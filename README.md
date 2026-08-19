@@ -1,5 +1,7 @@
 # serial-debugger — 跨平台串口调试工具 v0.6.4
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 基于 **Go + Wails v2** 的跨平台串口调试工具：串口扫描与连接、文本/Hex 双模收发、定时自动发送、端口转发、设备探测、多标签页与历史持久化，一个工具覆盖串口调试全流程。
 
 **架构亮点**
@@ -152,6 +154,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
+| [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 
 ## 版本历史
 
@@ -312,5 +315,5 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 贡献与许可
 
+- 本项目基于 [MIT License](LICENSE) 开源，欢迎社区贡献——见 [贡献指南](CONTRIBUTING.md)。
 - **AI 辅助声明**：本项目在开发与文档维护过程中使用了 AI Agent 工具辅助（代码生成与审计、文档润色、多语言翻译等）；文档与翻译内容由 AI 辅助产出，可能存在错误或不准确之处，欢迎指正与贡献修正。
-- 本项目暂无独立的贡献指南与许可证文件；协作与分发事宜请联系项目维护者。
