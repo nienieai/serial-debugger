@@ -1,5 +1,19 @@
 # 需求文档
 
+> 串口调试工具 v0.6.4 需求清单，随源码同步维护。
+> 状态图例：`✓` 已实现；`❌` 未实现（规划中）。
+
+## 目录
+
+- [公共](#公共)
+- [守护进程](#守护进程)（含 [进程生命周期管理](#进程生命周期管理)）
+- [GUI](#gui)
+- [网络调试](#网络调试)（规划中）
+- [CLI](#cli)
+- [MCP](#mcp)
+- [Web 客户端](#web-客户端)（规划中）
+- [Python 版对照](#python-版对照)
+
 ## 公共
 
 | # | 需求 | 状态 | 说明 |
@@ -52,6 +66,21 @@
 | 33 | 端口声明 | ✓ | `process.create` 新增 `connect` 参数，`false` 时存储完整配置不打开端口，全客户端可见 |
 | 34 | 声明转发 | ✓ | forward 模式声明双端口配置不启动转发，之后 `connect` 可省略端口参数 |
 
+### 推送事件
+
+| 事件 | 触发 | 说明 |
+|------|------|------|
+| `rx` / `tx` | 串口接收 / 发送 | 数据事件，含进程 ID 与数据帧 |
+| `1` / `2` | 转发模式端口 A / B | 方向事件，PC 被动监控 |
+| `send-error` | 发送失败 | 含进程 ID 与错误信息 |
+| `ports-changed` | 端口热插拔 | 硬件探针 2s 间隔扫描，变化时广播 |
+| `process-changed` | 进程创建 / 销毁 / 连接 / 断开 / 模式切换 / 查看变更 | 事件自带进程列表 |
+| `daemon-shutdown` | 守护进程关闭 | `shutdown` IPC 触发 |
+| `stats-count` | I/O 计数变化 | readLoop / writeLoop 推送 |
+| `stats-rate` | 每秒速率 | statsLoop 每秒推送 |
+| `clients-changed` | 客户端连接 / 断开 | 含客户端列表 |
+| `multistr-changed` | 多字符串发送状态 / 条目变更 | 发送状态变更、条目更新时广播 |
+
 ### 进程生命周期管理
 
 | # | 需求 | 状态 | 说明 |
@@ -93,7 +122,7 @@
 | 14 | 循环发送 | ✓ | 复选框开关，勾选即发，间隔 5ms 起可配 |
 | 15 | 追加换行 | ✓ | 文本 `\r\n`，Hex `0D0A` |
 | 16 | 端口刷新 | ✓ | 手动 + `ports-changed` 事件+描述自动更新 |
-| 17 | 清空显示 | ✓ | 清空环形缓冲区历史 + GUI 显示 |
+| 17 | 清空显示 | ✓ | v0.6.3 起本地化：仅清 GUI 视图，不清环形缓冲区与磁盘文件（见 #117）；daemon 侧保留 `session.clearhistory` IPC 供 CLI 等客户端使用 |
 | 18 | 深色/浅色主题 | ✓ | 跟随系统 / 深色 / 浅色 循环切换 |
 | 19 | 离线遮罩 | ✓ | 守护进程离线时覆盖 |
 | 20 | 线程/进程查看 | ✓ | 菜单弹窗显示 goroutine 数+进程详情 |
@@ -141,7 +170,7 @@
 | 62 | 工具栏水平滚动 | ✓ | v0.5.9：隐藏滚动条，鼠标拖拽滑动，两侧悬浮渐变箭头指示方向，`ResizeObserver` 动态显隐 |
 | 63 | 按钮文字精简 | ✓ | v0.5.9：箭头 + 字/H 短标签，悬浮提示切换说明，`data-wide` ghost 自适应宽度防跳动 |
 | 64 | SVG 图标系统 | ✓ | v0.5.9：键化 ICONS 库，640×640 画布，`data-icon` 声明式注入 |
-| 65 | 内置主题系统 | ✓ | v0.5.9：Go embed `config/themes/`，2 个主题，CSS 变量覆盖 + Wails 绑定 |
+| 65 | 内置主题系统 | ✓ | v0.5.9：Go embed `config/themes/`（system.json，dark/light 双模式），CSS 变量覆盖 + Wails 绑定 |
 | 66 | 语言字体绑定 | ✓ | v0.5.9：i18n `_font` 字段指定语言首选字体，`document.fonts.check()` 检测无字体回退默认 |
 | 67 | 发送字节自适应单位 | ✓ | v0.5.9：B/kB(2位小数)/MB(1位小数) 自适应，右对齐，最小宽度 80px |
 | 68 | 左侧区域最小宽度 | ✓ | v0.5.9：`.left-area` min-width 300px 防止历史框+发送框被 quick panel 挤压 |
@@ -167,7 +196,7 @@
 | 88 | 标签栏水平滚动 | ✓ | v0.6.0：`.tabs-scroll` 鼠标滚轮，`+` 固定右侧 |
 | 89 | 关于移入设置页 | ✓ | v0.6.0：关于从弹窗改为设置页独立面板 |
 | 90 | 尾部追加默认无 | ✓ | v0.6.0：appendSuffix 默认值从 crlf 改为 '' |
-| 91 | 内置图标文件化 | ✓ | v0.6.0：`config/icons/system/` 17 SVG + icons.json |
+| 91 | 内置图标文件化 | ✓ | v0.6.0：`config/icons/system/` 20 个 SVG + icons.json（0.6.1 增 menu，0.6.2 增 reset/send） |
 | 92 | 图标主题文件夹化 | ✓ | v0.6.0：`themes/icons/<名>/icons.json` + 平铺 SVG |
 | 93 | 版本号统一 | ✓ | v0.6.0：`version/version.go` 一处修改全部同步 |
 | 94 | 打开文件夹按键 | ✓ | v0.6.0：创建示例后增加打开系统资源管理器按键 |
@@ -187,11 +216,11 @@
 | 108 | 时间戳字节统计 | ✓ | v0.6.1：`~` 前缀 + 独立颜色 `--dc-stat` |
 | 109 | 高亮颜色扩展：背景色+加粗 | ✓ | v0.6.2：所有项增加 bgDark/bgLight/bold，双层列标题 |
 | 110 | 控制字符单节点+::before渲染 | ✓ | v0.6.2：真字符在 DOM（color:transparent），CSS ::before 显示标记 |
-| 111 | 转义字节格式可选 | ✓ | v0.6.2：/FF、\\xFF、0xFF、<FF>、[FF] 五种格式下拉 |
-| 112 | 复制链路重写 | ✓ | v0.6.2：cloneContents + 显式\\n块间 → textContent，标记不入剪贴板 |
+| 111 | 转义字节格式可选 | ✓ | v0.6.2：`/FF`、`\xFF`、`0xFF`、`<FF>`、`[FF]` 五种格式下拉 |
+| 112 | 复制链路重写 | ✓ | v0.6.2：cloneContents + 显式 `\n` 块间 → textContent，标记不入剪贴板 |
 | 113 | 可见回车→可见控制字符 | ✓ | v0.6.2：菜单栏和设置页重命名，含 CR/LF/Tab/空格全套标记 |
-| 114 | 允许复制转义字节开关 | ✓ | v0.6.2：默认开启，关闭后 /FF 不入剪贴板 |
-| 115 | Tab 键输入支持 | ✓ | v0.6.2：发送框拦截 Tab 键插入 \\t |
+| 114 | 允许复制转义字节开关 | ✓ | v0.6.2：默认开启，关闭后 `/FF` 不入剪贴板 |
+| 115 | Tab 键输入支持 | ✓ | v0.6.2：发送框拦截 Tab 键插入 `\t` |
 | 116 | 环形缓冲区快照读取 | ✓ | v0.6.3：`Snapshot()` 替代 `DrainAll()`，客户端读历史不清空缓冲区，多客户端可独立读取 |
 | 117 | 历史清空本地化 | ✓ | v0.6.3：GUI 清空历史仅为本地视图操作，不调 daemon IPC，不清环形缓冲区，不清磁盘文件 |
 | 118 | 上滚召回历史 | ✓ | v0.6.3：清空后上滚从 daemon 环形缓冲区快照召回数据；缓存边界外从磁盘文件翻页 |
@@ -216,7 +245,7 @@
 | 1 | 独立可执行文件 | ✓ | `serial-cli.exe` |
 | 2 | 命令行模式 | ✓ | CallOnce 临时管道 |
 | 3 | 交互模式 | ✓ | 3 管道持久连接，REPL，支持引号参数 |
-| 4 | 27 条命令 | ✓ | 含 declare / probe / setmode / unwatch 等；help 按功能分组重排 |
+| 4 | 34 条命令 | ✓ | 含 declare / probe / setmode / forward 等；`history-*` 命令族 7 条；help 按功能分组重排 |
 | 5 | start 命令 | ✓ | 统一启动入口，已运行则返回"已在运行中" |
 | 6 | check 命令 | ✓ | 三层检测（进程+管道+IPC），tasklist 失效时回退 IPC |
 | 7 | send --hex | ✓ | 十六进制发送，数据走共享内存 |
@@ -230,18 +259,26 @@
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
 | 1 | 独立可执行文件 | ✓ | `serial-mcp.exe`，JSON-RPC 2.0 over stdio |
-| 2 | 25 个工具 | ✓ | 覆盖全部串口功能，含 serial_declare / serial_probe_ports / serial_set_mode |
+| 2 | 28 个工具 | ✓ | 覆盖全部串口功能，含 serial_declare / serial_probe_ports / serial_set_mode / serial_multistr_* |
 | 3 | serial_start_daemon | ✓ | 统一启动入口，已运行返回 already_running |
-| 4 | serial_create | ✓ | 创建空闲或连接进程（去重），支持 mode/portB 参数 |
-| 5 | serial_connect / serial_disconnect | ✓ | 进程生命周期管理 |
-| 6 | serial_monitor | ✓ | 持久 DaemonClient 监听事件 |
-| 7 | serial_port_watch | ✓ | 轮询端口变化 |
-| 8 | serial_autosend_start/stop/status | ✓ | 自动发送管理 |
-| 9 | serial_sendqueue | ✓ | 写入多条到发送队列 |
-| 10 | serial_send（共享内存路径） | ✓ | 写共享内存后 IPC 触发 |
-| 11 | serial_probe_ports | ✓ | 设备端口探测，可选端口/波特率/规则过滤 |
-| 12 | serial_set_mode | ✓ | 切换进程模式 single ↔ forward，需 idle 状态 |
-| 13 | serial_declare | ✓ | 声明端口配置不打开串口，完整参数支持 |
+| 4 | serial_list_ports / serial_refresh_ports | ✓ | 端口列表缓存读取与强制硬件重扫 |
+| 5 | serial_create / serial_open | ✓ | 创建空闲或连接进程（去重），支持 mode/portB 参数；open 为 create+connect 快捷方式 |
+| 6 | serial_connect / serial_disconnect | ✓ | 进程生命周期管理 |
+| 7 | serial_switch | ✓ | 切换进程到其他端口，保留进程与历史 |
+| 8 | serial_forward_create | ✓ | 创建双向端口转发进程 |
+| 9 | serial_set_mode | ✓ | 切换进程模式 single ↔ forward，需 idle 状态 |
+| 10 | serial_declare | ✓ | 声明端口配置不打开串口，完整参数支持 |
+| 11 | serial_close | ✓ | 销毁进程（有连接先断开） |
+| 12 | serial_send（共享内存路径） | ✓ | 写共享内存后 IPC 触发 |
+| 13 | serial_sessions / serial_status | ✓ | 进程列表与守护进程状态查询 |
+| 14 | serial_history / serial_stats | ✓ | 历史缓冲区与 I/O 统计读取 |
+| 15 | serial_monitor | ✓ | 持久 DaemonClient 监听事件 |
+| 16 | serial_port_watch | ✓ | 轮询端口变化 |
+| 17 | serial_autosend_start/stop/status | ✓ | 自动发送管理 |
+| 18 | serial_sendqueue | ✓ | 写入多条到发送队列 |
+| 19 | serial_multistr_save/load/status | ✓ | 多字符串持久化与状态查询 |
+| 20 | serial_probe_ports | ✓ | 设备端口探测，可选端口/波特率/规则过滤 |
+| 21 | serial_shutdown | ✓ | 优雅关闭守护进程 |
 
 ## Web 客户端
 
@@ -261,10 +298,10 @@
 
 Python 版与 Go 版各有优劣，以下为功能对比：
 
-| 功能 | Python 版 | Go 版 (v0.5.4) |
+| 功能 | Python 版 | Go 版 (v0.6.4) |
 |------|-----------|-----------------|
 | 端口自动发现 | ✅ `HELP\r\n` 探针 | ✅ TOML 规则探测 |
-| MCP 协议 | ❌ | ✅ 25 工具 |
+| MCP 协议 | ❌ | ✅ 28 工具 |
 | GUI 桌面应用 | ❌ | ✅ Wails v2 |
 | 自动发送引擎 | ❌ | ✅ 单条/队列模式 |
 | 统计系统 (I/O 吞吐/速率) | ❌ | ✅ stats-count + stats-rate |
