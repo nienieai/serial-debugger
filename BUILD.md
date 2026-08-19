@@ -205,7 +205,7 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 ├── REQUIREMENTS.md            # 需求文档
 ├── BUILD.md                   # 本文档
 ├── LAYOUT-RULES.md            # 布局约束文档
-└── 框架文档.md                 # 架构设计文档
+└── ARCHITECTURE.md             # 架构设计文档
 ```
 
 ## 开发调试
