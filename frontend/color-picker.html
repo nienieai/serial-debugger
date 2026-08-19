@@ -1,0 +1,711 @@
+<!-- color-picker.html -->
+<!-- 此文件作为 <color-picker> 组件的 Shadow DOM 模板，供 color-picker.js 加载 -->
+<template id="color-picker-template">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        :host {
+            position: fixed;
+            width: 320px;
+            border-radius: 16px;
+            border: 1px solid;
+            z-index: 10000;
+            display: none;
+            overflow: hidden;
+            font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+        }
+
+        :host(.active) {
+            display: block;
+        }
+
+        /* ========== dark 主题 ========== */
+        :host([theme="dark"]) {
+            --input-bg: rgba(0, 0, 0, 0.5);
+            --input-border: rgb(160, 160, 160);
+            --input-text: rgb(240, 240, 240);
+            --input-hover-border: rgb(255, 255, 255);
+            --input-hover-shadow:
+                0 0 15px 3px rgba(255, 255, 255, 0.4),
+                0 0 5px 1px rgba(255, 255, 255, 0.6),
+                inset 0 1px 2px rgba(255, 255, 255, 0.2);
+            --input-focus-border: #3498db;
+            --input-focus-shadow:
+                0 0 20px 6px rgba(52, 152, 219, 0.3),
+                0 0 8px 2px rgba(52, 152, 219, 0.7),
+                inset 0 1px 3px rgba(255, 255, 255, 0.3);
+            --header-border: rgba(255, 255, 255, 0.2);
+            --title-color: #f5f5f5;
+            --section-title-color: #d8d8d8;
+            --action-border: rgba(255, 255, 255, 0.15);
+            --slider-track-bg: rgba(255, 255, 255, 0.15);
+            --swatch-bg-color: #000;
+        }
+
+        /* ========== light 主题 ========== */
+        :host([theme="light"]) {
+            --input-bg: rgba(255, 255, 255, 0.5);
+            --input-border: rgb(160, 160, 160);
+            --input-text: rgb(0, 0, 0);
+            --input-hover-border: #9ca3af;
+            --input-hover-shadow:
+                0 0 12px 2px rgba(156, 163, 175, 0.3),
+                0 0 4px 0px rgba(156, 163, 175, 0.5),
+                inset 0 1px 2px rgba(255, 255, 255, 0.3);
+            --input-focus-border: #1a73e8;
+            --input-focus-shadow:
+                0 0 18px 4px rgba(26, 115, 232, 0.15),
+                0 0 6px 1px rgba(26, 115, 232, 0.4),
+                inset 0 1px 3px rgba(255, 255, 255, 0.5);
+            --header-border: rgba(0, 0, 0, 0.2);
+            --title-color: #0a0a0a;
+            --section-title-color: #1a1a1a;
+            --action-border: rgba(0, 0, 0, 0.15);
+            --slider-track-bg: rgba(0, 0, 0, 0.12);
+            --swatch-bg-color: #fff;
+        }
+
+        /* ========== 透明度模式 — 对齐蜘蛛手风格 ========== */
+        :host([transparency="solid"][theme="dark"]) {
+            --picker-bg: #1c1c1c;
+            --picker-border: rgba(255, 255, 255, 0.1);
+            --header-bg: #252525;
+            --picker-backdrop: none;
+        }
+
+        :host([transparency="solid"][theme="light"]) {
+            --picker-bg: #fff;
+            --picker-border: rgba(0, 0, 0, 0.08);
+            --header-bg: #f5f5f5;
+            --picker-backdrop: none;
+        }
+
+        :host([transparency="transparent"][theme="dark"]) {
+            --picker-bg: rgba(0, 0, 0, 0.7);
+            --picker-border: rgba(255, 255, 255, 0.2);
+            --header-bg: rgba(255, 255, 255, 0.08);
+            --picker-backdrop: none;
+        }
+
+        :host([transparency="transparent"][theme="light"]) {
+            --picker-bg: rgba(255, 255, 255, 0.7);
+            --picker-border: rgba(0, 0, 0, 0.2);
+            --header-bg: rgba(0, 0, 0, 0.06);
+            --picker-backdrop: none;
+        }
+
+        :host([transparency="glass"][theme="dark"]) {
+            --picker-bg: rgba(255, 255, 255, 0.1);
+            --picker-border: rgba(160, 160, 160, 0.1);
+            --header-bg: rgba(255, 255, 255, 0.15);
+            --picker-backdrop: blur(20px);
+        }
+
+        :host([transparency="glass"][theme="light"]) {
+            --picker-bg: rgba(0, 0, 0, 0.1);
+            --picker-border: rgba(128, 128, 128, 0.1);
+            --header-bg: rgba(0, 0, 0, 0.08);
+            --picker-backdrop: blur(20px);
+        }
+
+        :host {
+            background-color: var(--picker-bg);
+            border-color: var(--picker-border);
+            -webkit-backdrop-filter: var(--picker-backdrop);
+            backdrop-filter: var(--picker-backdrop);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        }
+
+        /* ========== 标题栏 ========== */
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--header-border);
+            /* 右/上/下内边距均为0：关闭按键三边贴边 */
+            padding: 0 0 0 12px;
+            min-height: 44px;
+            cursor: move;
+            user-select: none;
+            background-color: var(--header-bg);
+        }
+
+        .popup-title {
+            font-weight: 600;
+            font-size: 19px;
+            color: var(--title-color);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            border-radius: 0;
+            font-size: 20px;
+            line-height: 1;
+            width: 44px;
+            align-self: stretch;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            cursor: pointer;
+            color: var(--title-color);
+            opacity: 0.6;
+        }
+
+        .close-btn svg {
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+        }
+
+        .close-btn:hover {
+            background-color: #e74c3c;
+            color: white;
+            opacity: 1;
+        }
+
+        .close-btn:active {
+            background-color: #a93226;
+            box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.3);
+            color: white;
+            opacity: 1;
+        }
+
+        /* ========== 当前颜色预览 ========== */
+        .current-color-section {
+            display: flex;
+            align-items: center;
+            margin: 8px 12px 8px;
+        }
+
+        .current-color-display {
+            width: 70px;
+            height: 70px;
+            border-radius: 10px;
+            margin-right: 15px;
+            border: 2px solid;
+            flex-shrink: 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        :host([theme="dark"]) .current-color-display {
+            border-color: rgba(255, 255, 255, 0.5);
+        }
+
+        :host([theme="light"]) .current-color-display {
+            border-color: rgba(0, 0, 0, 0.4);
+        }
+
+        .color-display-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: inherit;
+            pointer-events: none;
+            z-index: -1;
+            background-color: var(--swatch-bg-color);
+        }
+
+        .color-values {
+            flex-grow: 1;
+        }
+
+        .color-input-group {
+            margin-bottom: 10px;
+        }
+
+        .color-input-label,
+        .rgba-label,
+        .section-title {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: var(--section-title-color);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+        }
+
+        /* ========== 输入框（统一风格仿照 0.2.0-2）========== */
+        .color-input,
+        .rgba-input {
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            color: var(--input-text);
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        .color-input:hover,
+        .rgba-input:hover {
+            border-color: var(--input-hover-border);
+            box-shadow: var(--input-hover-shadow);
+        }
+
+        .color-input:focus,
+        .rgba-input:focus {
+            border-color: var(--input-focus-border);
+            box-shadow: var(--input-focus-shadow);
+        }
+
+        /* ========== HEX 输入 ========== */
+        .hex-row {
+            display: flex;
+            gap: 6px;
+        }
+
+        .hex-row .color-input {
+            flex: 1;
+        }
+
+        .color-input {
+            width: 100%;
+            padding: 10px;
+            border-radius: 12px;
+            font-size: 1rem;
+        }
+
+        .eyedropper-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            border: 1px solid;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+
+        :host([theme="dark"]) .eyedropper-btn {
+            background: transparent;
+            border-color: transparent;
+            color: #fff;
+        }
+
+        :host([theme="light"]) .eyedropper-btn {
+            background: transparent;
+            border-color: transparent;
+            color: #1e1e1e;
+        }
+
+        :host([theme="dark"]) .eyedropper-btn:hover {
+            background: rgba(255, 255, 255, 0.25) !important;
+            color: #fff !important;
+            box-shadow: 0 0 18px rgba(200, 200, 200, 0.5);
+        }
+
+        :host([theme="light"]) .eyedropper-btn:hover {
+            background: rgba(0, 0, 0, 0.15) !important;
+            color: #1e1e1e !important;
+            box-shadow: 0 0 18px rgba(100, 100, 100, 0.4);
+        }
+
+        .eyedropper-btn:active {
+            background: #555 !important;
+            color: #fff !important;
+            transform: translateY(0);
+            box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.45),
+                inset 0 -2px 4px rgba(255, 255, 255, 0.2) !important;
+            transition: background 0.05s, box-shadow 0.05s, transform 0.05s;
+        }
+
+        /* ========== RGBA 滑块 + 进度条 ========== */
+        .rgba-sliders {
+            margin: 0 12px 8px;
+        }
+
+        .rgba-slider-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .rgba-label {
+            width: 30px;
+            font-size: 16px;
+            font-weight: 600;
+            text-align: center;
+            flex-shrink: 0;
+            color: var(--section-title-color);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+        }
+
+        .slider-wrapper {
+            flex: 1;
+            position: relative;
+            margin: 0 10px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+        }
+
+        .slider-track {
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--slider-track-bg);
+            pointer-events: none;
+        }
+
+        .slider-fill {
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 6px;
+            border-radius: 3px;
+            pointer-events: none;
+            transition: width 0.05s linear;
+        }
+
+        .slider-fill.red { background: #ff0000; }
+        .slider-fill.green { background: #00ff00; }
+        .slider-fill.blue { background: #0000ff; }
+        .slider-fill.alpha {
+            background: repeating-linear-gradient(45deg,
+                #999 0px, #999 2px,
+                #ddd 2px, #ddd 4px);
+        }
+
+        .rgba-slider {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            height: 24px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            outline: none;
+            cursor: pointer;
+            margin: 0;
+        }
+
+        .rgba-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            transition: box-shadow 0.15s ease;
+        }
+
+        .rgba-slider.red:hover::-webkit-slider-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(255, 0, 0, 0.6);
+        }
+        .rgba-slider.green:hover::-webkit-slider-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(0, 255, 0, 0.6);
+        }
+        .rgba-slider.blue:hover::-webkit-slider-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(0, 0, 255, 0.6);
+        }
+        .rgba-slider.alpha:hover::-webkit-slider-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(150, 150, 150, 0.6);
+        }
+
+        .rgba-slider:active::-webkit-slider-thumb {
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 6px rgba(52, 152, 219, 0.25);
+            transform: scale(0.95);
+        }
+
+        .rgba-slider::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            transition: box-shadow 0.15s ease;
+        }
+
+        .rgba-slider.red:hover::-moz-range-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(255, 0, 0, 0.6);
+        }
+        .rgba-slider.green:hover::-moz-range-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(0, 255, 0, 0.6);
+        }
+        .rgba-slider.blue:hover::-moz-range-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(0, 0, 255, 0.6);
+        }
+        .rgba-slider.alpha:hover::-moz-range-thumb {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 14px rgba(150, 150, 150, 0.6);
+        }
+
+        .rgba-slider:active::-moz-range-thumb {
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 6px rgba(52, 152, 219, 0.25);
+            transform: scale(0.95);
+        }
+
+        .rgba-slider.red::-webkit-slider-thumb { background: #ff0000; }
+        .rgba-slider.green::-webkit-slider-thumb { background: #00ff00; }
+        .rgba-slider.blue::-webkit-slider-thumb { background: #0000ff; }
+        .rgba-slider.alpha::-webkit-slider-thumb {
+            background: linear-gradient(45deg, #ccc 25%, transparent 25%),
+                linear-gradient(-45deg, #ccc 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #ccc 75%),
+                linear-gradient(-45deg, transparent 75%, #ccc 75%);
+            background-size: 4px 4px;
+            background-position: 0 0, 0 2px, 2px -2px, -2px 0px;
+        }
+
+        .rgba-input {
+            width: 60px;
+            padding: 4px;
+            border-radius: 6px;
+            font-size: 15px;
+            text-align: center;
+            -moz-appearance: textfield;
+        }
+
+        .rgba-input::-webkit-inner-spin-button,
+        .rgba-input::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        /* ========== 颜色网格 ========== */
+        .basic-colors-section,
+        .saved-colors-section {
+            margin: 0 12px 8px;
+        }
+
+        .basic-colors-grid,
+        .saved-colors-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 6px;
+        }
+
+        .swatch-bg {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .swatch-bg-inner {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            right: 2px;
+            bottom: 2px;
+            background-color: var(--swatch-bg-color);
+            border-radius: 4px;
+            z-index: 0;
+        }
+
+        .swatch-bg.empty .swatch-bg-inner {
+            background-color: transparent;
+        }
+
+        .basic-color,
+        .saved-color {
+            position: relative;
+            z-index: 1;
+        }
+
+        .basic-color,
+        .saved-color {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        :host([theme="light"]) .basic-color,
+        :host([theme="light"]) .saved-color {
+            border-color: rgba(0, 0, 0, 0.2);
+        }
+
+        .basic-color:hover,
+        .saved-color:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .basic-color:active,
+        .saved-color:active {
+            transform: scale(0.95);
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .saved-color.empty {
+            background: repeating-linear-gradient(45deg,
+                    transparent, transparent 5px,
+                    rgba(128, 128, 128, 0.1) 5px, rgba(128, 128, 128, 0.1) 10px);
+            border-style: dashed;
+        }
+
+        :host([theme="dark"]) .saved-color.empty {
+            background: repeating-linear-gradient(45deg,
+                    rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2) 5px,
+                    rgba(255, 255, 255, 0.05) 5px, rgba(255, 255, 255, 0.05) 10px);
+        }
+
+        :host([theme="light"]) .saved-color.empty {
+            background: repeating-linear-gradient(45deg,
+                    rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.05) 5px,
+                    rgba(255, 255, 255, 0.1) 5px, rgba(255, 255, 255, 0.1) 10px);
+        }
+
+        .saved-color.selected {
+            border: 2px solid #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3), 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        /* ========== 操作按钮 ========== */
+        .action-buttons {
+            padding: 10px 12px 12px;
+            display: flex;
+            gap: 10px;
+            border-top: 1px solid var(--action-border);
+            background-color: var(--header-bg);
+        }
+
+        .color-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+        }
+
+        .btn-save {
+            background-color: #27ae60;
+            box-shadow: 0 2px 8px rgba(39, 174, 96, 0.2);
+        }
+
+        .btn-save:hover {
+            background-color: #219653;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(39, 174, 96, 0.35);
+        }
+
+        .btn-save:active {
+            background-color: #1a7a40;
+            box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.3);
+            transform: translateY(0);
+        }
+
+        .btn-apply {
+            background-color: #3498db;
+            box-shadow: 0 2px 8px rgba(52, 152, 219, 0.2);
+        }
+
+        .btn-apply:hover {
+            background-color: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.35);
+        }
+
+        .btn-apply:active {
+            background-color: #1d6fa5;
+            box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.3);
+            transform: translateY(0);
+        }
+    </style>
+
+    <div class="popup-header" id="popupHeader">
+        <div class="popup-title" id="popupTitle">选择颜色</div>
+        <button class="close-btn" id="closePopup" title="关闭">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+    </div>
+
+    <div class="current-color-section">
+        <div class="current-color-display" id="currentColorDisplay">
+            <div class="color-display-bg"></div>
+        </div>
+        <div class="color-values">
+            <div class="color-input-group">
+                <label class="color-input-label" for="hexInput">HEX 颜色值</label>
+                <div class="hex-row">
+                    <input type="text" id="hexInput" class="color-input" value="#3498db" maxlength="9">
+                    <button class="eyedropper-btn" id="eyedropperBtn" title="从屏幕取色"><span class="eyedropper-icon">💧</span></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="rgba-sliders">
+        <div class="rgba-slider-group">
+            <div class="rgba-label">R</div>
+            <div class="slider-wrapper">
+                <div class="slider-track"></div>
+                <div class="slider-fill red" id="redFill"></div>
+                <input type="range" min="0" max="255" value="52" class="rgba-slider red" id="redSlider">
+            </div>
+            <input type="number" min="0" max="255" value="52" class="rgba-input" id="redInput">
+        </div>
+        <div class="rgba-slider-group">
+            <div class="rgba-label">G</div>
+            <div class="slider-wrapper">
+                <div class="slider-track"></div>
+                <div class="slider-fill green" id="greenFill"></div>
+                <input type="range" min="0" max="255" value="152" class="rgba-slider green" id="greenSlider">
+            </div>
+            <input type="number" min="0" max="255" value="152" class="rgba-input" id="greenInput">
+        </div>
+        <div class="rgba-slider-group">
+            <div class="rgba-label">B</div>
+            <div class="slider-wrapper">
+                <div class="slider-track"></div>
+                <div class="slider-fill blue" id="blueFill"></div>
+                <input type="range" min="0" max="255" value="219" class="rgba-slider blue" id="blueSlider">
+            </div>
+            <input type="number" min="0" max="255" value="219" class="rgba-input" id="blueInput">
+        </div>
+        <div class="rgba-slider-group">
+            <div class="rgba-label">A</div>
+            <div class="slider-wrapper">
+                <div class="slider-track"></div>
+                <div class="slider-fill alpha" id="alphaFill"></div>
+                <input type="range" min="0" max="100" value="40" class="rgba-slider alpha" id="alphaSlider">
+            </div>
+            <input type="number" min="0" max="1" step="0.01" value="0.40" class="rgba-input" id="alphaInput">
+        </div>
+    </div>
+
+    <div class="basic-colors-section">
+        <div class="section-title">基础颜色</div>
+        <div class="basic-colors-grid" id="basicColorsGrid"></div>
+    </div>
+
+    <div class="saved-colors-section">
+        <div class="section-title">自定义颜色 (点击选中后保存)</div>
+        <div class="saved-colors-grid" id="savedColorsGrid"></div>
+    </div>
+
+    <div class="action-buttons">
+        <button id="saveColorBtn" class="color-btn btn-save">保存颜色</button>
+        <button id="applyColorBtn" class="color-btn btn-apply">应用颜色</button>
+    </div>
+</template>

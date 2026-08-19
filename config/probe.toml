@@ -1,0 +1,35 @@
+# 设备端口探测规则配置
+# 每条规则：对端口发送探测帧 → 匹配响应 → 识别设备类型
+
+# 读取响应超时（毫秒）
+timeout_ms = 200
+
+# 扫描的波特率（不写则按规则逐一尝试）
+baud_rates = [9600, 19200, 38400, 115200, 230400, 460800, 921600]
+
+# ── 探测规则 ──
+
+[[rules]]
+name = "Modbus RTU 设备"
+port_pattern = ".*"
+# 读保持寄存器 0x08（从站地址）：01 03 0008 0001 + CRC
+probe_hex = "01030008000105C8"
+match_type = "modbus_crc"
+min_response_len = 5
+
+[[rules]]
+name = "MCU 控制板 (HELP 响应)"
+port_pattern = ".*"
+# HELP\r\n：48454C500D0A（一般用 text，直接写字符串更方便）
+probe_hex = "48454C500D0A"
+match_type = "substring"
+match_value = "READY"   # 响应中预期子串，为 hex 编码
+min_response_len = 5
+
+[[rules]]
+name = "MCU 控制板 (# 回显)"
+port_pattern = ".*"
+probe_hex = "2300"       # '#' 后加空字节触发设备响应
+match_type = "regex"
+match_value = "#[A-Z_]+:"   # 匹配类似 #BOOT: #READY: 的回显
+min_response_len = 5

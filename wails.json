@@ -1,0 +1,12 @@
+{
+  "name": "serial-tool-v3",
+  "outputfilename": "serial-gui",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "Serial Tool",
+    "email": ""
+  }
+}

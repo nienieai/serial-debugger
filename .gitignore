@@ -1,0 +1,12 @@
+# 构建产物
+build/bin/
+*.exe
+
+# 运行时生成数据
+settings.ini
+history/
+multistr/
+
+# 系统文件
+Thumbs.db
+Desktop.ini

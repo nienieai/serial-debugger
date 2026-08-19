@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>串口调试工具</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="app">
+  <div class="header">
+    <div class="menu-bar">
+      <div class="menu-item">
+        <span class="menu-label">文件</span>
+        <div class="menu-dropdown">
+          <button id="menuNewSession" onclick="addTab()"><span class="menu-chk"></span><span class="menu-text">新建会话</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuCloseSession" onclick="closeCurrentTab()"><span class="menu-chk"></span><span class="menu-text">关闭会话</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <div class="menu-sep"></div>
+          <button id="menuAutoSaveHistory" onclick="toggleAutoSaveHistory()"><span class="menu-chk chk on"></span><span class="menu-text">自动保存历史</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuAutoCreateSession" onclick="toggleAutoCreateSession()"><span class="menu-chk chk on"></span><span class="menu-text">启动时自动创建会话</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <div class="menu-sep"></div>
+          <button id="menuQuit" onclick="quitApp()"><span class="menu-chk"></span><span class="menu-text">退出</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label">设置</span>
+        <div class="menu-dropdown">
+          <div class="menu-sub">
+            <span class="menu-sub-trigger"><span class="menu-chk"></span><span class="menu-text">编码格式</span><span class="menu-shortcut"></span><span class="menu-arrow"><span class="arr"></span></span></span>
+            <div class="menu-sub-dropdown">
+              <button id="menuEncAscii" onclick="setEncoding('ascii')"><span class="menu-chk chk"></span><span class="menu-text">ASCII</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuEncGb2312" onclick="setEncoding('gb2312')"><span class="menu-chk chk"></span><span class="menu-text">GB2312</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuEncUtf8" onclick="setEncoding('utf-8')"><span class="menu-chk chk on"></span><span class="menu-text">UTF-8</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+            </div>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="menu-sub">
+            <span class="menu-sub-trigger"><span class="menu-chk"></span><span class="menu-text">Hex显示设置</span><span class="menu-shortcut"></span><span class="menu-arrow"><span class="arr"></span></span></span>
+            <div class="menu-sub-dropdown">
+              <button id="menuHexPrefix" onclick="toggleHexPrefix()"><span class="menu-chk chk on"></span><span class="menu-text">0x 前缀</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuHexLower" onclick="toggleHexCase()"><span class="menu-chk chk"></span><span class="menu-text">小写显示</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <div class="menu-sep"></div>
+              <button id="menuHexSepN" onclick="setHexSep('none')"><span class="menu-chk chk"></span><span class="menu-text">无分割</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuHexSepS" onclick="setHexSep('space')"><span class="menu-chk chk on"></span><span class="menu-text">空格分割</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuHexSepC" onclick="setHexSep('comma')"><span class="menu-chk chk"></span><span class="menu-text">逗号分割</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+            </div>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="menu-sub">
+            <span class="menu-sub-trigger"><span class="menu-chk"></span><span class="menu-text">文本显示设置</span><span class="menu-shortcut"></span><span class="menu-arrow"><span class="arr"></span></span></span>
+            <div class="menu-sub-dropdown">
+              <button id="menuCrVisible" onclick="toggleCrVisible()"><span class="menu-chk chk"></span><span class="menu-text">可见控制字符</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <div class="menu-sep"></div>
+              <button id="menuHexEscShow" onclick="setHexEscapeMode('show')"><span class="menu-chk chk on"></span><span class="menu-text">显示转义字节</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuHexEscHide" onclick="setHexEscapeMode('hide')"><span class="menu-chk chk"></span><span class="menu-text">隐藏转义字节</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+              <button id="menuHexEscRaw" onclick="setHexEscapeMode('raw')"><span class="menu-chk chk"></span><span class="menu-text">原始编码字符</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+            </div>
+          </div>
+          <div class="menu-sep"></div>
+          <button id="menuThemeSettings" onclick="toggleThemePopup()"><span class="menu-chk"></span><span class="menu-text">主题设置</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <div class="menu-sep"></div>
+          <button id="menuAppSettings" onclick="openSettingsPage()"><span class="menu-chk"></span><span class="menu-text">软件设置</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label">工具</span>
+        <div class="menu-dropdown">
+          <button id="menuQuickPanel" onclick="toggleQuickPanel()"><span class="menu-chk chk"></span><span class="menu-text">多字符串</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label">守护进程</span>
+        <div class="menu-dropdown" id="menuBackendDropdown">
+          <button id="menuToggleDaemon" onclick="toggleDaemon()"><span class="menu-chk"></span><span class="menu-text">启动守护进程</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuRefreshPorts" onclick="refreshPortsForce()"><span class="menu-chk"></span><span class="menu-text">刷新串口列表</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuViewThreads" onclick="viewThreads()"><span class="menu-chk"></span><span class="menu-text">查看线程</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuViewClients" onclick="viewClients()"><span class="menu-chk"></span><span class="menu-text">查看客户端</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label">帮助</span>
+        <div class="menu-dropdown">
+          <button id="menuDevTools" onclick="openDevTools()"><span class="menu-chk"></span><span class="menu-text">开发人员工具</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuAbout" onclick="showAbout()"><span class="menu-chk"></span><span class="menu-text">关于</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label">语言</span>
+        <div class="menu-dropdown">
+          <button id="menuLangZh" onclick="setLanguage('zh')"><span class="menu-chk chk on"></span><span class="menu-text">简体中文</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangZhHant" onclick="setLanguage('zh-Hant')"><span class="menu-chk chk"></span><span class="menu-text">繁體中文</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangEn" onclick="setLanguage('en')"><span class="menu-chk chk"></span><span class="menu-text">English</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangFr" onclick="setLanguage('fr')"><span class="menu-chk chk"></span><span class="menu-text">Français (test)</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangEs" onclick="setLanguage('es')"><span class="menu-chk chk"></span><span class="menu-text">Español (test)</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangRu" onclick="setLanguage('ru')"><span class="menu-chk chk"></span><span class="menu-text">Русский (тест)</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangAr" onclick="setLanguage('ar')"><span class="menu-chk chk"></span><span class="menu-text">العربية (تجريبي)</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangJa" onclick="setLanguage('ja')"><span class="menu-chk chk"></span><span class="menu-text">日本語 (テスト)</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuLangKo" onclick="setLanguage('ko')"><span class="menu-chk chk"></span><span class="menu-text">한국어 (테스트)</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+        </div>
+      </div>
+    </div>
+    <button id="btnTheme" class="c-theme-btn" onclick="toggleThemePopup()" data-icon="theme_palette" data-icon-w="18" data-icon-h="18" data-i18n-title="tooltip.theme" title="主题设置"></button>
+  </div>
+
+  <div class="tabs-bar" id="tabsBar">
+    <div class="tabs-scroll" id="tabsScroll"></div>
+    <button class="tab-btn tab-new" id="tabAddBtn" onclick="addTab()" data-i18n-title="tooltip.new_tab" title="新建会话">+</button>
+  </div>
+
+  <div class="main-content" id="mainContent"></div>
+
+  <div class="statusbar" id="statusbar"></div>
+</div>
+
+<script src="/wailsjs/runtime/runtime.js"></script>
+<script src="/color-picker.js"></script>
+<script src="/i18n.js"></script>
+<script src="/icons.js"></script>
+<script src="/decoder.js"></script>
+<script src="/statusbar.js"></script>
+<script src="/tabpage.js"></script>
+<script src="/settingspage.js"></script>
+<script src="/history.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

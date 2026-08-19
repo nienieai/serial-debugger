@@ -1,0 +1,14 @@
+{
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {}
+      }
+    }
+  },
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": "../../assets/icon-daemon.ico"
+    }
+  }
+}

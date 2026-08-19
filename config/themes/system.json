@@ -1,0 +1,8 @@
+{
+  "_id": "system",
+  "_name": { "zh": "系统", "zh-Hant": "系統", "en": "System", "fr": "Système", "es": "Sistema", "ru": "Система", "ar": "النظام", "ja": "システム", "ko": "시스템", "_": "System" },
+  "_modes": ["dark", "light"],
+  "common": {},
+  "dark": {},
+  "light": {}
+}
