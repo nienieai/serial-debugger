@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+👋 欢迎使用 serial-debugger！如果它帮到了您，欢迎 **Star**；遇到问题请提交 **Issue**，有改进想法欢迎 **Pull Request**，任何反馈都是对我们的支持。
+
 基于 **Go + Wails v2** 的跨平台串口调试工具：串口扫描与连接、文本/Hex 双模收发、定时自动发送、端口转发、设备探测、多标签页与历史持久化，一个工具覆盖串口调试全流程。
 
 **架构亮点**
@@ -9,6 +11,37 @@
 - **3 管道 IPC + 共享内存**：daemon/resp/sub 命名管道承载控制与事件订阅；共享内存环形缓冲区承载数据（历史 5 MB/进程、发送队列 1 MB/进程），发送走共享内存、IPC 仅触发。
 - **守护进程 + 多客户端**：GUI / CLI / MCP 统一接入同一守护进程，ProcessManager 管理 idle/connected 状态与 single/forward 模式；心跳 5 s 一次，连续 3 次失败判定断连。
 - **解码引擎 Go 化**：Go 端 per-tab goroutine 逐字节容错解码，产出 `[]Segment` 分段结构；前端纯 DOM 渲染（零 `innerHTML`），解码与渲染彻底解耦。
+
+## 快速使用
+
+> 📦 **下载**：最新构建产物见 [Releases](https://github.com/nienieai/serial-debugger/releases)（GitHub Actions 自动构建，解压即用；Windows 需已安装 WebView2 Runtime）。
+
+> ⚠️ **使用须知**
+> - **安全**：本工具当前无安全相关设计（无认证、加密、访问控制等），仅限在受信任的本地环境使用，请勿用于安全敏感场景——详见[安全说明](#安全说明)。
+> - **翻译**：界面多语言由 AI 辅助翻译，可能存在不准确之处，欢迎提交修正——详见[国际化](#国际化)。
+
+### GUI
+
+1. 启动 `serial-gui.exe`（自动拉起守护进程）。
+2. 点击「扫描」选择目标串口（如 `COM3`），设置波特率等参数，点击「打开」。
+3. 在发送区输入数据，切换文本 / Hex 模式后点击「发送」；接收区实时回显。
+
+### CLI
+
+```bash
+serial-cli start                # 启动守护进程
+serial-cli ports                # 列出可用串口
+serial-cli open COM3 115200     # 打开串口
+serial-cli send "AT\r\n"        # 发送文本
+serial-cli status               # 查看守护进程状态
+serial-cli shutdown             # 关闭守护进程
+```
+
+> 不带参数进入交互 REPL，输入 `help` 查看全部命令；完整命令速查见 [CLI 速查表](CLI-CHEATSHEET.md)。
+
+### MCP
+
+`serial-mcp.exe` 作为 MCP 服务端通过 stdio 提供 JSON-RPC 2.0 接口，可接入支持 MCP 协议的客户端。
 
 ## 组成
 
@@ -18,6 +51,29 @@
 | `serial-gui.exe` | Wails v2 桌面客户端，多标签页，3 管道持久连接，纯事件驱动 |
 | `serial-cli.exe` | 命令行工具，交互 REPL + 一次性命令，34 条命令（含 help） |
 | `serial-mcp.exe` | MCP 协议工具，JSON-RPC 2.0 over stdio，28 个工具 |
+
+### 架构一览
+
+```mermaid
+graph LR
+    subgraph 客户端
+        GUI[serial-gui 桌面端]
+        CLI[serial-cli 命令行]
+        MCP[serial-mcp MCP 服务]
+    end
+    subgraph 守护进程 serial-daemon
+        IPC[3 管道 IPC<br/>daemon / resp / sub]
+        PM[ProcessManager<br/>进程状态机]
+        RB[(共享内存<br/>历史 5MB / 发送队列 1MB)]
+    end
+    GUI <-->|请求 / 响应 / 事件订阅| IPC
+    CLI <-->|3 管道或 CallOnce| IPC
+    MCP <-->|3 管道或 CallOnce| IPC
+    IPC --> PM
+    PM --> RB
+```
+
+> 数据走共享内存（发送与历史），IPC 仅承载控制与事件；客户端可直接映射共享内存绕过管道读取历史。
 
 ## 功能特性
 
@@ -73,35 +129,6 @@
 - 状态栏三色气泡实时显示 GUI/CLI/MCP 连接数
 - JS 侧 `_connecting` 互斥防重连风暴，Go 侧锁区合并 + 身份校验
 
-## 快速使用
-
-> ⚠️ **使用须知**
-> - **安全**：本工具当前无安全相关设计（无认证、加密、访问控制等），仅限在受信任的本地环境使用，请勿用于安全敏感场景——详见[安全说明](#安全说明)。
-> - **翻译**：界面多语言由 AI 辅助翻译，可能存在不准确之处，欢迎提交修正——详见[国际化](#国际化)。
-
-### GUI
-
-1. 启动 `serial-gui.exe`（自动拉起守护进程）。
-2. 点击「扫描」选择目标串口（如 `COM3`），设置波特率等参数，点击「打开」。
-3. 在发送区输入数据，切换文本 / Hex 模式后点击「发送」；接收区实时回显。
-
-### CLI
-
-```bash
-serial-cli start                # 启动守护进程
-serial-cli ports                # 列出可用串口
-serial-cli open COM3 115200     # 打开串口
-serial-cli send "AT\r\n"        # 发送文本
-serial-cli status               # 查看守护进程状态
-serial-cli shutdown             # 关闭守护进程
-```
-
-> 不带参数进入交互 REPL，输入 `help` 查看全部命令。
-
-### MCP
-
-`serial-mcp.exe` 作为 MCP 服务端通过 stdio 提供 JSON-RPC 2.0 接口，可接入支持 MCP 协议的客户端。
-
 ## 安装与构建
 
 ### 下载
@@ -118,7 +145,17 @@ go build -ldflags="-s -w" -o build/bin/serial-mcp.exe    ./cmd/serial-mcp/
 wails build -devtools  # GUI，产物在 build/bin/
 ```
 
-版本号统一维护在 `version/version.go`，改一处全部可执行文件同步。详细构建矩阵与调试方法见 [构建文档](BUILD.md)。
+> 💡 **仅需命令行工具时**（无需 GUI），可直接用 `go install` 安装：
+>
+> ```bash
+> go install github.com/nienieai/serial-debugger/cmd/serial-cli@latest
+> go install github.com/nienieai/serial-debugger/cmd/serial-mcp@latest
+> go install github.com/nienieai/serial-debugger/daemon@latest
+> ```
+>
+> GUI（`serial-gui`）需 Wails 环境（`wails build`），完整构建矩阵见 [BUILD.md](BUILD.md)。
+
+版本号统一维护在 `version/version.go`，改一处全部可执行文件同步。仓库已配置 [GitHub Actions 自动构建](.github/workflows/release.yml)：推送 `v*` 标签或手动触发即可产出各平台二进制并发布 Release。
 
 ## CLI 命令（34 条，含 help）
 
@@ -160,6 +197,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
+| [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
 ## 版本历史
 
@@ -314,7 +352,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 - Node.js 后端，Express + Socket.IO，Go WebView 桌面启动器
 
-## 安全说明
+## ⚠️ 安全说明
 
 > **本工具当前无安全相关设计**：不包含认证、授权、加密、访问控制或审计日志等安全机制；串口收发内容与历史记录以明文形式处理与存储。仅限在受信任的本地环境使用，请勿在不可信网络或安全敏感场景中部署。
 
