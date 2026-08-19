@@ -1,5 +1,5 @@
 {
-  "name": "serial-tool-v3",
+  "name": "serial-debugger",
   "outputfilename": "serial-gui",
   "frontend:install": "",
   "frontend:build": "",
