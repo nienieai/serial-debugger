@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"serial-tool-v3/ringbuf"
+	"github.com/nienieai/serial-debugger/ringbuf"
 )
 
 var (

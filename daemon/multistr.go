@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"serial-tool-v3/ringbuf"
+	"github.com/nienieai/serial-debugger/ringbuf"
 )
 
 // MultistrEntry represents one entry in the multi-string send panel.

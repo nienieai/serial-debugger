@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"go.bug.st/serial"
-	"serial-tool-v3/protocol"
-	"serial-tool-v3/ringbuf"
+	"github.com/nienieai/serial-debugger/protocol"
+	"github.com/nienieai/serial-debugger/ringbuf"
 )
 
 // ---- types ----

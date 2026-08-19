@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"serial-tool-v3/client"
-	"serial-tool-v3/config"
+	"github.com/nienieai/serial-debugger/client"
+	"github.com/nienieai/serial-debugger/config"
 )
 
 var mcpLang = "zh"

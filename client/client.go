@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"serial-tool-v3/pipe"
-	"serial-tool-v3/protocol"
-	"serial-tool-v3/ringbuf"
+	"github.com/nienieai/serial-debugger/pipe"
+	"github.com/nienieai/serial-debugger/protocol"
+	"github.com/nienieai/serial-debugger/ringbuf"
 )
 
 // DaemonClient is a persistent 3-pipe client connected to the serial daemon.

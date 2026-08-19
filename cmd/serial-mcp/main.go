@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"serial-tool-v3/version"
+	"github.com/nienieai/serial-debugger/version"
 )
 
 // ── JSON-RPC 2.0 types ──

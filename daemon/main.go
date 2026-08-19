@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"serial-tool-v3/config"
-	"serial-tool-v3/pipe"
+	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/pipe"
 )
 
 var daemonLang = "zh"

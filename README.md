@@ -155,6 +155,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
+| [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
 
 ## 版本历史
 

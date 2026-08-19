@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"serial-tool-v3/client"
-	"serial-tool-v3/config"
-	"serial-tool-v3/version"
+	"github.com/nienieai/serial-debugger/client"
+	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/version"
 )
 
 var cliLang = "zh"

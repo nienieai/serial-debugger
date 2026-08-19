@@ -12,8 +12,8 @@ import (
 
 	"go.bug.st/serial"
 
-	"serial-tool-v3/pipe"
-	"serial-tool-v3/protocol"
+	"github.com/nienieai/serial-debugger/pipe"
+	"github.com/nienieai/serial-debugger/protocol"
 )
 
 // ---- port info ----

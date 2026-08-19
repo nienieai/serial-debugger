@@ -1,4 +1,4 @@
-module serial-tool-v3
+module github.com/nienieai/serial-debugger
 
 go 1.26.0
 

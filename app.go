@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"serial-tool-v3/client"
-	"serial-tool-v3/config"
-	"serial-tool-v3/decode"
-	"serial-tool-v3/version"
+	"github.com/nienieai/serial-debugger/client"
+	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/decode"
+	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/text/encoding/simplifiedchinese"

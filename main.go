@@ -4,7 +4,7 @@ import (
 	"embed"
 	"log"
 
-	"serial-tool-v3/version"
+	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
