@@ -201,7 +201,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 版本历史
 
-### 0.6.4
+### 0.6.4（2026-06-05）
 
 - 修复 Hex 发送字节丢失：`DecodeEntryContentOnly` 误将 Modbus 首字节 0x01 判为 multistr 条目头，新增 flags/delay 校验防误判
 - `send.trigger` IPC 新增 `raw` 参数：直接发送传 `raw:true` 跳过 multistr 解码，快捷面板传 `raw:false` 保持兼容
@@ -211,7 +211,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 - `findProbeConfig` 新增搜索路径 `<exe>/../config/probe.toml`（build/bin → config 开发场景）
 - MCP ServerInfo 版本从硬编码 `0.5.9` 改为 `version.Version` 统一同步
 
-### 0.6.3
+### 0.6.3（2026-05-26）
 
 - 数据路径重构：环形缓冲区从 Drain 消费模型改为 Snapshot 观察模型，客户端读取历史不清空缓冲区，多客户端独立读取
 - 历史清空本地化：GUI 清空历史仅为本地视图操作，不通知 daemon，不清环形缓冲区和磁盘文件
