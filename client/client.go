@@ -424,18 +424,18 @@ func (c *DaemonClient) Declare(port string, baud int, dataBits int, stopBits str
 // DeclareForward registers a forward port pair configuration without opening ports.
 func (c *DaemonClient) DeclareForward(portA string, baudA int, dataBitsA int, stopBitsA string, parityA string, portB string, baudB int, dataBitsB int, stopBitsB string, parityB string) (map[string]any, error) {
 	return c.Call("process.create", map[string]any{
-		"mode":       "forward",
-		"port":       portA,
-		"baud":       baudA,
-		"dataBits":   dataBitsA,
-		"stopBits":   stopBitsA,
-		"parity":     parityA,
-		"portB":      portB,
-		"baudB":      baudB,
-		"dataBitsB":  dataBitsB,
-		"stopBitsB":  stopBitsB,
-		"parityB":    parityB,
-		"connect":    false,
+		"mode":      "forward",
+		"port":      portA,
+		"baud":      baudA,
+		"dataBits":  dataBitsA,
+		"stopBits":  stopBitsA,
+		"parity":    parityA,
+		"portB":     portB,
+		"baudB":     baudB,
+		"dataBitsB": dataBitsB,
+		"stopBitsB": stopBitsB,
+		"parityB":   parityB,
+		"connect":   false,
 	})
 }
 
@@ -480,10 +480,18 @@ func (c *DaemonClient) SetMode(processId string, mode string) error {
 // SwitchPort switches a connected process to a different serial port.
 func (c *DaemonClient) SwitchPort(processId string, port string, cfg map[string]any) error {
 	params := map[string]any{"processId": processId, "port": port}
-	if v, ok := cfg["baud"]; ok { params["baud"] = v }
-	if v, ok := cfg["dataBits"]; ok { params["dataBits"] = v }
-	if v, ok := cfg["stopBits"]; ok { params["stopBits"] = v }
-	if v, ok := cfg["parity"]; ok { params["parity"] = v }
+	if v, ok := cfg["baud"]; ok {
+		params["baud"] = v
+	}
+	if v, ok := cfg["dataBits"]; ok {
+		params["dataBits"] = v
+	}
+	if v, ok := cfg["stopBits"]; ok {
+		params["stopBits"] = v
+	}
+	if v, ok := cfg["parity"]; ok {
+		params["parity"] = v
+	}
 	_, err := c.Call("process.switch", params)
 	return err
 }

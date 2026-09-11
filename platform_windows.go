@@ -8,15 +8,15 @@ import (
 )
 
 var (
-	moduser32   = syscall.NewLazyDLL("user32.dll")
-	keybdEvent  = moduser32.NewProc("keybd_event")
+	moduser32  = syscall.NewLazyDLL("user32.dll")
+	keybdEvent = moduser32.NewProc("keybd_event")
 )
 
 const (
-	vkCtrl          = 0x11
-	vkShift         = 0x10
-	vkF12           = 0x7B
-	keyeventfKeyup  = 0x0002
+	vkCtrl         = 0x11
+	vkShift        = 0x10
+	vkF12          = 0x7B
+	keyeventfKeyup = 0x0002
 )
 
 func hideWindow(cmd *exec.Cmd) {

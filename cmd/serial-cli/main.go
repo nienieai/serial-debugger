@@ -180,7 +180,10 @@ func runCommandInteractive(dc *client.DaemonClient, args []string) {
 		return
 	case "status":
 		result, err := client.CallOnce("status", nil, "cli")
-		if err != nil { fmt.Fprintln(os.Stderr, "错误:", err); return }
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "错误:", err)
+			return
+		}
 		printJSON(result)
 		return
 	}
@@ -212,32 +215,50 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "status":
 		result, err := client.CallOnce("status", nil, "cli")
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "ports":
 		result, err := dc.Call("ports", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "refresh":
 		result, err := dc.Call("ports.refresh", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "threads":
 		result, err := dc.Call("threads", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "goroutines":
 		result, err := dc.Call("goroutines", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "sessions":
 		result, err := dc.Call("process.list", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "create":
@@ -248,11 +269,14 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		baudB := 115200
 		for i := 1; i < len(args); i++ {
 			if args[i] == "--mode" && i+1 < len(args) {
-				mode = args[i+1]; i++
+				mode = args[i+1]
+				i++
 			} else if args[i] == "--portB" && i+1 < len(args) {
-				portB = args[i+1]; i++
+				portB = args[i+1]
+				i++
 			} else if args[i] == "--baudB" && i+1 < len(args) {
-				baudB, _ = strconv.Atoi(args[i+1]); i++
+				baudB, _ = strconv.Atoi(args[i+1])
+				i++
 			} else if port == "" {
 				port = args[i]
 			} else if baud == 115200 {
@@ -269,13 +293,18 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			params["baudB"] = baudB
 		}
 		result, err := dc.Call("process.create", params)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "declare":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "用法: declare <port> [baud] [--mode forward] [--portB <p>] [--baudB <b>] [--dataBits <d>] [--stopBits <s>] [--parity <p>]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		port := ""
@@ -289,17 +318,35 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		for i := 1; i < len(args); i++ {
 			switch args[i] {
 			case "--mode":
-				if i+1 < len(args) { mode = args[i+1]; i++ }
+				if i+1 < len(args) {
+					mode = args[i+1]
+					i++
+				}
 			case "--portB":
-				if i+1 < len(args) { portB = args[i+1]; i++ }
+				if i+1 < len(args) {
+					portB = args[i+1]
+					i++
+				}
 			case "--baudB":
-				if i+1 < len(args) { baudB, _ = strconv.Atoi(args[i+1]); i++ }
+				if i+1 < len(args) {
+					baudB, _ = strconv.Atoi(args[i+1])
+					i++
+				}
 			case "--dataBits":
-				if i+1 < len(args) { dataBits, _ = strconv.Atoi(args[i+1]); i++ }
+				if i+1 < len(args) {
+					dataBits, _ = strconv.Atoi(args[i+1])
+					i++
+				}
 			case "--stopBits":
-				if i+1 < len(args) { stopBits = args[i+1]; i++ }
+				if i+1 < len(args) {
+					stopBits = args[i+1]
+					i++
+				}
 			case "--parity":
-				if i+1 < len(args) { parity = args[i+1]; i++ }
+				if i+1 < len(args) {
+					parity = args[i+1]
+					i++
+				}
 			default:
 				if port == "" {
 					port = args[i]
@@ -310,7 +357,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		if port == "" {
 			fmt.Fprintln(os.Stderr, "错误: 必须指定端口")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		params := map[string]any{
@@ -325,20 +374,27 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		if mode == "forward" {
 			if portB == "" {
 				fmt.Fprintln(os.Stderr, "错误: 转发模式需要 --portB")
-				if interactive { return }
+				if interactive {
+					return
+				}
 				os.Exit(1)
 			}
 			params["portB"] = portB
 			params["baudB"] = baudB
 		}
 		result, err := dc.Call("process.create", params)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "open":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "用法: open <port> [baud]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		port := args[1]
@@ -347,13 +403,18 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			baud, _ = strconv.Atoi(args[2])
 		}
 		result, err := dc.Call("process.create", map[string]any{"port": port, "baud": baud})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "connect":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "用法: connect <processId> <port> [baud]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		pid := args[1]
@@ -365,61 +426,84 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		result, err := dc.Call("process.connect", map[string]any{
 			"processId": pid, "port": port, "baud": baud,
 		})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "disconnect":
 		pid := resolveProcessID(dc, args, 1)
 		result, err := dc.Call("process.disconnect", map[string]any{"processId": pid})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "close":
 		pid := resolveProcessID(dc, args, 1)
 		result, err := dc.Call("process.destroy", map[string]any{"processId": pid})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
-		case "switch":
-			if len(args) < 3 {
-				fmt.Fprintln(os.Stderr, "用法: serial-cli switch <processId> <port> [baud]")
-				if interactive { return }
-				os.Exit(1)
+	case "switch":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "用法: serial-cli switch <processId> <port> [baud]")
+			if interactive {
+				return
 			}
-			pid := args[1]
-			port := args[2]
-			baud := 115200
-			if len(args) >= 4 {
-				if v, err := strconv.Atoi(args[3]); err == nil {
-					baud = v
-				}
+			os.Exit(1)
+		}
+		pid := args[1]
+		port := args[2]
+		baud := 115200
+		if len(args) >= 4 {
+			if v, err := strconv.Atoi(args[3]); err == nil {
+				baud = v
 			}
-			cfg := map[string]any{"baud": baud}
-			if err := dc.SwitchPort(pid, port, cfg); err != nil { errExit(err, interactive); return }
-			fmt.Println(`{"success": true}`)
+		}
+		cfg := map[string]any{"baud": baud}
+		if err := dc.SwitchPort(pid, port, cfg); err != nil {
+			errExit(err, interactive)
+			return
+		}
+		fmt.Println(`{"success": true}`)
 
 	case "setmode":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "用法: setmode <processId> <single|forward>")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		pid := args[1]
 		mode := args[2]
 		if mode != "single" && mode != "forward" {
 			fmt.Fprintln(os.Stderr, "错误: mode 必须是 single 或 forward")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		if err := dc.SetMode(pid, mode); err != nil {
-			if err != nil { errExit(err, interactive); return }
+			if err != nil {
+				errExit(err, interactive)
+				return
+			}
 		}
 		fmt.Println(`{"success": true}`)
 
 	case "send":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "用法: send <data> [processId] [--hex]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		data := args[1]
@@ -439,28 +523,40 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			pid = firstConnectedIDDC(dc)
 		}
 		err := dc.SendViaShm(pid, data, format)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		fmt.Println(`{"success": true}`)
 
-		case "forward":
-			if len(args) < 3 {
-				fmt.Fprintln(os.Stderr, "用法: serial-cli forward <portA> <portB> [baudA] [baudB]")
-				if interactive { return }
-				os.Exit(1)
+	case "forward":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "用法: serial-cli forward <portA> <portB> [baudA] [baudB]")
+			if interactive {
+				return
 			}
-			portA := args[1]
-			portB := args[2]
-			baudA := 115200
-			baudB := 115200
-			if len(args) >= 4 {
-				if v, err := strconv.Atoi(args[3]); err == nil { baudA = v }
+			os.Exit(1)
+		}
+		portA := args[1]
+		portB := args[2]
+		baudA := 115200
+		baudB := 115200
+		if len(args) >= 4 {
+			if v, err := strconv.Atoi(args[3]); err == nil {
+				baudA = v
 			}
-			if len(args) >= 5 {
-				if v, err := strconv.Atoi(args[4]); err == nil { baudB = v }
+		}
+		if len(args) >= 5 {
+			if v, err := strconv.Atoi(args[4]); err == nil {
+				baudB = v
 			}
-			result, err := dc.ForwardCreate(portA, baudA, portB, baudB)
-			if err != nil { errExit(err, interactive); return }
-			printJSON(result)
+		}
+		result, err := dc.ForwardCreate(portA, baudA, portB, baudB)
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
+		printJSON(result)
 
 	case "autosend":
 		if len(args) < 2 {
@@ -468,7 +564,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			fmt.Fprintln(os.Stderr, "      autosend stop [pid]")
 			fmt.Fprintln(os.Stderr, "      autosend status [pid]")
 			fmt.Fprintln(os.Stderr, "      autosend interval <ms> [pid]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		sub := args[1]
@@ -476,7 +574,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		case "start":
 			if len(args) < 4 {
 				fmt.Fprintln(os.Stderr, "用法: autosend start <intervalMs> <mode> [pid]")
-				if interactive { return }
+				if interactive {
+					return
+				}
 				os.Exit(1)
 			}
 			intervalMs, _ := strconv.Atoi(args[2])
@@ -493,16 +593,24 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			if pid == "" {
 				pid = firstConnectedIDDC(dc)
 			}
-			if err := dc.AutoSendStart(pid, intervalMs, mode, loop); err != nil { errExit(err, interactive); return }
+			if err := dc.AutoSendStart(pid, intervalMs, mode, loop); err != nil {
+				errExit(err, interactive)
+				return
+			}
 			fmt.Println(`{"success": true}`)
 		case "stop":
 			pid := resolveProcessID(dc, args, 2)
-			if err := dc.AutoSendStop(pid); err != nil { errExit(err, interactive); return }
+			if err := dc.AutoSendStop(pid); err != nil {
+				errExit(err, interactive)
+				return
+			}
 			fmt.Println(`{"success": true}`)
 		case "interval":
 			if len(args) < 3 {
 				fmt.Fprintln(os.Stderr, "用法: serial-cli autosend interval <ms> [processId]")
-				if interactive { return }
+				if interactive {
+					return
+				}
 				os.Exit(1)
 			}
 			intervalMs, _ := strconv.Atoi(args[2])
@@ -513,23 +621,33 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			if pid == "" {
 				pid = firstConnectedIDDC(dc)
 			}
-			if err := dc.AutoSendSetInterval(pid, intervalMs); err != nil { errExit(err, interactive); return }
+			if err := dc.AutoSendSetInterval(pid, intervalMs); err != nil {
+				errExit(err, interactive)
+				return
+			}
 			fmt.Println(`{"success": true}`)
 		case "status":
 			pid := resolveProcessID(dc, args, 2)
 			result, err := dc.AutoSendStatus(pid)
-			if err != nil { errExit(err, interactive); return }
+			if err != nil {
+				errExit(err, interactive)
+				return
+			}
 			printJSON(result)
 		default:
 			fmt.Fprintf(os.Stderr, "unknown autosend subcommand: %s\n", sub)
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 
 	case "sendqueue":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "用法: sendqueue <file> [pid]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		pid := ""
@@ -548,7 +666,10 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		} else {
 			fileData, fileErr = os.ReadFile(filePath)
 		}
-		if fileErr != nil { errExit(fileErr, interactive); return }
+		if fileErr != nil {
+			errExit(fileErr, interactive)
+			return
+		}
 		var entries []map[string]any
 		if err := json.Unmarshal(fileData, &entries); err != nil {
 			errExit(fmt.Errorf("invalid JSON: %w", err), interactive)
@@ -562,14 +683,19 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		} else {
 			_, err := client.CallOnce("multistr.write", map[string]any{"processId": pid, "entries": entries}, "cli")
-			if err != nil { errExit(err, interactive); return }
+			if err != nil {
+				errExit(err, interactive)
+				return
+			}
 		}
 		fmt.Printf(`{"success": true, "entries": %d}`+"\n", len(entries))
 
 	case "multistr":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "用法: multistr <save|load|reload|status> [pid]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		sub := args[1]
@@ -583,43 +709,69 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		switch sub {
 		case "save":
 			if dc != nil {
-				if err := dc.MultistrSave(pid); err != nil { errExit(err, interactive); return }
+				if err := dc.MultistrSave(pid); err != nil {
+					errExit(err, interactive)
+					return
+				}
 			} else {
 				_, err := client.CallOnce("multistr.save", map[string]any{"processId": pid}, "cli")
-				if err != nil { errExit(err, interactive); return }
+				if err != nil {
+					errExit(err, interactive)
+					return
+				}
 			}
 			fmt.Println(`{"success": true}`)
 		case "load":
 			if dc != nil {
 				entries, err := dc.MultistrLoad(pid)
-				if err != nil { errExit(err, interactive); return }
+				if err != nil {
+					errExit(err, interactive)
+					return
+				}
 				printJSON(map[string]any{"entries": entries})
 			} else {
 				result, err := client.CallOnce("multistr.load", map[string]any{"processId": pid}, "cli")
-				if err != nil { errExit(err, interactive); return }
+				if err != nil {
+					errExit(err, interactive)
+					return
+				}
 				printJSON(result)
 			}
 		case "reload":
 			if dc != nil {
-				if err := dc.MultistrReload(pid); err != nil { errExit(err, interactive); return }
+				if err := dc.MultistrReload(pid); err != nil {
+					errExit(err, interactive)
+					return
+				}
 			} else {
 				_, err := client.CallOnce("multistr.reload", map[string]any{"processId": pid}, "cli")
-				if err != nil { errExit(err, interactive); return }
+				if err != nil {
+					errExit(err, interactive)
+					return
+				}
 			}
 			fmt.Println(`{"success": true}`)
 		case "status":
 			if dc != nil {
 				result, err := dc.AutoSendStatus(pid)
-				if err != nil { errExit(err, interactive); return }
+				if err != nil {
+					errExit(err, interactive)
+					return
+				}
 				printJSON(result)
 			} else {
 				result, err := client.CallOnce("autosend.status", map[string]any{"processId": pid}, "cli")
-				if err != nil { errExit(err, interactive); return }
+				if err != nil {
+					errExit(err, interactive)
+					return
+				}
 				printJSON(result)
 			}
 		default:
 			fmt.Fprintf(os.Stderr, "unknown multistr subcommand: %s\n", sub)
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 
@@ -635,7 +787,10 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		}
 		results, err := dc.ProbePorts(ports, nil, nil, configPath)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		if len(results) == 0 {
 			fmt.Println("未检测到已知设备")
 		} else {
@@ -651,32 +806,46 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "shutdown":
 		result, err := dc.Call("shutdown", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 		fmt.Println("daemon shutdown requested")
 
 	case "history":
 		pid := resolveProcessID(dc, args, 1)
 		result, err := dc.Call("session.history", map[string]any{"processId": pid})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		translateHistory(result)
 		printJSON(result)
 
 	case "stats":
 		pid := resolveProcessID(dc, args, 1)
 		result, err := dc.Call("session.stats", map[string]any{"processId": pid})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "history-files":
 		result, err := dc.Call("history.files", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "history-search":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "用法: history-search <file> <keyword> [limit]")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		filename := args[1]
@@ -686,7 +855,10 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			limit, _ = strconv.Atoi(args[3])
 		}
 		result, err := dc.Call("history.search", map[string]any{"file": filename, "keyword": keyword, "limit": limit, "offset": 0})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		// Translate system messages in results
 		if results, ok := result["results"].([]any); ok {
 			for i, r := range results {
@@ -710,40 +882,59 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			enabled, _ = strconv.ParseBool(args[1])
 		}
 		result, err := dc.Call("history.enable", map[string]any{"enabled": enabled})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "history-status":
 		result, err := dc.Call("history.status", nil)
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "history-attach":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "用法: history-attach <processId> <file>")
-			if interactive { return }
+			if interactive {
+				return
+			}
 			os.Exit(1)
 		}
 		result, err := dc.Call("history.attach", map[string]any{"processId": args[1], "file": args[2]})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "history-new":
 		pid := resolveProcessID(dc, args, 1)
 		result, err := dc.Call("history.new", map[string]any{"processId": pid})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	case "history-detach":
 		pid := resolveProcessID(dc, args, 1)
 		result, err := dc.Call("history.detach", map[string]any{"processId": pid})
-		if err != nil { errExit(err, interactive); return }
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
 		printJSON(result)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		fmt.Fprintln(os.Stderr, "run 'serial-cli help' for available commands")
-		if interactive { return }
+		if interactive {
+			return
+		}
 		os.Exit(1)
 	}
 }

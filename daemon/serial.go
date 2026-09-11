@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"go.bug.st/serial"
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/ringbuf"
+	"go.bug.st/serial"
 )
 
 // ---- types ----
@@ -115,8 +115,8 @@ type Process struct {
 	historyFile     *os.File            // persistent history log file
 	historyFileName string              // current disk file name (for client paging)
 	ringBufMu       sync.Mutex          // serializes writes to ring buffer
-	stopCh      chan struct{}
-	stopOnce    sync.Once // ensures stopIO runs only once
+	stopCh          chan struct{}
+	stopOnce        sync.Once // ensures stopIO runs only once
 
 	sendCh chan sendJob
 
@@ -1043,12 +1043,12 @@ func openSerialPort(config *SerialConfig) (serial.Port, error) {
 	go func() {
 		p, err := serial.Open(config.Port, mode)
 		select {
-			case openCh <- openResult{p, err}:
-			default:
-				if p != nil {
-					p.Close()
-				}
+		case openCh <- openResult{p, err}:
+		default:
+			if p != nil {
+				p.Close()
 			}
+		}
 	}()
 	select {
 	case r := <-openCh:
@@ -1246,7 +1246,6 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 			pm.mu.Lock()
 			pm.processes[id] = proc
 			pm.mu.Unlock()
-
 
 			if mode == "forward" {
 				proc.recordSystemEvent("sys.forward_declared", port, cfgB.Port)
@@ -1557,7 +1556,7 @@ func (pm *ProcessManager) Connect(id string, port string, cfg SerialConfig) erro
 	proc.stopCh = make(chan struct{})
 	proc.sendCh = make(chan sendJob, 32)
 	proc.statsStop = make(chan struct{})
-		proc.stopOnce = sync.Once{}
+	proc.stopOnce = sync.Once{}
 	proc.startTime = time.Now()
 	pm.portMap[port] = id
 	pm.mu.Unlock()

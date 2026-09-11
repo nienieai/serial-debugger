@@ -42,9 +42,9 @@ type rpcError struct {
 // ── MCP initialize types ──
 
 type initializeResult struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    serverCap      `json:"capabilities"`
-	ServerInfo      serverInfo     `json:"serverInfo"`
+	ProtocolVersion string     `json:"protocolVersion"`
+	Capabilities    serverCap  `json:"capabilities"`
+	ServerInfo      serverInfo `json:"serverInfo"`
 }
 
 type serverCap struct {
@@ -98,7 +98,7 @@ func (s *mcpServer) requireReady(id any) bool {
 
 func (s *mcpServer) handleInitialize(req jsonrpcRequest) {
 	var params struct {
-		ProtocolVersion string         `json:"protocolVersion"`
+		ProtocolVersion string `json:"protocolVersion"`
 		ClientInfo      struct {
 			Name    string `json:"name"`
 			Version string `json:"version"`

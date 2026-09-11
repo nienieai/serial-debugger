@@ -194,8 +194,8 @@ func ProbePorts(ports []string, occupiedPorts map[string]bool, cfg *ProbeConfig,
 		}
 
 		// 逐波特率尝试（命中后跳出）
-	portMatched := false
-baudLoop:
+		portMatched := false
+	baudLoop:
 		for _, baud := range bauds {
 			if portMatched {
 				break

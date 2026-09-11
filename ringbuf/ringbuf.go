@@ -31,11 +31,11 @@ var magic = [4]byte{'R', 'I', 'N', 'G'}
 // prefixed with a 2-byte little-endian length. The underlying []byte may
 // be memory-mapped from a shared memory region.
 type RingBuffer struct {
-	data       []byte // full memory region (header + ring data)
-	dataStart  uint32 // offset to ring data (= headerTotal)
-	bufferSize uint32 // size of ring data area
-	autoUnmap  bool   // if true, unmap on Close (for CreateShared)
-	mapAddr    uintptr
+	data       []byte         // full memory region (header + ring data)
+	dataStart  uint32         // offset to ring data (= headerTotal)
+	bufferSize uint32         // size of ring data area
+	autoUnmap  bool           // if true, unmap on Close (for CreateShared)
+	mapAddr    unsafe.Pointer // MapViewOfFile base address; not Go heap memory
 	mapHandle  uintptr
 
 	mu sync.Mutex // protects concurrent read operations (Read/Peek/DrainAll/Reset)
@@ -76,7 +76,7 @@ func (rb *RingBuffer) verifyHeader() bool {
 
 // Wrap existing memory as a RingBuffer. The data slice must include
 // the header. Used by both CreateShared and OpenShared.
-func wrapMemory(data []byte, autoUnmap bool, mapAddr, mapHandle uintptr) *RingBuffer {
+func wrapMemory(data []byte, autoUnmap bool, mapAddr unsafe.Pointer, mapHandle uintptr) *RingBuffer {
 	bs := atomic.LoadUint32((*uint32)(unsafe.Pointer(&data[headerSizeOff])))
 	return &RingBuffer{
 		data:       data,

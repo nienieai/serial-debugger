@@ -30,15 +30,15 @@ func writeICO(path string, color [4]byte) {
 	buf := make([]byte, icoSize)
 
 	// ICO header
-	binary.LittleEndian.PutUint16(buf[0:], 0)   // reserved
-	binary.LittleEndian.PutUint16(buf[2:], 1)   // type = ICO
-	binary.LittleEndian.PutUint16(buf[4:], 1)   // count = 1 image
+	binary.LittleEndian.PutUint16(buf[0:], 0) // reserved
+	binary.LittleEndian.PutUint16(buf[2:], 1) // type = ICO
+	binary.LittleEndian.PutUint16(buf[4:], 1) // count = 1 image
 
 	// ICO entry
-	buf[6] = w       // width (0 = 256)
-	buf[7] = h       // height (0 = 256)
-	buf[8] = 0       // color palette
-	buf[9] = 0       // reserved
+	buf[6] = w                                  // width (0 = 256)
+	buf[7] = h                                  // height (0 = 256)
+	buf[8] = 0                                  // color palette
+	buf[9] = 0                                  // reserved
 	binary.LittleEndian.PutUint16(buf[10:], 1)  // planes
 	binary.LittleEndian.PutUint16(buf[12:], 32) // bpp
 	binary.LittleEndian.PutUint32(buf[14:], uint32(bmpSize))
@@ -46,11 +46,11 @@ func writeICO(path string, color [4]byte) {
 
 	// BITMAPINFOHEADER (at offset 22)
 	bmp := buf[22:]
-	binary.LittleEndian.PutUint32(bmp[0:], 40)   // header size
-	binary.LittleEndian.PutUint32(bmp[4:], w)     // width
-	binary.LittleEndian.PutUint32(bmp[8:], h*2)   // height (doubled for ICO: top-down + bottom-up)
-	binary.LittleEndian.PutUint16(bmp[12:], 1)    // planes
-	binary.LittleEndian.PutUint16(bmp[14:], 32)   // bpp
+	binary.LittleEndian.PutUint32(bmp[0:], 40)  // header size
+	binary.LittleEndian.PutUint32(bmp[4:], w)   // width
+	binary.LittleEndian.PutUint32(bmp[8:], h*2) // height (doubled for ICO: top-down + bottom-up)
+	binary.LittleEndian.PutUint16(bmp[12:], 1)  // planes
+	binary.LittleEndian.PutUint16(bmp[14:], 32) // bpp
 	// rest of header is zeros
 
 	// Pixel data (BGRA, bottom-up)
