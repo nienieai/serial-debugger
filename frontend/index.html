@@ -113,7 +113,12 @@
   <div class="statusbar" id="statusbar"></div>
 </div>
 
-<script src="/wailsjs/runtime/runtime.js"></script>
+<!--
+  注意：此处不要引入 /wailsjs/runtime/runtime.js。
+  该文件是 ES 模块（使用 export），以经典 <script> 引入会在加载时抛
+  "Unexpected token 'export'" 且永不执行；window.runtime 与 window.go
+  由 Wails 运行时自行注入，前端只使用 window.go.main.App.*。
+-->
 <script src="/color-picker.js"></script>
 <script src="/i18n.js"></script>
 <script src="/icons.js"></script>

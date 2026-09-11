@@ -10,5 +10,27 @@
     "APP": {
       "0000": "../../assets/icon-daemon.ico"
     }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "0.7.0.0",
+          "product_version": "0.7.0.0"
+        },
+        "info": {
+          "0409": {
+            "CompanyName": "nienieai",
+            "FileDescription": "串口调试工具 守护进程",
+            "FileVersion": "0.7.0",
+            "InternalName": "serial-daemon",
+            "LegalCopyright": "Copyright (c) 2026 nienieai (MIT License)",
+            "OriginalFilename": "serial-daemon.exe",
+            "ProductName": "串口调试工具",
+            "ProductVersion": "0.7.0"
+          }
+        }
+      }
+    }
   }
 }
