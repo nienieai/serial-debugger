@@ -377,12 +377,14 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 	// Dial client's resp and sub pipes (client created them, we connect)
 	respConn, err := pipe.Dial(p.RespPipe)
 	if err != nil {
+		logOp("错误", "连接客户端 resp 管道失败 (clientId=%s): %v", p.ClientId, err)
 		protocol.WriteMessage(daemonConn, protocol.Response{ID: req.ID, Error: "cannot connect resp pipe: " + err.Error()})
 		daemonConn.Close()
 		return
 	}
 	subConn, err := pipe.Dial(p.SubPipe)
 	if err != nil {
+		logOp("错误", "连接客户端 sub 管道失败 (clientId=%s): %v", p.ClientId, err)
 		respConn.Close()
 		protocol.WriteMessage(daemonConn, protocol.Response{ID: req.ID, Error: "cannot connect sub pipe: " + err.Error()})
 		daemonConn.Close()

@@ -36,14 +36,25 @@ const (
 
 var singletonHandle windows.Handle
 
+// callErrno 取出 Proc.Call 第三个返回值中的 Win32 错误码。
+//
+// 必须用 Proc.Call 的第三个返回值，不能改用 windows.GetLastError()：
+// 后者是另一次系统调用，此时 goroutine 可能已经被调度到别的 OS 线程，
+// 读到的是那个线程的 last-error（通常是 0），于是真正的错误码丢失。
+// x/sys/windows 的 Proc.Call 文档明确要求由调用方直接使用该返回值。
+func callErrno(callErr error) windows.Errno {
+	errno, _ := callErr.(windows.Errno)
+	return errno
+}
+
 func acquireLock() bool {
 	name, _ := windows.UTF16PtrFromString("Global\\serial-tool-daemon")
-	h, _, lastErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
+	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
 	singletonHandle = windows.Handle(h)
 	if h == 0 {
 		return false
 	}
-	return lastErr != windows.ERROR_ALREADY_EXISTS
+	return callErrno(callErr) != windows.ERROR_ALREADY_EXISTS
 }
 
 func releaseLock() {
@@ -53,59 +64,112 @@ func releaseLock() {
 }
 
 type pipeListener struct {
-	path       string
-	mu         sync.Mutex
-	closing    bool
+	path string
+	mu   sync.Mutex
+	// closing 后不再接受新连接。
+	closing bool
+	// currHandle 是当前已有 ConnectNamedPipe 在途的实例，Close 需要取消它的 I/O。
 	currHandle windows.Handle
+	// nextHandle 是预建好、留给下一次 Accept 的实例。
+	nextHandle windows.Handle
+}
+
+// createPipeInstance 创建一个命名管道实例（尚未 ConnectNamedPipe）。
+// 实例一经创建，管道名即存在且可被客户端 CreateFile 连上；随后的
+// ConnectNamedPipe 会立刻返回 ERROR_PIPE_CONNECTED。
+func createPipeInstance(addr string) (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(addr)
+	if err != nil {
+		return 0, err
+	}
+	handle, _, callErr := procCreateNamedPipeW.Call(
+		uintptr(unsafe.Pointer(name)),
+		pipeAccessDuplex,
+		pipeTypeByte|pipeReadmodeByte|pipeWait,
+		pipeUnlimitedInstances,
+		65536, 65536, 0, 0,
+	)
+	if handle == invalidHandleValue || handle == 0 {
+		return 0, fmt.Errorf("CreateNamedPipe failed: %v", callErr)
+	}
+	return windows.Handle(handle), nil
 }
 
 func listenPipe(addr string) (Listener, error) {
-	return &pipeListener{path: addr}, nil
+	l := &pipeListener{path: addr}
+	// 必须在 Listen 返回前就把实例建好。调用方拿到 Listener 后通常是
+	// 「go l.Accept()」再立刻向对端发消息，对端随即回调 Dial：如果实例
+	// 要等 Accept 的 goroutine 被调度后才由 CreateNamedPipe 创建，对端
+	// 会在这个窗口里拿到 ERROR_FILE_NOT_FOUND（WaitNamedPipe 对不存在的
+	// 管道名立即返回失败），表现为间歇性的「管道不可用」。
+	// Unix 实现的 net.Listen 同样是在 Listen 阶段就完成绑定，此处对齐。
+	h, err := createPipeInstance(addr)
+	if err != nil {
+		return nil, err
+	}
+	l.nextHandle = h
+	return l, nil
 }
 
 func (l *pipeListener) Accept() (io.ReadWriteCloser, error) {
-	name, _ := windows.UTF16PtrFromString(l.path)
 	for {
 		l.mu.Lock()
 		if l.closing {
 			l.mu.Unlock()
 			return nil, fmt.Errorf("listener closed")
 		}
+		handle := l.nextHandle
+		l.nextHandle = 0
 		l.mu.Unlock()
 
-		handle, _, _ := procCreateNamedPipeW.Call(
-			uintptr(unsafe.Pointer(name)),
-			pipeAccessDuplex,
-			pipeTypeByte|pipeReadmodeByte|pipeWait,
-			pipeUnlimitedInstances,
-			65536, 65536, 0, 0,
-		)
-		if handle == invalidHandleValue || handle == 0 {
-			return nil, fmt.Errorf("CreateNamedPipe failed: %v", windows.GetLastError())
+		if handle == 0 {
+			// 正常路径上不会走到这里（Listen 预建 + 每次 Accept 补建），
+			// 仅作为预建失败后的兜底。
+			h, err := createPipeInstance(l.path)
+			if err != nil {
+				return nil, err
+			}
+			handle = h
 		}
 
-		h := windows.Handle(handle)
 		l.mu.Lock()
 		if l.closing {
+			// Close 已经执行过：此时 handle 还没登记到 currHandle，
+			// Close 不会去关它，必须由这里释放。
 			l.mu.Unlock()
-			procCloseHandle.Call(handle)
+			procCloseHandle.Call(uintptr(handle))
 			return nil, fmt.Errorf("listener closed")
 		}
-		l.currHandle = h
+		l.currHandle = handle
 		l.mu.Unlock()
 
-		ret, _, _ := procConnectNamedPipe.Call(handle, 0, 0)
+		// 在阻塞于 ConnectNamedPipe 之前先补建下一个实例，让管道名在整个
+		// 生命周期内始终有实例存在，杜绝两次 Accept 之间的空窗。
+		if next, err := createPipeInstance(l.path); err == nil {
+			l.mu.Lock()
+			if l.closing {
+				procCloseHandle.Call(uintptr(next))
+			} else {
+				l.nextHandle = next
+			}
+			l.mu.Unlock()
+		}
+
+		// ERROR_PIPE_CONNECTED 表示客户端在本实例创建之后、ConnectNamedPipe
+		// 之前就连上来了——连接已经建立，属于正常结果而非错误。预建实例
+		// 之后这种情况是常态，因此这里必须正确区分。
+		ret, _, callErr := procConnectNamedPipe.Call(uintptr(handle), 0)
 		if ret == 0 {
-			err := windows.GetLastError()
-			if err != windows.ERROR_PIPE_CONNECTED {
-				procCloseHandle.Call(handle)
+			errno := callErrno(callErr)
+			if errno != windows.ERROR_PIPE_CONNECTED {
+				procCloseHandle.Call(uintptr(handle))
 				l.mu.Lock()
 				l.currHandle = 0
 				l.mu.Unlock()
-				if err == windows.ERROR_NO_DATA {
+				if errno == windows.ERROR_NO_DATA {
 					continue
 				}
-				return nil, fmt.Errorf("ConnectNamedPipe failed: %v", err)
+				return nil, fmt.Errorf("ConnectNamedPipe failed: %v", callErr)
 			}
 		}
 		// Connection handed off — clear currHandle so Close() won't
@@ -113,13 +177,18 @@ func (l *pipeListener) Accept() (io.ReadWriteCloser, error) {
 		l.mu.Lock()
 		l.currHandle = 0
 		l.mu.Unlock()
-		return &winPipeConn{handle: h}, nil
+		return &winPipeConn{handle: handle}, nil
 	}
 }
 
 func (l *pipeListener) Close() error {
 	l.mu.Lock()
 	l.closing = true
+	if l.nextHandle != 0 {
+		// 预建实例上没有在途 I/O，CloseHandle 不会阻塞。
+		procCloseHandle.Call(uintptr(l.nextHandle))
+		l.nextHandle = 0
+	}
 	if l.currHandle != 0 {
 		// ConnectNamedPipe is a *synchronous* pending I/O on this handle.
 		// Both DisconnectNamedPipe and CloseHandle block until that I/O
@@ -176,26 +245,29 @@ func clientPID(conn io.ReadWriteCloser) (uint32, error) {
 	}
 	procGetPID := kernel32.NewProc("GetNamedPipeClientProcessId")
 	var pid uint32
-	ret, _, _ := procGetPID.Call(uintptr(wc.handle), uintptr(unsafe.Pointer(&pid)))
+	ret, _, callErr := procGetPID.Call(uintptr(wc.handle), uintptr(unsafe.Pointer(&pid)))
 	if ret == 0 {
-		return 0, fmt.Errorf("GetNamedPipeClientProcessId failed: %v", windows.GetLastError())
+		return 0, fmt.Errorf("GetNamedPipeClientProcessId failed: %v", callErr)
 	}
 	return pid, nil
 }
 
 func dialPipe(addr string) (io.ReadWriteCloser, error) {
 	name, _ := windows.UTF16PtrFromString(addr)
-	ret, _, _ := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(name)), 5000)
+	// WaitNamedPipe 在管道名不存在时立即失败（ERROR_FILE_NOT_FOUND），
+	// 名字存在但实例都被占用时才等到超时；两种情况的错误码都要报出来，
+	// 否则只能看到笼统的「管道不可用」。
+	ret, _, callErr := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(name)), 5000)
 	if ret == 0 {
-		return nil, fmt.Errorf("pipe not available: %s", addr)
+		return nil, fmt.Errorf("pipe not available: %s: %v", addr, callErr)
 	}
-	handle, _, _ := procCreateFileW.Call(
+	handle, _, callErr := procCreateFileW.Call(
 		uintptr(unsafe.Pointer(name)),
 		genericRead|genericWrite, 0, 0,
 		openExisting, 0, 0,
 	)
 	if handle == invalidHandleValue || handle == 0 {
-		return nil, fmt.Errorf("CreateFile failed for pipe %s: %v", addr, windows.GetLastError())
+		return nil, fmt.Errorf("CreateFile failed for pipe %s: %v", addr, callErr)
 	}
 	return &winPipeConn{handle: windows.Handle(handle)}, nil
 }

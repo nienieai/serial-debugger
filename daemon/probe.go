@@ -70,9 +70,14 @@ func LoadProbeConfig(path string) (*ProbeConfig, error) {
 // findProbeConfig 按优先级查找探测配置文件：
 // 1. 显式路径
 // 2. daemon 可执行文件旁 probe.toml
-// 3. <exe>/../config/probe.toml（发布包：exe 与 config 同级）
-// 4. <exe>/../../config/probe.toml（开发：exe 在 build/bin，config 在仓库根）
-// 5. 当前工作目录 probe.toml / config/probe.toml
+// 3. <exe>/config/probe.toml（发布包：exe 与 config 子目录同级）
+// 4. <exe>/../config/probe.toml（exe 在 bin 子目录：config 与 bin 同级）
+// 5. <exe>/../../config/probe.toml（开发：exe 在 build/bin，config 在仓库根）
+// 6. 当前工作目录 probe.toml / config/probe.toml
+//
+// 前 5 项都基于可执行文件位置，因此与启动时的 cwd 无关；第 6 项是兜底。
+// 这样发布包无论从哪个目录启动（快捷方式、任务栏固定、其它 cwd 调用
+// serial-cli）都能读到随包的 config/probe.toml。
 //
 // 都找不到时返回空路径且不报错，调用方回退到内置规则
 // （config.DefaultProbeToml），因此 probe 功能开箱即用。
@@ -84,6 +89,19 @@ func findProbeConfig(explicitPath string) (string, error) {
 		return "", fmt.Errorf("指定配置文件不存在: %s", explicitPath)
 	}
 
+	candidates := probeConfigCandidates(exeDirOrEmpty(), wdOrEmpty())
+
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", nil
+}
+
+// probeConfigCandidates 生成探测配置的候选路径（按优先级），并去重。
+// exeDir / wd 为空字符串时跳过对应分组，便于单元测试覆盖布局分支。
+func probeConfigCandidates(exeDir, wd string) []string {
 	candidates := []string{}
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -93,23 +111,36 @@ func findProbeConfig(explicitPath string) (string, error) {
 			candidates = append(candidates, p)
 		}
 	}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
+
+	if exeDir != "" {
 		add(filepath.Join(exeDir, "probe.toml"))
+		add(filepath.Join(exeDir, "config", "probe.toml"))
 		add(filepath.Join(exeDir, "..", "config", "probe.toml"))
 		add(filepath.Join(exeDir, "..", "..", "config", "probe.toml"))
 	}
-	if wd, err := os.Getwd(); err == nil {
+	if wd != "" {
 		add(filepath.Join(wd, "probe.toml"))
 		add(filepath.Join(wd, "config", "probe.toml"))
 	}
+	return candidates
+}
 
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
+// exeDirOrEmpty 返回 daemon 可执行文件所在目录，取不到时返回空串。
+func exeDirOrEmpty() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
 	}
-	return "", nil
+	return filepath.Dir(exe)
+}
+
+// wdOrEmpty 返回当前工作目录，取不到时返回空串。
+func wdOrEmpty() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
 }
 
 // ---- probe engine ----
