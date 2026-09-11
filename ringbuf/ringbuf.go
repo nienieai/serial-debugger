@@ -5,6 +5,7 @@ package ringbuf
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -26,6 +27,38 @@ const (
 )
 
 var magic = [4]byte{'R', 'I', 'N', 'G'}
+
+// headerVersion 是共享内存头的布局版本。
+//
+// 任何会改变头字段含义、偏移或数据区语义的改动都必须递增它。守护进程与
+// 客户端是各自独立升级的二进制，新客户端可能映射到旧守护进程（或反之）
+// 创建的内存；版本不一致时必须明确拒绝，否则会按错误的偏移解释数据，
+// 表现为静默乱码，甚至在数据区大小变化时越界。
+const headerVersion = 1
+
+// maxRingDataSize 是头中声明的数据区大小的合理上界。
+// 头可能被破坏或来自不兼容的构建；不校验就据此构造切片会越界访问。
+const maxRingDataSize = 64 * 1024 * 1024
+
+// validateHeaderBytes 校验魔数、布局版本与数据区大小。
+// hdr 至少要有 headerTotal 字节。
+func validateHeaderBytes(hdr []byte) error {
+	if len(hdr) < headerTotal {
+		return fmt.Errorf("头部长度不足: %d", len(hdr))
+	}
+	if hdr[headerMagicOffset] != magic[0] || hdr[headerMagicOffset+1] != magic[1] ||
+		hdr[headerMagicOffset+2] != magic[2] || hdr[headerMagicOffset+3] != magic[3] {
+		return fmt.Errorf("魔数不匹配")
+	}
+	if v := binary.LittleEndian.Uint32(hdr[headerVersionOff:]); v != headerVersion {
+		return fmt.Errorf("布局版本不匹配: 期望 %d, 实际 %d", headerVersion, v)
+	}
+	bs := binary.LittleEndian.Uint32(hdr[headerSizeOff:])
+	if bs == 0 || bs > maxRingDataSize {
+		return fmt.Errorf("非法的数据区大小: %d", bs)
+	}
+	return nil
+}
 
 // RingBuffer is a byte-level ring buffer. It stores variable-length packets
 // prefixed with a 2-byte little-endian length. The underlying []byte may
@@ -52,30 +85,19 @@ func (rb *RingBuffer) countPtr() *uint32 {
 	return (*uint32)(unsafe.Pointer(&rb.data[headerCountOff]))
 }
 
-func (rb *RingBuffer) bufferSizePtr() *uint32 {
-	return (*uint32)(unsafe.Pointer(&rb.data[headerSizeOff]))
-}
-
 // initHeader writes the initial header values. Only called by creator.
 func (rb *RingBuffer) initHeader(bufSize uint32) {
 	copy(rb.data[headerMagicOffset:], magic[:])
-	binary.LittleEndian.PutUint32(rb.data[headerVersionOff:], 1)
+	binary.LittleEndian.PutUint32(rb.data[headerVersionOff:], headerVersion)
 	binary.LittleEndian.PutUint32(rb.data[headerSizeOff:], bufSize)
 	binary.LittleEndian.PutUint32(rb.data[headerHeadOff:], 0)
 	binary.LittleEndian.PutUint32(rb.data[headerTailOff:], 0)
 	binary.LittleEndian.PutUint32(rb.data[headerCountOff:], 0)
 }
 
-// verifyHeader checks the magic number. Returns false if invalid.
-func (rb *RingBuffer) verifyHeader() bool {
-	return rb.data[headerMagicOffset] == magic[0] &&
-		rb.data[headerMagicOffset+1] == magic[1] &&
-		rb.data[headerMagicOffset+2] == magic[2] &&
-		rb.data[headerMagicOffset+3] == magic[3]
-}
-
-// Wrap existing memory as a RingBuffer. The data slice must include
-// the header. Used by both CreateShared and OpenShared.
+// wrapMemory wraps an already-validated mapping as a RingBuffer.
+// The data slice must include the header, and its header must have passed
+// validateHeaderBytes — the declared data-area size is read from it here.
 func wrapMemory(data []byte, autoUnmap bool, mapAddr unsafe.Pointer, mapHandle uintptr) *RingBuffer {
 	bs := atomic.LoadUint32((*uint32)(unsafe.Pointer(&data[headerSizeOff])))
 	return &RingBuffer{

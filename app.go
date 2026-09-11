@@ -14,6 +14,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/client"
 	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/decode"
 	"github.com/nienieai/serial-debugger/version"
 
@@ -213,7 +214,7 @@ func (a *App) StopDaemon() error {
 	a.daemonMu.Unlock()
 
 	if ec != nil {
-		client.CallOnce("shutdown", nil, "gui")
+		client.CallOnce(contract.Shutdown, nil, "gui")
 		ec.Close()
 	}
 
@@ -239,7 +240,7 @@ type SerialConfig struct {
 	Parity   string `json:"parity"`
 }
 
-func (a *App) call(method string, params map[string]any) (map[string]any, error) {
+func (a *App) call(method contract.Method, params map[string]any) (map[string]any, error) {
 	a.daemonMu.Lock()
 	ec := a.eventConn
 	a.daemonMu.Unlock()
@@ -250,7 +251,7 @@ func (a *App) call(method string, params map[string]any) (map[string]any, error)
 }
 
 func (a *App) GetPorts() ([]map[string]any, error) {
-	result, err := a.call("ports", nil)
+	result, err := a.call(contract.Ports, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +264,7 @@ func (a *App) GetPorts() ([]map[string]any, error) {
 }
 
 func (a *App) RefreshPorts() ([]map[string]any, error) {
-	result, err := a.call("ports.refresh", nil)
+	result, err := a.call(contract.PortsRefresh, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +277,7 @@ func (a *App) RefreshPorts() ([]map[string]any, error) {
 }
 
 func (a *App) OpenSession(cfg SerialConfig) (string, error) {
-	result, err := a.call("process.create", map[string]any{
+	result, err := a.call(contract.ProcessCreate, map[string]any{
 		"port": cfg.Port, "baud": cfg.Baud,
 		"dataBits": cfg.DataBits, "stopBits": cfg.StopBits, "parity": cfg.Parity,
 	})
@@ -288,12 +289,12 @@ func (a *App) OpenSession(cfg SerialConfig) (string, error) {
 }
 
 func (a *App) CloseSession(processID string) error {
-	_, err := a.call("process.destroy", map[string]any{"processId": processID})
+	_, err := a.call(contract.ProcessDestroy, map[string]any{"processId": processID})
 	return err
 }
 
 func (a *App) CreateIdleProcess() (string, error) {
-	result, err := a.call("process.create", nil)
+	result, err := a.call(contract.ProcessCreate, nil)
 	if err != nil {
 		return "", err
 	}
@@ -302,7 +303,7 @@ func (a *App) CreateIdleProcess() (string, error) {
 }
 
 func (a *App) ConnectSession(processID string, cfg SerialConfig) error {
-	_, err := a.call("process.connect", map[string]any{
+	_, err := a.call(contract.ProcessConnect, map[string]any{
 		"processId": processID, "port": cfg.Port, "baud": cfg.Baud,
 		"dataBits": cfg.DataBits, "stopBits": cfg.StopBits, "parity": cfg.Parity,
 	})
@@ -310,7 +311,7 @@ func (a *App) ConnectSession(processID string, cfg SerialConfig) error {
 }
 
 func (a *App) DisconnectSession(processID string) error {
-	_, err := a.call("process.disconnect", map[string]any{"processId": processID})
+	_, err := a.call(contract.ProcessDisconnect, map[string]any{"processId": processID})
 	return err
 }
 
@@ -338,14 +339,14 @@ func (a *App) SwitchPort(sessionId string, port string, cfg map[string]any) {
 }
 
 func (a *App) SendData(processID string, data string, format string) error {
-	_, err := a.call("session.send", map[string]any{
+	_, err := a.call(contract.SessionSend, map[string]any{
 		"processId": processID, "data": data, "format": format,
 	})
 	return err
 }
 
 func (a *App) GetClients() []map[string]any {
-	result, err := a.call("client.list", nil)
+	result, err := a.call(contract.ClientList, nil)
 	if err != nil {
 		return nil
 	}
@@ -360,7 +361,7 @@ func (a *App) GetClients() []map[string]any {
 }
 
 func (a *App) GetSessions() []map[string]any {
-	result, err := a.call("process.list", nil)
+	result, err := a.call(contract.ProcessList, nil)
 	if err != nil {
 		return nil
 	}
@@ -693,12 +694,12 @@ func (a *App) GetVersion() string {
 }
 
 func (a *App) GetThreads() map[string]any {
-	result, _ := a.call("threads", nil)
+	result, _ := a.call(contract.Threads, nil)
 	return result
 }
 
 func (a *App) GetSessionHistory(processID string) map[string]any {
-	result, _ := a.call("session.history", map[string]any{"processId": processID})
+	result, _ := a.call(contract.SessionHistory, map[string]any{"processId": processID})
 	if result != nil {
 		// Decode each history entry's hex into segments for the frontend.
 		a.tabDecodersMu.Lock()
@@ -729,12 +730,12 @@ func (a *App) GetSessionHistory(processID string) map[string]any {
 }
 
 func (a *App) GetSessionStats(processID string) map[string]any {
-	result, _ := a.call("session.stats", map[string]any{"processId": processID})
+	result, _ := a.call(contract.SessionStats, map[string]any{"processId": processID})
 	return result
 }
 
 func (a *App) GetGoroutines() map[string]any {
-	result, _ := a.call("goroutines", nil)
+	result, _ := a.call(contract.Goroutines, nil)
 	return result
 }
 
@@ -759,19 +760,19 @@ func (a *App) ClearHistory(processID string) error {
 	if ec == nil {
 		return fmt.Errorf("not connected")
 	}
-	_, err := ec.Call("session.clearhistory", map[string]any{"processId": processID})
+	_, err := ec.Call(contract.SessionClearHistory, map[string]any{"processId": processID})
 	return err
 }
 
 // SetProcessMode switches the process mode between "single" and "forward".
 func (a *App) SetProcessMode(processID string, mode string) error {
-	_, err := a.call("process.setmode", map[string]any{"processId": processID, "mode": mode})
+	_, err := a.call(contract.ProcessSetMode, map[string]any{"processId": processID, "mode": mode})
 	return err
 }
 
 // ForwardConnect connects an idle forward-mode process to two serial ports.
 func (a *App) ForwardConnect(processID string, cfgA, cfgB SerialConfig) error {
-	_, err := a.call("process.connect", map[string]any{
+	_, err := a.call(contract.ProcessConnect, map[string]any{
 		"processId": processID,
 		"port":      cfgA.Port,
 		"baud":      cfgA.Baud,
@@ -965,7 +966,7 @@ func (a *App) StartQueueSend(processID string, loop bool, roundIntervalMs int) e
 		"intervalMs": roundIntervalMs,
 		"loop":       loop,
 	}
-	_, err := ec.Call("autosend.start", params)
+	_, err := ec.Call(contract.AutosendStart, params)
 	return err
 }
 

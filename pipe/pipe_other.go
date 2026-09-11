@@ -54,6 +54,10 @@ func clientPID(conn io.ReadWriteCloser) (uint32, error) {
 	return 0, nil
 }
 
+// cancelPending is a no-op on Unix: closing the net.Conn already unblocks any
+// goroutine parked in Read or Write.
+func cancelPending(conn io.ReadWriteCloser) {}
+
 func dialPipe(addr string) (io.ReadWriteCloser, error) {
 	conn, err := net.Dial("unix", addr)
 	if err != nil {

@@ -36,3 +36,14 @@ func Dial(addr string) (io.ReadWriteCloser, error) {
 func ClientPID(conn io.ReadWriteCloser) (uint32, error) {
 	return clientPID(conn)
 }
+
+// CancelPending aborts the I/O currently blocking on conn, so a goroutine
+// parked in Read or Write returns immediately instead of waiting for the peer.
+//
+// This is needed because closing a handle does NOT reliably wake a synchronous
+// Read/Write already in flight on Windows: the blocked call stays parked until
+// the peer closes its end. Without cancelling first, tearing down a connection
+// from another goroutine leaves the reader/writer goroutine stuck.
+func CancelPending(conn io.ReadWriteCloser) {
+	cancelPending(conn)
+}

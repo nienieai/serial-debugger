@@ -1,4 +1,4 @@
-# 串口调试工具 v0.6.5 框架文档
+# 串口调试工具 v0.7.0 框架文档
 
 ## 一、整体框架
 
@@ -174,6 +174,8 @@ sequenceDiagram
 
 ### 2.4 协议格式
 
+线路上是**换行分隔的 JSON**（每条消息一行，无内容长度头）。
+
 **注册**
 ```json
 {"id":0, "method":"register", "params":{"clientId":"gui-xxx", "source":"gui", "subscribe":["rx","tx",...], "respPipe":"...", "subPipe":"..."}}
@@ -194,14 +196,26 @@ sequenceDiagram
 {"event":"rx", "params":{"processId":"1","hex":"48656C6C6F","timestamp":"13:00:06.123"}}
 ```
 
+### 2.4.1 协议版本协商（v0.7.0）
+
+守护进程是机器级单例（`Global\serial-tool-daemon` 互斥体持有），而 GUI / CLI / MCP / 独立软件是各自独立升级的可执行文件，因此「新客户端 + 旧守护进程」是常态。协议层因此带有版本号：
+
+- `protocol.ProtocolVersion` 是当前协议版本常量。**任何破坏兼容性的改动都必须递增它**（方法改名或增删、参数形状变化、共享内存条目布局变化）。
+- 守护进程通过 `daemon.info` 返回 `{version, protocolVersion, pid, startTime, uptimeSec}`；`status` 结果中也带上 `version` 与 `protocolVersion`。
+- 客户端建立会话后**立即**调用 `daemon.info` 核对：协议号不一致、或对端版本过旧不认识该方法时，明确报错并给出可操作提示，而不是带病工作。
+- `client.StartDaemon()` 在发现版本不一致时会关闭旧守护进程、**等待它真正退出**（新实例靠 Global 互斥体判断单例，旧实例未释放锁时新实例会以「已在运行」退出而静默失败），再启动新实例，返回 `"restarted"`。
+
 ### 2.5 IPC 方法
+
+方法名由 `contract` 包统一定义（见 3.4），下表列出语义。**参数与响应形状的权威来源是 daemon 的实现与 `contract` 常量，不是本表**；本表用于快速索引。
 
 | 方法 | 参数 | 响应 |
 |------|------|------|
 | `register` | `clientId, source, subscribe, respPipe, subPipe` | `{"registered":true}`（注册后立即推送 ports-list + process-changed） |
+| `daemon.info` | — | `{"version","protocolVersion","pid","startTime","uptimeSec"}`（v0.7.0） |
 | `ping` | — | `{"pong":"ok"}`（静默） |
 | `subscribe` | `events: ["rx","tx",...]`（空数组推送全部已订阅状态） | `{"subscribed": N}`（订阅后立即推送对应状态） |
-| `status` | — | `{"status":"ok"}` |
+| `status` | — | `{"status":"ok","version","protocolVersion"}` |
 | `ports` | — | `{"ports":[...]}` |
 | `ports.refresh` | — | `{"ports":[...]}` + 变化时广播 |
 | `ports.probe` | `ports? baudRates? rules? configPath?` | `{"results":[{port,baud,rule,description}]}` |
@@ -224,7 +238,7 @@ sequenceDiagram
 | `client.list` | — | `{"clients":[{clientId,source,pid,connectTime,reqCount,subs}]}` |
 | `session.clearhistory` | `processId` | `{"success"}` — 重置环形缓冲区 |
 | `send.trigger` | `processId raw?` | `{"success"}` — 从 sendq 读一条进 sendCh（`raw:true` 跳过 multistr 解码，0.6.4 新增） |
-| `send.ringname` | `processId` | `{"sharedName":"..."}` — 发送队列共享内存名 |
+| `send.ringname` | `processId` | `{"ringName":"..."}` — 发送队列共享内存名（v0.7.0 前文档误写为 `sharedName`，实现一直是 `ringName`） |
 | `autosend.start` | `processId intervalMs mode loop?` | `{"success"}` — 启动 autoSendLoop（mode: single/queue） |
 | `autosend.stop` | `processId` | `{"success"}` |
 | `autosend.status` | `processId` | `{"status":{...}}` |
@@ -391,12 +405,32 @@ process.destroy        → 有连接先 disconnect → 删除 + closeHistory
 
 ### 3.4 dispatch 路由
 
+#### 方法名的单一事实来源：`contract` 包（v0.7.0）
+
+`daemon/ipc.go` 的 `dispatchForSession` 按方法名分发。方法名此前在**六处**各自以裸字符串重复声明——这个 switch、日志摘要里的第二个 switch、`client` 的包装、CLI 的命令分支、MCP 的工具表、GUI 的绑定方法——且裸 `string` 写错只在运行时变成 `unknown method`。
+
+现在所有方法名由 `contract` 包统一定义：
+
+```go
+const ProcessCreate Method = "process.create"
+var All = []Method{ Register, Subscribe, ..., ProcessCreate, ... }
+```
+
+- daemon 的 `switch contract.Method(req.Method)` 与各客户端层一律引用常量；
+- `client.Call` / `CallOnce` 的形参类型是 `contract.Method`，调用方直接传常量，**写错方法名无法通过编译**；
+- daemon 侧有一致性测试强制「`contract.All` 里的每个方法都真的被实现」，以及「dispatch 里不得出现字面量方法名」——后者防止契约退化成一份可能与实现脱节的平行清单。
+
+注意 CLI 的**命令名**是与 IPC 方法名不同的命名空间（`status` / `ports` / `threads` / `shutdown` 这几个词在两边都出现但含义不同），CLI 的命令 switch 保持字符串字面量。
+
+#### 分发对照表
+
 | 方法 | 处理 |
 |------|------|
 | `register` | 建立 3 管道会话，返回注册确认 |
+| `daemon.info` | 返回版本、IPC 协议号、PID、启动时间、运行时长 |
 | `ping` | 静默返回 pong（心跳，不记日志） |
 | `subscribe` | 更新会话事件订阅表 |
-| `status` | 静默返回 ok（手动健康检查） |
+| `status` | 静默返回 ok + 版本（手动健康检查） |
 | `ports` / `ports.refresh` | 缓存 / 刷新 + 变化广播 |
 | `ports.probe` | 加载 TOML 规则 → 跳过已连接端口 → 逐端口/波特率/规则发探针帧 → 匹配响应 |
 | `process.create` | pm.Create(mode, port, cfg, cfgB) — 支持 mode="forward" 双端口 |
@@ -549,7 +583,7 @@ graph TB
 
 ### 3.7 共享内存历史缓冲区
 
-每进程创建命名共享内存 `serial-tool-history-{id}`（`CreateFileMappingW`），5MB 固定大小：
+每进程创建命名共享内存 `serial-tool-history-<实例令牌>-{id}`（`CreateFileMappingW`），5MB 固定大小：
 
 ```
 [Header 24B] magic(4) | ver(4) | bufSize(4) | head(4) | tail(4) | count(4)
@@ -558,7 +592,11 @@ graph TB
 entry = timestamp(8B) | direction(1B) | hexLen(2B) | hexData(NB)
 ```
 
-客户端可通过 IPC 返回的 `sharedName` 直接 `OpenFileMappingW` 读取，绕过管道。
+**实例令牌（v0.7.0）**：名字里带守护进程实例令牌。原因是进程号计数器每次守护进程重启都从 1 重新开始，而上一实例残留的客户端可能仍映射着 `serial-tool-history-1`；`CreateFileMappingW` 遇到同名对象会**成功返回既有 section 的句柄**（错误码才是 `ERROR_ALREADY_EXISTS`），两个逻辑上无关的进程就会共享同一块内存、互相覆盖。令牌化后不同实例永不撞名，`CreateSharedRing` 的 `ERROR_ALREADY_EXISTS` 检查也就只会在真正异常时触发。
+
+**头部校验（v0.7.0）**：打开已有映射时校验魔数、**布局版本**与数据区大小上界。此前版本字段只写不读、`bufSize` 直接信任被映射内存自己声明的值并据此构造切片。改动头布局时必须递增 `headerVersion`。
+
+**读取路径**：历史读取经 IPC 的 `session.history`，走 `Snapshot` 语义（读不消费、不需写游标），daemon 侧由 `ringBufMu` 串行化。`ringbuf.OpenSharedRing` 从未接通：它只映射 `FILE_MAP_READ`，而返回对象上的 `Read`/`Reset` 会写 tail，按原设计调用会访问冲突。
 
 ### 3.7.1 历史持久化（双写）
 
@@ -1042,8 +1080,8 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `send` | `<data> [pid] [--hex]` | `SendViaShm`（写共享内存 + `send.trigger`） |
 | `sendqueue` | `<file> [pid]` | 从 JSON 文件写多行到 sendq 共享内存 |
 | `autosend` | `start <ms> <mode> [--loop] [pid]`<br/>`stop [pid]` / `status [pid]`<br/>`interval <ms> [pid]` | `autosend.start` / `autosend.stop` / `autosend.status` / `autosend.interval` |
-| `multistr` | `save [pid]` / `load [pid]`<br/>`reload [pid]` / `status [pid]` | `multistr.save` / `multistr.load` / `multistr.reload` / `multistr.status` |
-| `history` | `[pid]` | `session.history`（共享内存） |
+| `multistr` | `save [pid]` / `load [pid]`<br/>`reload [pid]` / `status [pid]` | `multistr.save` / `multistr.load` / `multistr.reload` / `autosend.status`（**`multistr.status` 这个 IPC 方法并不存在**，v0.7.0 前 CLI 与 MCP 都误用了该名字、实际发的都是 `autosend.status`；v0.7.0 起方法名是 `contract` 常量，写不出不存在的名字，但这个工具名/命令名的历史叫法保留） |
+| `history` | `[pid]` | `session.history`（经 IPC 读取共享内存环的快照） |
 | `history-files` | — | `history.files`（列出历史记录文件） |
 | `history-search` | `<file> <kw> [limit]` | `history.search`（分页搜索关键字） |
 | `history-enable` | `[true\|false]` | `history.enable`（开关自动保存，默认 true） |

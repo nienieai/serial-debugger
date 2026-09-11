@@ -1,14 +1,18 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "{{.Info.ProductVersion}}",
+		"product_version": "{{.Info.ProductVersion}}"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
 			"CompanyName": "{{.Info.CompanyName}}",
 			"FileDescription": "{{.Info.ProductName}}",
+			"FileVersion": "{{.Info.ProductVersion}}",
+			"InternalName": "serial-gui",
 			"LegalCopyright": "{{.Info.Copyright}}",
+			"OriginalFilename": "serial-gui.exe",
 			"ProductName": "{{.Info.ProductName}}",
+			"ProductVersion": "{{.Info.ProductVersion}}",
 			"Comments": "{{.Info.Comments}}"
 		}
 	}

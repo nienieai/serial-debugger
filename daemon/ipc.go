@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.bug.st/serial"
 
+	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/pipe"
 	"github.com/nienieai/serial-debugger/protocol"
+	"github.com/nienieai/serial-debugger/version"
 )
 
 // ---- port info ----
@@ -25,6 +28,23 @@ type portInfo struct {
 
 // ---- client session (3-pipe) ----
 
+// subQueueSize 是每个会话待发事件的队列深度。
+//
+// 事件经 sub 管道推送，而写管道是会阻塞的。此前广播在持有 sessMu 的情况下
+// 逐个会话同步写，任何一个停止读取事件的客户端都会把整条广播链卡住：既挡住
+// 新客户端注册（addSession 需要写锁），也让发起广播的串口读循环停在原地、
+// 连带丢掉端口数据。实测一个不读 sub 管道的客户端能让 status 阻塞 82 秒，
+// 直到它断开为止。
+//
+// 现在每个会话有自己的写入协程与有界队列，广播只做非阻塞投递：慢客户端
+// 被单独摘除，代价不再由所有人承担。
+//
+// 深度取 256 而非更大值，因为这只是「广播方与管道写之间」的解耦缓冲：
+// 客户端自身还有 4096 深的事件 channel 与 64KB 管道缓冲。单个事件最大约
+// 8 KB（4096 字节数据 hex 编码），256 条即约 2 MB/会话的内存上界；再深
+// 只会推迟本该发生的摘除、并放大内存占用。
+const subQueueSize = 256
+
 type clientSession struct {
 	clientId         string
 	source           string
@@ -34,19 +54,58 @@ type clientSession struct {
 	pid              uint32
 	connectTime      time.Time
 	reqCount         int
-	subMu            sync.Mutex // serializes writes to subConn
 	subs             map[string]bool
 	watchedProcesses map[string]bool // set of process IDs this client is viewing
+
+	subCh     chan protocol.Event // 待推送事件（有界）
+	subDone   chan struct{}       // 关闭表示该会话不再投递事件
+	evictOnce sync.Once
+	dropped   atomic.Int64 // 因队列满而未能投递的事件数
 }
 
 func (sess *clientSession) writeResp(v any) error {
 	return protocol.WriteMessage(sess.respConn, v)
 }
 
-func (sess *clientSession) writeSub(v any) error {
-	sess.subMu.Lock()
-	defer sess.subMu.Unlock()
-	return protocol.WriteMessage(sess.subConn, v)
+// enqueueSub 非阻塞地把事件放进该会话的发送队列。
+// 返回 false 表示队列已满 —— 调用方应当把该客户端判定为慢客户端。
+func (sess *clientSession) enqueueSub(evt protocol.Event) bool {
+	select {
+	case <-sess.subDone:
+		return true // 已判定退出，不再计入队列满
+	default:
+	}
+	select {
+	case sess.subCh <- evt:
+		return true
+	default:
+		sess.dropped.Add(1)
+		return false
+	}
+}
+
+// subWriter 是该会话唯一的 sub 管道写入者，保证事件之间的顺序。
+func (sess *clientSession) subWriter() {
+	for {
+		select {
+		case <-sess.subDone:
+			return
+		case evt := <-sess.subCh:
+			if err := protocol.WriteMessage(sess.subConn, evt); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// markEvicted 幂等地把该会话标记为「不再投递事件」。
+func (sess *clientSession) markEvicted() bool {
+	fired := false
+	sess.evictOnce.Do(func() {
+		close(sess.subDone)
+		fired = true
+	})
+	return fired
 }
 
 // ---- ipc server ----
@@ -63,6 +122,8 @@ type IpcServer struct {
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 
+	startTime time.Time
+
 	hwProbeInterval  time.Duration
 	hwProbeStop      chan struct{}
 	hwProbeLastPorts []string
@@ -74,6 +135,7 @@ func NewIpcServer(pm *ProcessManager) *IpcServer {
 		sessions:        make(map[string]*clientSession),
 		knownPIDs:       make(map[uint32]string),
 		shutdownCh:      make(chan struct{}),
+		startTime:       time.Now(),
 		hwProbeStop:     make(chan struct{}),
 		hwProbeInterval: 2 * time.Second,
 	}
@@ -249,15 +311,53 @@ func (s *IpcServer) broadcastProcessChanged() {
 	s.broadcastFiltered("process-changed", map[string]any{"processes": procs})
 }
 
+// broadcastFiltered 把事件投递给所有订阅了它的会话。
+//
+// 只在 sessMu 下做一次快照，随后在锁外非阻塞投递：绝不在持锁期间做管道 I/O，
+// 也绝不让某个会话的阻塞影响其它会话或调用方（调用方通常是串口读循环）。
 func (s *IpcServer) broadcastFiltered(eventName string, params any) {
-	s.sessMu.RLock()
-	defer s.sessMu.RUnlock()
 	evt := protocol.Event{Event: eventName, Params: params}
+
+	s.sessMu.RLock()
+	targets := make([]*clientSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
 		if sess.subs[eventName] {
-			sess.writeSub(evt)
+			targets = append(targets, sess)
 		}
 	}
+	s.sessMu.RUnlock()
+
+	for _, sess := range targets {
+		if !sess.enqueueSub(evt) {
+			s.onSubQueueFull(sess)
+		}
+	}
+}
+
+// onSubQueueFull 处理「某会话的事件队列已满」：标记并异步摘除，只处理一次。
+//
+// 必须异步：调用点可能在持锁路径上（例如 pushStatsCountTo 持有 pm 的读锁），
+// 而摘除会走 removeSession → broadcastProcessChanged → pm.List()，同步执行会在
+// 同一协程里二次获取 pm.mu 的读锁，遇到等待中的写者即死锁。
+func (s *IpcServer) onSubQueueFull(sess *clientSession) {
+	if !sess.markEvicted() {
+		return
+	}
+	go s.evictSlowClient(sess)
+}
+
+// evictSlowClient 摘除一个跟不上事件速率的客户端。
+//
+// 客户端断开后可以重连，并通过历史环形缓冲区重新同步（环形缓冲区才是权威
+// 数据源），因此丢弃事件是安全的；代价由一个慢客户端承担，而不是所有人。
+func (s *IpcServer) evictSlowClient(sess *clientSession) {
+	logOp("错误", "%s:%s 事件队列已满（深度 %d，已丢弃 %d 条），判定为慢客户端并断开",
+		sourceLabel(sess.source), sess.clientId, subQueueSize, sess.dropped.Load())
+	// 先取消在途 I/O 再清理：否则该会话的读/写协程会一直挂到对端关闭。
+	pipe.CancelPending(sess.daemonConn)
+	pipe.CancelPending(sess.respConn)
+	pipe.CancelPending(sess.subConn)
+	s.removeSession(sess.clientId)
 }
 
 func (s *IpcServer) broadcastEvent(msg RxTxMessage) {
@@ -279,6 +379,7 @@ func (s *IpcServer) addSession(sess *clientSession) {
 		for cid, old := range s.sessions {
 			if old.pid == sess.pid {
 				delete(s.sessions, cid)
+				old.markEvicted() // 让旧会话的写入协程退出，否则会泄漏
 				old.daemonConn.Close()
 				old.respConn.Close()
 				old.subConn.Close()
@@ -333,6 +434,7 @@ func (s *IpcServer) removeSession(clientId string) {
 		}
 		label := sourceLabel(sess.source)
 		logOp("连接", "%s:%s 已断开 (活跃会话: %d)", label, clientId, n)
+		sess.markEvicted() // 停止投递并让写入协程退出
 		sess.daemonConn.Close()
 		sess.respConn.Close()
 		sess.subConn.Close()
@@ -358,7 +460,7 @@ func (s *IpcServer) Handle(conn io.ReadWriteCloser) {
 		return
 	}
 
-	if req.Method == "register" {
+	if contract.Method(req.Method) == contract.Register {
 		s.handleRegister(conn, reader, req)
 	} else {
 		s.handleCallOnce(conn, data, req)
@@ -402,10 +504,15 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 		pid:         pid,
 		connectTime: time.Now(),
 		subs:        make(map[string]bool),
+		subCh:       make(chan protocol.Event, subQueueSize),
+		subDone:     make(chan struct{}),
 	}
 	for _, e := range p.Subscribe {
 		sess.subs[e] = true
 	}
+
+	// 每个会话一个 sub 写入协程，广播路径只做非阻塞投递。
+	go sess.subWriter()
 
 	s.addSession(sess)
 
@@ -470,13 +577,20 @@ func (s *IpcServer) handleCallOnce(conn io.ReadWriteCloser, firstData []byte, re
 	protocol.WriteMessage(conn, resp)
 
 	src := req.Source
-	if req.Method != "status" && req.Method != "ping" {
+	if contract.Method(req.Method) != contract.Status && contract.Method(req.Method) != contract.Ping {
 		label := sourceLabel(src)
 		result := "ok"
 		if resp.Error != "" {
 			result = "err: " + resp.Error
 		}
 		logOp("IPC", "%s call-once %s → %s (%v)", label, req.Method, result, dt.Round(time.Microsecond))
+	}
+}
+
+// pushSub 向单个会话投递事件，队列满时按慢客户端处理。
+func (s *IpcServer) pushSub(sess *clientSession, evt protocol.Event) {
+	if !sess.enqueueSub(evt) {
+		s.onSubQueueFull(sess)
 	}
 }
 
@@ -487,16 +601,14 @@ func (s *IpcServer) pushPortListTo(sess *clientSession) {
 	s.portsMu.RLock()
 	ports := s.cachedPorts
 	s.portsMu.RUnlock()
-	evt := protocol.Event{Event: "ports-list", Params: map[string]any{"ports": ports}}
-	sess.writeSub(evt)
+	s.pushSub(sess, protocol.Event{Event: "ports-list", Params: map[string]any{"ports": ports}})
 }
 
 func (s *IpcServer) pushProcessListTo(sess *clientSession) {
 	if !sess.subs["process-changed"] {
 		return
 	}
-	evt := protocol.Event{Event: "process-changed", Params: map[string]any{"processes": s.pm.List()}}
-	sess.writeSub(evt)
+	s.pushSub(sess, protocol.Event{Event: "process-changed", Params: map[string]any{"processes": s.pm.List()}})
 }
 
 func (s *IpcServer) pushSubscribedState(sess *clientSession, events []any) {
@@ -568,7 +680,7 @@ func (s *IpcServer) pushClientListTo(sess *clientSession) {
 			"subs":        subList,
 		})
 	}
-	sess.writeSub(protocol.Event{
+	s.pushSub(sess, protocol.Event{
 		Event:  "clients-changed",
 		Params: map[string]any{"clients": clients},
 	})
@@ -582,7 +694,7 @@ func (s *IpcServer) pushStatsCountTo(sess *clientSession) {
 	defer s.pm.mu.RUnlock()
 	for _, p := range s.pm.processes {
 		if p.status == "connected" {
-			sess.writeSub(protocol.Event{
+			s.pushSub(sess, protocol.Event{
 				Event: "stats-count",
 				Params: map[string]any{
 					"processId":    p.id,
@@ -626,11 +738,11 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 	}
 	label := sourceLabel(src)
 
-	switch req.Method {
-	case "register":
+	switch contract.Method(req.Method) {
+	case contract.Register:
 		return protocol.Response{ID: req.ID, Error: "already registered"}
 
-	case "subscribe":
+	case contract.Subscribe:
 		events, _ := req.Params["events"].([]any)
 		if sess != nil {
 			for _, e := range events {
@@ -648,29 +760,46 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Error: "subscribe requires persistent session"}
 
-	case "ping":
+	case contract.Ping:
 		return protocol.Response{ID: req.ID, Result: map[string]string{"pong": "ok"}}
 
-	case "status":
-		return protocol.Response{ID: req.ID, Result: map[string]string{"status": "ok"}}
+	case contract.Status:
+		// 一并带上版本与协议号：客户端据此判断对端是否为同一次构建。
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"status":          "ok",
+			"version":         version.Version,
+			"protocolVersion": protocol.ProtocolVersion,
+		}}
 
-	case "ports.refresh":
+	case contract.DaemonInfo:
+		// 客户端建立会话后会立即调用本方法核对协议版本；
+		// 旧版本守护进程不认识它，会返回 UnknownMethodPrefix，
+		// 客户端据此判断「对端过旧」并给出可操作的提示。
+		return protocol.Response{ID: req.ID, Result: protocol.DaemonInfo{
+			Version:         version.Version,
+			ProtocolVersion: protocol.ProtocolVersion,
+			PID:             uint32(os.Getpid()),
+			StartTime:       s.startTime.Format(time.RFC3339),
+			UptimeSec:       int64(time.Since(s.startTime).Seconds()),
+		}}
+
+	case contract.PortsRefresh:
 		s.reloadCache()
 		logOp("操作", "%s 刷新串口列表", label)
 		fallthrough
-	case "ports":
+	case contract.Ports:
 		s.portsMu.RLock()
 		ports := s.cachedPorts
 		s.portsMu.RUnlock()
 		return protocol.Response{ID: req.ID, Result: map[string]any{"ports": ports}}
 
-	case "ports.probe":
+	case contract.PortsProbe:
 		return s.handlePortsProbe(req, label)
 
-	case "process.list":
+	case contract.ProcessList:
 		return protocol.Response{ID: req.ID, Result: map[string]any{"processes": s.pm.List()}}
 
-	case "client.list":
+	case contract.ClientList:
 		s.sessMu.RLock()
 		clients := make([]map[string]any, 0, len(s.sessions))
 		for _, sess := range s.sessions {
@@ -690,21 +819,21 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		s.sessMu.RUnlock()
 		return protocol.Response{ID: req.ID, Result: map[string]any{"clients": clients}}
 
-	case "threads":
+	case contract.Threads:
 		logOp("操作", "%s 查看线程详情", label)
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"goroutines": s.pm.GoroutineCount(),
 			"sessions":   s.pm.ListConnected(),
 		}}
 
-	case "goroutines":
+	case contract.Goroutines:
 		logOp("操作", "%s 查看调用栈", label)
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"goroutines": s.pm.GoroutineCount(),
 			"stack":      s.pm.GoroutineStacks(),
 		}}
 
-	case "process.create":
+	case contract.ProcessCreate:
 		mode, _ := req.Params["mode"].(string)
 		if mode == "" {
 			mode = "single"
@@ -804,7 +933,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			"success":   true,
 		}}
 
-	case "process.destroy":
+	case contract.ProcessDestroy:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -827,7 +956,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.connect":
+	case contract.ProcessConnect:
 		var p struct {
 			ProcessID string `json:"processId"`
 			Port      string `json:"port"`
@@ -890,7 +1019,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.disconnect":
+	case contract.ProcessDisconnect:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -903,7 +1032,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("操作", "%s 断开进程 #%s", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.switch":
+	case contract.ProcessSwitch:
 		var p struct {
 			ProcessID string `json:"processId"`
 			Port      string `json:"port"`
@@ -925,7 +1054,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("串口", "%s 切换进程 #%s → %s @ %d", label, p.ProcessID, p.Port, p.Baud)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.setmode":
+	case contract.ProcessSetMode:
 		var p struct {
 			ProcessID string `json:"processId"`
 			Mode      string `json:"mode"`
@@ -939,7 +1068,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("操作", "%s 设置进程 #%s 模式 → %s", label, p.ProcessID, p.Mode)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.watch":
+	case contract.ProcessWatch:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -959,7 +1088,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		s.broadcastProcessChanged()
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.unwatch":
+	case contract.ProcessUnwatch:
 		var pu struct {
 			ProcessID string `json:"processId"`
 		}
@@ -973,7 +1102,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "process.watched":
+	case contract.ProcessWatched:
 		var watched []string
 		if sess != nil {
 			for pid := range sess.watchedProcesses {
@@ -985,7 +1114,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"processIds": watched}}
 
-	case "forward.create":
+	case contract.ForwardCreate:
 		var p struct {
 			PortA     string `json:"portA"`
 			BaudA     int    `json:"baudA"`
@@ -1034,7 +1163,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("串口", "%s 创建转发 %s \u2194 %s \u2192 #%s", label, p.PortA, p.PortB, proc.id)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"processId": proc.id, "success": true}}
 
-	case "session.send":
+	case contract.SessionSend:
 		var p struct {
 			ProcessID string `json:"processId"`
 			Data      string `json:"data"`
@@ -1049,7 +1178,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		s.trackCallerViewer(sess, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "session.clearhistory":
+	case contract.SessionClearHistory:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1061,7 +1190,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "session.history":
+	case contract.SessionHistory:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1075,7 +1204,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("操作", "%s 读取历史记录 (进程 %s)", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: result}
 
-	case "session.stats":
+	case contract.SessionStats:
 		var ps struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1088,7 +1217,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"stats": stats}}
 
-	case "send.trigger":
+	case contract.SendTrigger:
 		var p struct {
 			ProcessID string `json:"processId"`
 			Raw       bool   `json:"raw"`
@@ -1101,7 +1230,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "autosend.start":
+	case contract.AutosendStart:
 		var p struct {
 			ProcessID  string `json:"processId"`
 			IntervalMs int    `json:"intervalMs"`
@@ -1129,7 +1258,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("自动发送", "%s 启动自动发送 进程#%s 间隔%dms 模式=%s loop=%v", label, p.ProcessID, p.IntervalMs, p.Mode, loop)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "autosend.stop":
+	case contract.AutosendStop:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1142,7 +1271,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("自动发送", "%s 停止自动发送 进程#%s", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "autosend.status":
+	case contract.AutosendStatus:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1155,7 +1284,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"status": status}}
 
-	case "autosend.interval":
+	case contract.AutosendInterval:
 		var p struct {
 			ProcessID  string `json:"processId"`
 			IntervalMs int    `json:"intervalMs"`
@@ -1168,7 +1297,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "send.ringname":
+	case contract.SendRingName:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1181,7 +1310,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"ringName": name}}
 
-	case "multistr.save":
+	case contract.MultistrSave:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1193,7 +1322,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "multistr.load":
+	case contract.MultistrLoad:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1209,7 +1338,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"entries": entries}}
 
-	case "multistr.reload":
+	case contract.MultistrReload:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1225,7 +1354,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"entries": entries}}
 
-	case "multistr.read":
+	case contract.MultistrRead:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1241,7 +1370,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"entries": entries}}
 
-	case "multistr.write":
+	case contract.MultistrWrite:
 		var p struct {
 			ProcessID string          `json:"processId"`
 			Entries   []MultistrEntry `json:"entries"`
@@ -1254,7 +1383,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "shutdown":
+	case contract.Shutdown:
 		logOp("关闭", "%s 请求关闭守护进程", label)
 		// 1. Disconnect all serial ports then destroy processes
 		s.pm.DestroyAll()
@@ -1270,7 +1399,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}()
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "history.files":
+	case contract.HistoryFiles:
 		files, err := listHistoryFiles(historyDir())
 		if err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
@@ -1280,7 +1409,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"files": files}}
 
-	case "history.search":
+	case contract.HistorySearch:
 		var p struct {
 			File    string `json:"file"`
 			Keyword string `json:"keyword"`
@@ -1304,7 +1433,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			"hasMore":    len(results) == p.Limit,
 		}}
 
-	case "history.enable":
+	case contract.HistoryEnable:
 		var p struct {
 			Enabled bool `json:"enabled"`
 		}
@@ -1317,12 +1446,12 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			"enabled": p.Enabled,
 		}}
 
-	case "history.status":
+	case contract.HistoryStatus:
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"enabled": isHistoryEnabled(),
 		}}
 
-	case "history.attach":
+	case contract.HistoryAttach:
 		var p struct {
 			ProcessID string `json:"processId"`
 			File      string `json:"file"`
@@ -1340,7 +1469,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("操作", "%s 进程 #%s 已附加历史文件 %s", label, p.ProcessID, p.File)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "history.new":
+	case contract.HistoryNew:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1357,7 +1486,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		logOp("操作", "%s 进程 #%s 新建历史文件", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
-	case "history.detach":
+	case contract.HistoryDetach:
 		var p struct {
 			ProcessID string `json:"processId"`
 		}
@@ -1374,7 +1503,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	default:
-		return protocol.Response{ID: req.ID, Error: "unknown method: " + req.Method}
+		return protocol.Response{ID: req.ID, Error: protocol.UnknownMethodPrefix + req.Method}
 	}
 }
 
@@ -1424,9 +1553,9 @@ func (s *IpcServer) handlePortsProbe(req *protocol.Request, label string) protoc
 }
 
 func logIPCForSession(sess *clientSession, req *protocol.Request, resp protocol.Response, dt time.Duration) {
-	if req.Method == "status" || req.Method == "ping" ||
-		req.Method == "session.send" || req.Method == "send.trigger" ||
-		req.Method == "autosend.status" || req.Method == "ports.probe" {
+	if contract.Method(req.Method) == contract.Status || contract.Method(req.Method) == contract.Ping ||
+		contract.Method(req.Method) == contract.SessionSend || contract.Method(req.Method) == contract.SendTrigger ||
+		contract.Method(req.Method) == contract.AutosendStatus || contract.Method(req.Method) == contract.PortsProbe {
 		return
 	}
 	label := sourceLabel(sess.source)
@@ -1435,8 +1564,8 @@ func logIPCForSession(sess *clientSession, req *protocol.Request, resp protocol.
 		result = "err: " + resp.Error
 	}
 	summary := req.Method
-	switch req.Method {
-	case "process.create":
+	switch contract.Method(req.Method) {
+	case contract.ProcessCreate:
 		port, _ := req.Params["port"].(string)
 		baud, _ := req.Params["baud"].(float64)
 		if port != "" {
@@ -1452,24 +1581,24 @@ func logIPCForSession(sess *clientSession, req *protocol.Request, resp protocol.
 				}
 			}
 		}
-	case "process.destroy":
+	case contract.ProcessDestroy:
 		if pid, ok := req.Params["processId"]; ok {
 			summary = fmt.Sprintf("destroy #%v", pid)
 		}
-	case "process.connect":
+	case contract.ProcessConnect:
 		port, _ := req.Params["port"].(string)
 		pid, _ := req.Params["processId"].(string)
 		summary = fmt.Sprintf("connect #%s → %s", pid, port)
-	case "process.disconnect":
+	case contract.ProcessDisconnect:
 		if pid, ok := req.Params["processId"]; ok {
 			summary = fmt.Sprintf("disconnect #%v", pid)
 		}
-	case "process.switch":
+	case contract.ProcessSwitch:
 		if pid, ok := req.Params["processId"]; ok {
 			port, _ := req.Params["port"].(string)
 			summary = fmt.Sprintf("switch #%v → %s", pid, port)
 		}
-	case "session.send":
+	case contract.SessionSend:
 		fmtStr, _ := req.Params["format"].(string)
 		data, _ := req.Params["data"].(string)
 		size := len(data)
@@ -1478,12 +1607,12 @@ func logIPCForSession(sess *clientSession, req *protocol.Request, resp protocol.
 		}
 		pid, _ := req.Params["processId"]
 		summary = fmt.Sprintf("send #%v %s %dB", pid, fmtStr, size)
-	case "session.history":
+	case contract.SessionHistory:
 		pid, _ := req.Params["processId"]
 		summary = fmt.Sprintf("history #%v", pid)
-	case "ports.refresh":
+	case contract.PortsRefresh:
 		summary = "refresh ports"
-	case "shutdown":
+	case contract.Shutdown:
 		summary = "shutdown"
 	}
 	logOp("IPC", "%s:%s r%d %s → %s (%v)",

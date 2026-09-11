@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/pipe"
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/ringbuf"
@@ -111,7 +113,7 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 
 	regReq := map[string]any{
 		"id":     0,
-		"method": "register",
+		"method": contract.Register,
 		"params": map[string]any{
 			"clientId":  clientId,
 			"source":    source,
@@ -175,7 +177,34 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	go c.readSubLoop()
 	go c.startHeartbeat()
 
+	// 建立会话后立刻核对协议版本。守护进程是机器级单例，很可能是另一次
+	// 构建留下的；不核对就会带着不一致的方法集/数据格式继续工作。
+	if err := c.verifyProtocol(); err != nil {
+		c.Close()
+		return nil, err
+	}
+
 	return c, nil
+}
+
+// verifyProtocol 确认对端守护进程与本客户端使用同一 IPC 协议版本。
+func (c *DaemonClient) verifyProtocol() error {
+	res, err := c.Call(contract.DaemonInfo, nil)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
+			return fmt.Errorf("守护进程版本过旧（不支持 %s）。请执行 serial-cli shutdown 后重试，或重启串口调试工具", "daemon.info")
+		}
+		return fmt.Errorf("读取守护进程版本失败: %w", err)
+	}
+	info, err := protocol.DecodeDaemonInfo(res)
+	if err != nil {
+		return fmt.Errorf("解析守护进程版本失败: %w", err)
+	}
+	if !info.Compatible() {
+		return fmt.Errorf("IPC 协议版本不匹配：客户端为 %d，守护进程为 %s（协议 %d）。请执行 serial-cli shutdown 后重试",
+			protocol.ProtocolVersion, info.Version, info.ProtocolVersion)
+	}
+	return nil
 }
 
 func defaultEvents() []string {
@@ -250,7 +279,7 @@ func (c *DaemonClient) startHeartbeat() {
 	for {
 		select {
 		case <-ticker.C:
-			_, err := c.Call("ping", nil)
+			_, err := c.Call(contract.Ping, nil)
 			if err != nil {
 				failures++
 				if failures >= 3 {
@@ -270,7 +299,7 @@ func (c *DaemonClient) startHeartbeat() {
 }
 
 // Call sends a request on the daemon pipe and waits for the response on the resp pipe.
-func (c *DaemonClient) Call(method string, params map[string]any) (map[string]any, error) {
+func (c *DaemonClient) Call(method contract.Method, params map[string]any) (map[string]any, error) {
 	c.wMu.Lock()
 	id := c.reqID
 	c.reqID++
@@ -312,7 +341,7 @@ func (c *DaemonClient) Call(method string, params map[string]any) (map[string]an
 
 // Subscribe updates the event subscription list.
 func (c *DaemonClient) Subscribe(events []string) error {
-	_, err := c.Call("subscribe", map[string]any{"events": events})
+	_, err := c.Call(contract.Subscribe, map[string]any{"events": events})
 	return err
 }
 
@@ -357,7 +386,7 @@ func SendWrite(ringName string, data []byte) error {
 // and push it through sendCh (broadcast + history).
 // When raw is true, data is sent as-is; otherwise multistr header decoding is applied.
 func (c *DaemonClient) SendTrigger(processId string, raw bool) error {
-	_, err := c.Call("send.trigger", map[string]any{"processId": processId, "raw": raw})
+	_, err := c.Call(contract.SendTrigger, map[string]any{"processId": processId, "raw": raw})
 	return err
 }
 
@@ -389,7 +418,7 @@ func (c *DaemonClient) SendViaShm(processId string, data string, format string) 
 
 // SendRingName returns the send queue shared memory name for a process.
 func (c *DaemonClient) SendRingName(processId string) (string, error) {
-	result, err := c.Call("send.ringname", map[string]any{"processId": processId})
+	result, err := c.Call(contract.SendRingName, map[string]any{"processId": processId})
 	if err != nil {
 		return "", err
 	}
@@ -399,7 +428,7 @@ func (c *DaemonClient) SendRingName(processId string) (string, error) {
 
 // ForwardCreate creates a port forwarding process between two serial ports.
 func (c *DaemonClient) ForwardCreate(portA string, baudA int, portB string, baudB int) (map[string]any, error) {
-	return c.Call("process.create", map[string]any{
+	return c.Call(contract.ProcessCreate, map[string]any{
 		"mode": "forward",
 		"port": portA, "baud": baudA,
 		"portB": portB, "baudB": baudB,
@@ -411,7 +440,7 @@ func (c *DaemonClient) ForwardCreate(portA string, baudA int, portB string, baud
 // Returns the assigned processId; the process is idle and stored config is used
 // as defaults when connect is called later.
 func (c *DaemonClient) Declare(port string, baud int, dataBits int, stopBits string, parity string) (map[string]any, error) {
-	return c.Call("process.create", map[string]any{
+	return c.Call(contract.ProcessCreate, map[string]any{
 		"port":     port,
 		"baud":     baud,
 		"dataBits": dataBits,
@@ -423,7 +452,7 @@ func (c *DaemonClient) Declare(port string, baud int, dataBits int, stopBits str
 
 // DeclareForward registers a forward port pair configuration without opening ports.
 func (c *DaemonClient) DeclareForward(portA string, baudA int, dataBitsA int, stopBitsA string, parityA string, portB string, baudB int, dataBitsB int, stopBitsB string, parityB string) (map[string]any, error) {
-	return c.Call("process.create", map[string]any{
+	return c.Call(contract.ProcessCreate, map[string]any{
 		"mode":      "forward",
 		"port":      portA,
 		"baud":      baudA,
@@ -442,19 +471,19 @@ func (c *DaemonClient) DeclareForward(portA string, baudA int, dataBitsA int, st
 // WatchProcess declares that this client is viewing a specific process.
 // The daemon tracks per-process viewer counts and broadcasts changes.
 func (c *DaemonClient) WatchProcess(processId string) error {
-	_, err := c.Call("process.watch", map[string]any{"processId": processId})
+	_, err := c.Call(contract.ProcessWatch, map[string]any{"processId": processId})
 	return err
 }
 
 // UnwatchProcess stops watching a process (decrements viewer count).
 func (c *DaemonClient) UnwatchProcess(processId string) error {
-	_, err := c.Call("process.unwatch", map[string]any{"processId": processId})
+	_, err := c.Call(contract.ProcessUnwatch, map[string]any{"processId": processId})
 	return err
 }
 
 // GetWatchedProcesses returns the list of process IDs this client is watching.
 func (c *DaemonClient) GetWatchedProcesses() ([]string, error) {
-	resp, err := c.Call("process.watched", nil)
+	resp, err := c.Call(contract.ProcessWatched, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +502,7 @@ func (c *DaemonClient) GetWatchedProcesses() ([]string, error) {
 // SetMode switches the process mode between "single" and "forward".
 // Process must be idle (all ports disconnected).
 func (c *DaemonClient) SetMode(processId string, mode string) error {
-	_, err := c.Call("process.setmode", map[string]any{"processId": processId, "mode": mode})
+	_, err := c.Call(contract.ProcessSetMode, map[string]any{"processId": processId, "mode": mode})
 	return err
 }
 
@@ -492,7 +521,7 @@ func (c *DaemonClient) SwitchPort(processId string, port string, cfg map[string]
 	if v, ok := cfg["parity"]; ok {
 		params["parity"] = v
 	}
-	_, err := c.Call("process.switch", params)
+	_, err := c.Call(contract.ProcessSwitch, params)
 	return err
 }
 
@@ -511,7 +540,7 @@ func (c *DaemonClient) ProbePorts(ports []string, baudRates []int, rules []strin
 	if configPath != "" {
 		params["configPath"] = configPath
 	}
-	result, err := c.Call("ports.probe", params)
+	result, err := c.Call(contract.PortsProbe, params)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +557,7 @@ func (c *DaemonClient) ProbePorts(ports []string, baudRates []int, rules []strin
 // AutoSendStart starts auto-send on a process.
 
 func (c *DaemonClient) AutoSendStart(processId string, intervalMs int, mode string, loop bool) error {
-	_, err := c.Call("autosend.start", map[string]any{
+	_, err := c.Call(contract.AutosendStart, map[string]any{
 		"processId":  processId,
 		"intervalMs": intervalMs,
 		"mode":       mode,
@@ -539,13 +568,13 @@ func (c *DaemonClient) AutoSendStart(processId string, intervalMs int, mode stri
 
 // AutoSendStop stops auto-send on a process.
 func (c *DaemonClient) AutoSendStop(processId string) error {
-	_, err := c.Call("autosend.stop", map[string]any{"processId": processId})
+	_, err := c.Call(contract.AutosendStop, map[string]any{"processId": processId})
 	return err
 }
 
 // AutoSendSetInterval updates the interval of a running auto-send.
 func (c *DaemonClient) AutoSendSetInterval(processId string, intervalMs int) error {
-	_, err := c.Call("autosend.interval", map[string]any{
+	_, err := c.Call(contract.AutosendInterval, map[string]any{
 		"processId":  processId,
 		"intervalMs": intervalMs,
 	})
@@ -554,7 +583,7 @@ func (c *DaemonClient) AutoSendSetInterval(processId string, intervalMs int) err
 
 // AutoSendStatus returns the auto-send status for a process.
 func (c *DaemonClient) AutoSendStatus(processId string) (map[string]any, error) {
-	result, err := c.Call("autosend.status", map[string]any{"processId": processId})
+	result, err := c.Call(contract.AutosendStatus, map[string]any{"processId": processId})
 	if err != nil {
 		return nil, err
 	}
@@ -585,13 +614,13 @@ func (c *DaemonClient) AutoSendStartWithData(processId string, intervalMs int, m
 
 // MultistrSave tells the daemon to persist current sendq entries to disk.
 func (c *DaemonClient) MultistrSave(processId string) error {
-	_, err := c.Call("multistr.save", map[string]any{"processId": processId})
+	_, err := c.Call(contract.MultistrSave, map[string]any{"processId": processId})
 	return err
 }
 
 // MultistrLoad tells the daemon to load entries from disk into sendq.
 func (c *DaemonClient) MultistrLoad(processId string) ([]map[string]any, error) {
-	result, err := c.Call("multistr.load", map[string]any{"processId": processId})
+	result, err := c.Call(contract.MultistrLoad, map[string]any{"processId": processId})
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +636,7 @@ func (c *DaemonClient) MultistrLoad(processId string) ([]map[string]any, error) 
 
 // MultistrRead reads the current sendq entries from the daemon.
 func (c *DaemonClient) MultistrRead(processId string) ([]map[string]any, error) {
-	result, err := c.Call("multistr.read", map[string]any{"processId": processId})
+	result, err := c.Call(contract.MultistrRead, map[string]any{"processId": processId})
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +652,7 @@ func (c *DaemonClient) MultistrRead(processId string) ([]map[string]any, error) 
 
 // MultistrWrite writes entries to the sendq via IPC.
 func (c *DaemonClient) MultistrWrite(processId string, entries []map[string]any) error {
-	_, err := c.Call("multistr.write", map[string]any{
+	_, err := c.Call(contract.MultistrWrite, map[string]any{
 		"processId": processId,
 		"entries":   entries,
 	})
@@ -632,13 +661,13 @@ func (c *DaemonClient) MultistrWrite(processId string, entries []map[string]any)
 
 // MultistrReload tells the daemon to re-read entries from sendq into cache.
 func (c *DaemonClient) MultistrReload(processId string) error {
-	_, err := c.Call("multistr.reload", map[string]any{"processId": processId})
+	_, err := c.Call(contract.MultistrReload, map[string]any{"processId": processId})
 	return err
 }
 
 // ListHistoryFiles returns metadata for all .log files in the daemon's history directory.
 func (c *DaemonClient) ListHistoryFiles() ([]map[string]any, error) {
-	result, err := c.Call("history.files", nil)
+	result, err := c.Call(contract.HistoryFiles, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -654,7 +683,7 @@ func (c *DaemonClient) ListHistoryFiles() ([]map[string]any, error) {
 
 // SearchHistory searches a history file for entries matching the keyword.
 func (c *DaemonClient) SearchHistory(file, keyword string, limit int, offset int64) (map[string]any, error) {
-	return c.Call("history.search", map[string]any{
+	return c.Call(contract.HistorySearch, map[string]any{
 		"file":    file,
 		"keyword": keyword,
 		"limit":   limit,
@@ -664,13 +693,13 @@ func (c *DaemonClient) SearchHistory(file, keyword string, limit int, offset int
 
 // SetHistoryEnabled toggles auto-save for history files.
 func (c *DaemonClient) SetHistoryEnabled(enabled bool) error {
-	_, err := c.Call("history.enable", map[string]any{"enabled": enabled})
+	_, err := c.Call(contract.HistoryEnable, map[string]any{"enabled": enabled})
 	return err
 }
 
 // GetHistoryStatus returns whether history auto-save is enabled.
 func (c *DaemonClient) GetHistoryStatus() (bool, error) {
-	result, err := c.Call("history.status", nil)
+	result, err := c.Call(contract.HistoryStatus, nil)
 	if err != nil {
 		return false, err
 	}
@@ -681,7 +710,7 @@ func (c *DaemonClient) GetHistoryStatus() (bool, error) {
 // AttachHistoryFile opens an existing history file for append and loads its
 // content into the process ring buffer for display.
 func (c *DaemonClient) AttachHistoryFile(processID, filename string) error {
-	_, err := c.Call("history.attach", map[string]any{
+	_, err := c.Call(contract.HistoryAttach, map[string]any{
 		"processId": processID,
 		"file":      filename,
 	})
@@ -690,13 +719,13 @@ func (c *DaemonClient) AttachHistoryFile(processID, filename string) error {
 
 // NewHistoryFile creates a new history file for the process.
 func (c *DaemonClient) NewHistoryFile(processID string) error {
-	_, err := c.Call("history.new", map[string]any{"processId": processID})
+	_, err := c.Call(contract.HistoryNew, map[string]any{"processId": processID})
 	return err
 }
 
 // DetachHistoryFile closes the history file attached to the process.
 func (c *DaemonClient) DetachHistoryFile(processID string) error {
-	_, err := c.Call("history.detach", map[string]any{"processId": processID})
+	_, err := c.Call(contract.HistoryDetach, map[string]any{"processId": processID})
 	return err
 }
 
@@ -704,7 +733,7 @@ func (c *DaemonClient) DetachHistoryFile(processID string) error {
 
 // CallOnce writes a request on a temporary pipe and reads the response,
 // skipping events. The connection is closed after the response arrives.
-func CallOnce(method string, params map[string]any, source string) (map[string]any, error) {
+func CallOnce(method contract.Method, params map[string]any, source string) (map[string]any, error) {
 	conn, err := pipe.Dial(pipe.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("daemon not running: %v", err)
@@ -740,16 +769,62 @@ func CallOnce(method string, params map[string]any, source string) (map[string]a
 
 // ── daemon lifecycle (shared by all clients) ──
 
-// StartDaemon starts the serial daemon if not already running.
-// Returns "started" if newly started, "already_running" if already up.
+// StartDaemon starts the serial daemon if not already running, and additionally
+// ensures the running daemon speaks this client's protocol version.
+// Returns "started", "already_running" or "restarted".
 func StartDaemon() (string, error) {
-	if IsDaemonProcessRunning() {
-		_, err := CallOnce("status", nil, "cli")
-		if err == nil {
+	info, err := DaemonInfo()
+	if err == nil {
+		if info.Compatible() {
 			return "already_running", nil
 		}
+		// 版本不匹配：旧守护进程无法服务本客户端，直接换掉。
+		if rerr := restartDaemon(); rerr != nil {
+			return "", rerr
+		}
+		return "restarted", nil
+	}
+	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
+		// 旧版本守护进程不认识 daemon.info，同样需要换掉。
+		if rerr := restartDaemon(); rerr != nil {
+			return "", rerr
+		}
+		return "restarted", nil
 	}
 	return startDaemonProcess()
+}
+
+// DaemonInfo 通过一次性连接读取守护进程的身份与协议版本。
+func DaemonInfo() (protocol.DaemonInfo, error) {
+	res, err := CallOnce(contract.DaemonInfo, nil, "cli")
+	if err != nil {
+		return protocol.DaemonInfo{}, err
+	}
+	return protocol.DecodeDaemonInfo(res)
+}
+
+// restartDaemon 关闭正在运行的守护进程（可能是旧版本），等它真正退出后重启。
+func restartDaemon() error {
+	if _, err := CallOnce(contract.Shutdown, nil, "cli"); err != nil {
+		return fmt.Errorf("关闭旧守护进程失败: %w", err)
+	}
+	waitDaemonExit(8 * time.Second)
+	_, err := startDaemonProcess()
+	return err
+}
+
+// waitDaemonExit 等待守护进程进程真正消失。
+//
+// 必须先等它退出：新实例靠 Global 互斥体判断单例，旧实例尚未释放锁时
+// 新实例会直接以「已在运行」退出，重启就变成静默失败。
+func waitDaemonExit(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !IsDaemonProcessRunning() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func startDaemonProcess() (string, error) {
@@ -766,7 +841,7 @@ func startDaemonProcess() (string, error) {
 
 	for i := 0; i < 60; i++ {
 		time.Sleep(100 * time.Millisecond)
-		_, err := CallOnce("status", nil, "cli")
+		_, err := CallOnce(contract.Status, nil, "cli")
 		if err == nil {
 			return "started", nil
 		}
