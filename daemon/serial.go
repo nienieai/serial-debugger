@@ -1166,6 +1166,22 @@ func NewProcessManager() *ProcessManager {
 	}
 }
 
+// daemonInstanceToken 标识本次守护进程实例，在进程启动时确定一次。
+//
+// 进程号计数器（pm.counter）每次守护进程重启都从 1 重新开始，而上一实例
+// 残留的客户端可能仍然映射着 "serial-tool-history-1"。Windows 的
+// CreateFileMapping 遇到同名对象时会直接返回既有 section 的句柄而不报错，
+// 两个逻辑上无关的进程就会共享同一块内存、互相覆盖环形缓冲区。
+// 名字里带上实例令牌后不同实例永不撞名，CreateSharedRing 的
+// ERROR_ALREADY_EXISTS 检查也就只会在真正异常时触发。
+var daemonInstanceToken = fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFFFF)
+
+// newRingNames 生成本实例唯一的共享内存名称（历史环 + 发送队列环）。
+func newRingNames(id string) (historyName, sendName string) {
+	return fmt.Sprintf("serial-tool-history-%s-%s", daemonInstanceToken, id),
+		fmt.Sprintf("serial-tool-sendq-%s-%s", daemonInstanceToken, id)
+}
+
 func toStopBits(v string) serial.StopBits {
 	switch v {
 	case "1.5":
@@ -1214,13 +1230,12 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 			}
 
 			id := fmt.Sprintf("%d", pm.counter.Add(1))
-			sharedName := fmt.Sprintf("serial-tool-history-%s", id)
+			sharedName, sendName := newRingNames(id)
 			ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024)
 			if err != nil {
 				return nil, fmt.Errorf("create shared memory: %w", err)
 			}
 
-			sendName := fmt.Sprintf("serial-tool-sendq-%s", id)
 			sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024)
 			if err != nil {
 				ring.Close()
@@ -1289,7 +1304,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 			}
 
 			id := fmt.Sprintf("%d", pm.counter.Add(1))
-			sharedName := fmt.Sprintf("serial-tool-history-%s", id)
+			sharedName, sendName := newRingNames(id)
 			ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024)
 			if err != nil {
 				portA.Close()
@@ -1297,7 +1312,6 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 				return nil, fmt.Errorf("create shared memory: %w", err)
 			}
 
-			sendName := fmt.Sprintf("serial-tool-sendq-%s", id)
 			sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024)
 			if err != nil {
 				ring.Close()
@@ -1356,14 +1370,13 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 		}
 
 		id := fmt.Sprintf("%d", pm.counter.Add(1))
-		sharedName := fmt.Sprintf("serial-tool-history-%s", id)
+		sharedName, sendName := newRingNames(id)
 		ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024) // 5 MB
 		if err != nil {
 			serialPort.Close()
 			return nil, fmt.Errorf("create shared memory: %w", err)
 		}
 
-		sendName := fmt.Sprintf("serial-tool-sendq-%s", id)
 		sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024) // 1 MB
 		if err != nil {
 			ring.Close()
@@ -1402,13 +1415,12 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 
 	// Idle process (no port specified – mode is stored but no ports opened)
 	id := fmt.Sprintf("%d", pm.counter.Add(1))
-	sharedName := fmt.Sprintf("serial-tool-history-%s", id)
+	sharedName, sendName := newRingNames(id)
 	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024) // 5 MB
 	if err != nil {
 		return nil, fmt.Errorf("create shared memory: %w", err)
 	}
 
-	sendName := fmt.Sprintf("serial-tool-sendq-%s", id)
 	sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024) // 1 MB
 	if err != nil {
 		ring.Close()
