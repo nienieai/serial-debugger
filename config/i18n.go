@@ -51,20 +51,27 @@ func T(lang, key string, args ...any) string {
 	if !ok {
 		m, _ = i18nData["zh"]
 		if m == nil {
-			if len(args) > 0 {
-				return fmt.Sprintf(key, args...)
-			}
-			return key
+			return formatMsg(key, args)
 		}
 	}
 	s, ok := m[key]
 	if !ok {
 		s = key
 	}
-	if len(args) > 0 {
-		return fmt.Sprintf(s, args...)
+	return formatMsg(s, args)
+}
+
+// formatMsg applies args to a translated template.
+//
+// args is a slice rather than a variadic parameter on purpose: with `args
+// ...any` go vet classifies T as a printf wrapper and then rejects every call
+// whose key is not a constant format string (e.g. T(lang, key)), which made
+// `go test ./...` fail to build the whole config package.
+func formatMsg(tmpl string, args []any) string {
+	if len(args) == 0 {
+		return tmpl
 	}
-	return s
+	return fmt.Sprintf(tmpl, args...)
 }
 
 // HasLang returns true if the language code is supported.

@@ -256,7 +256,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "declare":
 		if len(args) < 2 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: declare <port> [baud] [--mode forward] [--portB <p>] [--baudB <b>] [--dataBits <d>] [--stopBits <s>] [--parity <p>]"); return }
+			fmt.Fprintln(os.Stderr, "用法: declare <port> [baud] [--mode forward] [--portB <p>] [--baudB <b>] [--dataBits <d>] [--stopBits <s>] [--parity <p>]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		port := ""
@@ -290,7 +291,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		}
 		if port == "" {
-			if interactive { fmt.Fprintln(os.Stderr, "错误: 必须指定端口"); return }
+			fmt.Fprintln(os.Stderr, "错误: 必须指定端口")
+			if interactive { return }
 			os.Exit(1)
 		}
 		params := map[string]any{
@@ -304,7 +306,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		if mode == "forward" {
 			if portB == "" {
-				if interactive { fmt.Fprintln(os.Stderr, "错误: 转发模式需要 --portB"); return }
+				fmt.Fprintln(os.Stderr, "错误: 转发模式需要 --portB")
+				if interactive { return }
 				os.Exit(1)
 			}
 			params["portB"] = portB
@@ -316,7 +319,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "open":
 		if len(args) < 2 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: open <port> [baud]"); return }
+			fmt.Fprintln(os.Stderr, "用法: open <port> [baud]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		port := args[1]
@@ -330,7 +334,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "connect":
 		if len(args) < 3 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: connect <processId> <port> [baud]"); return }
+			fmt.Fprintln(os.Stderr, "用法: connect <processId> <port> [baud]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		pid := args[1]
@@ -377,13 +382,15 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "setmode":
 		if len(args) < 3 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: setmode <processId> <single|forward>"); return }
+			fmt.Fprintln(os.Stderr, "用法: setmode <processId> <single|forward>")
+			if interactive { return }
 			os.Exit(1)
 		}
 		pid := args[1]
 		mode := args[2]
 		if mode != "single" && mode != "forward" {
-			if interactive { fmt.Fprintln(os.Stderr, "错误: mode 必须是 single 或 forward"); return }
+			fmt.Fprintln(os.Stderr, "错误: mode 必须是 single 或 forward")
+			if interactive { return }
 			os.Exit(1)
 		}
 		if err := dc.SetMode(pid, mode); err != nil {
@@ -393,7 +400,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "send":
 		if len(args) < 2 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: send <data> [processId] [--hex]"); return }
+			fmt.Fprintln(os.Stderr, "用法: send <data> [processId] [--hex]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		data := args[1]
@@ -437,15 +445,20 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			printJSON(result)
 
 	case "autosend":
-		if len(args) < 3 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: autosend start <intervalMs> <mode> [pid]"); fmt.Fprintln(os.Stderr, "      autosend stop [pid]"); fmt.Fprintln(os.Stderr, "      autosend status [pid]"); return }
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "用法: autosend start <intervalMs> <mode> [pid]")
+			fmt.Fprintln(os.Stderr, "      autosend stop [pid]")
+			fmt.Fprintln(os.Stderr, "      autosend status [pid]")
+			fmt.Fprintln(os.Stderr, "      autosend interval <ms> [pid]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		sub := args[1]
 		switch sub {
 		case "start":
 			if len(args) < 4 {
-				if interactive { fmt.Fprintln(os.Stderr, "用法: autosend start <intervalMs> <mode> [pid]"); return }
+				fmt.Fprintln(os.Stderr, "用法: autosend start <intervalMs> <mode> [pid]")
+				if interactive { return }
 				os.Exit(1)
 			}
 			intervalMs, _ := strconv.Atoi(args[2])
@@ -501,7 +514,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "sendqueue":
 		if len(args) < 2 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: sendqueue <file> [pid]"); return }
+			fmt.Fprintln(os.Stderr, "用法: sendqueue <file> [pid]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		pid := ""
@@ -540,7 +554,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "multistr":
 		if len(args) < 2 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: multistr <save|load|reload|status> [pid]"); return }
+			fmt.Fprintln(os.Stderr, "用法: multistr <save|load|reload|status> [pid]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		sub := args[1]
@@ -646,7 +661,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "history-search":
 		if len(args) < 3 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: history-search <file> <keyword> [limit]"); return }
+			fmt.Fprintln(os.Stderr, "用法: history-search <file> <keyword> [limit]")
+			if interactive { return }
 			os.Exit(1)
 		}
 		filename := args[1]
@@ -690,7 +706,8 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "history-attach":
 		if len(args) < 3 {
-			if interactive { fmt.Fprintln(os.Stderr, "用法: history-attach <processId> <file>"); return }
+			fmt.Fprintln(os.Stderr, "用法: history-attach <processId> <file>")
+			if interactive { return }
 			os.Exit(1)
 		}
 		result, err := dc.Call("history.attach", map[string]any{"processId": args[1], "file": args[2]})

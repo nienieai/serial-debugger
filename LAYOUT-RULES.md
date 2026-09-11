@@ -1,7 +1,7 @@
 # 布局约束规则
 
 > 本文件记录各区域元素的宽度 / 拉伸 / 裁剪策略，避免反复拉扯。
-> 适用范围：`serial-tool`（v0.6.4）前端，核对基准为 `frontend/style.css` 与 JS 构建的 DOM（`tabpage.js` / `settingspage.js` / `app.js`）。
+> 适用范围：`serial-tool`（v0.6.5）前端，核对基准为 `frontend/style.css` 与 JS 构建的 DOM（`tabpage.js` / `settingspage.js` / `app.js`）。
 > 规则格式：每条规则 = CSS 选择器 + 关键 CSS + 策略。改样式前先查本文件，改后请同步更新。
 
 ## 速查索引

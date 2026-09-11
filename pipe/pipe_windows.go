@@ -5,22 +5,21 @@ package pipe
 import (
 	"fmt"
 	"io"
-	"unsafe"
 	"sync"
-	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 var (
-	kernel32                = windows.NewLazySystemDLL("kernel32.dll")
-	procCreateNamedPipeW    = kernel32.NewProc("CreateNamedPipeW")
-	procConnectNamedPipe    = kernel32.NewProc("ConnectNamedPipe")
-	procDisconnectNamedPipe = kernel32.NewProc("DisconnectNamedPipe")
-	procCreateMutexW        = kernel32.NewProc("CreateMutexW")
-	procCloseHandle         = kernel32.NewProc("CloseHandle")
-	procWaitNamedPipeW      = kernel32.NewProc("WaitNamedPipeW")
-	procCreateFileW         = kernel32.NewProc("CreateFileW")
+	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
+	procCreateNamedPipeW = kernel32.NewProc("CreateNamedPipeW")
+	procConnectNamedPipe = kernel32.NewProc("ConnectNamedPipe")
+	procCreateMutexW     = kernel32.NewProc("CreateMutexW")
+	procCloseHandle      = kernel32.NewProc("CloseHandle")
+	procWaitNamedPipeW   = kernel32.NewProc("WaitNamedPipeW")
+	procCreateFileW      = kernel32.NewProc("CreateFileW")
+	procCancelIoEx       = kernel32.NewProc("CancelIoEx")
 )
 
 const (
@@ -122,31 +121,20 @@ func (l *pipeListener) Close() error {
 	l.mu.Lock()
 	l.closing = true
 	if l.currHandle != 0 {
-		procDisconnectNamedPipe.Call(uintptr(l.currHandle))
-		procCloseHandle.Call(uintptr(l.currHandle))
-		l.currHandle = 0
+		// ConnectNamedPipe is a *synchronous* pending I/O on this handle.
+		// Both DisconnectNamedPipe and CloseHandle block until that I/O
+		// completes — and it never completes without a client, so either
+		// call deadlocks the listener forever. CancelIoEx aborts pending
+		// I/O on a handle from another thread; Accept then observes the
+		// error, closes the handle it created and returns.
+		//
+		// No self-connect fallback is needed: Accept checks l.closing and
+		// assigns l.currHandle inside a single critical section, so either
+		// Accept wins the race (Close sees the handle and cancels it) or
+		// Close wins (Accept sees closing and closes its own handle).
+		procCancelIoEx.Call(uintptr(l.currHandle), 0)
 	}
 	l.mu.Unlock()
-
-	// Self-connect to unblock any Accept that already created a new pipe
-	// instance but hasn't reached the closing check yet. Small initial
-	// delay gives Accept time to reach ConnectNamedPipe, then 40 retries
-	// (2 s total) to account for scheduling delays under load.
-	time.Sleep(20 * time.Millisecond)
-	name, _ := windows.UTF16PtrFromString(l.path)
-	for i := 0; i < 40; i++ {
-		handle, _, _ := procCreateFileW.Call(
-			uintptr(unsafe.Pointer(name)),
-			genericRead|genericWrite, 0, 0,
-			openExisting, 0, 0,
-		)
-		if handle != 0 && handle != invalidHandleValue {
-			procCloseHandle.Call(handle)
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
 	return nil
 }
 

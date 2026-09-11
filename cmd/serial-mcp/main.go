@@ -8,8 +8,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/nienieai/serial-debugger/version"
 )
@@ -208,29 +206,33 @@ func (s *mcpServer) handleMessage(body []byte) {
 	}
 }
 
-// ── Content-Length framing ──
+// ── newline-delimited framing (MCP stdio transport) ──
+//
+// Per the MCP specification the stdio transport delimits messages by
+// newlines and messages MUST NOT contain embedded newlines:
+// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports
+//
+// The previous implementation used LSP-style "Content-Length: N\r\n\r\n"
+// headers, which is not an MCP transport and made the server unusable from
+// any spec-compliant client.
 
 func readMessage(br *bufio.Reader) ([]byte, error) {
-	var contentLen int
 	for {
-		line, err := br.ReadString('\n')
+		line, err := br.ReadBytes('\n')
 		if err != nil {
+			// Tolerate a final message without a trailing newline.
+			if err == io.EOF {
+				if body := bytes.TrimSpace(line); len(body) > 0 {
+					return body, nil
+				}
+			}
 			return nil, err
 		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break
-		}
-		if strings.HasPrefix(line, "Content-Length:") {
-			contentLen, _ = strconv.Atoi(strings.TrimSpace(line[len("Content-Length:"):]))
+		// Skip blank/whitespace-only lines between messages.
+		if body := bytes.TrimSpace(line); len(body) > 0 {
+			return body, nil
 		}
 	}
-	if contentLen <= 0 {
-		return nil, fmt.Errorf("missing or invalid Content-Length header")
-	}
-	body := make([]byte, contentLen)
-	_, err := io.ReadFull(br, body)
-	return body, err
 }
 
 func writeMessage(w io.Writer, msg any) error {
@@ -238,27 +240,9 @@ func writeMessage(w io.Writer, msg any) error {
 	if err != nil {
 		return err
 	}
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
-	if _, err := w.Write([]byte(header)); err != nil {
-		return err
-	}
+	data = append(data, '\n')
 	_, err = w.Write(data)
 	return err
-}
-
-// ── MCP header scanner (used by readMessage via bufio.Scanner) ──
-
-func scanHeader(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.Index(data, []byte("\r\n")); i >= 0 {
-		return i + 2, data[0:i], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }
 
 // ── Logging (stderr only) ──

@@ -13,7 +13,7 @@
 ## 快速构建
 
 ```bash
-cd 串口调试工具-0.6.4     # 发布包解压目录；源码仓库中构建可跳过
+cd 串口调试工具-0.6.5     # 发布包解压目录；源码仓库中构建可跳过
 go mod tidy
 
 # 守护进程 / CLI / MCP
@@ -114,7 +114,7 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 ## 源代码目录
 
 ```text
-串口调试工具-0.6.4/
+串口调试工具-0.6.5/
 ├── main.go                    # GUI 入口 (Wails)
 ├── app.go                     # GUI Go 后端 (Wails 绑定、daemon 通信、TabDecoder 管理)
 ├── settings.go                # GUI 设置持久化 (INI)
@@ -176,7 +176,7 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 │   └── probe.toml             #   设备探测规则配置
 │
 ├── version/                   # 版本号 (改一处全部同步)
-│   └── version.go             #   const Version = "0.6.4"
+│   └── version.go             #   const Version = "0.6.5"
 │
 ├── frontend/                  # GUI 前端 (Wails 嵌入)
 │   ├── index.html             #   HTML 骨架（仅菜单栏/标签栏/容器/状态栏，其余 JS 构建）
@@ -250,7 +250,7 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 - 主题/语言气泡底部"创建示例"按键通过 Go 后端 `CreateExampleFiles` 创建示例文件夹和文件
 - 设置页全部文字已 i18n 化（当前 91 个 `settings.*` 翻译键，9 语言全覆盖）
 - 所有可执行文件放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`
-- 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（build/bin → config 开发场景）→ 工作目录 → `config/`（开发模式）
+- 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（发布包布局）→ `exe/../../config/`（开发布局：exe 在 `build/bin`，配置在仓库根）→ 工作目录 `probe.toml` / `config/probe.toml`，候选去重。全部未命中时回退**内置规则**（`config/probe.toml` 经 `//go:embed` 嵌入二进制），因此发布包即使不含 `config/` 目录，`probe` 也可直接使用
 - GUI 设置文件 `settings.ini`（INI 格式），与 `serial-gui.exe` 同目录
 - 外部 i18n 目录 `build/bin/i18n/` 与 `serial-gui.exe` 同目录，文件名格式 `{lang}.json`，详见 README
 - 外部主题目录 `build/bin/themes/colors/`（颜色主题 .json）和 `build/bin/themes/icons/<名称>/`（图标主题文件夹，含 icons.json + .svg）

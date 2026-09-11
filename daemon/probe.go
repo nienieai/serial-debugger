@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/nienieai/serial-debugger/config"
 )
 
 // ---- probe config (TOML) ----
@@ -41,9 +42,17 @@ type ProbeResult struct {
 // ---- config loading ----
 
 func LoadProbeConfig(path string) (*ProbeConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	var data []byte
+	if path == "" {
+		// Nothing on disk: fall back to the embedded rule set so the probe
+		// feature works without a shipped config/ directory.
+		data = config.DefaultProbeToml()
+	} else {
+		var err error
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("读取配置文件失败: %w", err)
+		}
 	}
 	var cfg ProbeConfig
 	if err := toml.Unmarshal(data, &cfg); err != nil {
@@ -61,9 +70,12 @@ func LoadProbeConfig(path string) (*ProbeConfig, error) {
 // findProbeConfig 按优先级查找探测配置文件：
 // 1. 显式路径
 // 2. daemon 可执行文件旁 probe.toml
-// 3. <exe>/../config/probe.toml（build/bin → config）
-// 4. 当前工作目录 probe.toml
-// 5. config/probe.toml（开发模式）
+// 3. <exe>/../config/probe.toml（发布包：exe 与 config 同级）
+// 4. <exe>/../../config/probe.toml（开发：exe 在 build/bin，config 在仓库根）
+// 5. 当前工作目录 probe.toml / config/probe.toml
+//
+// 都找不到时返回空路径且不报错，调用方回退到内置规则
+// （config.DefaultProbeToml），因此 probe 功能开箱即用。
 func findProbeConfig(explicitPath string) (string, error) {
 	if explicitPath != "" {
 		if _, err := os.Stat(explicitPath); err == nil {
@@ -73,14 +85,23 @@ func findProbeConfig(explicitPath string) (string, error) {
 	}
 
 	candidates := []string{}
+	seen := map[string]bool{}
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if !seen[p] {
+			seen[p] = true
+			candidates = append(candidates, p)
+		}
+	}
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
-		candidates = append(candidates, filepath.Join(exeDir, "probe.toml"))
-		candidates = append(candidates, filepath.Join(exeDir, "..", "config", "probe.toml"))
+		add(filepath.Join(exeDir, "probe.toml"))
+		add(filepath.Join(exeDir, "..", "config", "probe.toml"))
+		add(filepath.Join(exeDir, "..", "..", "config", "probe.toml"))
 	}
 	if wd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(wd, "probe.toml"))
-		candidates = append(candidates, filepath.Join(wd, "config", "probe.toml"))
+		add(filepath.Join(wd, "probe.toml"))
+		add(filepath.Join(wd, "config", "probe.toml"))
 	}
 
 	for _, p := range candidates {
@@ -88,7 +109,7 @@ func findProbeConfig(explicitPath string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("未找到探测配置文件 probe.toml（搜索路径: %v）", candidates)
+	return "", nil
 }
 
 // ---- probe engine ----

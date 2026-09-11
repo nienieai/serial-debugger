@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 / v0.6.4）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 / v0.6.4 / v0.6.5）的已完成记录；
 > 更早版本完成情况见 [README.md](README.md)「版本历史」。
 
 ## 待实现
@@ -34,10 +34,23 @@
 | 1 | 清空后内容太少时上滚不触发 `expandHistory` | 部分修复 | display 内容不足以产生滚动条时 `onscroll` 事件无法触发；已保留可点击的「↑ 向上滚动加载更多」入口；改进方向：onscroll 替代方案，内容不足时也能召回 |
 | 2 | 重复快速点击「加载磁盘历史」可能触发多次请求 | 已缓解 | 已加入 `_diskLoading` 互斥和 `pointerEvents` 禁用，极快连击下仍有极小概率穿透 |
 | 3 | `loadTabHistory` 重新从 daemon 取数据后 `_clearedAt` 标记丢失 | 已知限制 | 切换标签导致缓存被重新覆盖时清除标记线消失，所有历史均可见；此为预期行为 |
-| 4 | `go vet` 报告 `ringbuf_windows.go` 多处 `unsafe.Pointer` 使用警告 | 待处理 | 共 4 处（L57 / L89 / L92 / L127 / L130 附近），共享内存映射的既有代码；`go build` 正常，需专项审查指针运算安全性 |
+| 4 | `go vet` 报告 `ringbuf_windows.go` 多处 `unsafe.Pointer` 使用警告 | 待处理 | 共 5 处（L57 / L89 / L92 / L127 / L130），共享内存映射的既有代码；`go build` 正常，需专项审查指针运算安全性 |
 | 5 | `.settings-page--overlay` 遗留死代码 | 待处理 | `frontend/style.css` L1079–1090 仍保留居中模态样式，但 JS 已无引用（设置页 v0.6.0 起为独立标签页）；确认后删除 |
-| 6 | `frontend/style.css` 头部注释版本号过时 | 待处理 | 文件头注释仍写 `v0.5.7 — CSS`，与当前 v0.6.4 不符，需更新 |
+| 6 | `frontend/style.css` 头部注释版本号过时 | 待处理 | 文件头注释仍写 `v0.5.7 — CSS`，与当前 v0.6.5 不符，需更新 |
 | 7 | 控制字符 CRLF 渲染双路径并存 | 已知限制 | `renderSegments()`（Go 解码新路径）合并为单节点 `data-ws="crlf"`（标记 `←↵`），旧 decoder 路径拆为 cr + lf 两个节点；后续统一路径后可简化 |
+
+## v0.6.5 已完成
+
+| 需求 | 说明 |
+|------|------|
+| MCP stdio 分帧合规 | `serial-mcp.exe` 由 Content-Length 分帧改为换行分隔 JSON-RPC，符合 MCP stdio 传输规范；此前规范客户端完全无法通信 |
+| 无 daemon 时 CLI 挂死 | `pipeListener.Close()` 改用 `CancelIoEx` 中止挂起的 `ConnectNamedPipe`：`DisconnectNamedPipe` 与 `CloseHandle` 都会等待该 pending I/O，导致 listener 永久阻塞 |
+| CLI 一次性命令 4.1 s 开销 | 同源问题（40 × 50 ms × 2 个 listener 的自连接重试），已移除，降至约 60–80 ms |
+| `probe` 开箱可用 | `probe.toml` 增加 `//go:embed` 内置回退；搜索路径修正为 `<exe>/../../config/` 并去除重复候选 |
+| CLI 用法错误静默退出 | 14 处 `if interactive { 打印; return }` 改为先打印提示再判断模式 |
+| `autosend` 可选 pid | 参数校验 `< 3` → `< 2`，`stop` / `status` 可不带 pid；补 `interval` 帮助行 |
+| `go test ./...` 可运行 | `config.T` 的 args 改为切片参数，规避 `go vet` 的 printf wrapper 误判，config 包不再构建失败 |
+| 文档同步 | ARCHITECTURE.md 的 MCP 分帧、BUILD.md 的 probe 搜索路径说明 |
 
 ## v0.6.4 已完成
 
