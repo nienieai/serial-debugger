@@ -99,6 +99,138 @@ func TestDialRacesAcceptGoroutine(t *testing.T) {
 	}
 }
 
+// dialPair 建立一个已连接的管道对，返回服务端与客户端两端。
+func dialPair(t *testing.T) (server, client io.ReadWriteCloser) {
+	t.Helper()
+	addr := uniqueAddr(t)
+
+	ln, err := Listen(addr)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	accepted := make(chan io.ReadWriteCloser, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+
+	client, err = Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+
+	select {
+	case server = <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept 超时")
+	}
+	t.Cleanup(func() { server.Close() })
+	return server, client
+}
+
+// CancelPending 必须唤醒阻塞中的 Read。
+//
+// 同步句柄上的 CloseHandle 并不保证做到这一点 —— 已发起的同步 Read 会一直
+// 停在那里直到对端关闭。守护进程摘除慢客户端时要靠它让会话的读协程立刻退出，
+// 否则该协程会一直挂到客户端进程结束。
+func TestCancelPendingUnblocksRead(t *testing.T) {
+	server, _ := dialPair(t)
+
+	readDone := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 16)
+		_, err := server.Read(buf)
+		readDone <- err
+	}()
+
+	// 给读协程一点时间真正进入阻塞
+	time.Sleep(200 * time.Millisecond)
+	CancelPending(server)
+
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("取消之后 Read 应返回错误")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CancelPending 未能唤醒阻塞中的 Read")
+	}
+}
+
+// CancelPending 同样要唤醒阻塞中的 Write（对端不读时管道缓冲区写满即阻塞）。
+func TestCancelPendingUnblocksWrite(t *testing.T) {
+	server, _ := dialPair(t)
+
+	// 刻意不读取 client 端，让服务端的写最终阻塞在满的管道缓冲区上。
+	writeDone := make(chan struct{})
+	go func() {
+		chunk := make([]byte, 64*1024)
+		for i := 0; i < 1024; i++ {
+			if _, err := server.Write(chunk); err != nil {
+				close(writeDone)
+				return
+			}
+		}
+		close(writeDone)
+	}()
+
+	// 让它写满缓冲区并阻塞
+	time.Sleep(300 * time.Millisecond)
+	CancelPending(server)
+
+	select {
+	case <-writeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CancelPending 未能唤醒阻塞中的 Write")
+	}
+}
+
+// Close 不能在存在在途 Read 的情况下阻塞。
+//
+// 同步句柄上的 CloseHandle 会等待在途 I/O 完成，而对端不发送数据就永远不
+// 完成。守护进程的会话清理路径会在其它协程仍可能阻塞于该连接时关闭它，
+// 因此 Close 必须先取消在途 I/O。
+func TestCloseDoesNotBlockWithPendingRead(t *testing.T) {
+	server, _ := dialPair(t)
+
+	readDone := make(chan struct{})
+	go func() {
+		buf := make([]byte, 16)
+		_, _ = server.Read(buf)
+		close(readDone)
+	}()
+
+	// 让读协程真正进入阻塞
+	time.Sleep(200 * time.Millisecond)
+
+	closed := make(chan struct{})
+	go func() {
+		_ = server.Close()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close 在存在在途 Read 时阻塞了")
+	}
+
+	select {
+	case <-readDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close 之后阻塞中的 Read 未返回")
+	}
+
+	// 重复关闭必须是空操作（摘除路径与 removeSession 可能都会关闭它）
+	if err := server.Close(); err != nil {
+		t.Fatalf("重复 Close 应无错误: %v", err)
+	}
+}
+
 // Close 之后 Accept 必须立刻返回错误，而不是永久阻塞在 ConnectNamedPipe。
 func TestCloseUnblocksAccept(t *testing.T) {
 	addr := uniqueAddr(t)

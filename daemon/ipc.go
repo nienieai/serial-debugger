@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.bug.st/serial"
@@ -26,6 +27,23 @@ type portInfo struct {
 
 // ---- client session (3-pipe) ----
 
+// subQueueSize 是每个会话待发事件的队列深度。
+//
+// 事件经 sub 管道推送，而写管道是会阻塞的。此前广播在持有 sessMu 的情况下
+// 逐个会话同步写，任何一个停止读取事件的客户端都会把整条广播链卡住：既挡住
+// 新客户端注册（addSession 需要写锁），也让发起广播的串口读循环停在原地、
+// 连带丢掉端口数据。实测一个不读 sub 管道的客户端能让 status 阻塞 82 秒，
+// 直到它断开为止。
+//
+// 现在每个会话有自己的写入协程与有界队列，广播只做非阻塞投递：慢客户端
+// 被单独摘除，代价不再由所有人承担。
+//
+// 深度取 256 而非更大值，因为这只是「广播方与管道写之间」的解耦缓冲：
+// 客户端自身还有 4096 深的事件 channel 与 64KB 管道缓冲。单个事件最大约
+// 8 KB（4096 字节数据 hex 编码），256 条即约 2 MB/会话的内存上界；再深
+// 只会推迟本该发生的摘除、并放大内存占用。
+const subQueueSize = 256
+
 type clientSession struct {
 	clientId         string
 	source           string
@@ -35,19 +53,58 @@ type clientSession struct {
 	pid              uint32
 	connectTime      time.Time
 	reqCount         int
-	subMu            sync.Mutex // serializes writes to subConn
 	subs             map[string]bool
 	watchedProcesses map[string]bool // set of process IDs this client is viewing
+
+	subCh     chan protocol.Event // 待推送事件（有界）
+	subDone   chan struct{}       // 关闭表示该会话不再投递事件
+	evictOnce sync.Once
+	dropped   atomic.Int64 // 因队列满而未能投递的事件数
 }
 
 func (sess *clientSession) writeResp(v any) error {
 	return protocol.WriteMessage(sess.respConn, v)
 }
 
-func (sess *clientSession) writeSub(v any) error {
-	sess.subMu.Lock()
-	defer sess.subMu.Unlock()
-	return protocol.WriteMessage(sess.subConn, v)
+// enqueueSub 非阻塞地把事件放进该会话的发送队列。
+// 返回 false 表示队列已满 —— 调用方应当把该客户端判定为慢客户端。
+func (sess *clientSession) enqueueSub(evt protocol.Event) bool {
+	select {
+	case <-sess.subDone:
+		return true // 已判定退出，不再计入队列满
+	default:
+	}
+	select {
+	case sess.subCh <- evt:
+		return true
+	default:
+		sess.dropped.Add(1)
+		return false
+	}
+}
+
+// subWriter 是该会话唯一的 sub 管道写入者，保证事件之间的顺序。
+func (sess *clientSession) subWriter() {
+	for {
+		select {
+		case <-sess.subDone:
+			return
+		case evt := <-sess.subCh:
+			if err := protocol.WriteMessage(sess.subConn, evt); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// markEvicted 幂等地把该会话标记为「不再投递事件」。
+func (sess *clientSession) markEvicted() bool {
+	fired := false
+	sess.evictOnce.Do(func() {
+		close(sess.subDone)
+		fired = true
+	})
+	return fired
 }
 
 // ---- ipc server ----
@@ -253,15 +310,53 @@ func (s *IpcServer) broadcastProcessChanged() {
 	s.broadcastFiltered("process-changed", map[string]any{"processes": procs})
 }
 
+// broadcastFiltered 把事件投递给所有订阅了它的会话。
+//
+// 只在 sessMu 下做一次快照，随后在锁外非阻塞投递：绝不在持锁期间做管道 I/O，
+// 也绝不让某个会话的阻塞影响其它会话或调用方（调用方通常是串口读循环）。
 func (s *IpcServer) broadcastFiltered(eventName string, params any) {
-	s.sessMu.RLock()
-	defer s.sessMu.RUnlock()
 	evt := protocol.Event{Event: eventName, Params: params}
+
+	s.sessMu.RLock()
+	targets := make([]*clientSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
 		if sess.subs[eventName] {
-			sess.writeSub(evt)
+			targets = append(targets, sess)
 		}
 	}
+	s.sessMu.RUnlock()
+
+	for _, sess := range targets {
+		if !sess.enqueueSub(evt) {
+			s.onSubQueueFull(sess)
+		}
+	}
+}
+
+// onSubQueueFull 处理「某会话的事件队列已满」：标记并异步摘除，只处理一次。
+//
+// 必须异步：调用点可能在持锁路径上（例如 pushStatsCountTo 持有 pm 的读锁），
+// 而摘除会走 removeSession → broadcastProcessChanged → pm.List()，同步执行会在
+// 同一协程里二次获取 pm.mu 的读锁，遇到等待中的写者即死锁。
+func (s *IpcServer) onSubQueueFull(sess *clientSession) {
+	if !sess.markEvicted() {
+		return
+	}
+	go s.evictSlowClient(sess)
+}
+
+// evictSlowClient 摘除一个跟不上事件速率的客户端。
+//
+// 客户端断开后可以重连，并通过历史环形缓冲区重新同步（环形缓冲区才是权威
+// 数据源），因此丢弃事件是安全的；代价由一个慢客户端承担，而不是所有人。
+func (s *IpcServer) evictSlowClient(sess *clientSession) {
+	logOp("错误", "%s:%s 事件队列已满（深度 %d，已丢弃 %d 条），判定为慢客户端并断开",
+		sourceLabel(sess.source), sess.clientId, subQueueSize, sess.dropped.Load())
+	// 先取消在途 I/O 再清理：否则该会话的读/写协程会一直挂到对端关闭。
+	pipe.CancelPending(sess.daemonConn)
+	pipe.CancelPending(sess.respConn)
+	pipe.CancelPending(sess.subConn)
+	s.removeSession(sess.clientId)
 }
 
 func (s *IpcServer) broadcastEvent(msg RxTxMessage) {
@@ -283,6 +378,7 @@ func (s *IpcServer) addSession(sess *clientSession) {
 		for cid, old := range s.sessions {
 			if old.pid == sess.pid {
 				delete(s.sessions, cid)
+				old.markEvicted() // 让旧会话的写入协程退出，否则会泄漏
 				old.daemonConn.Close()
 				old.respConn.Close()
 				old.subConn.Close()
@@ -337,6 +433,7 @@ func (s *IpcServer) removeSession(clientId string) {
 		}
 		label := sourceLabel(sess.source)
 		logOp("连接", "%s:%s 已断开 (活跃会话: %d)", label, clientId, n)
+		sess.markEvicted() // 停止投递并让写入协程退出
 		sess.daemonConn.Close()
 		sess.respConn.Close()
 		sess.subConn.Close()
@@ -406,10 +503,15 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 		pid:         pid,
 		connectTime: time.Now(),
 		subs:        make(map[string]bool),
+		subCh:       make(chan protocol.Event, subQueueSize),
+		subDone:     make(chan struct{}),
 	}
 	for _, e := range p.Subscribe {
 		sess.subs[e] = true
 	}
+
+	// 每个会话一个 sub 写入协程，广播路径只做非阻塞投递。
+	go sess.subWriter()
 
 	s.addSession(sess)
 
@@ -484,6 +586,13 @@ func (s *IpcServer) handleCallOnce(conn io.ReadWriteCloser, firstData []byte, re
 	}
 }
 
+// pushSub 向单个会话投递事件，队列满时按慢客户端处理。
+func (s *IpcServer) pushSub(sess *clientSession, evt protocol.Event) {
+	if !sess.enqueueSub(evt) {
+		s.onSubQueueFull(sess)
+	}
+}
+
 func (s *IpcServer) pushPortListTo(sess *clientSession) {
 	if !sess.subs["ports-list"] {
 		return
@@ -491,16 +600,14 @@ func (s *IpcServer) pushPortListTo(sess *clientSession) {
 	s.portsMu.RLock()
 	ports := s.cachedPorts
 	s.portsMu.RUnlock()
-	evt := protocol.Event{Event: "ports-list", Params: map[string]any{"ports": ports}}
-	sess.writeSub(evt)
+	s.pushSub(sess, protocol.Event{Event: "ports-list", Params: map[string]any{"ports": ports}})
 }
 
 func (s *IpcServer) pushProcessListTo(sess *clientSession) {
 	if !sess.subs["process-changed"] {
 		return
 	}
-	evt := protocol.Event{Event: "process-changed", Params: map[string]any{"processes": s.pm.List()}}
-	sess.writeSub(evt)
+	s.pushSub(sess, protocol.Event{Event: "process-changed", Params: map[string]any{"processes": s.pm.List()}})
 }
 
 func (s *IpcServer) pushSubscribedState(sess *clientSession, events []any) {
@@ -572,7 +679,7 @@ func (s *IpcServer) pushClientListTo(sess *clientSession) {
 			"subs":        subList,
 		})
 	}
-	sess.writeSub(protocol.Event{
+	s.pushSub(sess, protocol.Event{
 		Event:  "clients-changed",
 		Params: map[string]any{"clients": clients},
 	})
@@ -586,7 +693,7 @@ func (s *IpcServer) pushStatsCountTo(sess *clientSession) {
 	defer s.pm.mu.RUnlock()
 	for _, p := range s.pm.processes {
 		if p.status == "connected" {
-			sess.writeSub(protocol.Event{
+			s.pushSub(sess, protocol.Event{
 				Event: "stats-count",
 				Params: map[string]any{
 					"processId":    p.id,

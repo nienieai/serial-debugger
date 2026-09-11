@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -207,7 +208,10 @@ func (l *pipeListener) Close() error {
 	return nil
 }
 
-type winPipeConn struct{ handle windows.Handle }
+type winPipeConn struct {
+	handle windows.Handle
+	closed atomic.Bool
+}
 
 func (c *winPipeConn) Read(p []byte) (int, error) {
 	done := uint32(0)
@@ -233,7 +237,20 @@ func (c *winPipeConn) Write(p []byte) (int, error) {
 	return int(done), nil
 }
 
+// Close 取消在途 I/O 后关闭句柄，且只关一次。
+//
+// 同步句柄上的 CloseHandle 会等待已经发起的 ReadFile/WriteFile 完成，而对端
+// 不读不写就永远不会完成 —— 于是从别的协程关闭连接会永久挂住（实测会把调用
+// 方卡在 syscall 里）。守护进程在会话清理与慢客户端摘除两条路径上都会关闭
+// 连接，因此这里必须先 CancelIoEx。
+//
+// closed 保证重复关闭是空操作：摘除路径与 removeSession 可能先后关闭同一个连接，
+// 而对已关闭的句柄再次 CloseHandle 有误关其它已复用句柄的风险。
 func (c *winPipeConn) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+	procCancelIoEx.Call(uintptr(c.handle), 0)
 	procCloseHandle.Call(uintptr(c.handle))
 	return nil
 }
@@ -250,6 +267,19 @@ func clientPID(conn io.ReadWriteCloser) (uint32, error) {
 		return 0, fmt.Errorf("GetNamedPipeClientProcessId failed: %v", callErr)
 	}
 	return pid, nil
+}
+
+// cancelPending 取消该连接上尚未完成的同步 I/O。
+//
+// 同步句柄上的 CloseHandle 不保证唤醒已经阻塞的 ReadFile/WriteFile（Windows
+// 会等待该 I/O 完成，而对端不关闭就一直等），因此从别的协程拆连接前必须先
+// CancelIoEx，否则读/写协程会一直挂着。
+func cancelPending(conn io.ReadWriteCloser) {
+	wc, ok := conn.(*winPipeConn)
+	if !ok || wc.handle == 0 {
+		return
+	}
+	procCancelIoEx.Call(uintptr(wc.handle), 0)
 }
 
 func dialPipe(addr string) (io.ReadWriteCloser, error) {
