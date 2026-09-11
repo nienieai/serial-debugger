@@ -35,8 +35,8 @@
 | 2 | 重复快速点击「加载磁盘历史」可能触发多次请求 | 已缓解 | 已加入 `_diskLoading` 互斥和 `pointerEvents` 禁用，极快连击下仍有极小概率穿透 |
 | 3 | `loadTabHistory` 重新从 daemon 取数据后 `_clearedAt` 标记丢失 | 已知限制 | 切换标签导致缓存被重新覆盖时清除标记线消失，所有历史均可见；此为预期行为 |
 | 4 | `go vet` 报告 `ringbuf_windows.go` 多处 `unsafe.Pointer` 使用警告 | 待处理 | 共 5 处（L57 / L89 / L92 / L127 / L130），共享内存映射的既有代码；`go build` 正常，需专项审查指针运算安全性 |
-| 5 | `.settings-page--overlay` 遗留死代码 | 待处理 | `frontend/style.css` L1079–1090 仍保留居中模态样式，但 JS 已无引用（设置页 v0.6.0 起为独立标签页）；确认后删除 |
-| 6 | `frontend/style.css` 头部注释版本号过时 | 待处理 | 文件头注释仍写 `v0.5.7 — CSS`，与当前 v0.6.5 不符，需更新 |
+| 5 | `.settings-page--overlay` 遗留死代码 | 已修复 | v0.6.5 删除（`frontend/style.css` 定义与后代选择器两处，JS 无引用） |
+| 6 | `frontend/style.css` 头部注释版本号过时 | 已修复 | v0.6.5 更新为 `v0.6.5 — CSS` |
 | 7 | 控制字符 CRLF 渲染双路径并存 | 已知限制 | `renderSegments()`（Go 解码新路径）合并为单节点 `data-ws="crlf"`（标记 `←↵`），旧 decoder 路径拆为 cr + lf 两个节点；后续统一路径后可简化 |
 
 ## v0.6.5 已完成

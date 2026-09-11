@@ -27,9 +27,9 @@ jobs:
 
       - name: Build daemon / cli / mcp
         run: |
-          go build -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
-          go build -ldflags="-s -w" -o build/bin/serial-cli.exe    ./cmd/serial-cli/
-          go build -ldflags="-s -w" -o build/bin/serial-mcp.exe    ./cmd/serial-mcp/
+          go build -trimpath -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
+          go build -trimpath -ldflags="-s -w" -o build/bin/serial-cli.exe    ./cmd/serial-cli/
+          go build -trimpath -ldflags="-s -w" -o build/bin/serial-mcp.exe    ./cmd/serial-mcp/
 
       - name: Build GUI (wails)
         run: wails build

@@ -1,5 +1,5 @@
 /* ============================================================
-   串口调试工具 v0.5.7 — CSS
+   串口调试工具 v0.6.5 — CSS
    Organization: vars → reset → utilities → states → base
                  → layout-overlays → components → rtl → scrollbar
    ============================================================ */
@@ -1076,18 +1076,6 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 [dir="rtl"] body { direction: rtl; }
 
 /* ---- 20. Settings page ---- */
-.settings-page--overlay {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(680px, 94vw);
-  max-height: 90vh;
-  overflow-y: auto;
-  background: var(--bg);
-  border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  padding: 40px 32px 24px;
-}
 .settings-page-inner {
   overflow: hidden;
   background: var(--input-bg);
@@ -1225,7 +1213,6 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 .settings-panel.is-hidden {
   display: none;
 }
-.settings-page--overlay .settings-section-title:first-child { margin-top: 0; }
 .settings-section-title {
   font-size: 15px;
   font-weight: 600;

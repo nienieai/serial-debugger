@@ -39,7 +39,7 @@ func detectLang() string {
 
 func main() {
 	cliLang = detectLang()
-	args := os.Args[1:]
+	args := stripLangFlag(os.Args[1:])
 	if len(args) == 0 {
 		interactiveMode()
 		return
@@ -53,6 +53,24 @@ func main() {
 	default:
 		runCommand(args)
 	}
+}
+
+// stripLangFlag removes --lang <lang> / --lang=<lang> from the argument list.
+// detectLang has already consumed the value, but leaving the flag in place made
+// it dispatch as a command ("unknown command: --lang").
+func stripLangFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--lang":
+			i++ // skip the value that follows
+		case strings.HasPrefix(args[i], "--lang="):
+			// self-contained form
+		default:
+			out = append(out, args[i])
+		}
+	}
+	return out
 }
 
 func interactiveMode() {
@@ -479,9 +497,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			fmt.Println(`{"success": true}`)
 		case "stop":
 			pid := resolveProcessID(dc, args, 2)
-			if err := dc.AutoSendStop(pid); err != nil {
-				if err != nil { errExit(err, interactive); return }
-			}
+			if err := dc.AutoSendStop(pid); err != nil { errExit(err, interactive); return }
 			fmt.Println(`{"success": true}`)
 		case "interval":
 			if len(args) < 3 {
@@ -497,9 +513,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			if pid == "" {
 				pid = firstConnectedIDDC(dc)
 			}
-			if err := dc.AutoSendSetInterval(pid, intervalMs); err != nil {
-				if err != nil { errExit(err, interactive); return }
-			}
+			if err := dc.AutoSendSetInterval(pid, intervalMs); err != nil { errExit(err, interactive); return }
 			fmt.Println(`{"success": true}`)
 		case "status":
 			pid := resolveProcessID(dc, args, 2)
@@ -861,6 +875,7 @@ func printHelp() {
   autosend start <ms> <mode> [--loop] [pid]  启动自动发送 (mode: single|queue, --loop循环)
   autosend stop [pid]                        停止自动发送
   autosend status [pid]                      查看自动发送状态
+  autosend interval <ms> [pid]               修改自动发送间隔
   sendqueue <json-file> [pid]                从JSON文件读取条目数组写入发送队列
 
 多字符串:
@@ -869,15 +884,14 @@ func printHelp() {
   multistr reload [pid]                      从发送队列刷新缓存
   multistr status [pid]                      查看多字符串发送状态
 
-	历史记录:
-	  history [processId]                内存缓冲区历史
-	  history-files                      列出所有历史记录文件 (.log)
-	  history-search <file> <kw> [limit] 在历史文件中搜索关键字
-	  history-enable [true|false]         开关自动保存 (默认 true)
-	  history-status                     查看自动保存状态
-	  history-attach <pid> <file>         为进程附加历史文件 (加载内容+继续追加)
-	  history-new [pid]                   为进程新建历史文件
-	  history-detach [pid]                分离进程的当前历史文件
+历史记录:
+  history-files                      列出所有历史记录文件 (.log)
+  history-search <file> <kw> [limit] 在历史文件中搜索关键字
+  history-enable [true|false]        开关自动保存 (默认 true)
+  history-status                     查看自动保存状态
+  history-attach <pid> <file>        为进程附加历史文件 (加载内容+继续追加)
+  history-new [pid]                  为进程新建历史文件
+  history-detach [pid]               分离进程的当前历史文件
 
 诊断:
   stats   [processId]                查看进程 I/O 统计（速率/字节/错误）
