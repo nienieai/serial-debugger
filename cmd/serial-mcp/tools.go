@@ -48,7 +48,6 @@ type toolContent struct {
 	Text string `json:"text"`
 }
 
-
 var allTools = []toolDef{
 	{
 		Name:        "serial_start_daemon",
@@ -69,28 +68,28 @@ var allTools = []toolDef{
 		Name:        "serial_create",
 		Description: "Create a serial process. mode: single (default) or forward. Without port: idle. With port: create+connect with dedup. Forward mode requires portB.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"mode": {Type: "string", Description: "Process mode: single (default) or forward", Enum: []string{"single", "forward"}},
-			"port": {Type: "string", Description: "Serial port name (e.g. COM3). Omit for idle. In forward mode, this is port A."},
-			"baud": {Type: "integer", Description: "Baud rate (default 115200)."},
-			"dataBits": {Type: "integer", Description: "Data bits (default: 8)"},
-			"stopBits": {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
-			"parity": {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
-			"portB": {Type: "string", Description: "Second port for forward mode (e.g. COM4)."},
-			"baudB": {Type: "integer", Description: "Baud rate for port B (default 115200)."},
+			"mode":      {Type: "string", Description: "Process mode: single (default) or forward", Enum: []string{"single", "forward"}},
+			"port":      {Type: "string", Description: "Serial port name (e.g. COM3). Omit for idle. In forward mode, this is port A."},
+			"baud":      {Type: "integer", Description: "Baud rate (default 115200)."},
+			"dataBits":  {Type: "integer", Description: "Data bits (default: 8)"},
+			"stopBits":  {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
+			"parity":    {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
+			"portB":     {Type: "string", Description: "Second port for forward mode (e.g. COM4)."},
+			"baudB":     {Type: "integer", Description: "Baud rate for port B (default 115200)."},
 			"dataBitsB": {Type: "integer", Description: "Data bits for port B (default: 8)"},
 			"stopBitsB": {Type: "string", Description: "Stop bits for port B (default: 1)", Enum: []string{"1", "1.5", "2"}},
-			"parityB": {Type: "string", Description: "Parity for port B (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
+			"parityB":   {Type: "string", Description: "Parity for port B (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
 		}},
 	},
 	{
 		Name:        "serial_open",
 		Description: "Open a serial port. Shortcut for serial_create with port. Returns processId.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"port": {Type: "string", Description: "Serial port name (e.g. COM3)"},
-			"baud": {Type: "integer", Description: "Baud rate (default 115200)."},
+			"port":     {Type: "string", Description: "Serial port name (e.g. COM3)"},
+			"baud":     {Type: "integer", Description: "Baud rate (default 115200)."},
 			"dataBits": {Type: "integer", Description: "Data bits (default: 8)"},
 			"stopBits": {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
-			"parity": {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
+			"parity":   {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
 		}, Required: []string{"port"}},
 	},
 	{
@@ -98,11 +97,11 @@ var allTools = []toolDef{
 		Description: "Connect an idle process to a serial port. Process must be idle.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"processId": {Type: "string", Description: "Process ID from serial_create."},
-			"port": {Type: "string", Description: "Serial port name (e.g. COM3)."},
-			"baud": {Type: "integer", Description: "Baud rate (default 115200)."},
-			"dataBits": {Type: "integer", Description: "Data bits (default: 8)"},
-			"stopBits": {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
-			"parity": {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
+			"port":      {Type: "string", Description: "Serial port name (e.g. COM3)."},
+			"baud":      {Type: "integer", Description: "Baud rate (default 115200)."},
+			"dataBits":  {Type: "integer", Description: "Data bits (default: 8)"},
+			"stopBits":  {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
+			"parity":    {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
 		}, Required: []string{"processId", "port"}},
 	},
 	{
@@ -117,8 +116,8 @@ var allTools = []toolDef{
 		Description: "Switch a connected process to a different serial port without destroying the process. Preserves history and send queue.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"processId": {Type: "string", Description: "Process ID to switch"},
-			"port": {Type: "string", Description: "New serial port name (e.g. COM4)"},
-			"baud": {Type: "integer", Description: "Baud rate (default 115200)"},
+			"port":      {Type: "string", Description: "New serial port name (e.g. COM4)"},
+			"baud":      {Type: "integer", Description: "Baud rate (default 115200)"},
 		}, Required: []string{"processId", "port"}},
 	},
 	{
@@ -135,17 +134,17 @@ var allTools = []toolDef{
 		Name:        "serial_declare",
 		Description: "Declare a serial port configuration without opening the port. Stores full serial config (baud, dataBits, stopBits, parity) on an idle process visible to ALL connected clients via process-changed events. Use serial_connect later to activate. Forward mode supported for port pairs.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"mode": {Type: "string", Description: "Process mode: single (default) or forward", Enum: []string{"single", "forward"}},
-			"port": {Type: "string", Description: "Serial port name (e.g. COM3). Required unless creating empty idle process."},
-			"baud": {Type: "integer", Description: "Baud rate (default 115200)."},
-			"dataBits": {Type: "integer", Description: "Data bits (default: 8)"},
-			"stopBits": {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
-			"parity": {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
-			"portB": {Type: "string", Description: "Second port for forward mode (e.g. COM4)."},
-			"baudB": {Type: "integer", Description: "Baud rate for port B (default 115200)."},
+			"mode":      {Type: "string", Description: "Process mode: single (default) or forward", Enum: []string{"single", "forward"}},
+			"port":      {Type: "string", Description: "Serial port name (e.g. COM3). Required unless creating empty idle process."},
+			"baud":      {Type: "integer", Description: "Baud rate (default 115200)."},
+			"dataBits":  {Type: "integer", Description: "Data bits (default: 8)"},
+			"stopBits":  {Type: "string", Description: "Stop bits (default: 1)", Enum: []string{"1", "1.5", "2"}},
+			"parity":    {Type: "string", Description: "Parity (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
+			"portB":     {Type: "string", Description: "Second port for forward mode (e.g. COM4)."},
+			"baudB":     {Type: "integer", Description: "Baud rate for port B (default 115200)."},
 			"dataBitsB": {Type: "integer", Description: "Data bits for port B (default: 8)"},
 			"stopBitsB": {Type: "string", Description: "Stop bits for port B (default: 1)", Enum: []string{"1", "1.5", "2"}},
-			"parityB": {Type: "string", Description: "Parity for port B (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
+			"parityB":   {Type: "string", Description: "Parity for port B (default: none)", Enum: []string{"none", "odd", "even", "mark", "space"}},
 		}, Required: []string{"port"}},
 	},
 	{
@@ -153,7 +152,7 @@ var allTools = []toolDef{
 		Description: "Switch a process between single-port and forward mode. Process must be idle (all ports disconnected).",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"processId": {Type: "string", Description: "Process ID to modify."},
-			"mode": {Type: "string", Description: "Target mode", Enum: []string{"single", "forward"}},
+			"mode":      {Type: "string", Description: "Target mode", Enum: []string{"single", "forward"}},
 		}, Required: []string{"processId", "mode"}},
 	},
 	{
@@ -167,9 +166,9 @@ var allTools = []toolDef{
 		Name:        "serial_send",
 		Description: "Send data over a connected serial process. Supports text and hex.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"data": {Type: "string", Description: "Data to send."},
+			"data":      {Type: "string", Description: "Data to send."},
 			"processId": {Type: "string", Description: "Process ID. If omitted, uses first connected."},
-			"format": {Type: "string", Description: "Data format (default: text)", Enum: []string{"text", "hex"}},
+			"format":    {Type: "string", Description: "Data format (default: text)", Enum: []string{"text", "hex"}},
 		}, Required: []string{"data"}},
 	},
 	{
@@ -194,7 +193,7 @@ var allTools = []toolDef{
 		Description: "Persistent daemon client that listens for events.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"timeout": {Type: "integer", Description: "Listen duration in seconds (default: 30)."},
-			"events": {Type: "string", Description: "Comma-separated event names to listen for."},
+			"events":  {Type: "string", Description: "Comma-separated event names to listen for."},
 		}},
 	},
 	{
@@ -221,10 +220,10 @@ var allTools = []toolDef{
 		Name:        "serial_autosend_start",
 		Description: "Start auto-send on a serial process.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"processId": {Type: "string", Description: "Process ID."},
+			"processId":  {Type: "string", Description: "Process ID."},
 			"intervalMs": {Type: "integer", Description: "Send interval (single) or round interval (queue loop)."},
-			"mode": {Type: "string", Description: "Mode: single or queue", Enum: []string{"single", "queue"}},
-			"loop": {Type: "boolean", Description: "Loop continuously (queue mode only)."},
+			"mode":       {Type: "string", Description: "Mode: single or queue", Enum: []string{"single", "queue"}},
+			"loop":       {Type: "boolean", Description: "Loop continuously (queue mode only)."},
 		}, Required: []string{"processId", "intervalMs", "mode"}},
 	},
 	{
@@ -246,7 +245,7 @@ var allTools = []toolDef{
 		Description: "Write multi-string entries to the send queue. Each entry: {enabled, hex, content, delay, note}.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"processId": {Type: "string", Description: "Process ID."},
-			"entries": {Type: "array", Description: "Array of entry objects with fields: enabled, hex, content, delay, note."},
+			"entries":   {Type: "array", Description: "Array of entry objects with fields: enabled, hex, content, delay, note."},
 		}, Required: []string{"processId", "entries"}},
 	},
 	{
@@ -281,37 +280,38 @@ var allTools = []toolDef{
 		}},
 	},
 }
+
 type toolHandler func(params json.RawMessage) *toolCallResult
 
 var toolHandlers = map[string]toolHandler{
-	"serial_start_daemon":  handleStartDaemon,
-	"serial_list_ports":    handleListPorts,
-	"serial_refresh_ports": handleRefreshPorts,
-	"serial_create":        handleCreate,
-	"serial_open":          handleOpen,
-	"serial_connect":       handleConnect,
-	"serial_disconnect":    handleDisconnect,
-	"serial_switch":        handleSwitchPort,
-	"serial_forward_create": handleForwardCreate,
-	"serial_declare":       handleDeclare,
-	"serial_close":         handleClose,
-	"serial_send":          handleSend,
-	"serial_sessions":      handleSessions,
-	"serial_history":       handleHistory,
-	"serial_status":        handleStatus,
-	"serial_monitor":       handleMonitor,
-	"serial_shutdown":      handleShutdown,
-	"serial_stats":         handleStats,
-	"serial_port_watch":       handlePortWatch,
-	"serial_autosend_start":   handleAutoSendStart,
-	"serial_autosend_stop":    handleAutoSendStop,
-	"serial_autosend_status":  handleAutoSendStatus,
-	"serial_sendqueue":        handleSendQueue,
-	"serial_multistr_save":    handleMultistrSave,
-	"serial_multistr_load":    handleMultistrLoad,
-	"serial_multistr_status":  handleMultistrStatus,
-	"serial_probe_ports":      handleProbePorts,
-	"serial_set_mode":         handleSetMode,
+	"serial_start_daemon":    handleStartDaemon,
+	"serial_list_ports":      handleListPorts,
+	"serial_refresh_ports":   handleRefreshPorts,
+	"serial_create":          handleCreate,
+	"serial_open":            handleOpen,
+	"serial_connect":         handleConnect,
+	"serial_disconnect":      handleDisconnect,
+	"serial_switch":          handleSwitchPort,
+	"serial_forward_create":  handleForwardCreate,
+	"serial_declare":         handleDeclare,
+	"serial_close":           handleClose,
+	"serial_send":            handleSend,
+	"serial_sessions":        handleSessions,
+	"serial_history":         handleHistory,
+	"serial_status":          handleStatus,
+	"serial_monitor":         handleMonitor,
+	"serial_shutdown":        handleShutdown,
+	"serial_stats":           handleStats,
+	"serial_port_watch":      handlePortWatch,
+	"serial_autosend_start":  handleAutoSendStart,
+	"serial_autosend_stop":   handleAutoSendStop,
+	"serial_autosend_status": handleAutoSendStatus,
+	"serial_sendqueue":       handleSendQueue,
+	"serial_multistr_save":   handleMultistrSave,
+	"serial_multistr_load":   handleMultistrLoad,
+	"serial_multistr_status": handleMultistrStatus,
+	"serial_probe_ports":     handleProbePorts,
+	"serial_set_mode":        handleSetMode,
 }
 
 func okResult(v any) *toolCallResult {
@@ -449,7 +449,6 @@ func handleConnect(raw json.RawMessage) *toolCallResult {
 	return okResult(result)
 }
 
-
 func handleSwitchPort(raw json.RawMessage) *toolCallResult {
 	var p struct {
 		ProcessID string `json:"processId"`
@@ -459,14 +458,22 @@ func handleSwitchPort(raw json.RawMessage) *toolCallResult {
 	json.Unmarshal(raw, &p)
 	if p.ProcessID == "" {
 		p.ProcessID = firstConnectedID()
-		if p.ProcessID == "" { return errResult("No connected process") }
+		if p.ProcessID == "" {
+			return errResult("No connected process")
+		}
 	}
-	if p.Port == "" { return errResult("port is required") }
-	if p.Baud <= 0 { p.Baud = 115200 }
+	if p.Port == "" {
+		return errResult("port is required")
+	}
+	if p.Baud <= 0 {
+		p.Baud = 115200
+	}
 	result, err := client.CallOnce("process.switch", map[string]any{
 		"processId": p.ProcessID, "port": p.Port, "baud": p.Baud,
 	}, "mcp")
-	if err != nil { return errResult(fmt.Sprintf("Failed to switch: %v", err)) }
+	if err != nil {
+		return errResult(fmt.Sprintf("Failed to switch: %v", err))
+	}
 	return okResult(result)
 }
 
@@ -478,13 +485,21 @@ func handleForwardCreate(raw json.RawMessage) *toolCallResult {
 		BaudB int    `json:"baudB"`
 	}
 	json.Unmarshal(raw, &p)
-	if p.PortA == "" || p.PortB == "" { return errResult("portA and portB are required") }
-	if p.BaudA <= 0 { p.BaudA = 115200 }
-	if p.BaudB <= 0 { p.BaudB = 115200 }
+	if p.PortA == "" || p.PortB == "" {
+		return errResult("portA and portB are required")
+	}
+	if p.BaudA <= 0 {
+		p.BaudA = 115200
+	}
+	if p.BaudB <= 0 {
+		p.BaudB = 115200
+	}
 	result, err := client.CallOnce("forward.create", map[string]any{
 		"portA": p.PortA, "baudA": p.BaudA, "portB": p.PortB, "baudB": p.BaudB,
 	}, "mcp")
-	if err != nil { return errResult(fmt.Sprintf("Failed to create forward: %v", err)) }
+	if err != nil {
+		return errResult(fmt.Sprintf("Failed to create forward: %v", err))
+	}
 	return okResult(result)
 }
 

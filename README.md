@@ -1,4 +1,4 @@
-# serial-debugger — 跨平台串口调试工具 v0.6.4
+# serial-debugger — 跨平台串口调试工具 v0.6.5
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -200,6 +200,17 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
 ## 版本历史
+
+### 0.6.5（2026-09-11）
+
+- **修复 MCP stdio 分帧不符合规范**：`serial-mcp.exe` 改用换行分隔 JSON-RPC。原 Content-Length 分帧并非 MCP 传输格式，任何规范兼容的 MCP 客户端都完全无法与之通信（而服务器声明的是 `protocolVersion: 2025-06-18`）
+- **修复无守护进程时 CLI 永久挂死**：`pipeListener.Close()` 原对挂起的 `ConnectNamedPipe` 依次调用 `DisconnectNamedPipe` 与 `CloseHandle`，二者都会等待该 pending I/O 完成，导致 `status` / `ports` / `sessions` / `shutdown` 等命令无限阻塞（>30 s 不返回）；改用 `CancelIoEx` 中止挂起 I/O
+- **修复一次性 CLI 命令固定 4.1 s 开销**：源于同一 listener 关闭路径的自连接重试（40 × 50 ms × 2 个 listener），现降至约 60–80 ms
+- **修复 `probe` 开箱不可用**：`probe.toml` 增加 `//go:embed` 内置回退；修正 `<exe>/../../config/probe.toml` 搜索路径（原 `../config` 在 `build/bin` 场景下指向 `build/config`，即 v0.6.4 声称的修复实际未生效）并去除重复候选
+- **修复 CLI 用法错误静默退出**：非交互模式下参数错误此前零输出直接 exit 1，现打印用法提示后再退出
+- **修复 `autosend stop` / `autosend status` 不带 pid 不可用**：参数校验由 `len(args) < 3` 改为 `< 2`，与帮助文本中 `[pid]` 可选一致
+- **修复 `go test ./...` 整体无法运行**：`config.T` 的 args 改为切片参数，避免 `go vet` 将其判定为 printf wrapper、进而拒绝所有非恒定 key 的调用
+- `ARCHITECTURE.md` / `BUILD.md` 中 MCP 分帧与 probe 搜索路径描述同步修正
 
 ### 0.6.4（2026-06-05）
 

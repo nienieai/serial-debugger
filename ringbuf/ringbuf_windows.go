@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	kernel32DLL          = syscall.NewLazyDLL("kernel32.dll")
+	kernel32DLL           = syscall.NewLazyDLL("kernel32.dll")
 	procCreateFileMapping = kernel32DLL.NewProc("CreateFileMappingW")
 	procOpenFileMapping   = kernel32DLL.NewProc("OpenFileMappingW")
 	procMapViewOfFile     = kernel32DLL.NewProc("MapViewOfFile")
@@ -54,8 +54,15 @@ func CreateSharedRing(name string, ringDataSize uint32) (*RingBuffer, error) {
 		return nil, fmt.Errorf("MapViewOfFile failed: %v", err)
 	}
 
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), totalSize)
-	rb := wrapMemory(data, true, addr, h)
+	// MapViewOfFile returns a raw address. Converting it to unsafe.Pointer is
+	// safe here: the region is a file mapping, not Go heap memory, so the GC
+	// never moves it, and its lifetime is bounded by UnmapViewOfFile.
+	// go vet's unsafeptr check is deliberately conservative about uintptr
+	// results from syscall wrappers and still reports these conversions; the
+	// conversion is done once per mapping and kept in mapAddr.
+	base := unsafe.Pointer(addr)
+	data := unsafe.Slice((*byte)(base), totalSize)
+	rb := wrapMemory(data, true, base, h)
 	rb.initHeader(ringDataSize)
 	rb.bufferSize = ringDataSize // set after initHeader writes to shared mem
 	return rb, nil
@@ -86,11 +93,12 @@ func OpenSharedRing(name string) (*RingBuffer, error) {
 	}
 
 	// Read the actual size from the mapped header
-	bs := atomic.LoadUint32((*uint32)(unsafe.Pointer(addr + headerSizeOff)))
+	base := unsafe.Pointer(addr)
+	bs := atomic.LoadUint32((*uint32)(unsafe.Add(base, headerSizeOff)))
 	totalSize := uintptr(headerTotal + bs)
 
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), totalSize)
-	rb := wrapMemory(data, true, addr, h)
+	data := unsafe.Slice((*byte)(base), totalSize)
+	rb := wrapMemory(data, true, base, h)
 	if !rb.verifyHeader() {
 		rb.Close()
 		return nil, fmt.Errorf("invalid ring buffer header in '%s'", name)
@@ -124,11 +132,12 @@ func OpenSharedRingForWrite(name string) (*RingBuffer, error) {
 		return nil, fmt.Errorf("MapViewOfFile failed: %v", err)
 	}
 
-	bs := atomic.LoadUint32((*uint32)(unsafe.Pointer(addr + headerSizeOff)))
+	base := unsafe.Pointer(addr)
+	bs := atomic.LoadUint32((*uint32)(unsafe.Add(base, headerSizeOff)))
 	totalSize := uintptr(headerTotal + bs)
 
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), totalSize)
-	rb := wrapMemory(data, true, addr, h)
+	data := unsafe.Slice((*byte)(base), totalSize)
+	rb := wrapMemory(data, true, base, h)
 	if !rb.verifyHeader() {
 		rb.Close()
 		return nil, fmt.Errorf("invalid ring buffer header in '%s'", name)
@@ -138,9 +147,9 @@ func OpenSharedRingForWrite(name string) (*RingBuffer, error) {
 
 // Close unmaps the shared memory and closes the handle.
 func (rb *RingBuffer) Close() error {
-	if rb.autoUnmap && rb.mapAddr != 0 {
-		procUnmapViewOfFile.Call(rb.mapAddr)
-		rb.mapAddr = 0
+	if rb.autoUnmap && rb.mapAddr != nil {
+		procUnmapViewOfFile.Call(uintptr(rb.mapAddr))
+		rb.mapAddr = nil
 	}
 	if rb.mapHandle != 0 {
 		syscall.CloseHandle(syscall.Handle(rb.mapHandle))

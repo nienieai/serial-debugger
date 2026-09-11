@@ -1,4 +1,4 @@
-# 串口调试工具 v0.6.4 框架文档
+# 串口调试工具 v0.6.5 框架文档
 
 ## 一、整体框架
 
@@ -1105,7 +1105,7 @@ IPC 摘要：`来源:clientId rN 方法 → 结果 (耗时)`，`status` 和 `pin
 
 ### 6.1 独立可执行文件
 
-`serial-mcp.exe`，JSON-RPC 2.0 over stdio，Content-Length 分帧。
+`serial-mcp.exe`，JSON-RPC 2.0 over stdio，换行分隔分帧（每行一条消息，遵循 MCP stdio 传输规范；v0.6.5 前误用 Content-Length 分帧，规范客户端无法通信）。
 
 ### 6.2 配置
 
@@ -1386,7 +1386,7 @@ selection → cloneContents()
 ## 十二、构建
 
 ```bash
-cd 串口调试工具-0.6.4
+cd 串口调试工具-0.6.5
 go mod tidy
 
 # 守护进程 / CLI / MCP
@@ -1400,4 +1400,4 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.6.4"`），改一处全部同步。
+版本号统一在 `version/version.go`（`const Version = "0.6.5"`），改一处全部同步。

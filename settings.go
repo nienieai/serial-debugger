@@ -12,27 +12,27 @@ import (
 
 // AppSettings holds all user-facing GUI settings persisted to disk.
 type AppSettings struct {
-	DisplayMode     string  `json:"displayMode" ini:"display_mode"`
-	SendRatio       float64 `json:"sendRatio" ini:"send_ratio"`
-	QuickPanelRatio float64 `json:"quickPanelRatio" ini:"quick_panel_ratio"`
-	Encoding        string  `json:"encoding" ini:"encoding"`
-	HexCase         string  `json:"hexCase" ini:"hex_case"`
-	HexPrefix       bool    `json:"hexPrefix" ini:"hex_prefix"`
-	HexSep          string  `json:"hexSep" ini:"hex_sep"`
-	CrVisible       bool    `json:"crVisible" ini:"cr_visible"`
-	HexEscapeMode   string  `json:"hexEscapeMode" ini:"hex_escape_mode"`
+	DisplayMode       string  `json:"displayMode" ini:"display_mode"`
+	SendRatio         float64 `json:"sendRatio" ini:"send_ratio"`
+	QuickPanelRatio   float64 `json:"quickPanelRatio" ini:"quick_panel_ratio"`
+	Encoding          string  `json:"encoding" ini:"encoding"`
+	HexCase           string  `json:"hexCase" ini:"hex_case"`
+	HexPrefix         bool    `json:"hexPrefix" ini:"hex_prefix"`
+	HexSep            string  `json:"hexSep" ini:"hex_sep"`
+	CrVisible         bool    `json:"crVisible" ini:"cr_visible"`
+	HexEscapeMode     string  `json:"hexEscapeMode" ini:"hex_escape_mode"`
 	HexEscapeFormat   string  `json:"hexEscapeFormat" ini:"hex_escape_format"`
 	CopyHexEscapes    bool    `json:"copyHexEscapes" ini:"copy_hex_escapes"`
 	DisplayFontFamily string  `json:"displayFontFamily" ini:"display_font_family"`
 	DisplayFontSize   int     `json:"displayFontSize" ini:"display_font_size"`
 	TabSize           int     `json:"tabSize" ini:"tab_size"`
 	EolSequence       string  `json:"eolSequence" ini:"eol_sequence"`
-	Theme              string `json:"theme" ini:"theme"`
-	ColorThemeID       string `json:"colorThemeId" ini:"color_theme_id"`
-	IconThemeID        string `json:"iconThemeId" ini:"icon_theme_id"`
-	Language           string `json:"language" ini:"language"`
-	AutoCreateSession  bool   `json:"autoCreateSession" ini:"auto_create_session"`
-	DisplayColors      string `json:"displayColors" ini:"display_colors"`
+	Theme             string  `json:"theme" ini:"theme"`
+	ColorThemeID      string  `json:"colorThemeId" ini:"color_theme_id"`
+	IconThemeID       string  `json:"iconThemeId" ini:"icon_theme_id"`
+	Language          string  `json:"language" ini:"language"`
+	AutoCreateSession bool    `json:"autoCreateSession" ini:"auto_create_session"`
+	DisplayColors     string  `json:"displayColors" ini:"display_colors"`
 
 	Serial   SerialDefaults   `json:"serial" ini:"serial"`
 	AutoSend AutoSendDefaults `json:"autoSend" ini:"autosend"`
@@ -59,25 +59,25 @@ var iniSectionOrder = []string{"display", "serial", "autosend", "append"}
 
 func defaultSettings() *AppSettings {
 	return &AppSettings{
-		DisplayMode:     "text",
-		SendRatio:       0.3,
-		QuickPanelRatio: 0,
-		Encoding:        "utf-8",
-		HexCase:         "upper",
-		HexPrefix:       true,
-		HexSep:          "space",
-		CrVisible:       true,
-		HexEscapeMode:   "show",
+		DisplayMode:       "text",
+		SendRatio:         0.3,
+		QuickPanelRatio:   0,
+		Encoding:          "utf-8",
+		HexCase:           "upper",
+		HexPrefix:         true,
+		HexSep:            "space",
+		CrVisible:         true,
+		HexEscapeMode:     "show",
 		HexEscapeFormat:   "slash",
 		CopyHexEscapes:    true,
 		DisplayFontFamily: "Consolas",
 		DisplayFontSize:   14,
 		TabSize:           4,
 		EolSequence:       "lf",
-		Theme:           "auto",
-		ColorThemeID:    "theme-default",
-		IconThemeID:     "",
-		Language:        "zh",
+		Theme:             "auto",
+		ColorThemeID:      "theme-default",
+		IconThemeID:       "",
+		Language:          "zh",
 		AutoCreateSession: true,
 		Serial: SerialDefaults{
 			Baud:        115200,

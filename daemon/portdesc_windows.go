@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -45,6 +46,13 @@ func loadPortDescriptions() map[string]string {
 		cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		output, _ = cmd2.Output()
 	}
+
+	// PowerShell 5.1's `Out-File -Encoding UTF8` writes a UTF-8 BOM and
+	// os.ReadFile hands it back verbatim. Left in place it lands inside a
+	// port description; because the results are collected into a map, which
+	// port carries the stray U+FEFF varies between runs, and it breaks
+	// regex/equality matching against descriptions.
+	output = bytes.TrimPrefix(output, []byte{0xEF, 0xBB, 0xBF})
 
 	re := regexp.MustCompile(`^\s*(.*?)\s*\((COM\d+)\)\s*$`)
 	for _, line := range strings.Split(string(output), "\n") {

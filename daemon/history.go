@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -184,12 +185,29 @@ func searchHistoryFile(path string, keyword string, limit int, offset int64) ([]
 
 		hexUpper := strings.ToUpper(entry.Hex)
 		kwUpper := strings.ToUpper(keyword)
-		if strings.Contains(hexUpper, kwUpper) {
+		if strings.Contains(hexUpper, kwUpper) || containsDecodedHex(entry.Hex, kwUpper) {
 			results = append(results, entry)
 		}
 	}
 
 	return results, pos, nil
+}
+
+// containsDecodedHex reports whether keyword occurs in the plain text carried
+// by a data entry.
+//
+// Data entries store their payload hex-encoded, while system messages store
+// literal text in the same field. Matching only entry.Hex therefore meant a
+// user-typed plain keyword ("OK") could never match a data entry (4F4B), even
+// though the same keyword did match system entries. Decoding first makes plain
+// text searches work for both, while the raw comparison above still supports
+// searching by hex.
+func containsDecodedHex(hexText, kwUpper string) bool {
+	raw, err := hex.DecodeString(hexText)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToUpper(string(raw)), kwUpper)
 }
 
 func readHistoryEntry(r *bufio.Reader) (HistoryEntry, int64, error) {

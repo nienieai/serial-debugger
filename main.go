@@ -18,11 +18,11 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:          "串口调试工具 v" + version.Version,
-		Width:          1200,
-		Height:         780,
-		MinWidth:       640,
-		MinHeight:      480,
+		Title:     "串口调试工具 v" + version.Version,
+		Width:     1200,
+		Height:    780,
+		MinWidth:  640,
+		MinHeight: 480,
 		Debug: options.Debug{
 			OpenInspectorOnStartup: false,
 		},

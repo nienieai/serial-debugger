@@ -26,16 +26,16 @@ type portInfo struct {
 // ---- client session (3-pipe) ----
 
 type clientSession struct {
-	clientId        string
-	source          string
-	daemonConn      io.ReadWriteCloser // client→daemon (requests)
-	respConn        io.ReadWriteCloser // daemon→client (responses)
-	subConn         io.ReadWriteCloser // daemon→client (events)
-	pid             uint32
-	connectTime     time.Time
-	reqCount        int
-	subMu           sync.Mutex // serializes writes to subConn
-	subs            map[string]bool
+	clientId         string
+	source           string
+	daemonConn       io.ReadWriteCloser // client→daemon (requests)
+	respConn         io.ReadWriteCloser // daemon→client (responses)
+	subConn          io.ReadWriteCloser // daemon→client (events)
+	pid              uint32
+	connectTime      time.Time
+	reqCount         int
+	subMu            sync.Mutex // serializes writes to subConn
+	subs             map[string]bool
 	watchedProcesses map[string]bool // set of process IDs this client is viewing
 }
 
@@ -377,12 +377,14 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 	// Dial client's resp and sub pipes (client created them, we connect)
 	respConn, err := pipe.Dial(p.RespPipe)
 	if err != nil {
+		logOp("错误", "连接客户端 resp 管道失败 (clientId=%s): %v", p.ClientId, err)
 		protocol.WriteMessage(daemonConn, protocol.Response{ID: req.ID, Error: "cannot connect resp pipe: " + err.Error()})
 		daemonConn.Close()
 		return
 	}
 	subConn, err := pipe.Dial(p.SubPipe)
 	if err != nil {
+		logOp("错误", "连接客户端 sub 管道失败 (clientId=%s): %v", p.ClientId, err)
 		respConn.Close()
 		protocol.WriteMessage(daemonConn, protocol.Response{ID: req.ID, Error: "cannot connect sub pipe: " + err.Error()})
 		daemonConn.Close()
@@ -715,28 +717,44 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		if mode == "forward" {
 			var p struct {
-				Port       string `json:"port"`
-				Baud       int    `json:"baud"`
-				DataBits   int    `json:"dataBits"`
-				StopBits   string `json:"stopBits"`
-				Parity     string `json:"parity"`
-				PortB      string `json:"portB"`
-				BaudB      int    `json:"baudB"`
-				DataBitsB  int    `json:"dataBitsB"`
-				StopBitsB  string `json:"stopBitsB"`
-				ParityB    string `json:"parityB"`
+				Port      string `json:"port"`
+				Baud      int    `json:"baud"`
+				DataBits  int    `json:"dataBits"`
+				StopBits  string `json:"stopBits"`
+				Parity    string `json:"parity"`
+				PortB     string `json:"portB"`
+				BaudB     int    `json:"baudB"`
+				DataBitsB int    `json:"dataBitsB"`
+				StopBitsB string `json:"stopBitsB"`
+				ParityB   string `json:"parityB"`
 			}
 			if err := convParams(req.Params, &p); err != nil {
 				return protocol.Response{ID: req.ID, Error: "invalid params: " + err.Error()}
 			}
-			if p.Baud <= 0 { p.Baud = 115200 }
-			if p.DataBits <= 0 { p.DataBits = 8 }
-			if p.StopBits == "" { p.StopBits = "1" }
-			if p.Parity == "" { p.Parity = "none" }
-			if p.BaudB <= 0 { p.BaudB = 115200 }
-			if p.DataBitsB <= 0 { p.DataBitsB = 8 }
-			if p.StopBitsB == "" { p.StopBitsB = "1" }
-			if p.ParityB == "" { p.ParityB = "none" }
+			if p.Baud <= 0 {
+				p.Baud = 115200
+			}
+			if p.DataBits <= 0 {
+				p.DataBits = 8
+			}
+			if p.StopBits == "" {
+				p.StopBits = "1"
+			}
+			if p.Parity == "" {
+				p.Parity = "none"
+			}
+			if p.BaudB <= 0 {
+				p.BaudB = 115200
+			}
+			if p.DataBitsB <= 0 {
+				p.DataBitsB = 8
+			}
+			if p.StopBitsB == "" {
+				p.StopBitsB = "1"
+			}
+			if p.ParityB == "" {
+				p.ParityB = "none"
+			}
 			cfgA := SerialConfig{Port: p.Port, Baud: p.Baud, DataBits: p.DataBits, StopBits: p.StopBits, Parity: p.Parity}
 			cfgB := SerialConfig{Port: p.PortB, Baud: p.BaudB, DataBits: p.DataBitsB, StopBits: p.StopBitsB, Parity: p.ParityB}
 			proc, err := s.pm.Create("forward", p.Port, cfgA, &cfgB, connect)
@@ -828,14 +846,30 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		if p.PortB != "" {
 			// Forward mode: connect both ports
-			if p.Baud <= 0 { p.Baud = 115200 }
-			if p.DataBits <= 0 { p.DataBits = 8 }
-			if p.StopBits == "" { p.StopBits = "1" }
-			if p.Parity == "" { p.Parity = "none" }
-			if p.BaudB <= 0 { p.BaudB = 115200 }
-			if p.DataBitsB <= 0 { p.DataBitsB = 8 }
-			if p.StopBitsB == "" { p.StopBitsB = "1" }
-			if p.ParityB == "" { p.ParityB = "none" }
+			if p.Baud <= 0 {
+				p.Baud = 115200
+			}
+			if p.DataBits <= 0 {
+				p.DataBits = 8
+			}
+			if p.StopBits == "" {
+				p.StopBits = "1"
+			}
+			if p.Parity == "" {
+				p.Parity = "none"
+			}
+			if p.BaudB <= 0 {
+				p.BaudB = 115200
+			}
+			if p.DataBitsB <= 0 {
+				p.DataBitsB = 8
+			}
+			if p.StopBitsB == "" {
+				p.StopBitsB = "1"
+			}
+			if p.ParityB == "" {
+				p.ParityB = "none"
+			}
 			cfgA := SerialConfig{Port: p.Port, Baud: p.Baud, DataBits: p.DataBits, StopBits: p.StopBits, Parity: p.Parity}
 			cfgB := SerialConfig{Port: p.PortB, Baud: p.BaudB, DataBits: p.DataBitsB, StopBits: p.StopBitsB, Parity: p.ParityB}
 			if err := s.pm.ConnectForward(p.ProcessID, cfgA, cfgB); err != nil {
@@ -967,14 +1001,30 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		if p.BaudA <= 0 { p.BaudA = 115200 }
-		if p.DataBitsA <= 0 { p.DataBitsA = 8 }
-		if p.StopBitsA == "" { p.StopBitsA = "1" }
-		if p.ParityA == "" { p.ParityA = "none" }
-		if p.BaudB <= 0 { p.BaudB = 115200 }
-		if p.DataBitsB <= 0 { p.DataBitsB = 8 }
-		if p.StopBitsB == "" { p.StopBitsB = "1" }
-		if p.ParityB == "" { p.ParityB = "none" }
+		if p.BaudA <= 0 {
+			p.BaudA = 115200
+		}
+		if p.DataBitsA <= 0 {
+			p.DataBitsA = 8
+		}
+		if p.StopBitsA == "" {
+			p.StopBitsA = "1"
+		}
+		if p.ParityA == "" {
+			p.ParityA = "none"
+		}
+		if p.BaudB <= 0 {
+			p.BaudB = 115200
+		}
+		if p.DataBitsB <= 0 {
+			p.DataBitsB = 8
+		}
+		if p.StopBitsB == "" {
+			p.StopBitsB = "1"
+		}
+		if p.ParityB == "" {
+			p.ParityB = "none"
+		}
 		cfgA := SerialConfig{Port: p.PortA, Baud: p.BaudA, DataBits: p.DataBitsA, StopBits: p.StopBitsA, Parity: p.ParityA}
 		cfgB := SerialConfig{Port: p.PortB, Baud: p.BaudB, DataBits: p.DataBitsB, StopBits: p.StopBitsB, Parity: p.ParityB}
 		proc, err := s.pm.ForwardCreate(cfgA, cfgB)
@@ -1193,8 +1243,8 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 
 	case "multistr.write":
 		var p struct {
-			ProcessID string           `json:"processId"`
-			Entries   []MultistrEntry  `json:"entries"`
+			ProcessID string          `json:"processId"`
+			Entries   []MultistrEntry `json:"entries"`
 		}
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params: " + err.Error()}
@@ -1249,9 +1299,9 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{
-			"results":   results,
+			"results":    results,
 			"nextOffset": next,
-			"hasMore":   len(results) == p.Limit,
+			"hasMore":    len(results) == p.Limit,
 		}}
 
 	case "history.enable":
