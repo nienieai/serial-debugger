@@ -10,6 +10,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/client"
 	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/contract"
 )
 
 var mcpLang = "zh"
@@ -329,7 +330,7 @@ func errResult(msg string) *toolCallResult {
 }
 
 func firstConnectedID() string {
-	result, err := client.CallOnce("process.list", nil, "mcp")
+	result, err := client.CallOnce(contract.ProcessList, nil, "mcp")
 	if err != nil {
 		return ""
 	}
@@ -386,7 +387,7 @@ func handleStartDaemon(_ json.RawMessage) *toolCallResult {
 }
 
 func handleListPorts(_ json.RawMessage) *toolCallResult {
-	result, err := client.CallOnce("ports", nil, "mcp")
+	result, err := client.CallOnce(contract.Ports, nil, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to list ports: %v", err))
 	}
@@ -394,7 +395,7 @@ func handleListPorts(_ json.RawMessage) *toolCallResult {
 }
 
 func handleRefreshPorts(_ json.RawMessage) *toolCallResult {
-	result, err := client.CallOnce("ports.refresh", nil, "mcp")
+	result, err := client.CallOnce(contract.PortsRefresh, nil, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to refresh ports: %v", err))
 	}
@@ -403,7 +404,7 @@ func handleRefreshPorts(_ json.RawMessage) *toolCallResult {
 
 func handleCreate(raw json.RawMessage) *toolCallResult {
 	params := mcpToIPCParams(raw)
-	result, err := client.CallOnce("process.create", params, "mcp")
+	result, err := client.CallOnce(contract.ProcessCreate, params, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to create process: %v", err))
 	}
@@ -415,7 +416,7 @@ func handleOpen(raw json.RawMessage) *toolCallResult {
 	if _, ok := params["port"]; !ok {
 		return errResult("Missing required parameter: port")
 	}
-	result, err := client.CallOnce("process.create", params, "mcp")
+	result, err := client.CallOnce(contract.ProcessCreate, params, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to open process: %v", err))
 	}
@@ -435,7 +436,7 @@ func handleConnect(raw json.RawMessage) *toolCallResult {
 	if p.ProcessID == "" || p.Port == "" {
 		return errResult("Missing required parameters: processId and port")
 	}
-	result, err := client.CallOnce("process.connect", map[string]any{
+	result, err := client.CallOnce(contract.ProcessConnect, map[string]any{
 		"processId": p.ProcessID,
 		"port":      p.Port,
 		"baud":      p.Baud,
@@ -468,7 +469,7 @@ func handleSwitchPort(raw json.RawMessage) *toolCallResult {
 	if p.Baud <= 0 {
 		p.Baud = 115200
 	}
-	result, err := client.CallOnce("process.switch", map[string]any{
+	result, err := client.CallOnce(contract.ProcessSwitch, map[string]any{
 		"processId": p.ProcessID, "port": p.Port, "baud": p.Baud,
 	}, "mcp")
 	if err != nil {
@@ -494,7 +495,7 @@ func handleForwardCreate(raw json.RawMessage) *toolCallResult {
 	if p.BaudB <= 0 {
 		p.BaudB = 115200
 	}
-	result, err := client.CallOnce("forward.create", map[string]any{
+	result, err := client.CallOnce(contract.ForwardCreate, map[string]any{
 		"portA": p.PortA, "baudA": p.BaudA, "portB": p.PortB, "baudB": p.BaudB,
 	}, "mcp")
 	if err != nil {
@@ -509,7 +510,7 @@ func handleDeclare(raw json.RawMessage) *toolCallResult {
 		return errResult("Missing required parameter: port")
 	}
 	params["connect"] = false
-	result, err := client.CallOnce("process.create", params, "mcp")
+	result, err := client.CallOnce(contract.ProcessCreate, params, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to declare: %v", err))
 	}
@@ -528,7 +529,7 @@ func handleSetMode(raw json.RawMessage) *toolCallResult {
 	if p.Mode != "single" && p.Mode != "forward" {
 		return errResult("mode must be 'single' or 'forward'")
 	}
-	result, err := client.CallOnce("process.setmode", map[string]any{
+	result, err := client.CallOnce(contract.ProcessSetMode, map[string]any{
 		"processId": p.ProcessID, "mode": p.Mode,
 	}, "mcp")
 	if err != nil {
@@ -548,7 +549,7 @@ func handleDisconnect(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("process.disconnect", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.ProcessDisconnect, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to disconnect: %v", err))
 	}
@@ -566,7 +567,7 @@ func handleClose(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("process.destroy", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.ProcessDestroy, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to destroy process: %v", err))
 	}
@@ -594,7 +595,7 @@ func handleSend(raw json.RawMessage) *toolCallResult {
 	}
 
 	// Write data to shared memory, then trigger send
-	ringResult, err := client.CallOnce("send.ringname", map[string]any{"processId": p.ProcessID}, "mcp")
+	ringResult, err := client.CallOnce(contract.SendRingName, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to get ring name: %v", err))
 	}
@@ -617,7 +618,7 @@ func handleSend(raw json.RawMessage) *toolCallResult {
 		return errResult(fmt.Sprintf("Failed to write send queue: %v", err))
 	}
 
-	result, err := client.CallOnce("send.trigger", map[string]any{"processId": p.ProcessID, "raw": true}, "mcp")
+	result, err := client.CallOnce(contract.SendTrigger, map[string]any{"processId": p.ProcessID, "raw": true}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to trigger send: %v", err))
 	}
@@ -625,7 +626,7 @@ func handleSend(raw json.RawMessage) *toolCallResult {
 }
 
 func handleSessions(_ json.RawMessage) *toolCallResult {
-	result, err := client.CallOnce("process.list", nil, "mcp")
+	result, err := client.CallOnce(contract.ProcessList, nil, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to list processes: %v", err))
 	}
@@ -648,7 +649,7 @@ func handleHistory(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("session.history", map[string]any{"processId": pid}, "mcp")
+	result, err := client.CallOnce(contract.SessionHistory, map[string]any{"processId": pid}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to read history: %v", err))
 	}
@@ -671,7 +672,7 @@ func handleHistory(raw json.RawMessage) *toolCallResult {
 }
 
 func handleStatus(_ json.RawMessage) *toolCallResult {
-	result, err := client.CallOnce("status", nil, "mcp")
+	result, err := client.CallOnce(contract.Status, nil, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("%v", err))
 	}
@@ -727,7 +728,7 @@ func handleMonitor(raw json.RawMessage) *toolCallResult {
 }
 
 func handleShutdown(_ json.RawMessage) *toolCallResult {
-	result, err := client.CallOnce("shutdown", nil, "mcp")
+	result, err := client.CallOnce(contract.Shutdown, nil, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to shutdown daemon: %v", err))
 	}
@@ -750,7 +751,7 @@ func handleStats(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("session.stats", map[string]any{"processId": pid}, "mcp")
+	result, err := client.CallOnce(contract.SessionStats, map[string]any{"processId": pid}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to get stats: %v", err))
 	}
@@ -774,7 +775,7 @@ func handlePortWatch(raw json.RawMessage) *toolCallResult {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
-	lastResult, err := client.CallOnce("ports", nil, "mcp")
+	lastResult, err := client.CallOnce(contract.Ports, nil, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to get ports: %v", err))
 	}
@@ -790,7 +791,7 @@ func handlePortWatch(raw json.RawMessage) *toolCallResult {
 					"description": fmt.Sprintf("No port changes detected during %.0fs watch period", timeout.Seconds()),
 				})
 			}
-			currentResult, err := client.CallOnce("ports", nil, "mcp")
+			currentResult, err := client.CallOnce(contract.Ports, nil, "mcp")
 			if err != nil {
 				continue
 			}
@@ -833,7 +834,7 @@ func handleAutoSendStart(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("autosend.start", map[string]any{
+	result, err := client.CallOnce(contract.AutosendStart, map[string]any{
 		"processId":  p.ProcessID,
 		"intervalMs": p.IntervalMs,
 		"mode":       p.Mode,
@@ -856,7 +857,7 @@ func handleAutoSendStop(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("autosend.stop", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.AutosendStop, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to stop auto-send: %v", err))
 	}
@@ -874,7 +875,7 @@ func handleAutoSendStatus(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("autosend.status", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.AutosendStatus, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to get auto-send status: %v", err))
 	}
@@ -898,7 +899,7 @@ func handleSendQueue(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("multistr.write", map[string]any{
+	result, err := client.CallOnce(contract.MultistrWrite, map[string]any{
 		"processId": p.ProcessID,
 		"entries":   p.Entries,
 	}, "mcp")
@@ -919,7 +920,7 @@ func handleMultistrSave(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("multistr.save", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.MultistrSave, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to save entries: %v", err))
 	}
@@ -937,7 +938,7 @@ func handleMultistrLoad(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("multistr.load", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.MultistrLoad, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to load entries: %v", err))
 	}
@@ -955,7 +956,7 @@ func handleMultistrStatus(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce("autosend.status", map[string]any{"processId": p.ProcessID}, "mcp")
+	result, err := client.CallOnce(contract.AutosendStatus, map[string]any{"processId": p.ProcessID}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to get status: %v", err))
 	}
@@ -985,7 +986,7 @@ func handleProbePorts(raw json.RawMessage) *toolCallResult {
 		params["configPath"] = p.ConfigPath
 	}
 
-	result, err := client.CallOnce("ports.probe", params, "mcp")
+	result, err := client.CallOnce(contract.PortsProbe, params, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to probe ports: %v", err))
 	}

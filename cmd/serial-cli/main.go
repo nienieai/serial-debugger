@@ -12,6 +12,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/client"
 	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/version"
 )
@@ -196,7 +197,7 @@ func runCommandInteractive(dc *client.DaemonClient, args []string) {
 		cmdStart()
 		return
 	case "status":
-		result, err := client.CallOnce("status", nil, "cli")
+		result, err := client.CallOnce(contract.Status, nil, "cli")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "错误:", err)
 			return
@@ -234,7 +235,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		return
 
 	case "status":
-		result, err := client.CallOnce("status", nil, "cli")
+		result, err := client.CallOnce(contract.Status, nil, "cli")
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -242,7 +243,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "ports":
-		result, err := dc.Call("ports", nil)
+		result, err := dc.Call(contract.Ports, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -250,7 +251,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "refresh":
-		result, err := dc.Call("ports.refresh", nil)
+		result, err := dc.Call(contract.PortsRefresh, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -258,7 +259,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "threads":
-		result, err := dc.Call("threads", nil)
+		result, err := dc.Call(contract.Threads, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -266,7 +267,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "goroutines":
-		result, err := dc.Call("goroutines", nil)
+		result, err := dc.Call(contract.Goroutines, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -274,7 +275,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "sessions":
-		result, err := dc.Call("process.list", nil)
+		result, err := dc.Call(contract.ProcessList, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -312,7 +313,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			params["portB"] = portB
 			params["baudB"] = baudB
 		}
-		result, err := dc.Call("process.create", params)
+		result, err := dc.Call(contract.ProcessCreate, params)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -402,7 +403,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			params["portB"] = portB
 			params["baudB"] = baudB
 		}
-		result, err := dc.Call("process.create", params)
+		result, err := dc.Call(contract.ProcessCreate, params)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -422,7 +423,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		if len(args) >= 3 {
 			baud, _ = strconv.Atoi(args[2])
 		}
-		result, err := dc.Call("process.create", map[string]any{"port": port, "baud": baud})
+		result, err := dc.Call(contract.ProcessCreate, map[string]any{"port": port, "baud": baud})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -443,7 +444,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		if len(args) >= 4 {
 			baud, _ = strconv.Atoi(args[3])
 		}
-		result, err := dc.Call("process.connect", map[string]any{
+		result, err := dc.Call(contract.ProcessConnect, map[string]any{
 			"processId": pid, "port": port, "baud": baud,
 		})
 		if err != nil {
@@ -454,7 +455,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "disconnect":
 		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call("process.disconnect", map[string]any{"processId": pid})
+		result, err := dc.Call(contract.ProcessDisconnect, map[string]any{"processId": pid})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -463,7 +464,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "close":
 		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call("process.destroy", map[string]any{"processId": pid})
+		result, err := dc.Call(contract.ProcessDestroy, map[string]any{"processId": pid})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -702,7 +703,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 				return
 			}
 		} else {
-			_, err := client.CallOnce("multistr.write", map[string]any{"processId": pid, "entries": entries}, "cli")
+			_, err := client.CallOnce(contract.MultistrWrite, map[string]any{"processId": pid, "entries": entries}, "cli")
 			if err != nil {
 				errExit(err, interactive)
 				return
@@ -734,7 +735,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 					return
 				}
 			} else {
-				_, err := client.CallOnce("multistr.save", map[string]any{"processId": pid}, "cli")
+				_, err := client.CallOnce(contract.MultistrSave, map[string]any{"processId": pid}, "cli")
 				if err != nil {
 					errExit(err, interactive)
 					return
@@ -750,7 +751,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 				}
 				printJSON(map[string]any{"entries": entries})
 			} else {
-				result, err := client.CallOnce("multistr.load", map[string]any{"processId": pid}, "cli")
+				result, err := client.CallOnce(contract.MultistrLoad, map[string]any{"processId": pid}, "cli")
 				if err != nil {
 					errExit(err, interactive)
 					return
@@ -764,7 +765,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 					return
 				}
 			} else {
-				_, err := client.CallOnce("multistr.reload", map[string]any{"processId": pid}, "cli")
+				_, err := client.CallOnce(contract.MultistrReload, map[string]any{"processId": pid}, "cli")
 				if err != nil {
 					errExit(err, interactive)
 					return
@@ -780,7 +781,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 				}
 				printJSON(result)
 			} else {
-				result, err := client.CallOnce("autosend.status", map[string]any{"processId": pid}, "cli")
+				result, err := client.CallOnce(contract.AutosendStatus, map[string]any{"processId": pid}, "cli")
 				if err != nil {
 					errExit(err, interactive)
 					return
@@ -825,7 +826,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		cmdMonitor(dc, timeout)
 
 	case "shutdown":
-		result, err := dc.Call("shutdown", nil)
+		result, err := dc.Call(contract.Shutdown, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -835,7 +836,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "history":
 		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call("session.history", map[string]any{"processId": pid})
+		result, err := dc.Call(contract.SessionHistory, map[string]any{"processId": pid})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -845,7 +846,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "stats":
 		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call("session.stats", map[string]any{"processId": pid})
+		result, err := dc.Call(contract.SessionStats, map[string]any{"processId": pid})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -853,7 +854,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "history-files":
-		result, err := dc.Call("history.files", nil)
+		result, err := dc.Call(contract.HistoryFiles, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -874,7 +875,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		if len(args) >= 4 {
 			limit, _ = strconv.Atoi(args[3])
 		}
-		result, err := dc.Call("history.search", map[string]any{"file": filename, "keyword": keyword, "limit": limit, "offset": 0})
+		result, err := dc.Call(contract.HistorySearch, map[string]any{"file": filename, "keyword": keyword, "limit": limit, "offset": 0})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -901,7 +902,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		if len(args) >= 2 {
 			enabled, _ = strconv.ParseBool(args[1])
 		}
-		result, err := dc.Call("history.enable", map[string]any{"enabled": enabled})
+		result, err := dc.Call(contract.HistoryEnable, map[string]any{"enabled": enabled})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -909,7 +910,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "history-status":
-		result, err := dc.Call("history.status", nil)
+		result, err := dc.Call(contract.HistoryStatus, nil)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -924,7 +925,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 			os.Exit(1)
 		}
-		result, err := dc.Call("history.attach", map[string]any{"processId": args[1], "file": args[2]})
+		result, err := dc.Call(contract.HistoryAttach, map[string]any{"processId": args[1], "file": args[2]})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -933,7 +934,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "history-new":
 		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call("history.new", map[string]any{"processId": pid})
+		result, err := dc.Call(contract.HistoryNew, map[string]any{"processId": pid})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -942,7 +943,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 
 	case "history-detach":
 		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call("history.detach", map[string]any{"processId": pid})
+		result, err := dc.Call(contract.HistoryDetach, map[string]any{"processId": pid})
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -995,7 +996,7 @@ func resolveProcessID(dc *client.DaemonClient, args []string, pos int) string {
 }
 
 func firstConnectedIDDC(dc *client.DaemonClient) string {
-	result, err := dc.Call("process.list", nil)
+	result, err := dc.Call(contract.ProcessList, nil)
 	exitOnErr(err)
 	processes, _ := result["processes"].([]any)
 	for _, p := range processes {
