@@ -14,6 +14,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/pipe"
 	"github.com/nienieai/serial-debugger/protocol"
+	"github.com/nienieai/serial-debugger/version"
 )
 
 // ---- port info ----
@@ -63,6 +64,8 @@ type IpcServer struct {
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 
+	startTime time.Time
+
 	hwProbeInterval  time.Duration
 	hwProbeStop      chan struct{}
 	hwProbeLastPorts []string
@@ -74,6 +77,7 @@ func NewIpcServer(pm *ProcessManager) *IpcServer {
 		sessions:        make(map[string]*clientSession),
 		knownPIDs:       make(map[uint32]string),
 		shutdownCh:      make(chan struct{}),
+		startTime:       time.Now(),
 		hwProbeStop:     make(chan struct{}),
 		hwProbeInterval: 2 * time.Second,
 	}
@@ -652,7 +656,24 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		return protocol.Response{ID: req.ID, Result: map[string]string{"pong": "ok"}}
 
 	case "status":
-		return protocol.Response{ID: req.ID, Result: map[string]string{"status": "ok"}}
+		// 一并带上版本与协议号：客户端据此判断对端是否为同一次构建。
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"status":          "ok",
+			"version":         version.Version,
+			"protocolVersion": protocol.ProtocolVersion,
+		}}
+
+	case "daemon.info":
+		// 客户端建立会话后会立即调用本方法核对协议版本；
+		// 旧版本守护进程不认识它，会返回 UnknownMethodPrefix，
+		// 客户端据此判断「对端过旧」并给出可操作的提示。
+		return protocol.Response{ID: req.ID, Result: protocol.DaemonInfo{
+			Version:         version.Version,
+			ProtocolVersion: protocol.ProtocolVersion,
+			PID:             uint32(os.Getpid()),
+			StartTime:       s.startTime.Format(time.RFC3339),
+			UptimeSec:       int64(time.Since(s.startTime).Seconds()),
+		}}
 
 	case "ports.refresh":
 		s.reloadCache()
@@ -1374,7 +1395,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	default:
-		return protocol.Response{ID: req.ID, Error: "unknown method: " + req.Method}
+		return protocol.Response{ID: req.ID, Error: protocol.UnknownMethodPrefix + req.Method}
 	}
 }
 

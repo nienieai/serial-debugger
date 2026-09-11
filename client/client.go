@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -175,7 +176,34 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	go c.readSubLoop()
 	go c.startHeartbeat()
 
+	// 建立会话后立刻核对协议版本。守护进程是机器级单例，很可能是另一次
+	// 构建留下的；不核对就会带着不一致的方法集/数据格式继续工作。
+	if err := c.verifyProtocol(); err != nil {
+		c.Close()
+		return nil, err
+	}
+
 	return c, nil
+}
+
+// verifyProtocol 确认对端守护进程与本客户端使用同一 IPC 协议版本。
+func (c *DaemonClient) verifyProtocol() error {
+	res, err := c.Call("daemon.info", nil)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
+			return fmt.Errorf("守护进程版本过旧（不支持 %s）。请执行 serial-cli shutdown 后重试，或重启串口调试工具", "daemon.info")
+		}
+		return fmt.Errorf("读取守护进程版本失败: %w", err)
+	}
+	info, err := protocol.DecodeDaemonInfo(res)
+	if err != nil {
+		return fmt.Errorf("解析守护进程版本失败: %w", err)
+	}
+	if !info.Compatible() {
+		return fmt.Errorf("IPC 协议版本不匹配：客户端为 %d，守护进程为 %s（协议 %d）。请执行 serial-cli shutdown 后重试",
+			protocol.ProtocolVersion, info.Version, info.ProtocolVersion)
+	}
+	return nil
 }
 
 func defaultEvents() []string {
@@ -740,16 +768,62 @@ func CallOnce(method string, params map[string]any, source string) (map[string]a
 
 // ── daemon lifecycle (shared by all clients) ──
 
-// StartDaemon starts the serial daemon if not already running.
-// Returns "started" if newly started, "already_running" if already up.
+// StartDaemon starts the serial daemon if not already running, and additionally
+// ensures the running daemon speaks this client's protocol version.
+// Returns "started", "already_running" or "restarted".
 func StartDaemon() (string, error) {
-	if IsDaemonProcessRunning() {
-		_, err := CallOnce("status", nil, "cli")
-		if err == nil {
+	info, err := DaemonInfo()
+	if err == nil {
+		if info.Compatible() {
 			return "already_running", nil
 		}
+		// 版本不匹配：旧守护进程无法服务本客户端，直接换掉。
+		if rerr := restartDaemon(); rerr != nil {
+			return "", rerr
+		}
+		return "restarted", nil
+	}
+	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
+		// 旧版本守护进程不认识 daemon.info，同样需要换掉。
+		if rerr := restartDaemon(); rerr != nil {
+			return "", rerr
+		}
+		return "restarted", nil
 	}
 	return startDaemonProcess()
+}
+
+// DaemonInfo 通过一次性连接读取守护进程的身份与协议版本。
+func DaemonInfo() (protocol.DaemonInfo, error) {
+	res, err := CallOnce("daemon.info", nil, "cli")
+	if err != nil {
+		return protocol.DaemonInfo{}, err
+	}
+	return protocol.DecodeDaemonInfo(res)
+}
+
+// restartDaemon 关闭正在运行的守护进程（可能是旧版本），等它真正退出后重启。
+func restartDaemon() error {
+	if _, err := CallOnce("shutdown", nil, "cli"); err != nil {
+		return fmt.Errorf("关闭旧守护进程失败: %w", err)
+	}
+	waitDaemonExit(8 * time.Second)
+	_, err := startDaemonProcess()
+	return err
+}
+
+// waitDaemonExit 等待守护进程进程真正消失。
+//
+// 必须先等它退出：新实例靠 Global 互斥体判断单例，旧实例尚未释放锁时
+// 新实例会直接以「已在运行」退出，重启就变成静默失败。
+func waitDaemonExit(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !IsDaemonProcessRunning() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func startDaemonProcess() (string, error) {

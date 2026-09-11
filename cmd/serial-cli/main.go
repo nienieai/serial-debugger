@@ -12,6 +12,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/client"
 	"github.com/nienieai/serial-debugger/config"
+	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/version"
 )
 
@@ -145,18 +146,31 @@ func cmdCheck() {
 	processRunning := client.IsDaemonProcessRunning()
 	fmt.Printf("进程检测 (tasklist): %v\n", processRunning)
 
-	_, err := client.CallOnce("status", nil, "cli")
+	info, err := client.DaemonInfo()
 	if err == nil {
 		fmt.Println("IPC 健康检查: ok")
+		fmt.Printf("守护进程版本: %s (IPC 协议 %d)\n", info.Version, info.ProtocolVersion)
+		fmt.Printf("客户端版本:   %s (IPC 协议 %d)\n", version.Version, protocol.ProtocolVersion)
+		if !info.Compatible() {
+			fmt.Println("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程")
+		}
 		if !processRunning {
 			fmt.Println("(tasklist 检测失效，但守护进程实际运行中)")
 		}
+		return
+	}
+
+	// daemon.info 不可用时区分三种情况，不再一律报「守护进程未运行」。
+	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
+		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC 协议 %d)\n",
+			version.Version, protocol.ProtocolVersion)
+		fmt.Println("请执行 serial-cli start 重启守护进程")
+		return
+	}
+	if processRunning {
+		fmt.Printf("管道连接 / IPC 健康检查: 失败 (%v)\n", err)
 	} else {
-		if processRunning {
-			fmt.Printf("管道连接 / IPC 健康检查: 失败 (%v)\n", err)
-		} else {
-			fmt.Printf("守护进程未运行 (%v)\n", err)
-		}
+		fmt.Printf("守护进程未运行 (%v)\n", err)
 	}
 }
 
@@ -166,9 +180,12 @@ func cmdStart() {
 		fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
 		os.Exit(1)
 	}
-	if status == "already_running" {
+	switch status {
+	case "already_running":
 		fmt.Println("守护进程已在运行中")
-	} else {
+	case "restarted":
+		fmt.Println("检测到守护进程版本不一致，已重启为当前版本")
+	default:
 		fmt.Println("守护进程已启动")
 	}
 }
@@ -199,7 +216,10 @@ func runCommand(args []string) {
 	default:
 		dc, err := client.NewDaemonClient("cli")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, `{"error": "daemon not running: %s"}`+"\n", err.Error())
+			// 不要在这里断言「daemon not running」：连接失败的原因可能是
+			// 守护进程未运行、版本不匹配、管道握手失败等，硬套一个错误
+			// 结论会把排查方向带偏。让底层错误自己说话。
+			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
 			os.Exit(1)
 		}
 		defer dc.Close()
@@ -1038,7 +1058,7 @@ func printHelp() {
 
 守护进程:
   start                              启动守护进程（如已运行则返回状态）
-  check                              检查守护进程是否运行（进程检测 + IPC 健康检查）
+  check                              检查守护进程状态与版本一致性（进程检测 + IPC + 协议版本）
   status                             守护进程状态
   shutdown                           关闭守护进程
 
