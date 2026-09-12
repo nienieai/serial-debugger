@@ -54,6 +54,12 @@ func generateClientId(source string) string {
 	return fmt.Sprintf("%s-%s", source, hex.EncodeToString(b))
 }
 
+// handshakeTimeout 是等待守护进程回连各条管道的时间上限。
+//
+// 授权上是一个常量；做成变量是为了让测试能用很短的值，从而区分
+// 「读了 daemonConn 拿到真实原因」与「一直干等到超时」两条路径。
+var handshakeTimeout = 5 * time.Second
+
 // NewDaemonClient creates a 3-pipe persistent connection to the daemon.
 func NewDaemonClient(source string) (*DaemonClient, error) {
 	return NewDaemonClientWithEvents(source, nil)
@@ -135,6 +141,60 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	}
 
 	// 4. Wait for daemon to connect back on resp and sub
+	//
+	// 同时监听 daemonConn 上的第一条响应：守护进程回连客户端管道失败时，
+	// 会把原因（如「连接客户端 resp 管道失败」）写在这条管道上
+	// （daemon/ipc.go handleRegister 的三处 WriteMessage 错误分支）。
+	// 此前客户端只等 respCh，从不读 daemonConn，于是真实原因被丢弃，
+	// 5 秒后用户只看到一句没有信息量的超时。
+	//
+	// 成功注册时守护进程同样会回一条 {"registered":true}（ipc.go:532），
+	// 这里把它消费掉，顺带当作「守护进程已接受注册」的确认。
+	earlyCh := make(chan *protocol.RawMsg, 1)
+	go func() {
+		data, err := bufio.NewReader(daemonConn).ReadBytes('\n')
+		if err != nil {
+			close(earlyCh)
+			return
+		}
+		var msg protocol.RawMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			close(earlyCh)
+			return
+		}
+		earlyCh <- &msg
+	}()
+
+	// reasonFromMsg 把 daemonConn 上收到的第一条消息翻译成失败原因。
+	reasonFromMsg := func(msg *protocol.RawMsg) (string, bool) {
+		if msg == nil {
+			return "守护进程在注册过程中关闭了连接", true
+		}
+		if msg.Error != "" {
+			return msg.Error, true
+		}
+		// 成功的注册确认（{"registered":true}）不是失败。
+		return "", false
+	}
+
+	// failFast 把 daemonConn 上的「提前失败」变成一条可读的错误。
+	//
+	// 单独监听它（而不是只在超时分支里顺手取一下）是必要的：守护进程回连失败时
+	// 客户端要等的那条 resp/sub 管道**永远不会来**，所以只等超时的话，即使原因
+	// 在几百微秒内就已到达，用户仍要干等满 5 秒才看到它。实测：原因是 0.5ms
+	// 到达的，而连接要 2s（测试用超时）才断开。
+	failFast := func() (string, bool) {
+		select {
+		case msg, ok := <-earlyCh:
+			if !ok {
+				return reasonFromMsg(nil)
+			}
+			return reasonFromMsg(msg)
+		default:
+			return "", false
+		}
+	}
+
 	var respConn, subConn io.ReadWriteCloser
 	select {
 	case respConn = <-respCh:
@@ -142,11 +202,26 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 		daemonConn.Close()
 		subLn.Close()
 		return nil, fmt.Errorf("resp pipe: %w", err)
-	case <-time.After(5 * time.Second):
+	case msg, ok := <-earlyCh:
+		reason := "守护进程拒绝了注册请求"
+		if !ok {
+			reason = "守护进程在注册过程中关闭了连接"
+		} else if r, failed := reasonFromMsg(msg); failed {
+			reason = r
+		}
 		daemonConn.Close()
 		respLn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("timeout waiting for daemon to connect resp pipe")
+		return nil, fmt.Errorf("守护进程回连 resp 管道失败: %s", reason)
+	case <-time.After(handshakeTimeout):
+		reason := "守护进程未在 5 秒内回连 resp 管道"
+		if e, ok := failFast(); ok {
+			reason = "守护进程回连 resp 管道失败: " + e
+		}
+		daemonConn.Close()
+		respLn.Close()
+		subLn.Close()
+		return nil, fmt.Errorf("%s", reason)
 	}
 	select {
 	case subConn = <-subCh:
@@ -155,11 +230,23 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 		respConn.Close()
 		subLn.Close()
 		return nil, fmt.Errorf("sub pipe: %w", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(handshakeTimeout):
+		reason := "守护进程未在 5 秒内回连 sub 管道"
+		if e, ok := failFast(); ok {
+			reason = "守护进程回连 sub 管道失败: " + e
+		}
 		daemonConn.Close()
 		respConn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("timeout waiting for daemon to connect sub pipe")
+		return nil, fmt.Errorf("%s", reason)
+	}
+
+	// 握手成功：确认 daemonConn 上那条注册响应已被消费。
+	// 正常情况下上面那个 goroutine 早已把它放进 earlyCh；这里只在它尚未
+	// 完成时收取，避免遗留协程在会话期间与后续写入争用这条管道。
+	select {
+	case <-earlyCh:
+	default:
 	}
 
 	c := &DaemonClient{

@@ -1497,8 +1497,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if proc == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		closeHistoryFile(proc.historyFile)
-		proc.historyFile = nil
+		proc.detachHistoryFile()
 		logOp("操作", "%s 进程 #%s 已分离历史文件", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 

@@ -1158,7 +1158,7 @@ function _csRefresh(wrap) {
   for (var i = 0; i < sel.options.length; i++) {
     var opt = sel.options[i];
     var cls = 'cs-option';
-    if (i === sel.selectedIndex) cls += ' selected';
+    if (i === sel.selectedIndex) cls += ' is-selected';
     if (opt.className) cls += ' ' + opt.className;
     html += '<div class="' + cls + '" data-val="' + escHtml(opt.value) + '">' + escHtml(opt.textContent || opt.text) + '</div>';
   }

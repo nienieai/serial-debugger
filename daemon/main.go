@@ -62,6 +62,11 @@ func main() {
 	quickEditDisabled := disableQuickEdit()
 	loadDaemonLang()
 
+	// 日志文件要尽早打开：由客户端拉起的守护进程没有控制台（Stdout/Stderr
+	// 被 os/exec 接到空设备），不开文件就等于没有任何日志（TODO #30）。
+	logErr := initLogFile()
+	defer closeLogFile()
+
 	silent := false
 	for _, a := range os.Args[1:] {
 		if a == "--silent" {
@@ -71,10 +76,19 @@ func main() {
 	}
 
 	if !pipe.AcquireLock() {
-		fmt.Fprintln(os.Stderr, dt("daemon.already_running"))
+		// 「已在运行中」是双击场景下唯一能看到的线索，但进程一退出控制台就关，
+		// 所以必须同时落盘（此前只写 stderr，控制台关闭即永久丢失）。
+		line := logToFile("启动", "%s", dt("daemon.already_running"))
+		fmt.Fprint(os.Stderr, line)
 		os.Exit(1)
 	}
 	defer pipe.ReleaseLock()
+
+	if logErr != nil {
+		logOp("警告", "日志文件不可用，本次仅输出到控制台: %v", logErr)
+	} else if p, err := logFilePath(); err == nil {
+		logOp("启动", "日志文件: %s", p)
+	}
 
 	if !silent {
 		fmt.Println(dt("daemon.starting"))
@@ -123,5 +137,6 @@ func main() {
 func logOp(category string, format string, args ...any) {
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
-	fmt.Printf("%s [%-6s] %s\n", ts, category, msg)
+	fmt.Print(formatLogLine(ts, category, msg))
+	writeLogLine(formatLogLine(ts, category, msg))
 }

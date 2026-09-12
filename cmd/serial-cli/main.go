@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -191,10 +192,67 @@ func cmdStart() {
 	}
 }
 
+// cmdLogs 打印守护进程日志的末尾若干行。
+//
+// 守护进程日志固定写在 <exe>/logs/daemon.log（daemon/logfile.go）。发布包里
+// serial-daemon.exe 与 serial-cli.exe 同目录，所以这里用自身 exe 目录推导即可，
+// 无需连守护进程——守护进程起不来时才是这个命令最有用的时刻。
+func cmdLogs(args []string) {
+	n := 50
+	if len(args) >= 2 {
+		if v, err := strconv.Atoi(args[1]); err == nil && v > 0 {
+			n = v
+		}
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "无法确定程序目录:", err)
+		os.Exit(1)
+	}
+	path := filepath.Join(filepath.Dir(exe), "logs", "daemon.log")
+
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "无法读取守护进程日志 %s: %v\n", path, err)
+		fmt.Fprintln(os.Stderr, "提示：守护进程启动后才会创建该文件。")
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	// 只保留最后 n 行，避免一次性把大文件读进内存。
+	lines := make([]string, 0, n)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if len(lines) == n {
+			copy(lines, lines[1:])
+			lines = lines[:n-1]
+		}
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "读取日志失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("守护进程日志: %s\n", path)
+	if len(lines) == 0 {
+		fmt.Println("（暂无内容）")
+		return
+	}
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+}
+
 func runCommandInteractive(dc *client.DaemonClient, args []string) {
 	switch args[0] {
 	case "start":
 		cmdStart()
+		return
+	case "logs":
+		cmdLogs(args)
 		return
 	case "status":
 		result, err := client.CallOnce(contract.Status, nil, "cli")
@@ -214,6 +272,11 @@ func runCommand(args []string) {
 	case "start":
 		cmdStart()
 		return
+	case "logs":
+		// 不连守护进程：守护进程起不来时正是最需要看日志的时候，
+		// 若先建连接就会以「连不上」失败，永远读不到原因（TODO #30）。
+		cmdLogs(args)
+		return
 	default:
 		dc, err := client.NewDaemonClient("cli")
 		if err != nil {
@@ -232,6 +295,10 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 	switch args[0] {
 	case "start":
 		cmdStart()
+		return
+
+	case "logs":
+		cmdLogs(args)
 		return
 
 	case "status":
@@ -1111,6 +1178,9 @@ func printHelp() {
   monitor [timeout]                   实时监听事件（可选超时秒数）
   threads                            线程/会话详情
   goroutines                         Goroutine 调用栈
+  logs [n]                           打印守护进程日志末尾 n 行 (默认 50)
+                                     日志文件: <exe>/logs/daemon.log
+                                     无需守护进程在运行即可查看
 
 其他:
   help                               显示帮助

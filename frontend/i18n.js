@@ -102,10 +102,14 @@ function formatSysMsg(raw) {
 }
 
 // Retranslate all visible system message DOM nodes in-place without touching cache or re-rendering.
+//
+// 必须遍历**所有**标签页：displayContent 是每个 TabPage 各自创建的一份
+// （tabpage.js 给每页都发了同一个 id="displayContent"），而
+// document.getElementById 只返回文档里第一个匹配元素——于是切换语言时
+// 只有第一个标签页的系统消息会被刷新，其余标签页仍显示旧语言。
+// 这里按类名取，覆盖每一个页面。见 TODO #15。
 function refreshSysMsgI18n() {
-  var display = document.getElementById('displayContent');
-  if (!display) return;
-  var nodes = display.querySelectorAll('.sys-msg[data-sys-raw]');
+  var nodes = document.querySelectorAll('.display-content .sys-msg[data-sys-raw]');
   for (var i = 0; i < nodes.length; i++) {
     var raw = nodes[i].getAttribute('data-sys-raw');
     nodes[i].textContent = '── ' + formatSysMsg(raw) + ' ──';
