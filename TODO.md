@@ -57,7 +57,7 @@
 | 24 | 响应式只有 1 个宽度断点 | 已知限制 | `style.css` 共 5 个 `@media`，其中 4 个是配色（dark/light），宽度断点仅 `min-width: 800px` 一个，且只作用于设置页。主界面在 760px 下靠 flex 自然收缩，无专门窄屏规则 |
 | 25 | `z-index: 1` 被 4 个元素共用，层序依赖 DOM 顺序 | 已知限制 | `#sendMirror`(0)、`#sendInput`、`#btnSend`、`#btnClearFloat`、`.cs-dropdown` 同为 1。目前靠 DOM 顺序得到正确层序、未出问题，但改动顺序即可能破图。整体尺度自洽：内容 0–5 < 拖拽指示 10 < 遮罩 50 < 菜单/弹窗 100 < 子菜单 110 |
 | 26 | 标签栏横向滚动无视觉提示 | 待处理 | `.send-scroll-wrap` 有浮动箭头 + 拖拽滚动，`.tabs-scroll` 只有滚轮映射（`app.js:1567` 的 `deltaY → scrollLeft`），无箭头也无其它提示。13 个标签时最后一个被裁在右边缘，用户未必知道可以滚 |
-| 27 | `daemon not running: ` 前缀仍由底层产生，与 v0.7.0 记录矛盾 | 待处理 | v0.7.0「已完成」表记「去掉 CLI 连接失败时硬套的 `daemon not running: ` 前缀」，CLI 自身那层确实去掉了（`cmd/serial-cli/main.go:220` 有注释说明为何不该断言），但 `client/client.go:742` 与 `pipe/pipe_other.go:92` 仍在用 `fmt.Errorf("daemon not running: %v", err)` 包装，文案仍会透出（实测 `serial-cli check` 输出 `守护进程未运行 (daemon not running: pipe not available: ...)`） |
+| 28 | 双击控制台程序表现为「闪退」，且原因不可读 | 待处理 | `serial-daemon.exe` / `serial-cli.exe` / `serial-mcp.exe` 都是控制台程序，双击时控制台一闪即关：① 守护进程是机器级单例，已有实例时 `daemon/main.go:70-73` 把 `daemon.already_running`（「守护进程已在运行中」）写到 stderr 后 `os.Exit(1)`；② CLI 无参数运行，打印用法后退出；③ MCP 是 stdio 服务器，双击时没有输入流、立即 EOF 退出（静默）。**关键问题**：那句唯一线索只走 stderr 且不落日志——`logOp` 只 `fmt.Printf`（`daemon/main.go:117`），而且它在锁检查之后才被调用，所以该消息完全没有被记录，控制台关闭即永久丢失，用户无从判断是崩溃还是正常退出（实测事件日志与 WER 均无崩溃记录，可确认非崩溃）。建议：用 `GetConsoleProcessList` 判断「控制台只有自己一个进程」即视为双击启动，退出前暂停等按键；并把该消息纳入日志 |
 
 ## v0.7.2 已完成
 
