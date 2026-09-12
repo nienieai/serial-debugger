@@ -13,7 +13,7 @@
 | `.tabs-bar` `.tabs-scroll` `.tab-new` | [4. 标签栏](#4-标签栏-tabs-bar) |
 | `.send-controls` `.send-scroll-area` `.send-scroll-wrap` | [5. 发送工具栏](#5-发送工具栏-send-controls) |
 | `.display-area` `.display-content` `.c-clear-btn` `.c-fwd-display` | [6. 显示区](#6-显示区-display-area) |
-| `.quick-panel` `.o-divider--quick` `.qp-table` | [7. 快速面板](#7-快速面板-quick-panel) |
+| `.quick-panel` `.o-divider--quick` `.qp-table` `.qp-add-row` | [7. 快速面板](#7-快速面板-quick-panel) |
 | `#settingsOverlay` `.c-form-row` `.c-form-col` | [8. 串口详细设置窗](#8-串口详细设置窗-settingsoverlay) |
 | `.settings-layout` `.settings-nav` `.settings-body` | [9. 设置页](#9-设置页-settings-layout) |
 | `.settings-bubble` | [10. 气泡卡片](#10-气泡卡片-settings-bubble) |
@@ -131,6 +131,7 @@ portal 细节（`app.js` `_csOpenDropdown()`）：
 | `.o-divider--quick` | `width: 5px; cursor: ew-resize; position: relative; z-index: 3` | 拖动调整面板宽度（`::before` 扩展热区） |
 | `.qp-table` | `display: grid; grid-template-columns: 14px minmax(40px, max-content) minmax(40px, max-content) minmax(80px, 1fr) minmax(40px, max-content) minmax(40px, max-content) minmax(28px, max-content)` | 表头与行共享列宽 |
 | `.qp-hdr` / `.qp-row` | `display: grid; grid-template-columns: subgrid; grid-column: 1 / -1` | CSS Subgrid，表头 sticky 顶部 |
+| `.qp-add-row` | `grid-column: 1 / -1; position: sticky; bottom: 0; z-index: 2; background: var(--input-bg)` | 表格末尾的「+ 添加」行。数据少时不溢出，它自然落在末行之后；内容溢出出现滚动条时由 `sticky bottom` 贴住滚动区底边，滚动过程中始终可见（与表头 `sticky top` 对称）。`background` 必须不透明，否则滚动时下方行会透出来 |
 
 宽度分配（JS `applyQuickPanelRatio()`）：`state.quickPanelRatio`（默认 `0.25`）控制比例，`leftArea` 取 `1 - r`、`.quick-panel` 取 `r`（`flex: r 1 0px`）；`r <= 0.01` 时隐藏面板。转发模式下面板强制隐藏。
 

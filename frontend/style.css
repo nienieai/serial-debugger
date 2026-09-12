@@ -1015,13 +1015,22 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 .qp-rows { display: contents; }
 .qp-empty { grid-column: 1 / -1; text-align: center; color: var(--placeholder); font-size: 12px; padding: 20px 8px; }
 
-/* footer stays outside the scrollable grid */
-.qp-footer { flex-shrink: 0; padding: 4px 8px; border-top: 1px solid var(--border); }
-.qp-footer button {
+/* 末尾「+ 添加」行：作为表格最后一行跨满所有列。
+   sticky bottom 让它在内容溢出时贴住滚动区底边，数据少时则自然落在末尾。
+   背景必须不透明，否则滚动时下方行会透出来。 */
+.qp-add-row {
+  grid-column: 1 / -1;
+  position: sticky; bottom: 0; z-index: 2;
+  background: var(--input-bg);
+  padding: 4px 8px 6px 8px;
+  border-top: 1px solid var(--border);
+}
+.qp-add-row button {
+  display: block; width: 100%;
   font-size: 12px; padding: 4px 16px; background: var(--bg3); color: var(--fg);
   border: 1px dashed var(--border); border-radius: 6px; cursor: pointer;
 }
-.qp-footer button:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+.qp-add-row button:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
 
 /* ---- 17. Components: Alert ---- */
 .alert-popup {

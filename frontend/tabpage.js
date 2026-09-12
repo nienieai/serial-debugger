@@ -430,16 +430,18 @@ function buildQuickPanelDOM() {
 		'<span class="qp-col qp-col-del"><button class="qp-clear-all" data-icon="trash" data-icon-w="16" data-icon-h="16" title="'+t('quick_panel.clear_all','清空全部')+'" onclick="quickPanelClearAll()"></button></span>' +
 		'</div>' +
 		'<div class="qp-rows"></div>';
-	panel.appendChild(table);
 
-	const footer = document.createElement('div');
-	footer.className = 'qp-footer';
+	// 末尾「+ 添加」行：数据少时它就是表格的最后一行；
+	// 内容溢出出现滚动条时由 sticky 贴住滚动区底边，不随滚动消失。
+	const addRow = document.createElement('div');
+	addRow.className = 'qp-add-row';
 	const btnAdd = document.createElement('button');
-	btnAdd.className = 'toggle-btn';
 	btnAdd.textContent = t('quick_panel.add','+ 添加');
 	btnAdd.addEventListener('click', quickPanelAdd);
-	footer.appendChild(btnAdd);
-	panel.appendChild(footer);
+	addRow.appendChild(btnAdd);
+	table.appendChild(addRow);
+
+	panel.appendChild(table);
 
 	return panel;
 }
