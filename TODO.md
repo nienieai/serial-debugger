@@ -48,6 +48,28 @@
 | 15 | 前端三处功能失效 | 待处理 | ①速率告警色永不出现（JS 产出 `.rate-high`/`.rate-warn`，CSS 只定义 `.rate-orange`/`.rate-red`）②下拉框选中态高亮与 `scrollIntoView` 永不生效（`selected` vs `is-selected`）③多标签共用相同 DOM id，`i18n.js` 只刷新第一个标签的系统消息 |
 | 16 | 解码逻辑 Go 与 JS 各一份 | 已知限制 | `decode/decode.go` 注释自称 "Mirrors JS _decodeUTF8Tolerant byte-for-byte"；加 `history.js` 的 legacy 回退共三条路径。发送侧 GBK 用「非 ASCII 算 2 字节」估算 |
 | 17 | 各包测试覆盖不均 | 待处理 | `daemon`/`pipe`/`ringbuf`/`decode` 有测试；`client`（四端共用的三管道协议）、`protocol`、`contract`、`config` 仍为零 |
+| 18 | `applySendRatio()` 把类名当 `overflow` 值使用，两个隐藏分支从未生效 | 已修复 | v0.7.2 改为 `classList.toggle('is-hidden', cond)`，转发模式分支一并清理该类。原 `app.js:4030/4034` 写 `style.overflow = 'is-hidden'`，而 `is-hidden` 是类名（`style.css:71` → `display:none !important`），不是 `overflow` 的合法值，CSSOM 静默忽略该赋值。实测 `inlineOverflow` 恒为空、`is-hidden` 类从未被加上；`sendRatio=0.005` 时发送区只剩 4px 残条（40px 工具栏被 `overflow:hidden` 裁切），`0.97` 时显示区被 `min-height:40px` 夹住而非隐藏。应为 `classList.toggle('is-hidden', cond)` |
+| 19 | 浅色主题缺失 4 个语义色变量 | 已修复 | v0.7.2 给两个浅色块补上 `--accent:#2563eb; --green:#15803d; --red:#dc2626; --yellow:#b45309`（均为浅底上可读的加深版本，`--accent` 取与既有 `--fwd-p1` 同色）。原两个浅色块各定义 17 个变量，深色块 21 个，缺 `--accent`/`--green`/`--red`/`--yellow`。`var()` 无 fallback 时属性在 computed-value 阶段失效并回落到初始值，所以不是「颜色不对」而是**属性整体消失**：设置页 4 个开关处于「开」时轨道 `rgba(0,0,0,0)` + 白圆点 = 完全不可见；另波及 `.status-dot.is-online`、`.tab-dot.live`、`.rate-orange`/`.rate-red`、`.port-occupied`，以及 `.cs-option.is-selected`/`.settings-mode-btn.is-active`/`.settings-theme-card.is-selected`/`.settings-lang-item.is-selected` 等一批 `background:var(--accent); color:#fff` 的选中态（白字透明底） |
+| 20 | 悬浮条预留空间无单一事实来源 | 部分修复 | v0.7.2 引入 `--reserve-top: 76px`，`.display-content` 的 `padding-top` 与 `.c-clear-btn` 的 `top` 均由它推导，2px 重叠已消除。其余悬浮元素（send-controls / settings-header / 转发按钮）仍各自写死数值，未一并收敛。原 6 个悬浮元素（config-bar / send-controls / settings-header / 转发按钮 / 清空 / 发送）的空间靠在滚动子容器的 `padding` 里预留，取值 74/44/60/40 四种，间距取法不一（+30 / +4 / +8 / +0）。`.c-clear-btn` 底边 76px（`top:48` + `h:28`）而 `.display-content` 预留 74px，差 2px，实测压住第一条数据行 48×2px。建议引入 `--reserve-*` 变量并让预留值由悬浮条高度推导 |
+| 21 | `.display-area` 的 `min-height` 被 JS 内联覆盖，文档失准 | 已修复 | v0.7.2 在 `LAYOUT-RULES.md` §6 明确「以 JS 为准」并说明原因。原 `style.css:574` 与 §6 都写 `min-height: 0`，但 `app.js:4029` 每次 `applySendRatio()` 都写 `displayArea.style.minHeight = '40px'`，实测 computed 为 40px。该覆盖是有意的（拖动时不显示区消失），但使「查 CSS 即可得布局真相」的假设不成立 |
+| 22 | `.tabs-scroll` 的 `overflow-y: visible` 无法实现 | 已知限制 | CSS 规定一个轴为 `visible`、另一轴非 `visible` 时，`visible` 会被计算成 `auto`。实测 computed 为 `auto`，且 `scrollH=37 / clientH=36`——**任何标签数下都溢出 1px（含只有 1 个标签时）**，溢出的正是激活标签 `margin-bottom:-1px` 那一截，被裁掉。因此 `LAYOUT-RULES.md` §4 记的「激活态向下覆盖分隔线」效果从未真正生效 |
+| 23 | 类名前缀约定 76% 未落实 | 已知限制 | `CLAUDE.md` 规定 `o-`/`c-`/`t-`/`is-` 四类前缀，实测 272 个不同类名中 206 个（76%）不符合，合规仅 24%（`c-` 34、`is-` 12、`o-` 10、`t-` 10）。`.data-line`、`.config-bar`、`.cs-*`、`.qp-*`、`.settings-*`、`.ctrl-*` 均为旧命名。改造量大且易破图，建议只对新代码强制 |
+| 24 | 响应式只有 1 个宽度断点 | 已知限制 | `style.css` 共 5 个 `@media`，其中 4 个是配色（dark/light），宽度断点仅 `min-width: 800px` 一个，且只作用于设置页。主界面在 760px 下靠 flex 自然收缩，无专门窄屏规则 |
+| 25 | `z-index: 1` 被 4 个元素共用，层序依赖 DOM 顺序 | 已知限制 | `#sendMirror`(0)、`#sendInput`、`#btnSend`、`#btnClearFloat`、`.cs-dropdown` 同为 1。目前靠 DOM 顺序得到正确层序、未出问题，但改动顺序即可能破图。整体尺度自洽：内容 0–5 < 拖拽指示 10 < 遮罩 50 < 菜单/弹窗 100 < 子菜单 110 |
+| 26 | 标签栏横向滚动无视觉提示 | 待处理 | `.send-scroll-wrap` 有浮动箭头 + 拖拽滚动，`.tabs-scroll` 只有滚轮映射（`app.js:1567` 的 `deltaY → scrollLeft`），无箭头也无其它提示。13 个标签时最后一个被裁在右边缘，用户未必知道可以滚 |
+| 27 | `daemon not running: ` 前缀仍由底层产生，与 v0.7.0 记录矛盾 | 待处理 | v0.7.0「已完成」表记「去掉 CLI 连接失败时硬套的 `daemon not running: ` 前缀」，CLI 自身那层确实去掉了（`cmd/serial-cli/main.go:220` 有注释说明为何不该断言），但 `client/client.go:742` 与 `pipe/pipe_other.go:92` 仍在用 `fmt.Errorf("daemon not running: %v", err)` 包装，文案仍会透出（实测 `serial-cli check` 输出 `守护进程未运行 (daemon not running: pipe not available: ...)`） |
+
+## v0.7.2 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 隐藏分支从未生效 | `applySendRatio()` 把类名 `'is-hidden'` 当成 `overflow` 的值赋值，CSSOM 静默忽略非法值，`r >= 0.97`（收起显示区）与 `r <= 0.01`（收起发送区）两个分支从未执行；面板只被 flex 压到 0 高度，`sendRatio = 0.005` 时留下 4px 高的工具栏残条。改为 `classList.toggle('is-hidden', cond)`，转发模式分支一并清理 |
+| 浅色主题缺 4 个语义色变量 | 两个浅色块各 17 个变量 vs 深色块 21 个，缺 `--accent`/`--green`/`--red`/`--yellow`。`var()` 无 fallback 时属性在 computed-value 阶段失效、整体回落初始值，4 个设置开关「开」态不可见（透明轨道 + 白圆点），并波及状态栏在线点、标签活动点、速率告警色、端口占用标记及一批 `background:var(--accent); color:#fff` 的选中态 |
+| 清空按钮压住第一条数据行 | 按钮底边 76px（`top:48` + `h:28`）vs `.display-content` 预留 74px，重叠 48×2px。引入 `--reserve-top: 76px`，`padding-top` 与按钮 `top` 由同一值推导 |
+| `LAYOUT-RULES.md` 与实现不符 | 补三处说明：`.display-area` 的 `min-height` 以 JS（40px）为准；`.tabs-scroll` 的 `overflow-y: visible` 受 CSS 规范限制实际为 `auto`（故「激活标签覆盖分隔线」不生效）；`.o-divider--quick` 折叠时保留是刻意设计（拖出手柄） |
+| 文档版本号滞后 | `LAYOUT-RULES.md`、`frontend/style.css` 头部、`ARCHITECTURE.md` 标题与构建章节同步到 v0.7.2 |
+
+本轮另记录 6 条未修项于「已知问题」#22–#27。
 
 ## v0.7.1 已完成
 

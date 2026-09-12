@@ -4019,18 +4019,22 @@ function applySendRatio() {
   if (activeMode() === 'forward') {
     displayArea.style.flex = '1 1 0px';
     displayArea.style.minHeight = '';
-    displayArea.style.overflow = '';
+    displayArea.classList.remove('is-hidden');
     sendArea.style.display = 'none';
+    sendArea.classList.remove('is-hidden');
     if (divider) divider.style.display = 'none';
     return;
   }
   var r = state.sendRatio;
   displayArea.style.flex = (1 - r) + ' 1 0px';
   displayArea.style.minHeight = '40px';
-  displayArea.style.overflow = r >= 0.97 ? 'is-hidden' : '';
+  // 注意：原来这里写的是 style.overflow = 'is-hidden'，把类名当成了 overflow 值。
+  // CSSOM 会静默忽略非法值，所以这两个分支从未生效过（面板只是被 flex 压到 0 高度，
+  // 留下 4px 残条）。要隐藏必须切换类。
+  displayArea.classList.toggle('is-hidden', r >= 0.97);
   sendArea.style.display = '';
   sendArea.style.flex = r + ' 1 0px';
   sendArea.style.minHeight = '0px';
-  sendArea.style.overflow = r <= 0.01 ? 'is-hidden' : '';
+  sendArea.classList.toggle('is-hidden', r <= 0.01);
   if (divider) divider.style.display = '';
 }

@@ -1,5 +1,5 @@
 /* ============================================================
-   串口调试工具 v0.6.5 — CSS
+   串口调试工具 v0.7.2 — CSS
    Organization: vars → reset → utilities → states → base
                  → layout-overlays → components → rtl → scrollbar
    ============================================================ */
@@ -9,6 +9,11 @@
 
 :root {
   color-scheme: light dark;
+
+  /* 顶部悬浮条预留：须 >= config-bar 高度（44px）与清空浮动按钮底边
+     （top 48 + height 28 = 76px）中的较大者，否则第一条数据行会被按钮压住。
+     .c-clear-btn 的 top 由本值倒推，改一处即可。 */
+  --reserve-top: 76px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,6 +34,7 @@
     --bg: #f3f3f3; --bg2: #e8e8e8; --bg3: #dcdcdc;
     --fg: #1a1a1a; --border: #c0c0c0; --input-bg: #ffffff;
     --hover: #d0d0d0; --placeholder: #999; --scrollbar-thumb: #c0c0c0;
+    --accent: #2563eb; --green: #15803d; --red: #dc2626; --yellow: #b45309;
     --fwd-p1: #2563eb; --fwd-p2: #d97706;
     --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
     --hex-escape: #777; --badge-cli: #059669;
@@ -335,7 +341,8 @@ button:disabled:active { transform: none; box-shadow: none; }
 
 /* Clear display float button */
 .c-clear-btn {
-  position: absolute; top: 48px; right: 8px; z-index: 1;
+  /* calc 结果即 --reserve-top，两者必须一致，否则会压住第一条数据行 */
+  position: absolute; top: calc(var(--reserve-top) - 28px); right: 8px; z-index: 1;
   padding: 0 12px; font-size: 13px; height: 28px; line-height: 28px;
   background: var(--bg2); border: 1px solid var(--border);
   transition: background 0.15s; border-radius: 6px;
@@ -573,7 +580,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* ---- 14. Components: Display + Send ---- */
 .display-area { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; overflow: hidden; padding-top: 0; }
 .display-content {
-  flex: 1; overflow-y: auto; padding: 74px 12px 8px 12px;
+  flex: 1; overflow-y: auto; padding: var(--reserve-top) 12px 8px 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   font-size: 15px; line-height: 1.6; background: var(--input-bg); min-height: 0;
 }

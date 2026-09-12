@@ -201,6 +201,19 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 版本历史
 
+### 0.7.2（2026-09-12）
+
+本版为**前端缺陷修复**，来自一次对 GUI 布局的系统性核对（几何测量 + 浅色/深色对照 + 逐条核对 `LAYOUT-RULES.md` 与实现）。前两项都是「代码写错了但不报错」的静默失效。
+
+- **修复隐藏分支从未生效**（`applySendRatio()`）。原代码写 `style.overflow = 'is-hidden'`——把**类名**当成了 `overflow` 的值。CSSOM 对非法值静默忽略，所以 `sendRatio >= 0.97`（收起显示区）与 `<= 0.01`（收起发送区）两个分支从未执行过；面板只是被 flex 压到 0 高度，`sendRatio = 0.005` 时留下 4px 高的发送工具栏残条。改为 `classList.toggle('is-hidden', cond)`，转发模式分支一并清理该类。
+- **修复浅色主题缺失 4 个语义色变量**。两个浅色变量块各定义 17 个变量，而深色块有 21 个，缺 `--accent` / `--green` / `--red` / `--yellow`。由于 `var()` 无 fallback 时属性会在 computed-value 阶段失效并回落到初始值，表现不是「颜色不对」而是**属性整体消失**：设置页 4 个开关处于「开」时轨道全透明 + 白圆点 = 完全不可见；此外状态栏在线点、标签活动点、速率告警色、端口占用标记，以及 `.cs-option.is-selected` / `.settings-*.is-selected` 等一批 `background: var(--accent); color: #fff` 的选中态都会变成白字透明底。已补齐为浅底可读的加深版本（`--accent` 取与既有 `--fwd-p1` 同色）。
+- **修复清空按钮压住第一条数据行**。`.c-clear-btn` 底边在 76px（`top: 48px` + `height: 28px`），而 `.display-content` 只预留 74px，差 2px，实测重叠 48×2px。根因是悬浮条的预留空间由各处分别写死、没有单一来源，现引入 `--reserve-top`，`.display-content` 的 `padding-top` 与按钮的 `top` 都由它推导。
+- **同步 `LAYOUT-RULES.md`**：补充三处与实现不符或未记录的说明——`.display-area` 的 `min-height` 实际由 JS 写为 40px；`.tabs-scroll` 的 `overflow-y: visible` 因 CSS 规范（一轴 `visible`、另一轴非 `visible` 时 `visible` 会被计算为 `auto`）无法生效，故「激活标签向下覆盖分隔线」实际不生效；`.o-divider--quick` 在面板折叠时保留是刻意设计（从右边缘把面板拖出来的手柄），不是残留。
+
+另将 6 条未修项记入 `TODO.md`：类名前缀约定落实率仅 24%、响应式只有一个宽度断点（800px）、`z-index: 1` 被 4 个元素共用、标签栏横向滚动无视觉提示、`client`/`pipe` 层仍在产生误导性的 `daemon not running: ` 前缀等。
+
+验证：`LAYOUT-RULES.md` 声明 vs 实测 45 项核对 **0 项不符**；GUI 端到端 **20/20** 通过且控制台无 error；浅色/深色下 4 个开关轨道分别为 `rgb(37,99,235)` / `rgb(76,194,255)`；清空按钮与首行重叠由 2px 降为 0。
+
 ### 0.7.1（2026-09-12）
 
 本版为**平台支持**更新：守护进程、CLI、MCP 三个可执行文件现在可在 Linux 上构建并运行。Windows 行为不变。

@@ -1,7 +1,7 @@
 # 布局约束规则
 
 > 本文件记录各区域元素的宽度 / 拉伸 / 裁剪策略，避免反复拉扯。
-> 适用范围：`serial-tool`（v0.6.5）前端，核对基准为 `frontend/style.css` 与 JS 构建的 DOM（`tabpage.js` / `settingspage.js` / `app.js`）。
+> 适用范围：`serial-tool`（v0.7.2）前端，核对基准为 `frontend/style.css` 与 JS 构建的 DOM（`tabpage.js` / `settingspage.js` / `app.js`）。
 > 规则格式：每条规则 = CSS 选择器 + 关键 CSS + 策略。改样式前先查本文件，改后请同步更新。
 
 ## 速查索引
@@ -12,7 +12,7 @@
 | `.config-bar` `.port-wrap` `.baud-wrap` | [3. 配置栏](#3-配置栏-config-bar) |
 | `.tabs-bar` `.tabs-scroll` `.tab-new` | [4. 标签栏](#4-标签栏-tabs-bar) |
 | `.send-controls` `.send-scroll-area` `.send-scroll-wrap` | [5. 发送工具栏](#5-发送工具栏-send-controls) |
-| `.display-area` `.display-content` `.c-fwd-display` | [6. 显示区](#6-显示区-display-area) |
+| `.display-area` `.display-content` `.c-clear-btn` `.c-fwd-display` | [6. 显示区](#6-显示区-display-area) |
 | `.quick-panel` `.o-divider--quick` `.qp-table` | [7. 快速面板](#7-快速面板-quick-panel) |
 | `#settingsOverlay` `.c-form-row` `.c-form-col` | [8. 串口详细设置窗](#8-串口详细设置窗-settingsoverlay) |
 | `.settings-layout` `.settings-nav` `.settings-body` | [9. 设置页](#9-设置页-settings-layout) |
@@ -87,7 +87,7 @@ portal 细节（`app.js` `_csOpenDropdown()`）：
 | 元素 | CSS | 策略 |
 | --- | --- | --- |
 | `.tabs-bar` | `display: flex; align-items: flex-end; height: 36px; overflow: visible; position: relative` | 激活标签 `margin-bottom: -1px` 延伸至页面；`:after` 绘制底部 1px 分隔线 |
-| `.tabs-scroll` | `overflow-x: auto; overflow-y: visible; scrollbar-width: none` | 内容宽度自适应，隐藏滚动条 |
+| `.tabs-scroll` | `overflow-x: auto; scrollbar-width: none` | 内容宽度自适应，隐藏滚动条。**声明里写的 `overflow-y: visible` 无法生效**：CSS 规定一个轴为 `visible`、另一轴非 `visible` 时，`visible` 会被计算为 `auto`（实测 computed 即 `auto/auto`）。后果是 `scrollHeight` 恒比 `clientHeight` 大 1px（即激活标签的 `margin-bottom: -1px`），该 1px 被裁掉，故「激活态向下覆盖分隔线」实际不生效 |
 | `.tab-btn.is-active` | `height: 33px; padding-bottom: 8px; margin-bottom: -1px; z-index: 2` | 激活态变高，向下覆盖分隔线 |
 | `.tab-new` | `flex-shrink: 0; width: 28px; height: 28px; align-self: center` | 固定在 `.tabs-scroll` 外右侧（`index.html` 中为 `class="tab-btn tab-new"`） |
 
@@ -108,9 +108,15 @@ portal 细节（`app.js` `_csOpenDropdown()`）：
 
 | 元素 | CSS | 策略 |
 | --- | --- | --- |
-| `.display-area` | `flex: 1; min-height: 0; overflow: hidden; position: relative` | 唯一可见滚动的是内部 `.display-content` |
-| `.display-content` | `flex: 1; overflow-y: auto; padding: 74px 12px 8px 12px`；底部 `padding-bottom: 40px` | 顶部 74px 为悬浮 config-bar 预留；底部 40px 为转发浮动按钮栏预留 |
+| `.display-area` | `flex: 1; min-height: 0; overflow: hidden; position: relative` | 唯一可见滚动的是内部 `.display-content`。**`min-height` 实际由 JS 覆盖**，见下 |
+| `.display-content` | `flex: 1; overflow-y: auto; padding: var(--reserve-top) 12px 8px 12px`；底部 `padding-bottom: 40px` | 顶部预留见下；底部 40px 为转发浮动按钮栏预留 |
 | `.display-area.c-fwd-display` | `flex: 1 1 0px !important; min-height: 0 !important; overflow: auto !important` | 转发模式：隐藏发送区后接管全部空间 |
+
+**顶部预留 `--reserve-top`（`style.css` `:root`，当前 76px）**：`.tab-page-inner` 内有两个悬浮元素叠在显示区顶部——`.config-bar`（`top: 0`，高 44px）与清空按钮 `.c-clear-btn`（`top: calc(var(--reserve-top) - 28px)`，高 28px，底边 76px）。`.display-content` 的 `padding-top` 必须取两者底边的较大值，否则第一条数据行会被浮动按钮压住（此处曾因写死 74px 而差 2px）。`.c-clear-btn` 的 `top` 由本值倒推，改一处即可。
+
+**`.display-area` 的 `min-height` 以 JS 为准**：CSS 写的是 `0`，但 `app.js` 的 `applySendRatio()` 在非转发模式下每次都内联写 `displayArea.style.minHeight = '40px'`（转发模式下清空，由 `.c-fwd-display` 的 `min-height: 0 !important` 接管）。该覆盖是有意的——把发送分隔条拖到底时不让显示区消失——但查 CSS 看不到，排查布局时需知此处会被 JS 改写。
+
+**`.o-divider--quick` 折叠时仍显示**：`applyQuickPanelRatio()` 里 `r <= 0.01` 只把 `.quick-panel` 设为 `display:none`，分隔线**刻意保留**，作为「从右边缘把面板拖出来」的手柄（转发模式下才 `display:none`）。故面板折叠时窗口最右侧仍有一个 `cursor: ew-resize` 的可拖拽区，这是设计而非残留。
 
 转发模式布局切换（JS `updateModeUI()`）：
 
