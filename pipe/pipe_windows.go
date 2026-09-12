@@ -37,6 +37,12 @@ const (
 
 var singletonHandle windows.Handle
 
+// Addr 见 pipe.go 的说明，由各平台实现。
+const Addr = `\\.\pipe\serial-tool-daemon`
+
+// endpoint 把逻辑名映射为该平台的端点地址。
+func endpoint(name string) string { return `\\.\pipe\` + name }
+
 // callErrno 取出 Proc.Call 第三个返回值中的 Win32 错误码。
 //
 // 必须用 Proc.Call 的第三个返回值，不能改用 windows.GetLastError()：
