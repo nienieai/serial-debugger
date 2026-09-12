@@ -59,6 +59,18 @@
 | 26 | 标签栏横向滚动无视觉提示 | 待处理 | `.send-scroll-wrap` 有浮动箭头 + 拖拽滚动，`.tabs-scroll` 只有滚轮映射（`app.js:1567` 的 `deltaY → scrollLeft`），无箭头也无其它提示。13 个标签时最后一个被裁在右边缘，用户未必知道可以滚 |
 | 27 | `daemon not running: ` 前缀仍由底层产生，与 v0.7.0 记录矛盾 | 待处理 | v0.7.0「已完成」表记「去掉 CLI 连接失败时硬套的 `daemon not running: ` 前缀」，CLI 自身那层确实去掉了（`cmd/serial-cli/main.go:220` 有注释说明为何不该断言），但 `client/client.go:742` 与 `pipe/pipe_other.go:92` 仍在用 `fmt.Errorf("daemon not running: %v", err)` 包装，文案仍会透出（实测 `serial-cli check` 输出 `守护进程未运行 (daemon not running: pipe not available: ...)`） |
 
+## v0.7.2 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 隐藏分支从未生效 | `applySendRatio()` 把类名 `'is-hidden'` 当成 `overflow` 的值赋值，CSSOM 静默忽略非法值，`r >= 0.97`（收起显示区）与 `r <= 0.01`（收起发送区）两个分支从未执行；面板只被 flex 压到 0 高度，`sendRatio = 0.005` 时留下 4px 高的工具栏残条。改为 `classList.toggle('is-hidden', cond)`，转发模式分支一并清理 |
+| 浅色主题缺 4 个语义色变量 | 两个浅色块各 17 个变量 vs 深色块 21 个，缺 `--accent`/`--green`/`--red`/`--yellow`。`var()` 无 fallback 时属性在 computed-value 阶段失效、整体回落初始值，4 个设置开关「开」态不可见（透明轨道 + 白圆点），并波及状态栏在线点、标签活动点、速率告警色、端口占用标记及一批 `background:var(--accent); color:#fff` 的选中态 |
+| 清空按钮压住第一条数据行 | 按钮底边 76px（`top:48` + `h:28`）vs `.display-content` 预留 74px，重叠 48×2px。引入 `--reserve-top: 76px`，`padding-top` 与按钮 `top` 由同一值推导 |
+| `LAYOUT-RULES.md` 与实现不符 | 补三处说明：`.display-area` 的 `min-height` 以 JS（40px）为准；`.tabs-scroll` 的 `overflow-y: visible` 受 CSS 规范限制实际为 `auto`（故「激活标签覆盖分隔线」不生效）；`.o-divider--quick` 折叠时保留是刻意设计（拖出手柄） |
+| 文档版本号滞后 | `LAYOUT-RULES.md`、`frontend/style.css` 头部、`ARCHITECTURE.md` 标题与构建章节同步到 v0.7.2 |
+
+本轮另记录 6 条未修项于「已知问题」#22–#27。
+
 ## v0.7.1 已完成
 
 | 需求 | 说明 |
