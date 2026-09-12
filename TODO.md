@@ -58,6 +58,20 @@
 | 25 | `z-index: 1` 被 4 个元素共用，层序依赖 DOM 顺序 | 已知限制 | `#sendMirror`(0)、`#sendInput`、`#btnSend`、`#btnClearFloat`、`.cs-dropdown` 同为 1。目前靠 DOM 顺序得到正确层序、未出问题，但改动顺序即可能破图。整体尺度自洽：内容 0–5 < 拖拽指示 10 < 遮罩 50 < 菜单/弹窗 100 < 子菜单 110 |
 | 26 | 标签栏横向滚动无视觉提示 | 待处理 | `.send-scroll-wrap` 有浮动箭头 + 拖拽滚动，`.tabs-scroll` 只有滚轮映射（`app.js:1567` 的 `deltaY → scrollLeft`），无箭头也无其它提示。13 个标签时最后一个被裁在右边缘，用户未必知道可以滚 |
 | 27 | `daemon not running: ` 前缀仍由底层产生，与 v0.7.0 记录矛盾 | 待处理 | v0.7.0「已完成」表记「去掉 CLI 连接失败时硬套的 `daemon not running: ` 前缀」，CLI 自身那层确实去掉了（`cmd/serial-cli/main.go:220` 有注释说明为何不该断言），但 `client/client.go:742` 与 `pipe/pipe_other.go:92` 仍在用 `fmt.Errorf("daemon not running: %v", err)` 包装，文案仍会透出（实测 `serial-cli check` 输出 `守护进程未运行 (daemon not running: pipe not available: ...)`） |
+| 29 | 守护进程回连失败时原因被丢弃，只剩无信息的超时 | 待处理 | 三管道握手是「客户端建 resp/sub 管道 → 向守护进程注册 → 守护进程回连」。守护进程回连失败时会 `WriteMessage(daemonConn, ...Error)` 说明原因（`daemon/ipc.go:483/491`，如「连接客户端 resp 管道失败」），但客户端此时阻塞在等 `respCh`（`client/client.go:139-150`），**从不读 `daemonConn`**，于是 5 秒后只报 `timeout waiting for daemon to connect resp pipe`。用户报的「先开守护进程再开 GUI 有时连不上」正是这个表现，但拿不到根因（本地复现 7 次未重现：单 GUI、双 GUI、daemon 先行三种组合均成功，属概率性问题）。修法：握手期间起 goroutine 读 `daemonConn`，收到错误响应即刻返回该原因（注意握手成功后要停读，`readRespLoop` 才接管） |
+| 30 | 客户端拉起的守护进程日志被整体丢弃 | 待处理 | `client.startDaemonProcess()` 用 `exec.Command(exePath, "--silent")` 且未设 `Stdout`/`Stderr`，按 `os/exec` 约定子进程输出被接到空设备；而 `daemon/logOp` 只做 `fmt.Printf`（`daemon/main.go:117`）不落文件。结果：由 GUI/CLI 启动守护进程时，守护进程侧的任何错误（回连失败、串口异常等）**没有任何地方能看到**，只有手动 `serial-daemon.exe > log.txt` 才留得下。这也是 #29 难以定位的原因之一。修法：守护进程把日志同时写入数据目录下的文件，或在 `startDaemonProcess` 中重定向到文件 |
+
+## v0.7.3 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 多字符串发送「+ 添加」改为表格末尾行 | 原为独立页脚条 `.qp-footer`（带 `border-top`、独占一行高度），与表格分离。现改为表格最后一行 `.qp-add-row`：数据少时紧跟末行之后（实测间距 0px）。原按钮带的 `.toggle-btn` 有 `width: max-content` 会阻止撑满整行，故新行不再使用该类 |
+| 快速面板滚动条跨过表头与添加行 | `.qp-table` 既是定义列宽的网格、又是滚动容器，滚动条必然跨过表头与添加行（实测跨度 `184..926`，应为 `217..889`）。改为三段式：`.qp-scroll` 成为唯一滚动容器，跨度与「表头下沿..添加行上沿」完全重合。`subgrid` 随之不可用（其轨道来自母网格、不随滚动区滚动条收窄，会溢出到滚动条底下），表头与滚动区改为两个独立网格共享确定值列模板 `--qp-cols`——用 `max-content` 时表头文字与行内控件固有尺寸不同，实测宽面板下偏差可达 14px，改定值后 enable/hex/delay/send 四列为 0 |
+| 横向滚动条过粗 | 全局规则只有 `::-webkit-scrollbar { width: 6px }`，`width` 约束的是竖向滚动条；横向的粗细由 `height` 决定，未设置即回落平台默认值（Windows 上十几像素）。补为 `width: 6px; height: 6px` |
+| 滚动条出现/消失导致整列跳动 | `.qp-scroll` 加 `scrollbar-gutter: stable` 让滚动条槽恒占 6px，`.qp-hdr` 右内边距相应取 `10px`（4+6）。实测有/无滚动条两态下列偏差完全一致 |
+| 表头「延时(ms)」被截成「延时(…)」 | 拆成独立网格后表头单元格宽度等于列轨道本身（44px），而「延时(ms)」需 60px（55 内容 + 4 内边距 + 1 边框）。原来 `subgrid` + `gap: 0` 时单元格宽度是「轨道 + 间隙」（54+6=60）正好放得下，故属拆分网格引入的回归。延时列改为 62px，从内容列最小值（48→40）补回 |
+| 快速面板横向滚动条恢复（限高 6px） | 表头在滚动区之外，只让数据行横滚会导致表头不跟随、列错位；故 `.qp-hdr` 自身也横向可滚（滚动条隐藏），由 `tabpage.js` 的 `scroll` 监听同步 `scrollLeft`，横滚条只由 `.qp-scroll` 显示一条。实测横滚前后列偏差一致（最大 3.5px）。各列最小值合计 284px，触发横滚条的面板宽度约 298px |
+| 「先开守护进程再开 GUI 有时连不上」 | 两层根因：① 守护进程在 Windows 控制台里运行时，**点击控制台窗口会让它进入选择（QuickEdit）模式，此后进程往控制台写输出会阻塞**；日志是同步 `fmt.Printf`，一卡住 `handleRegister` 就停在回连途中，客户端只能等 5 秒超时（控制台标题会带「选择」前缀）。现于启动时调 `SetConsoleMode` 关掉 `ENABLE_QUICK_EDIT_MODE`（须同时设 `ENABLE_EXTENDED_FLAGS` 才生效），改动成功时记一条日志——已用 `cmd /c .bat` 在真实控制台里验证该日志出现。② `CheckDaemonStatus` 原先用 `tasklist` 当硬闸门，误判（安全软件拦截 / CreateProcess 失败 / 输出格式变化）即拒绝连接，且无超时——卡住会让 `a.checking` 永远停在 true 导致永久离线。现改为直接拨 IPC（无守护进程时 `WaitNamedPipe` 立刻返回 `ERROR_FILE_NOT_FOUND`），`tasklist` 加 3 秒超时，`checkOffline` 不再以它的结果决定是否尝试连接 |
 
 ## v0.7.2 已完成
 

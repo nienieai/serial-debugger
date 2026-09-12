@@ -1,5 +1,5 @@
 /* ============================================================
-   串口调试工具 v0.7.2 — CSS
+   串口调试工具 v0.7.3 — CSS
    Organization: vars → reset → utilities → states → base
                  → layout-overlays → components → rtl → scrollbar
    ============================================================ */
@@ -888,28 +888,67 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 }
 .qp-toolbar input[type="number"]:focus { border-color: var(--accent); }
 
-/* ── single grid: header + rows share column widths via subgrid ── */
+/* ── 三段式：表头 / 可滚动的数据行 / 添加行 ──
+   滚动条必须只覆盖数据行（表头下沿到添加行上沿），因此滚动容器不能再是
+   定义列宽的整张表。表头与滚动区各自持有同一份列模板 --qp-cols 来保持对齐
+   （原来的 subgrid 方案做不到这点：subgrid 的轨道来自母网格，一旦滚动区
+   自身出现滚动条，轨道就会溢出到滚动条底下）。                              */
 .qp-table {
+  /* 列宽必须是确定值：表头与滚动区是两个独立网格，若用 max-content，
+     两者的固有尺寸不同（表头是文字、行内是控件），列会各自漂移，
+     连 1fr 列宽都跟着变，实测宽面板下偏差可达 14px。
+     延时列必须 >= 60px：表头文字「延时(ms)」实测需 55px 内容宽，
+     加 padding 4px 与右边框 1px 即 60px，否则会被 .qp-col 的
+     text-overflow: ellipsis 截成「延时(…」。原来用 subgrid + gap:0 时
+     单元格宽度是「轨道 + 间隙」（54+6=60），正好放得下，改成独立网格后
+     单元格宽度等于轨道本身，所以必须显式给足。
+     其余最小宽度刻意压低：面板过窄时右侧列会被裁且无法触及，
+     压低最小值可把触发横滚条的面板宽度降到约 298px。
+     内容列是 1fr，正常宽度下自动撑开，不影响观感。 */
+  --qp-cols: 12px 34px 34px minmax(40px, 1fr) 62px 40px 26px;
   flex: 1; min-height: 0;
-  display: grid;
-  grid-template-columns: 14px minmax(40px, max-content) minmax(40px, max-content) minmax(80px, 1fr) minmax(40px, max-content) minmax(40px, max-content) minmax(28px, max-content);
-  grid-auto-rows: auto;
-  gap: 0 6px;
-  overflow-y: auto;
-  align-content: start;
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
 
-/* header row: subgrid inherits parent columns, sticky on scroll */
+/* header row */
 .qp-hdr {
+  flex-shrink: 0;
   display: grid;
-  grid-template-columns: subgrid;
-  grid-column: 1 / -1;
-  position: sticky; top: 0; z-index: 2;
-  background: var(--input-bg);
-  gap: 0;
-  align-items: center; padding: 6px 4px;
+  grid-template-columns: var(--qp-cols);
+  gap: 0 6px;
+  align-items: center;
+  /* 左右内边距要与 .qp-scroll 对齐；右侧额外留出 6px 给滚动区的滚动条槽
+     （.qp-scroll 用了 scrollbar-gutter: stable，恒占 6px），否则最右三列
+     会相对表头左移 6px。 */
+  padding: 6px 10px 6px 4px;
   font-size: 13px; color: var(--fg); user-select: none; font-weight: 600;
   border-bottom: 1px solid var(--border);
+  /* 表头在滚动区之外，横滚时必须跟着走，否则列会错位。
+     它自己也可横向滚动（由 JS 与 .qp-scroll 同步 scrollLeft），
+     但滚动条不显示——横滚条只由 .qp-scroll 提供一条。 */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.qp-hdr::-webkit-scrollbar { display: none; }
+
+/* 滚动区：只有这里出现滚动条，因而滚动条被严格夹在表头与添加行之间。
+   flex 用 0 1 auto：数据少时按内容高度收缩，添加行自然跟在末行之后；
+   数据多时被压缩到可用高度并出现滚动条。
+   scrollbar-gutter: stable 让滚动条槽恒占位，避免出现/消失时整列跳动。 */
+.qp-scroll {
+  flex: 0 1 auto; min-height: 0;
+  display: grid;
+  grid-template-columns: var(--qp-cols);
+  gap: 0 6px;
+  align-content: start;
+  padding: 0 4px;
+  scrollbar-gutter: stable;
+  overflow-y: auto;
+  /* 横向恢复滚动：面板窄于约 298px 时出现横滚条（全局
+     ::-webkit-scrollbar 已把 height 限成 6px，不会再是平台默认的十几像素）。
+     表头由 JS 同步 scrollLeft 跟随。 */
+  overflow-x: auto;
 }
 .qp-hdr .qp-col {
   text-align: center; white-space: nowrap;
@@ -1012,15 +1051,14 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   border-radius: 4px; transition: color 0.15s, background 0.15s;
 }
 .qp-clear-all:hover { color: var(--red); background: var(--bg3); }
+/* 行的容器只做占位，真正的网格是 .qp-scroll（列模板与表头一致） */
 .qp-rows { display: contents; }
 .qp-empty { grid-column: 1 / -1; text-align: center; color: var(--placeholder); font-size: 12px; padding: 20px 8px; }
 
-/* 末尾「+ 添加」行：作为表格最后一行跨满所有列。
-   sticky bottom 让它在内容溢出时贴住滚动区底边，数据少时则自然落在末尾。
-   背景必须不透明，否则滚动时下方行会透出来。 */
+/* 末尾「+ 添加」行：表格的最后一行，钉在面板底部，滚动条不会覆盖它。
+   数据少时它同样在底部——不溢出时这一行与面板底边之间不会有空档。 */
 .qp-add-row {
-  grid-column: 1 / -1;
-  position: sticky; bottom: 0; z-index: 2;
+  flex-shrink: 0;
   background: var(--input-bg);
   padding: 4px 8px 6px 8px;
   border-top: 1px solid var(--border);
@@ -1455,6 +1493,6 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .tab-btn-settings.is-active { background: var(--tab-active); }
 
 /* ---- 21. Scrollbar ---- */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }

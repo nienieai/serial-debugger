@@ -126,14 +126,14 @@ func (a *App) CheckDaemonStatus() bool {
 	a.checking = true
 	a.daemonMu.Unlock()
 
-	// Try to establish a connection
-	if !client.IsDaemonProcessRunning() {
-		a.daemonMu.Lock()
-		a.checking = false
-		a.daemonMu.Unlock()
-		return false
-	}
-
+	// 直接尝试建立连接。
+	//
+	// 这里刻意**不**先用 client.IsDaemonProcessRunning()（tasklist）做闸门：
+	// 那是启发式检查——tasklist 被安全软件拦截、超时、CreateProcess 失败，
+	// 或命令行输出不符合预期时都会返回 false，于是守护进程明明在等连接，
+	// GUI 却被判成离线、连 IPC 都不试。实测该命令每次约 250ms。
+	// 没有守护进程时 WaitNamedPipe 会立刻返回 ERROR_FILE_NOT_FOUND
+	// （见 pipe.dialPipe），所以直接拨号并不慢，而且它是权威判据。
 	ec, err := client.NewDaemonClient("gui")
 	if err != nil {
 		a.daemonMu.Lock()

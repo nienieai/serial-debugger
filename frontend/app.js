@@ -1717,13 +1717,16 @@ var _connecting = false;
 async function checkOffline() {
   if (state.daemonOnline) { stopOfflineCheck(); return; }
   if (_connecting) return; // let the running tryConnect finish
+  // processRunning 只用于界面展示，**不再**作为是否尝试连接的条件。
+  // 它是 tasklist 的启发式结果（每次约 250ms），误判时会让 GUI 永远不去
+  // 尝试连接——守护进程明明在等也一直显示离线。CheckDaemonStatus 内部直接
+  // 拨 IPC，没有守护进程时 WaitNamedPipe 立刻返回 ERROR_FILE_NOT_FOUND，
+  // 代价很低，且是权威判据。
   try {
     state.processRunning = await window.go.main.App.DaemonProcessRunning();
   } catch { state.processRunning = false; }
-  if (state.processRunning && !_connecting) {
-    connectRetries = 0;
-    tryConnect();
-  }
+  connectRetries = 0;
+  tryConnect();
 }
 
 let connectRetries = 0;
