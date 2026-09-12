@@ -1423,8 +1423,9 @@ selection → cloneContents()
 
 ## 十二、构建
 
+在仓库根目录执行：
+
 ```bash
-cd 串口调试工具-0.6.5
 go mod tidy
 
 # 守护进程 / CLI / MCP
@@ -1438,4 +1439,86 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.6.5"`），改一处全部同步。
+版本号统一在 `version/version.go`（`const Version = "0.7.0"`），改一处全部同步。
+
+Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
+
+```bash
+go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
+go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
+go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
+```
+
+## 十三、平台相关代码约定
+
+Go 没有预处理器，**条件编译的粒度是文件，不是代码块**——无法在函数体中间条件编译几行代码。因此所有平台差异都靠"成对文件提供同名函数"来隔离，调用点不含任何平台判断。
+
+### 13.1 三种机制
+
+| 机制 | 写法 | 说明 |
+|---|---|---|
+| 文件名后缀 | `pipe_windows.go` | 后缀必须是合法 GOOS/GOARCH |
+| 构建约束 | `//go:build windows` | 支持 `\|\|`、`&&`、`!` 与括号 |
+| 自定义标签 | `//go:build myfeature` + `-tags myfeature` | 编译期功能开关 |
+
+本项目只用前两种。约定的完整形态是**两者同时写**：后缀表达意图，标签表达事实。
+
+### 13.2 三条硬规则
+
+1. `//go:build` 必须写在 `package` 之前，且其后空一行，否则会被当成普通注释。
+2. **文件名后缀与 `//go:build` 是 AND 关系**，不是覆盖。两者冲突时该文件在任何平台都不参与编译，而且**不报错**——静默失效，只能靠 `go list` 才能发现。
+3. **后缀必须是合法 GOOS/GOARCH**。`unix`、`other`、`posix`、`bsd` 都不是。写成 `xxx_unix.go` 后缀不产生任何约束，该文件会在**包括 Windows 在内的所有平台**被编译。这类文件必须完全依赖显式标签。
+
+合法 GOOS：`windows` `linux` `darwin` `freebsd` `openbsd` `netbsd` `dragonfly` `solaris` `illumos` `aix` `plan9` `js` `wasip1` `android` `ios`
+
+合法 GOARCH：`386` `amd64` `arm` `arm64` `riscv64` `loong64` `ppc64` `ppc64le` `s390x` `mips*` `wasm`
+
+注意 `_64` 不是 GOARCH（是 `amd64`/`arm64`），`_x86` 也不是。另外 `GOOS=android` 会同时匹配 `linux` 的标签与文件，`ios` 匹配 `darwin`，`illumos` 匹配 `solaris`。
+
+### 13.3 成对文件清单
+
+共 7 对。每对提供**同名同签名**的函数：
+
+| 目录 | Windows | 其他平台 | 提供的入口 |
+|---|---|---|---|
+| `pipe/` | `pipe_windows.go` | `pipe_other.go` | `Addr`、`endpoint`、`listenPipe`、`dialPipe`、`acquireLock`/`releaseLock`、`clientPID`、`cancelPending` |
+| `ringbuf/` | `ringbuf_windows.go` | `ringbuf_other.go` | `CreateSharedRing`、`OpenSharedRing`、`OpenSharedRingForWrite` |
+| `daemon/` | `console_windows.go` | `console_other.go` | `setConsoleOutputCP` |
+| `daemon/` | `platform_windows.go` | `platform_other.go` | `setFlowControl` |
+| `daemon/` | `portdesc_windows.go` | `portdesc_other.go` | `loadPortDescriptions` |
+| `client/` | `process_windows.go` | `process_other.go` | `hideWindow`、`IsDaemonProcessRunning` |
+| 仓库根（GUI） | `platform_windows.go` | `platform_other.go` | `hideWindow`、`openFolder`、`forceKillDaemon`、`openDevToolsWindow` |
+
+约束写法：
+
+- `xxx_windows.go` → `//go:build windows`（后缀已生效，标签用于统一风格）
+- `xxx_other.go` → `//go:build !windows`（后缀**不生效**，标签是唯一约束）
+
+### 13.4 新增平台时
+
+以新增 Linux 支持为例，要动的就是上表 7 对文件。两种做法：
+
+- **拆三份**：`_windows` / `_linux` / `_other`（其余平台兜底），适合 Linux 与 Windows 差异大的模块（如 `pipe/`、`ringbuf/`）。
+- **改兜底**：`_other` 改为 `//go:build !windows && !linux`，另加 `_linux`，适合差异小的模块（如 `console/`、`portdesc/`）。
+
+改完必须逐一确认每个目标 GOOS 下的文件集合（见 §13.5）。
+
+### 13.5 排查方法
+
+判断某个文件到底有没有被编进去，唯一可靠的办法是让工具链自己说：
+
+```bash
+GOOS=linux   go list -f '{{range .GoFiles}}{{.}} {{end}}' ./pipe/
+GOOS=windows go list -f '{{range .GoFiles}}{{.}} {{end}}' ./pipe/
+```
+
+不要靠读代码或看文件名推断——§13.2 的第 2、3 条都是"看上去对、实际不生效"的陷阱。
+
+新增或改动平台文件后，用以下命令自检全仓库的成对文件是否存在约束冲突：
+
+```bash
+for os in windows linux darwin freebsd; do
+  echo "== $os =="
+  GOOS=$os go list -f '{{.ImportPath}}: {{join .GoFiles " "}}' ./...
+done
+```
