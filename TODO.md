@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.7.0）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.7.1）的已完成记录；
 > 更早版本完成情况见 [README.md](README.md)「版本历史」。
 
 ## 待实现
@@ -48,6 +48,16 @@
 | 15 | 前端三处功能失效 | 待处理 | ①速率告警色永不出现（JS 产出 `.rate-high`/`.rate-warn`，CSS 只定义 `.rate-orange`/`.rate-red`）②下拉框选中态高亮与 `scrollIntoView` 永不生效（`selected` vs `is-selected`）③多标签共用相同 DOM id，`i18n.js` 只刷新第一个标签的系统消息 |
 | 16 | 解码逻辑 Go 与 JS 各一份 | 已知限制 | `decode/decode.go` 注释自称 "Mirrors JS _decodeUTF8Tolerant byte-for-byte"；加 `history.js` 的 legacy 回退共三条路径。发送侧 GBK 用「非 ASCII 算 2 字节」估算 |
 | 17 | 各包测试覆盖不均 | 待处理 | `daemon`/`pipe`/`ringbuf`/`decode` 有测试；`client`（四端共用的三管道协议）、`protocol`、`contract`、`config` 仍为零 |
+
+## v0.7.1 已完成
+
+| 需求 | 说明 |
+|------|------|
+| Linux 支持（daemon / CLI / MCP） | 按平台拆分成对文件：管道改 `$XDG_RUNTIME_DIR/serial-tool/` 下的 Unix 域套接字（0700），共享内存改 `/dev/shm` + `mmap(MAP_SHARED)`，控制台代码页与串口流控设置下沉到平台文件。`pipe.Addr` 由常量改为平台变量，新增 `pipe.Endpoint(name)` |
+| 共享内存打开路径误用声明长度 | 打开既有对象时调用方传的大小为 0，触发「声明的数据区超出映射长度」；改用 `Fstat` 取真实文件大小，且只在创建者进程退出时 `unlink` |
+| 平台代码约定无文档 | `ARCHITECTURE.md` 新增 §13：条件编译的文件级粒度、三条硬规则（标签与后缀是 AND、后缀必须是合法 GOOS/GOARCH）、7 对平台文件清单、`go list` 排查法 |
+| 换行符依赖本机 `core.autocrlf` | 新增 `.gitattributes` 固定 `eol=lf`；此前 Windows 上 `gofmt -l .` 把全部 Go 文件报成未格式化，Linux 上却干净 |
+| 平台文件标签不一致 | `client/process_windows.go` 补 `//go:build windows`，14 个平台文件统一风格 |
 
 ## v0.7.0 已完成
 

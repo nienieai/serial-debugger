@@ -70,6 +70,15 @@ type RingBuffer struct {
 	autoUnmap  bool           // if true, unmap on Close (for CreateShared)
 	mapAddr    unsafe.Pointer // MapViewOfFile base address; not Go heap memory
 	mapHandle  uintptr
+	// owner 表示本 RingBuffer 是共享内存对象的创建者。
+	//
+	// Windows 上对象由内核引用计数管理，最后一句柄关闭即释放，无需区分。
+	// POSIX 共享内存则会一直留在 /dev/shm 里直到被显式 unlink，而客户端也会
+	// 打开并 Close 同一个环 —— 若客户端也去 unlink，守护进程的环就没了。
+	owner bool
+	// shmFile 是 POSIX 共享内存对象路径，创建者 Close 时据此 unlink。
+	// Windows 实现不使用（对象随句柄自动释放）。
+	shmFile string
 
 	mu sync.Mutex // protects concurrent read operations (Read/Peek/DrainAll/Reset)
 }

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sys/windows"
-
 	"github.com/nienieai/serial-debugger/config"
 	"github.com/nienieai/serial-debugger/pipe"
 )
@@ -58,7 +56,7 @@ func dt(key string, args ...any) string {
 }
 
 func main() {
-	windows.SetConsoleOutputCP(65001)
+	setConsoleOutputCP()
 	loadDaemonLang()
 
 	silent := false

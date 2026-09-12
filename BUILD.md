@@ -7,13 +7,17 @@
 | Go | 1.26+ | 后端编译 | 检查：`go version` |
 | Wails CLI | v2.x | GUI 构建 | `go install github.com/wailsapp/wails/v2/cmd/wails@latest` |
 | WebView2 运行时 | Evergreen | GUI 运行 | 仅 Windows；目标机需安装 |
+| GTK3 + WebKit2GTK | 4.1 | GUI 构建/运行 | 仅 Linux：`apt install libgtk-3-dev libwebkit2gtk-4.1-dev` |
+
+守护进程 / CLI / MCP 三个可执行文件在 Windows 与 Linux 上均可构建，不需要 Wails、WebView2 或 GTK，仅需 Go 工具链。
 
 > 首次构建前先运行 `wails doctor` 自检，它会列出缺失依赖及修复指引。
 
 ## 快速构建
 
+在仓库根目录执行：
+
 ```bash
-cd 串口调试工具-0.6.5     # 发布包解压目录；源码仓库中构建可跳过
 go mod tidy
 
 # 守护进程 / CLI / MCP
@@ -26,6 +30,16 @@ wails build -devtools
 ```
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
+
+Linux 下去掉 `.exe` 后缀，GUI 另需 GTK3 + WebKit2GTK 开发包：
+
+```bash
+go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
+go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
+go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
+```
+
+平台差异的实现约定见 [ARCHITECTURE.md](ARCHITECTURE.md) §13。
 
 ## 按需构建
 

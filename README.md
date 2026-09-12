@@ -201,6 +201,18 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 版本历史
 
+### 0.7.1（2026-09-12）
+
+本版为**平台支持**更新：守护进程、CLI、MCP 三个可执行文件现在可在 Linux 上构建并运行。Windows 行为不变。
+
+- **新增 Linux 支持**。此前 `daemon/main.go` 直接 import `golang.org/x/sys/windows`，导致整个守护进程包只能在 Windows 上编译；共享内存也只有 Windows 命名映射一种实现。现按平台拆分为成对文件（`//go:build windows` / `//go:build !windows`）：管道改用 `$XDG_RUNTIME_DIR/serial-tool/` 下的 Unix 域套接字（目录 0700），共享内存改用 `/dev/shm` + `mmap(MAP_SHARED)`，控制台代码页与串口流控设置下沉到各自平台文件。`pipe.Addr` 由常量改为平台变量，并新增 `pipe.Endpoint(name)` 统一三处管道名构造。
+- **修复共享内存打开路径误用声明长度**。非 Windows 实现最初按调用方传入的大小建立映射，而打开既有对象时调用方传的是 0，触发「声明的数据区超出映射长度」。现改用 `Fstat` 取真实文件大小，并且只在创建者进程退出时 `unlink`，避免误删其他进程仍在使用的映射。
+- **文档新增平台相关代码约定**（`ARCHITECTURE.md` §13）。说明 Go 条件编译的**文件级**粒度、三条硬规则（`//go:build` 与文件名后缀是 **AND** 关系而非覆盖；后缀必须是合法 GOOS/GOARCH，`unix`/`other`/`posix` 都不是），7 对平台文件清单，以及用 `go list` 在各 GOOS 下核对实际参与编译的文件集这一排查手段。
+- **新增 `.gitattributes` 固定 `eol=lf`**。此前换行符取决于各人机器上的 `core.autocrlf`（本机为 `true`），表现为 Windows 上 `gofmt -l .` 把全部 Go 文件报成未格式化、而 Linux 上干净。仓库内本就以 LF 存储，此文件只是把现状显式固定。
+- `client/process_windows.go` 补上 `//go:build windows`：后缀本就隐式生效，此改动仅为与其余 13 个平台文件统一风格。
+
+Linux 端到端验证（Ubuntu 22.04.5，socat 建立 PTY 回环）：11 个包全部构建通过；守护进程创建 `/run/user/1000/serial-tool/daemon.sock`；CLI 报 `{"version":"0.7.1","protocolVersion":1}`；两个会话分别打开 PTY 两端，A 发送的 `4C494E55582D302E372E30` B 字节级完整收到；共享内存创建→2 个对象（24+5 MB、24+1 MB），销毁→0。四个 GOOS（windows / linux / darwin / freebsd）下 `go list` 列出的文件集互斥且完整，无缺失、无重复符号。
+
 ### 0.7.0（2026-09-12）
 
 本版以**稳定性与接口一致性**为主，未新增功能。五项修复各自都来自实测复现，而非代码审阅的推测。

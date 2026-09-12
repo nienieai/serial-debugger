@@ -66,8 +66,11 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	}
 
 	clientId := generateClientId(source)
-	respName := `\\.\pipe\st-` + clientId + `-resp`
-	subName := `\\.\pipe\st-` + clientId + `-sub`
+	// 端点名交给 pipe 包按平台构造：Windows 是命名管道路径，
+	// 类 Unix 是文件系统套接字路径（写死 Windows 前缀会在 Linux 上
+	// 于当前工作目录造出怪名字的套接字文件）。
+	respName := pipe.Endpoint("st-" + clientId + "-resp")
+	subName := pipe.Endpoint("st-" + clientId + "-sub")
 
 	// 1. Create listeners (client acts as pipe server for resp and sub)
 	respLn, err := pipe.Listen(respName)
