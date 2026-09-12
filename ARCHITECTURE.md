@@ -1439,7 +1439,7 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.7.4.1"`），改一处全部同步。
+版本号统一在 `version/version.go`（`const Version = "0.7.4.2"`），改一处全部同步。
 
 Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
 
