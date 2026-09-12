@@ -29,21 +29,28 @@ func fakeDaemonThatRejectsRegister(t *testing.T, reason string) func() {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
+		// 循环 accept：客户端现在会在握手失败后重试（见 handshakeRetries），
+		// 每次重试都是新连接，只接受一次会让后续重试撞上 WaitNamedPipe 超时，
+		// 从而掩盖本测试要验证的「原因透传」。
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
 
-		// 读掉 register 请求，然后只回错误——绝不回连客户端管道。
-		reader := bufio.NewReader(conn)
-		if _, err := protocol.ReadMessage(reader); err != nil {
-			return
-		}
-		_ = protocol.WriteMessage(conn, protocol.Response{ID: 0, Error: reason})
+				// 读掉 register 请求，然后只回错误——绝不回连客户端管道。
+				reader := bufio.NewReader(conn)
+				if _, err := protocol.ReadMessage(reader); err != nil {
+					return
+				}
+				_ = protocol.WriteMessage(conn, protocol.Response{ID: 0, Error: reason})
 
-		// 给客户端足够时间读到这条消息，再断开。
-		time.Sleep(300 * time.Millisecond)
+				// 给客户端足够时间读到这条消息，再断开。
+				time.Sleep(50 * time.Millisecond)
+			}()
+		}
 	}()
 
 	return func() {
@@ -92,9 +99,15 @@ func TestHandshakeSurfacesDaemonReason(t *testing.T) {
 	if !strings.Contains(err.Error(), reason) {
 		t.Fatalf("错误信息里应包含守护进程给出的原因 %q，实际为: %v", reason, err)
 	}
-	// 必须是快速失败路径，而不是干等到超时。留足余量以容纳管道抖动。
-	if elapsed > handshakeTimeout/2 {
-		t.Fatalf("应当快速失败（读到 daemonConn 上的错误），实际耗时 %v（超时 %v）", elapsed, handshakeTimeout)
+	// 错误里应带上尝试次数，让「重试过仍失败」这件事可见。
+	if !strings.Contains(err.Error(), "已尝试") {
+		t.Errorf("错误信息应带上尝试次数，实际为: %v", err)
+	}
+	// 必须是快速失败路径，而不是每次重试都干等到超时。
+	// 允许 (重试次数+1) 倍的余量，但仍远小于「每次都超时」的量级。
+	budget := handshakeTimeout / 2 * time.Duration(handshakeRetries+1)
+	if elapsed > budget {
+		t.Fatalf("应当快速失败（读到 daemonConn 上的错误），实际耗时 %v（预算 %v）", elapsed, budget)
 	}
 }
 
@@ -117,14 +130,22 @@ func TestHandshakeReasonDoesNotClaimRejection(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		conn, err := ln.Accept()
-		if err != nil {
-			return
+		// 同样循环 accept：客户端会重试。
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_, _ = protocol.ReadMessage(bufio.NewReader(conn)) // 读掉 register
+				// 不回任何东西，直接关——模拟确认未送达
+			}()
 		}
-		defer conn.Close()
-		_, _ = protocol.ReadMessage(bufio.NewReader(conn)) // 读掉 register
-		// 不回任何东西，直接关——模拟确认未送达
 	}()
+	// done 只用于让被 defer 的 ln.Close() 收尾；不在测试里等它，
+	// 否则 ln.Close() 与 Accept 的收尾顺序会变成额外的挂死点。
+	_ = done
 
 	old := handshakeTimeout
 	handshakeTimeout = 2 * time.Second
@@ -138,5 +159,4 @@ func TestHandshakeReasonDoesNotClaimRejection(t *testing.T) {
 	if strings.Contains(msg, "拒绝") {
 		t.Fatalf("不应断言「拒绝」——守护进程可能已接受注册，实际: %s", msg)
 	}
-	<-done
 }

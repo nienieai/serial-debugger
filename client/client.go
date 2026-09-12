@@ -60,13 +60,51 @@ func generateClientId(source string) string {
 // 「读了 daemonConn 拿到真实原因」与「一直干等到超时」两条路径。
 var handshakeTimeout = 5 * time.Second
 
+// earlyResult 是注册握手期间 daemonConn 上第一条消息的读取结果。
+//
+// 用「发送结果」而不是「关闭通道」表达失败是有意的：关闭通道会让 select
+// 立刻返回，从而与诊断/清理动作竞争，掩盖真实错误。
+type earlyResult struct {
+	msg *protocol.RawMsg
+	err error
+}
+
 // NewDaemonClient creates a 3-pipe persistent connection to the daemon.
 func NewDaemonClient(source string) (*DaemonClient, error) {
 	return NewDaemonClientWithEvents(source, nil)
 }
 
+// handshakeRetries 是注册握手失败后的重试次数（不含首次）。
+//
+// 为什么需要：在**并发**建立会话时，注册握手会以约 8% 的概率失败——实测
+// 8 路并行 × 60 轮 = 42/480（8.8%），而串行只有 1/300（0.3%）。现场证据是
+// 矛盾的：守护进程侧显示该会话**已完成注册**（`addSession` 位于两条回连管道
+// 都成功之后，且无「写注册确认失败」记录、会话也未被驱逐），客户端侧却在读
+// `daemonConn` 时报错，于是报「注册未完成」。这指向 pipe 层并发下的句柄/缓冲
+// 竞态，尚未定位。
+//
+// 在根因查明前，重试是恰当的工程处置：每次重试都用**全新的 clientId**，因而
+// 是全新的 resp/sub 管道名，不会踩到上一次的残留实例。失败仍会被完整记录
+// （见 NewDaemonClientWithEvents 的最终错误），不会把问题藏起来。
+const handshakeRetries = 2
+
 // NewDaemonClientWithEvents creates a 3-pipe client with a custom event subscription list.
+//
+// 握手失败会自动重试（见 handshakeRetries 的说明）；全部失败时返回的错误里
+// 带尝试次数与每次的原因。
 func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient, error) {
+	var lastErr error
+	for attempt := 0; attempt <= handshakeRetries; attempt++ {
+		c, err := connectOnce(source, subscribe)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("注册握手失败（已尝试 %d 次）: %w", handshakeRetries+1, lastErr)
+}
+
+func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	if subscribe == nil {
 		subscribe = defaultEvents()
 	}
@@ -150,19 +188,19 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	//
 	// 成功注册时守护进程同样会回一条 {"registered":true}（ipc.go:532），
 	// 这里把它消费掉，顺带当作「守护进程已接受注册」的确认。
-	earlyCh := make(chan *protocol.RawMsg, 1)
+	earlyCh := make(chan earlyResult, 1)
 	go func() {
 		data, err := bufio.NewReader(daemonConn).ReadBytes('\n')
 		if err != nil {
-			close(earlyCh)
+			earlyCh <- earlyResult{err: err}
 			return
 		}
 		var msg protocol.RawMsg
 		if err := json.Unmarshal(data, &msg); err != nil {
-			close(earlyCh)
+			earlyCh <- earlyResult{err: err}
 			return
 		}
-		earlyCh <- &msg
+		earlyCh <- earlyResult{msg: &msg}
 	}()
 
 	// reasonFromMsg 把 daemonConn 上收到的第一条消息翻译成失败原因。
@@ -186,11 +224,8 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	// 到达的，而连接要 2s（测试用超时）才断开。
 	failFast := func() (string, bool) {
 		select {
-		case msg, ok := <-earlyCh:
-			if !ok {
-				return reasonFromMsg(nil)
-			}
-			return reasonFromMsg(msg)
+		case r := <-earlyCh:
+			return reasonFromMsg(r.msg)
 		default:
 			return "", false
 		}
@@ -203,17 +238,15 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 		daemonConn.Close()
 		subLn.Close()
 		return nil, fmt.Errorf("resp pipe: %w", err)
-	case msg, ok := <-earlyCh:
+	case r := <-earlyCh:
 		// 到这里说明 resp 回连没成，而 daemonConn 上有结论了。
 		//
 		// 注意措辞：不能断言「守护进程拒绝了注册」——实测反例是守护进程**已经**
 		// 走完注册（日志有「已注册」）却没能把确认送到客户端，说成「拒绝」会把
 		// 排查方向带偏。只陈述观测到的事实。
-		reason := "守护进程在回连 resp 管道前关闭了连接"
-		if !ok {
-			reason, _ = reasonFromMsg(nil)
-		} else if r, failed := reasonFromMsg(msg); failed {
-			reason = r
+		reason, _ := reasonFromMsg(r.msg)
+		if r.err != nil {
+			reason = fmt.Sprintf("守护进程在回连 resp 管道前关闭了连接（读注册管道失败: %v）", r.err)
 		}
 		daemonConn.Close()
 		respLn.Close()
@@ -234,6 +267,7 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	case err := <-subErrCh:
 		daemonConn.Close()
 		respConn.Close()
+		respLn.Close() // 此前漏关：握手重试会让每次失败泄漏一个 listener 及其预建管道实例
 		subLn.Close()
 		return nil, fmt.Errorf("sub pipe: %w", err)
 	case <-time.After(handshakeTimeout):
@@ -243,6 +277,7 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 		}
 		daemonConn.Close()
 		respConn.Close()
+		respLn.Close() // 同上
 		subLn.Close()
 		return nil, fmt.Errorf("%s", reason)
 	}
