@@ -62,15 +62,24 @@
 | 29 | 守护进程回连失败时原因被丢弃，只剩无信息的超时 | 已修复 | v0.7.4 修复。握手期间起 goroutine 读 `daemonConn`，并且**为它单独设一个 select 分支**——回连失败时客户端要等的 resp 管道永远不会来，只在超时分支里顺手取一下的话，即使原因已到达也要干等满 5 秒。`client/handshake_test.go` 用假守护进程验证，并做变异验证：修复前 `2.0s` + 「守护进程未在 5 秒内回连 resp 管道」，修复后 `0.3–1.5ms` + 守护进程给出的真实原因。原记录：守护进程回连失败时会 `WriteMessage(daemonConn, ...Error)` 说明原因（`daemon/ipc.go:483/491`），但客户端此时阻塞在等 `respCh`（`client/client.go:139-150`），**从不读 `daemonConn`** |
 | 30 | 客户端拉起的守护进程日志被整体丢弃 | 已修复 | v0.7.4 修复：日志双路输出（控制台 + `<exe>/logs/daemon.log`，超 2 MB 启动时轮转为 `.1`），新增 `serial-cli logs [n]` 查看（不连守护进程，起不来时才有用）。两个 Windows 细节都是实测踩出来的：① 必须共享打开——`os.OpenFile` 是独占共享模式，守护进程一运行日志就没人读得到，而「它跑着的时候去看日志」正是唯一用途；② 必须用 `FILE_APPEND_DATA` 而不是 `GENERIC_WRITE`——`CreateFile(OPEN_ALWAYS)` 会停在偏移 0，第二个实例写「已在运行中」时覆盖日志开头，实测留下一截被截断的旧行 |
 
-## v0.7.4 已完成
+| 31 | `sendqueue` JSON 未知字段被静默丢弃，装载成空内容 | 已修复 | v0.7.4 修复（外部测试报告发现，本机复测确认）。CLI 把文件解析成 `[]map[string]any` 再走 IPC，未知字段连丢两次（CLI 的 map 忽略一次、守护进程的 struct 再忽略一次），于是 `{"data":"ONE"}` / `{"text":"ONE"}` 返回 `success:true, entries:1` 而实际内容是**空**——使用者直到发现发不出东西才知道字段名写错。现于 CLI 侧用 `DisallowUnknownFields` 严格校验并给出可读报错（含接受字段名与示例），另接受 `data` 作为 `content` 的别名以兼容最常见手误。回归测试 `cmd/serial-cli/sendqueue_test.go`，已做变异验证 |
+| 32 | `sendqueue` 不接受带 UTF-8 BOM 的 JSON | 已修复 | v0.7.4 修复。PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM，而 Go 的 json 解析器报 `invalid character 'ï' looking for beginning of value`——用户完全看不出是自己文件的编码问题。现解析前剔除 BOM。**本机核对时我自己也踩了一次同类坑**：用 PowerShell `Set-Content` 改写 Go 源文件把中文搞成了乱码，只能删掉重写 |
+| 33 | autosend 空队列时静默空转 | 已修复 | v0.7.4 修复。`autosend start <ms> queue` 在队列为空时返回 `success:true` 然后一个字节不发、零告警；现象与「发送路径坏掉」无法区分，外部报告观察到的「不发送数据」里就混着这一种。现 queue 模式在装载后校验条目数，为空则明确报错并复位启用位 |
+| 34 | autosend 计数器跨轮累加，`sendCount` 不是本轮数值 | 已修复 | v0.7.4 修复。`startAutoSend` 不复位 `autoSendSendCount`/`autoSendErrorCount`/`autoSendLastSend`，实测上一轮 queue 留下的 `sendCount=26` 会原样出现在下一轮 single 的 `status` 里，看起来像「刚启动就发了 26 次」。现于 start 时归零（在 `autoSendMu` 下，与读取侧一致） |
+| 35 | `writePortSilent` 对空闲进程解引用 nil 串口 | 已修复 | v0.7.4 修复（写 autosend 测试时暴露）。`writePortSilent` 直接 `p.port.Write`，而空闲进程的 `port` 是 nil 接口。生产路径上 `AutoSendStart` 有 `status=="connected"` 守卫，但**自动发送跑到一半进程被断开**时循环仍会 tick，那次解引用就是一次 nil panic；dispatch 路径无 `recover` 且守护进程是机器级单例，一崩即全断。现加 nil 守卫并返回「串口未连接」错误，由上层按普通发送失败计数 |
 
+## v0.7.4 已完成
 | 需求 | 说明 |
 |------|------|
 | 共享环生命周期竞态致守护进程崩溃 | `pm.Close()` 在释放 `pm.mu` 之后才拆共享内存，而 `Process` 指针裸共享，读取方可能碰到已 `UnmapViewOfFile` 的环。实测 `-race` 复现 `DATA RACE` + `0xC0000005`；因 dispatch 无 `recover` 且守护进程是机器级单例，后果是所有会话与串口一起断。环的置空移入保护它的锁内、使用方持锁后重新判空；`historyFile` 改用 `histFileMu`；`sendRing` 同源窗口一并修掉 |
 | 回连失败原因被丢弃（只剩超时） | 客户端在握手期间读 `daemonConn`，并为它单独设 select 分支，从而**快速失败**而非干等 5 秒。实测 2.0s → 0.3–1.5ms |
 | 客户端拉起的守护进程零日志 | 日志双路输出到 `<exe>/logs/daemon.log`（2 MB 轮转），新增 `serial-cli logs [n]`（无需守护进程在运行）。Windows 下须共享打开（否则运行中读不到）且须 `FILE_APPEND_DATA`（否则覆盖日志开头） |
 | 前端三处逻辑从未生效 | 速率告警类名对齐 CSS；`selected` → `is-selected`；`refreshSysMsgI18n` 改为遍历全部标签页而非 `getElementById` 只取第一个 |
-| 测试补充 | 新增 `daemon/ringlife_test.go`（并发建销 + 读写环的生命周期竞态）、`daemon/logfile_test.go`（共享读、追加语义、轮转）、`client/handshake_test.go`（首个 client 包测试，覆盖三管道握手失败路径）。关键测试均做变异验证 |
+| `sendqueue` 静默容错与 BOM | CLI 侧改为严格字段校验（`DisallowUnknownFields`）并给出含字段名与示例的报错，接受 `data` 作 `content` 别名；解析前剔除 UTF-8 BOM |
+| autosend 三处状态问题 | queue 模式空队列改为明确报错（此前静默空转）；start 时归零 `sendCount`/`errorCount`/`lastSend`（此前跨轮累加）；`writePortSilent` 补 nil 串口守卫（此前对空闲进程解引用即 panic） |
+| 测试补充 | 新增 `daemon/ringlife_test.go`（并发建销 + 读写环的生命周期竞态）、`daemon/logfile_test.go`（共享读、追加语义、轮转）、`daemon/autosend_regress_test.go`（空队列/计数归零/间隔生效/nil 串口）、`client/handshake_test.go`（首个 client 包测试，覆盖三管道握手失败路径与措辞）、`cmd/serial-cli/sendqueue_test.go`（严格校验/BOM/别名/空内容）。关键测试均做变异验证 |
+
+> 本节后半部分（`sendqueue` 严格校验、autosend 三处）来自外部 AI Agent 的《串口调试工具 v0.7.4 全面测试报告》，已于本机用 COM3/COM4 交叉互连 + COM12（Canaan K230 Buildroot 控制台）独立复测确认。**报告中另有两条 P0 经实测证伪**（single 模式不发送、`intervalMs` 不生效），详见该报告复核记录。
 
 ## v0.7.3 已完成
 

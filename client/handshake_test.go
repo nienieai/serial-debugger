@@ -97,3 +97,46 @@ func TestHandshakeSurfacesDaemonReason(t *testing.T) {
 		t.Fatalf("应当快速失败（读到 daemonConn 上的错误），实际耗时 %v（超时 %v）", elapsed, handshakeTimeout)
 	}
 }
+
+// TestHandshakeReasonDoesNotClaimRejection 确认「注册确认没到达」时不会
+// 断言成「守护进程拒绝了注册」。
+//
+// 为什么重要：实测反例——守护进程日志显示它**已经**走完注册（有「已注册」一行，
+// 而那一行位于两条回连管道都成功之后），却仍可能没能把确认送到客户端。
+// 此时说「守护进程拒绝了注册请求」是事实错误，会把排查方向完全带偏——这正是
+// 外部测试报告里点名的那句话。
+func TestHandshakeReasonDoesNotClaimRejection(t *testing.T) {
+	// 假守护进程收到 register 后**直接关闭**连接，不写任何响应。
+	// 真实场景对应「守护进程已注册但确认未送达」。
+	ln, err := pipe.Listen(pipe.Addr)
+	if err != nil {
+		t.Skip("守护进程端点已被占用（可能有真实守护进程在运行），跳过")
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = protocol.ReadMessage(bufio.NewReader(conn)) // 读掉 register
+		// 不回任何东西，直接关——模拟确认未送达
+	}()
+
+	old := handshakeTimeout
+	handshakeTimeout = 2 * time.Second
+	defer func() { handshakeTimeout = old }()
+
+	_, err = NewDaemonClient("test")
+	if err == nil {
+		t.Fatal("守护进程未回送确认，客户端不应成功")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "拒绝") {
+		t.Fatalf("不应断言「拒绝」——守护进程可能已接受注册，实际: %s", msg)
+	}
+	<-done
+}

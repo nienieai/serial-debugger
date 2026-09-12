@@ -277,7 +277,15 @@ func (p *Process) recordSystemEvent(key string, args ...any) {
 
 // writePortSilent writes raw bytes to the serial port without broadcasting
 // events or recording history. Used by auto-send.
+//
+// 必须判空 p.port：空闲进程（尚未连接串口）的 port 是 nil 接口。生产路径上
+// AutoSendStart 有 status=="connected" 守卫，但自动发送跑到一半进程被断开时，
+// 循环仍会继续 tick，此时解引用 nil 会**直接打崩整个守护进程**（dispatch 路径
+// 无 recover，且它是机器级单例）。返回错误让上层按普通发送失败处理即可。
 func (p *Process) writePortSilent(data []byte) error {
+	if p.port == nil {
+		return fmt.Errorf("串口未连接")
+	}
 	p.portWriteMu.Lock()
 	defer p.portWriteMu.Unlock()
 	_, err := p.port.Write(data)
@@ -304,6 +312,12 @@ func (p *Process) startAutoSend(intervalMs int, mode string, loop bool) error {
 	p.autoSendIntervalMs = intervalMs
 	p.autoSendStopCh = make(chan struct{})
 	p.autoSendOnce = sync.Once{}
+	// 计数器归零：此前 start 不复位，sendCount/errorCount 会跨轮累加，
+	// 于是「这一轮到底发了多少」读不出来——实测上一轮 queue 留下的
+	// sendCount=26 会原样出现在下一轮 single 的 status 里。
+	p.autoSendSendCount.Store(0)
+	p.autoSendErrorCount.Store(0)
+	p.autoSendLastSend = time.Time{}
 
 	// For queue mode, load entries from sendq into cache before starting
 	if mode == "queue" {
@@ -311,6 +325,15 @@ func (p *Process) startAutoSend(intervalMs int, mode string, loop bool) error {
 		p.sendRingMu.Lock()
 		entries := ReadAllEntries(p.sendRing)
 		p.sendRingMu.Unlock()
+
+		// 空队列直接拒绝：此前返回 success 后空转，一个字节不发、零告警，
+		// 脚本化调用完全察觉不到（现象与 single 模式「不发送」一致，
+		// 极易被误判成发送路径坏掉）。
+		if len(entries) == 0 {
+			p.autoSendEnabled = false
+			return fmt.Errorf("发送队列为空，无法按 queue 模式启动自动发送：请先用 sendqueue 装载条目，或改用 single 模式")
+		}
+
 		p.multistrMu.Lock()
 		p.multistrCache = entries
 		p.multistrDirty = false

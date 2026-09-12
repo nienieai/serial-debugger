@@ -168,7 +168,8 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 	// reasonFromMsg 把 daemonConn 上收到的第一条消息翻译成失败原因。
 	reasonFromMsg := func(msg *protocol.RawMsg) (string, bool) {
 		if msg == nil {
-			return "守护进程在注册过程中关闭了连接", true
+			return "守护进程已接受注册，但注册确认未到达（连接在注册过程中被关闭）；" +
+				"守护进程日志里该会话会表现为「已注册」后直接「已断开」", true
 		}
 		if msg.Error != "" {
 			return msg.Error, true
@@ -203,20 +204,25 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 		subLn.Close()
 		return nil, fmt.Errorf("resp pipe: %w", err)
 	case msg, ok := <-earlyCh:
-		reason := "守护进程拒绝了注册请求"
+		// 到这里说明 resp 回连没成，而 daemonConn 上有结论了。
+		//
+		// 注意措辞：不能断言「守护进程拒绝了注册」——实测反例是守护进程**已经**
+		// 走完注册（日志有「已注册」）却没能把确认送到客户端，说成「拒绝」会把
+		// 排查方向带偏。只陈述观测到的事实。
+		reason := "守护进程在回连 resp 管道前关闭了连接"
 		if !ok {
-			reason = "守护进程在注册过程中关闭了连接"
+			reason, _ = reasonFromMsg(nil)
 		} else if r, failed := reasonFromMsg(msg); failed {
 			reason = r
 		}
 		daemonConn.Close()
 		respLn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("守护进程回连 resp 管道失败: %s", reason)
+		return nil, fmt.Errorf("注册未完成: %s", reason)
 	case <-time.After(handshakeTimeout):
-		reason := "守护进程未在 5 秒内回连 resp 管道"
+		reason := fmt.Sprintf("守护进程未在 %v 内回连 resp 管道", handshakeTimeout)
 		if e, ok := failFast(); ok {
-			reason = "守护进程回连 resp 管道失败: " + e
+			reason = "注册未完成: " + e
 		}
 		daemonConn.Close()
 		respLn.Close()
@@ -231,9 +237,9 @@ func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient
 		subLn.Close()
 		return nil, fmt.Errorf("sub pipe: %w", err)
 	case <-time.After(handshakeTimeout):
-		reason := "守护进程未在 5 秒内回连 sub 管道"
+		reason := fmt.Sprintf("守护进程未在 %v 内回连 sub 管道", handshakeTimeout)
 		if e, ok := failFast(); ok {
-			reason = "守护进程回连 sub 管道失败: " + e
+			reason = "注册未完成: " + e
 		}
 		daemonConn.Close()
 		respConn.Close()
@@ -741,7 +747,11 @@ func (c *DaemonClient) MultistrRead(processId string) ([]map[string]any, error) 
 }
 
 // MultistrWrite writes entries to the sendq via IPC.
-func (c *DaemonClient) MultistrWrite(processId string, entries []map[string]any) error {
+// entries 用 any 而不是 []map[string]any：调用方各自的条目类型不同
+// （CLI 是做过严格校验的 queueEntry 结构体），只要可 JSON 序列化即可。
+// 写死成 []map[string]any 会逼调用方做一次多余的形状转换，还会丢掉
+// delay/note 这类字段。
+func (c *DaemonClient) MultistrWrite(processId string, entries any) error {
 	_, err := c.Call(contract.MultistrWrite, map[string]any{
 		"processId": processId,
 		"entries":   entries,

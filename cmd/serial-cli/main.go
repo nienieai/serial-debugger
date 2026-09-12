@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -289,6 +290,62 @@ func runCommand(args []string) {
 		defer dc.Close()
 		runCommandWithClient(dc, args, false)
 	}
+}
+
+// queueEntry 是 sendqueue 接受的条目结构，字段与守护进程的 MultistrEntry 一致。
+//
+// 这里刻意**在 CLI 侧**做严格校验：此前把文件解析成 []map[string]any 再走 IPC，
+// 未知字段会连丢两次（CLI 的 map 忽略、守护进程的 struct 再忽略），于是
+// {"data":"ONE"} 这种写错字段名的输入会返回 success:true 但装进去的是**空内容**，
+// 使用者直到发现发不出东西才知道写错了（TODO 已记录）。
+//
+// 额外容忍 "data" 作为 "content" 的别名：这是最常被写错的字段名。
+type queueEntry struct {
+	Enabled bool   `json:"enabled"`
+	Hex     bool   `json:"hex"`
+	Content string `json:"content"`
+	Delay   int    `json:"delay"`
+	Note    string `json:"note"`
+	// 仅为给出更友好的报错而接受，随后回填到 Content。
+	Data string `json:"data"`
+}
+
+// parseQueueEntries 严格解析 sendqueue 的 JSON 文件。
+//
+// 三条硬规则（对应已知的三个静默陷阱）：
+//  1. 未知字段直接报错——不能静默丢掉使用者真正想传的字段
+//  2. 剔除 UTF-8 BOM——PowerShell 5.1 的 Set-Content -Encoding UTF8 会写 BOM，
+//     而 json 解析器会报 `invalid character 'ï'`，属常见跨工具互操作问题
+//  3. 拒绝内容为空的条目——空条目发不出任何字节，却一路 success
+func parseQueueEntries(raw []byte) ([]queueEntry, error) {
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	var entries []queueEntry
+	if err := dec.Decode(&entries); err != nil {
+		return nil, fmt.Errorf(
+			"解析发送队列 JSON 失败: %w\n"+
+				"接受的字段: content(必填) / hex / enabled / delay / note\n"+
+				"示例: [{\"content\":\"ONE\",\"hex\":false,\"enabled\":true}]", err)
+	}
+	// 顶层必须是数组；多余的尾随内容也要报错，避免「只解析了前半段」。
+	if dec.More() {
+		return nil, fmt.Errorf("发送队列 JSON 在数组之后还有多余内容")
+	}
+
+	for i := range entries {
+		if entries[i].Content == "" && entries[i].Data != "" {
+			entries[i].Content = entries[i].Data
+		}
+		if entries[i].Content == "" {
+			return nil, fmt.Errorf(
+				"第 %d 条的 content 为空。空条目发不出任何字节，"+
+					"请检查字段名是否写成了 data/text/value 等", i+1)
+		}
+	}
+	return entries, nil
 }
 
 func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bool) {
@@ -758,9 +815,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			errExit(fileErr, interactive)
 			return
 		}
-		var entries []map[string]any
-		if err := json.Unmarshal(fileData, &entries); err != nil {
-			errExit(fmt.Errorf("invalid JSON: %w", err), interactive)
+		entries, err := parseQueueEntries(fileData)
+		if err != nil {
+			errExit(err, interactive)
 			return
 		}
 		// Write via IPC

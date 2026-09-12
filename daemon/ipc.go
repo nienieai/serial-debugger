@@ -540,6 +540,16 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 	for {
 		data, err := protocol.ReadMessage(reader)
 		if err != nil {
+			// 注册成功却连第一条请求都没来就断开——这是一个必须留痕的异常：
+			// 客户端此时多半报「回连 resp 管道失败」，而本进程其实已经把两条
+			// 回连管道都建好了（否则到不了 addSession 的「已注册」那行）。
+			// 此前这里静默 removeSession，日志里只剩「已注册 → 已断开」这个
+			// 指纹，没有任何原因，定位只能靠猜。
+			if sess.reqCount == 0 {
+				label := sourceLabel(sess.source)
+				logOp("错误", "%s:%s 注册后未能开始通信即断开 (PID: %d): %v",
+					label, sess.clientId, sess.pid, err)
+			}
 			s.removeSession(p.ClientId)
 			return
 		}
