@@ -137,6 +137,12 @@ function createStatusEncoding(container) {
 
 // ---- StatusStats: Tx / Rx bytes + speed ----
 function createStatusStats(container) {
+	// 方向箭头沿用项目既有约定：TX = ↾，RX = ⇃（见 history.js 的时间戳前缀
+	// 与设置页的颜色预览）。状态栏只放箭头 + TX/RX 缩写，不放「发送/接收」
+	// 这类词——右下角空间有限，且各语言的缩写本来就是通用的。
+	var TX_ARROW = '↾';
+	var RX_ARROW = '⇃';
+
 	function makeItem(defaultCls, defaultLabel) {
 		var item = document.createElement('span');
 		item.className = 'stat-item';
@@ -154,10 +160,10 @@ function createStatusStats(container) {
 		return { arrow: arrow, val: val };
 	}
 
-	var txItem = makeItem('tx', 'Tx');
-	var rxItem = makeItem('rx', 'Rx');
-	var txSpeedItem = makeItem('tx', 'Tx');
-	var rxSpeedItem = makeItem('rx', 'Rx');
+	var txItem = makeItem('tx', TX_ARROW + ' TX');
+	var rxItem = makeItem('rx', RX_ARROW + ' RX');
+	var txSpeedItem = makeItem('tx', TX_ARROW + ' TX');
+	var rxSpeedItem = makeItem('rx', RX_ARROW + ' RX');
 	txSpeedItem.val.textContent = '0 B/s(0%)';
 	rxSpeedItem.val.textContent = '0 B/s(0%)';
 
@@ -177,10 +183,10 @@ function createStatusStats(container) {
 				}
 			} else {
 				if (el.classList.contains('rx') || el.classList.contains('p2')) {
-					el.textContent = t('stat.rx', 'Rx');
+					el.textContent = RX_ARROW + ' ' + t('stat.rx', 'RX');
 					el.className = 'stat-arrow rx';
 				} else {
-					el.textContent = t('stat.tx', 'Tx');
+					el.textContent = TX_ARROW + ' ' + t('stat.tx', 'TX');
 					el.className = 'stat-arrow tx';
 				}
 			}

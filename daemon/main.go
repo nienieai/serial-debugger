@@ -57,6 +57,9 @@ func dt(key string, args ...any) string {
 
 func main() {
 	setConsoleOutputCP()
+	// 必须在任何日志输出之前关掉：控制台一旦被点击进入选择模式，
+	// 之后所有往控制台写日志的操作都会阻塞，进而卡住连接处理。
+	quickEditDisabled := disableQuickEdit()
 	loadDaemonLang()
 
 	silent := false
@@ -79,6 +82,9 @@ func main() {
 	}
 
 	logOp("启动", "守护进程已启动")
+	if quickEditDisabled {
+		logOp("启动", "已关闭控制台快速编辑模式（否则点击控制台会使日志写入阻塞、卡住连接）")
+	}
 
 	pm := NewProcessManager()
 	srv := NewIpcServer(pm)

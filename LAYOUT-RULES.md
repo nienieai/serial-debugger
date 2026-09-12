@@ -1,7 +1,7 @@
 # 布局约束规则
 
 > 本文件记录各区域元素的宽度 / 拉伸 / 裁剪策略，避免反复拉扯。
-> 适用范围：`serial-tool`（v0.7.2）前端，核对基准为 `frontend/style.css` 与 JS 构建的 DOM（`tabpage.js` / `settingspage.js` / `app.js`）。
+> 适用范围：`serial-tool`（v0.7.3）前端，核对基准为 `frontend/style.css` 与 JS 构建的 DOM（`tabpage.js` / `settingspage.js` / `app.js`）。
 > 规则格式：每条规则 = CSS 选择器 + 关键 CSS + 策略。改样式前先查本文件，改后请同步更新。
 
 ## 速查索引
@@ -13,7 +13,7 @@
 | `.tabs-bar` `.tabs-scroll` `.tab-new` | [4. 标签栏](#4-标签栏-tabs-bar) |
 | `.send-controls` `.send-scroll-area` `.send-scroll-wrap` | [5. 发送工具栏](#5-发送工具栏-send-controls) |
 | `.display-area` `.display-content` `.c-clear-btn` `.c-fwd-display` | [6. 显示区](#6-显示区-display-area) |
-| `.quick-panel` `.o-divider--quick` `.qp-table` | [7. 快速面板](#7-快速面板-quick-panel) |
+| `.quick-panel` `.o-divider--quick` `.qp-table` `.qp-scroll` `.qp-add-row` | [7. 快速面板](#7-快速面板-quick-panel) |
 | `#settingsOverlay` `.c-form-row` `.c-form-col` | [8. 串口详细设置窗](#8-串口详细设置窗-settingsoverlay) |
 | `.settings-layout` `.settings-nav` `.settings-body` | [9. 设置页](#9-设置页-settings-layout) |
 | `.settings-bubble` | [10. 气泡卡片](#10-气泡卡片-settings-bubble) |
@@ -129,8 +129,16 @@ portal 细节（`app.js` `_csOpenDropdown()`）：
 | --- | --- | --- |
 | `.quick-panel` | `min-width: 0; overflow: hidden; display: flex; flex-direction: column; padding-top: 44px` | 宽度由 flex 比例控制，`padding-top` 为 config-bar 预留 |
 | `.o-divider--quick` | `width: 5px; cursor: ew-resize; position: relative; z-index: 3` | 拖动调整面板宽度（`::before` 扩展热区） |
-| `.qp-table` | `display: grid; grid-template-columns: 14px minmax(40px, max-content) minmax(40px, max-content) minmax(80px, 1fr) minmax(40px, max-content) minmax(40px, max-content) minmax(28px, max-content)` | 表头与行共享列宽 |
-| `.qp-hdr` / `.qp-row` | `display: grid; grid-template-columns: subgrid; grid-column: 1 / -1` | CSS Subgrid，表头 sticky 顶部 |
+| `.qp-table` | `display: flex; flex-direction: column; overflow: hidden`；持有 `--qp-cols: 12px 34px 34px minmax(40px, 1fr) 62px 40px 26px` | **三段式**容器：表头 / 滚动区 / 添加行。本身不滚动。**延时列必须 ≥ 60px**：表头文字「延时(ms)」实测需 55px 内容宽，加 `padding 4px` 与右边框 1px 即 60px，否则被 `.qp-col` 的 `text-overflow: ellipsis` 截成「延时(…」。原来用 `subgrid` + `gap: 0` 时单元格宽度是「轨道 + 间隙」（54+6=60）正好放得下，改成独立网格后单元格宽度等于轨道本身，所以必须显式给足。其余最小宽度刻意压低：`.qp-scroll` 关掉了横向滚动（见下），面板过窄时右侧列会被裁且无法触及，压低最小值把触发裁剪的面板宽度降到约 298px；内容列是 `1fr`，正常宽度下自动撑开，不影响观感 |
+| `.qp-hdr` | `flex-shrink: 0; display: grid; grid-template-columns: var(--qp-cols); padding: 6px 10px 6px 4px; overflow-x: auto; overflow-y: hidden`；`::-webkit-scrollbar { display: none }` | 表头。**不再是 sticky**——它在滚动区之外，天然常驻。**它自己也横向可滚**（滚动条隐藏），由 JS 与 `.qp-scroll` 同步 `scrollLeft`，这样横滚时表头跟着走、列不错位；横滚条只由 `.qp-scroll` 显示一条 |
+| `.qp-scroll` | `flex: 0 1 auto; min-height: 0; display: grid; grid-template-columns: var(--qp-cols); padding: 0 4px; scrollbar-gutter: stable; overflow-y: auto; overflow-x: auto` | **唯一的滚动容器**：竖向滚动条因而被严格夹在表头下沿与添加行上沿之间。`flex: 0 1 auto`（不 grow）让数据少时按内容收缩、添加行紧跟末行，数据多时被压缩并出现滚动条。横向在面板窄于约 298px 时出现横滚条，粗细由全局 `::-webkit-scrollbar { height: 6px }` 限定为 6px（未设 `height` 时会回落到平台默认的十几像素）；表头由 `tabpage.js` 里的 `scroll` 监听同步 `scrollLeft`。竖向滚动条的**跨度为表头下沿..添加行上沿**，与添加行的位置无关 |
+| `.qp-rows` | `display: contents` | 只做占位，行是 `.qp-scroll` 的直接网格项 |
+| `.qp-row` | `display: grid; grid-template-columns: subgrid; grid-column: 1 / -1` | `subgrid` 继承 `.qp-scroll` 的列 |
+| `.qp-add-row` | `flex-shrink: 0; background: var(--input-bg); border-top: 1px solid var(--border)` | 表格末尾的「+ 添加」行，钉在面板底部，滚动条不会覆盖它 |
+
+**为什么不能用一张网格 + `subgrid`（原方案）**：`.qp-table` 既是定义列宽的母网格、又是滚动容器，滚动条就必然跨过表头与添加行；而一旦把滚动容器拆出来，`subgrid` 的轨道来自母网格、不会随滚动区的滚动条收窄，轨道会溢出到滚动条底下。所以改为两个独立网格共享同一份**确定值**列模板。列宽必须是确定值：用 `max-content` 时表头（文字）与行（控件）的固有尺寸不同，列会各自漂移，连 `1fr` 列宽都跟着变，实测宽面板下偏差可达 14px。
+
+**滚动条槽**：`.qp-scroll` 用 `scrollbar-gutter: stable` 让滚动条槽恒占 6px（与全局 `::-webkit-scrollbar { width: 6px; height: 6px }` 对应），`.qp-hdr` 的右内边距相应取 `4px + 6px = 10px`。这样滚动条出现/消失时不会有整列跳动，表头与行也始终对齐（实测两态偏差完全一致）。
 
 宽度分配（JS `applyQuickPanelRatio()`）：`state.quickPanelRatio`（默认 `0.25`）控制比例，`leftArea` 取 `1 - r`、`.quick-panel` 取 `r`（`flex: r 1 0px`）；`r <= 0.01` 时隐藏面板。转发模式下面板强制隐藏。
 
