@@ -202,6 +202,7 @@
   "serial.close_first": "Fermez tous les ports avant de changer de mode",
   "serial.get_fail": "Échec de la récupération",
   "serial.mode_fail": "Échec du changement de mode",
+  "serial.need_session_tab": "Basculez d'abord vers un onglet de session série (la page de réglages est ouverte)",
   "serial.open": "Ouvrir le port",
   "serial.open_fail": "Échec de l'ouverture",
   "serial.open_first": "Ouvrez d'abord un port",

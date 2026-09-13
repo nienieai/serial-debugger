@@ -202,6 +202,7 @@
   "serial.close_first": "أغلق جميع المنافذ قبل تغيير النمط",
   "serial.get_fail": "فشل الاستلام",
   "serial.mode_fail": "فشل تغيير النمط",
+  "serial.need_session_tab": "انتقل أولا إلى علامة تبويب جلسة المنفذ (صفحة الإعدادات مفتوحة)",
   "serial.open": "فتح المنفذ",
   "serial.open_fail": "فشل الفتح",
   "serial.open_first": "افتح منفذاً أولاً",

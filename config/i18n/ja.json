@@ -202,6 +202,7 @@
   "serial.close_first": "モード切替の前にすべてのポートを切断してください",
   "serial.get_fail": "取得に失敗しました",
   "serial.mode_fail": "モード切替に失敗しました",
+  "serial.need_session_tab": "先にシリアルセッションのタブへ切り替えてください（現在は設定ページ）",
   "serial.open": "ポート接続",
   "serial.open_fail": "ポートを開けませんでした",
   "serial.open_first": "先にポートを開いてください",

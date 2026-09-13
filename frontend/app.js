@@ -1797,6 +1797,31 @@ function onDaemonGone(reason) {
 
 // ---- session sync ----
 let syncPending = false;
+
+// 把守护进程会话的当前状态写到一个标签页上（标签、在线状态、参数、查看者）。
+// 「找回原有标签页」与「新建标签页」两条路共用，避免两处判断漂移。
+// （第 2 步「更新已有标签页」是它的增量版本：只在实际变化时打 tabsChanged。）
+function _applyDaemonSessionToTab(tab, ds) {
+  const isConnected = ds.status === 'connected';
+  const isForward = ds.mode === 'forward';
+  const hasDeclared = !!ds.portName;
+  tab.label = isForward
+    ? (isConnected ? ds.portName : (hasDeclared ? `${ds.portName} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_forward', '端口转发空闲')))
+    : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
+  tab.portOpen = isConnected;
+  tab.mode = ds.mode || 'single';
+  tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
+  if (isConnected || hasDeclared) {
+    tab.syncedParams = {
+      portName: ds.portName, baud: ds.baud,
+      dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
+      forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
+    };
+  } else {
+    tab.syncedParams = null;
+  }
+}
+
 async function syncDaemonSessions(procData) {
   if (syncPending) return;
   syncPending = true;
@@ -1840,6 +1865,23 @@ async function syncDaemonSessions(procData) {
   // 1. Create tabs for new daemon sessions not tracked in any GUI tab
   daemonSessions.forEach(ds => {
     if (!guiSessionIds.has(ds.id)) {
+          // 先看有没有「本来就是这个会话」的标签页：第 3 步在守护进程列表一时
+          // 不含该会话时会把 sessionId 清掉（连接/重建的窗口期）。等它回到列表里
+          // 若直接按「未登记」新建，同一个会话就会多出一个标签页 —— 用户实测到的
+          // 「启动串口后多了一个新建标签页、原来那个跑到后面」正是这条。
+          const orphan = state.tabs.find(t => isSessionTab(t) && !t.sessionId && t._orphanSid === ds.id);
+          if (orphan) {
+            _applyDaemonSessionToTab(orphan, ds);
+            orphan.sessionId = ds.id;
+            orphan._orphanSid = null;
+            guiSessionIds.add(ds.id);
+            if (ds.id && state.daemonOnline) {
+              window.go.main.App.StartTabDecoder(ds.id);
+              window.go.main.App.SetTabEncoding(ds.id, state.encoding);
+            }
+            tabsChanged = true;
+            return;
+          }
           // Skip unmatched idle processes while GUI is creating one (addTab in flight)
           if (_creatingTab && ds.status !== 'connected') return;
 	      const isConnected = ds.status === 'connected';
@@ -1921,6 +1963,9 @@ async function syncDaemonSessions(procData) {
       if (tab.connectedAt && (Date.now() - tab.connectedAt) < 3000) {
         return;
       }
+      // 记住它是谁：下一次列表里这个会话回来时要能找回同一个标签页，
+      // 而不是新建一个（见第 1 步的 orphan 分支）。
+      tab._orphanSid = tab.sessionId;
       tab.portOpen = false;
       tab.sessionId = null;
       tab.syncedParams = null;
@@ -1936,12 +1981,17 @@ async function syncDaemonSessions(procData) {
   // These are dead tabs left behind by a daemon disconnect or external session destroy.
   // Skip settings tabs — they are intentionally sessionless.
   if (daemonSessions.length > 0) {
+    // 只数「会话标签页」：设置页不占会话位。此前用的是 state.tabs.length，
+    // 于是**只要开着设置页**，单独一个空闲会话标签页就会被判成「还有别的标签页」
+    // 而销毁 —— 它在标签栏里的位置随之消失，下一次同步又会在末尾补一个新的。
+    let sessionTabCount = state.tabs.filter(t => isSessionTab(t)).length;
     for (let i = state.tabs.length - 1; i >= 0; i--) {
       const t = state.tabs[i];
-      if (t.type === 'settings') continue;
-      if (t.source === 'gui' && !t.sessionId && state.tabs.length > 1) {
+      if (!isSessionTab(t)) continue;
+      if (t.source === 'gui' && !t.sessionId && sessionTabCount > 1) {
         if (t._page) t._page.destroy();
         state.tabs.splice(i, 1);
+        sessionTabCount--;
         tabsChanged = true;
       }
     }
@@ -2155,8 +2205,7 @@ function updateSyncIndicator() {
 
 // Returns true when the active "tab" is a real session tab (not settings/welcome).
 function _hasSessionTab() {
-  const t = getActiveTab();
-  return t && !t.type && !(t._page && t._page.isWelcome);
+  return isSessionTab(getActiveTab());
 }
 
 // Show/hide status-bar stats: visible only when daemon is online and the
@@ -2645,12 +2694,45 @@ function getActiveTab() {
   return tab;
 }
 
+// 可以承载串口会话的标签页（排除设置页与欢迎页）。
+//
+// 为什么必须区分：设置标签页的 _page 是一个只有 show/hide 的壳，没有
+// portSelect / btnOpen 这些元素，而 pageEl 在活动页找不到时会回退到
+// document.getElementById —— 每个 TabPage 都有同名 id，于是那个回退交出去的
+// 是**别的标签页**的元素。结果就是「在设置页上点打开串口」会读到另一个标签页
+// 选的端口，再把会话挂到设置页对象上：串口真的开了，却没有任何界面能管它；
+// 设置页对象还多了 sessionId，后续同步逻辑也跟着乱。
+function isSessionTab(t) {
+  return !!t && !t.type && !(t._page && t._page.isWelcome);
+}
+
+// 当前的会话标签页；停在设置页/欢迎页/无标签页时返回 null。
+// 所有会碰串口、发送队列、历史缓存的入口都必须先过这一关。
+function activeSessionTab() {
+  var t = getActiveTab();
+  return isSessionTab(t) ? t : null;
+}
+
+// 停在非会话标签页时给出解释（而不是静默失败或挂到别的标签页上）
+function requireSessionTab(what) {
+  var tab = activeSessionTab();
+  if (tab) return tab;
+  showAlert(t('confirm.title', '提示'),
+    t('serial.need_session_tab', '请先切换到串口会话标签页（当前停在设置页）'));
+  return null;
+}
+
 async function togglePort() {
-  const tab = getActiveTab();
+  const tab = activeSessionTab();
+  if (!tab) { requireSessionTab(); return; }
   if (tab.portOpen) { await closePort(); } else { await openPort(); }
 }
 
 async function openPort() {
+  // 先确认站在会话标签页上：设置页没有端口选择与开关按钮，
+  // 而 pageEl 的全局回退会交出别的标签页的元素（见 isSessionTab 的说明）。
+  const tab = requireSessionTab();
+  if (!tab) return;
   if (activeMode() === 'forward') {
     await openForwardPorts();
     return;
@@ -2667,12 +2749,15 @@ async function openPort() {
   };
 
   try {
-    let tab = getActiveTab();
-
-    // If tab has no backing process, create an idle one first
+    // If tab has no backing process, create an idle one first.
+    // 建进程期间必须挡住 syncDaemonSessions：它收到 process-changed 时会为
+    // 「GUI 尚未登记的进程」补一个标签页，而这里要过 await 才把 sessionId 记上，
+    // 中间那一小段足够让它多建一个（addTab 一直有这个 _creatingTab 保护，
+    // 这条路径此前没有 —— 「启动串口后多出一个新建标签页」就是这么来的）。
     if (!tab.sessionId) {
-      const sid = await window.go.main.App.CreateIdleProcess();
-      tab.sessionId = sid;
+      _creatingTab = true;
+      try { tab.sessionId = await window.go.main.App.CreateIdleProcess(); }
+      finally { _creatingTab = false; }
     }
 
     // Connect the idle process to the selected port
@@ -2696,6 +2781,8 @@ async function openPort() {
 }
 
 async function openForwardPorts() {
+  const tab = requireSessionTab();
+  if (!tab) return;
   const portA = pageEl('portSelectA').value;
   const portB = pageEl('portSelectB').value;
   if (!portA || !portB) { showAlert(t('confirm.title','提示'), t('serial.select_two','请选择两个端口')); return; }
@@ -2716,11 +2803,11 @@ async function openForwardPorts() {
   };
 
   try {
-    let tab = getActiveTab();
-
+    // 同 openPort：建进程期间挡住 syncDaemonSessions，避免它替同一个进程再建一个标签页
     if (!tab.sessionId) {
-      const sid = await window.go.main.App.CreateIdleProcess();
-      tab.sessionId = sid;
+      _creatingTab = true;
+      try { tab.sessionId = await window.go.main.App.CreateIdleProcess(); }
+      finally { _creatingTab = false; }
     }
 
     await window.go.main.App.ForwardConnect(tab.sessionId, cfgA, cfgB);
@@ -2743,7 +2830,7 @@ async function openForwardPorts() {
 }
 
 async function closePort() {
-  const tab = getActiveTab();
+  const tab = activeSessionTab();
   if (!tab || !tab.sessionId) return;
   try {
     if (state.daemonOnline) {
@@ -2914,21 +3001,24 @@ function toggleSettings() {
 }
 
 function updateOpenBtn() {
-  const btn = pageEl('btnOpen');
-  if (!btn) return;
   const tab = getActiveTab();
-  // Settings tab has no open/close button
-  if (tab && tab.type === 'settings') {
-    btn.disabled = true; btn.style.display = 'none';
-    var sendBtn = pageEl('btnSend');
-    if (sendBtn) sendBtn.disabled = true;
+  // Settings / welcome / no tab: there is no open-close button on this page.
+  // 注意这里**不能**走 pageEl 的全局回退 —— 每个 TabPage 都有自己的 btnOpen，
+  // 回退会把第一个标签页的按钮交出来，于是「切到设置页」会把第 1 个标签页的
+  // 「打开串口」按钮隐藏掉（实测确认）。只动当前页自己的元素。
+  if (!isSessionTab(tab)) {
+    const page = getActivePage();
+    if (page && page.btnOpen) { page.btnOpen.disabled = true; page.btnOpen.style.display = 'none'; }
+    if (page && page.btnSend) page.btnSend.disabled = true;
     return;
   }
+  const btn = pageEl('btnOpen');
+  if (!btn) return;
   btn.style.display = '';
   const isFwd = activeMode() === 'forward';
   if (!state.daemonOnline) {
     btn.disabled = true; btn.textContent = isFwd ? t('btn.start_forward', '启动转发') : t('btn.open_port', '打开串口');
-  } else if (tab && tab.portOpen) {
+  } else if (tab.portOpen) {
     btn.disabled = false;
     btn.textContent = isFwd ? t('btn.stop_forward', '停止转发') : t('btn.close_port', '关闭串口');
     btn.style.background = 'var(--red)'; btn.style.color = '#fff';
@@ -2937,7 +3027,7 @@ function updateOpenBtn() {
     btn.textContent = isFwd ? t('btn.start_forward', '启动转发') : t('btn.open_port', '打开串口');
     btn.style.background = ''; btn.style.color = '';
   }
-  pageEl('btnSend').disabled = !(tab && tab.portOpen && activeMode() === 'single');
+  pageEl('btnSend').disabled = !(tab.portOpen && activeMode() === 'single');
 }
 
 // ---- display ----

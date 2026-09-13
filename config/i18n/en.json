@@ -202,6 +202,7 @@
   "serial.close_first": "Close all ports before switching mode",
   "serial.get_fail": "Get failed",
   "serial.mode_fail": "Mode switch failed",
+  "serial.need_session_tab": "Switch to a serial session tab first (the settings page is open)",
   "serial.open": "Open Port",
   "serial.open_fail": "Open failed",
   "serial.open_first": "Open a port first",

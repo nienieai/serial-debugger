@@ -202,6 +202,7 @@
   "serial.close_first": "모드 전환 전에 모든 포트를 닫으십시오",
   "serial.get_fail": "가져오기 실패",
   "serial.mode_fail": "모드 전환 실패",
+  "serial.need_session_tab": "먼저 시리얼 세션 탭으로 전환하세요(현재 설정 페이지)",
   "serial.open": "포트 열기",
   "serial.open_fail": "열기 실패",
   "serial.open_first": "먼저 포트를 여십시오",

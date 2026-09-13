@@ -202,6 +202,7 @@
   "serial.close_first": "请先关闭所有串口连接再切换模式",
   "serial.get_fail": "获取失败",
   "serial.mode_fail": "切换模式失败",
+  "serial.need_session_tab": "请先切换到串口会话标签页（当前停在设置页）",
   "serial.open": "打开串口",
   "serial.open_fail": "打开失败",
   "serial.open_first": "请先打开串口",
