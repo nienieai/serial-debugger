@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.7.1）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.7.5.1）的已完成记录；
 > 更早版本完成情况见 [README.md](README.md)「版本历史」。
 
 ## 待实现
@@ -73,6 +73,24 @@
 | 40 | `probe` 规则改从站地址须手工重算 CRC | 已文档化 | v0.7.4.3 起文档化。`probe_hex` 是**含 CRC 的整帧**，改地址不重算 CRC 会因校验失败而设备完全不应答，而报错只是「未检测到已知设备」——用户看不出是自己 CRC 写错。已在 `操作说明.md` §九 详述并随包交付 `modbus_crc.py`（含已知帧自检、支持 `--sweep` 列出地址 1–16 的帧）。**仍建议根治**：把从站地址做成规则字段（如 `slave_addr`），由引擎生成帧并算 CRC，替掉「整帧 + 手算 CRC」这个脆弱设计 |
 | 41 | `match_type` 的 `regex` 与 `substring` 匹配对象不同，易误用 | 已文档化 | v0.7.5 文档化（外部报告把它报为「行为不一致」）。`substring` 的 `match_value` 是**十六进制串**，在响应的十六进制文本里找；`regex` 的 `match_value` 是**正则**，匹配**响应原始文本**。所以 `substring "04"` 命中 hex 串 `"040302…"`，而 `regex "^04"` 是在原始字节里找 ASCII 的 `0`/`4`，匹配不到——语义自洽，非缺陷。已在 `操作说明.md` §九 写明差异与各自适用场景。**可改进**：给 `match_type` 加白名单校验，写错时明确报错而不是静默不匹配 |
 | 42 | 语言文件中 Tx/Rx 大小写混用 | 已修复 | v0.7.5 修复。`en.json` 的 `stats.*` / `tooltip.*` / `settings.color_*` 用大写 `RX`/`TX`，而 `stat.rx` / `stat.tx` / `display.*` 用 `Rx`/`Tx`，同一界面混用两种写法。统一到 `Rx`/`Tx`——与前端 `history.js` 硬编码的 `'Rx'`/`'Tx'` 及 9 种语言里 8 种的原状一致。改动 `en.json` 14 处、`es.json` 8 处、`fr.json` 8 处；i18n 一致性检查 9 语言 × 374 键全绿 |
+| 43 | 发送框文本模式：镜像层与 textarea 排版逐格错开 | 已修复 | v0.7.5.1 修复（外部测试反馈）。镜像层把空格换成 `·`、并把真实空格设为 `font-size: 0`，这一格的推进宽度于是变成 `·` 的宽度；字体里两者不等宽就逐格错开且随空格数累加。实测设置里 10 种可选字体 **8 种**中招（Cascadia Code/Fira Code/JetBrains Mono/Source Code Pro 每空格 +8px 即整一格、宋体 +7px、楷体 +7.5px、微软雅黑 −0.83px、Segoe UI −0.84px；Consolas 与 Courier New 恰好为 0）。表现为光标不在可见字形上、点选偏移、选中时叠出两层字。改为真实字符保留原宽度＋标记绝对定位叠加（静态位置，保持基线对齐），修复后漂移 0～0.64px。仅作用于 `.send-input-mirror` |
+| 44 | Hex 输入的预处理在四条路径上分叉 | 已修复 | v0.7.5.1 修复。手动发送（`sendData`）与回写环形缓冲都做了 `replace(/0x/gi,'').replace(/[\s,]+/g,'')`，而自动发送（`startAutoSend`）与字节统计（`updateSendInfo`）只有 `replace(/\s/g,'')`。高亮层把 `0x` 当合法前缀、把 `,` 当分隔符，于是「全绿 + 手动能发 + 自动发送报 invalid hex」；字节数也偏大（`0xAA 0xBB` 显示 4B 实际 2B）。实测 `0xAA 0xBB` / `AA,BB` / `0xAA` 自动发送全部失败，修复后正常发出。现抽出 `_normalizeHexInput` 单一实现，四条路径共用，夹具断言其外无残留 |
+| 45 | 1 位十六进制数字高亮判绿但发送必失败，且失败无提示 | 已修复 | v0.7.5.1 修复。同一 1 位数字在落单 token 时判合法（`len>=1 && len<=2`）、在长串按 2 字符切分后落单时判非法，而后端 `hex.DecodeString` 对奇数长度一律拒绝；`sendData` 的 `catch {}` 又把错误整个吞掉，于是 `A`、`AA B` 全绿却「点了发送没反应也没解释」。保留了宽容高亮（便于边打字边看），改为新增发送框悬浮提示：悬停或发送被拦下时在发送按钮上方浮出原因，5 秒自动消失、`pointer-events:none`、9 语言本地化（`send.hint_empty`/`hint_odd`/`hint_badchar`） |
+| 46 | 发送框占位符写死中文，9 种语言的 `send.placeholder` 闲置 | 已修复 | v0.7.5.1 修复。`#sendInput::placeholder` 被设为 `transparent`，用户看到的是镜像层里硬编码的 `'输入要发送的数据...'`。改镜像层走 `t('send.placeholder')`，并在 `applyI18n` 里重绘镜像层 |
+| 47 | 发送框里 `0x` 前缀与合法字节同色，`.send-hex-prefix` 无视觉作用 | 待处理 | v0.7.5.1 记录。`style.css` 里 `.send-hex-prefix` 与 `.send-hex-ok` 都用 `var(--dc-hexTx)`，实测同为 `rgb(217,119,6)`，这个类等于没有区分作用。接收区也是同一套处理（`formatHex` 产出整串由外层统一着色），所以算一致而非缺陷——但若本意是要区分前缀，就是漏配了颜色 |
+| 48 | 发送框 hex 分词：`0x` 紧贴字节串末尾时整段被判红 | 待处理 | v0.7.5.1 记录。`_renderSendMirrorHex` 的前缀识别条件写成 `i + 2 < text.length`（应为 `i + 1 < text.length`），字符串结尾的两字符序列因此不会被当作前缀；渲染阶段有个「token 恰好等于 `0x` 就当前缀」的兜底把多数情况盖住了，但 `AA0x` 这种紧贴写法仍整段标红——而 `_normalizeHexInput` 会把 `0x` 剥掉、实际能发出去（假红灯）。仅显示问题，不影响发送 |
+| 49 | `fakeDaemonThatRejectsRegister` 的「端点被占用则跳过」守卫在 Windows 上失效 | 待处理 | v0.7.5.1 记录（写发送框回归时撞到）。该守卫靠 `pipe.Listen(pipe.Addr)` 返回错误判断「已有真守护进程」，但 `pipe.createPipeInstance` 用的是 `pipeUnlimitedInstances`，**同名管道允许第二个实例**，于是真守护进程在跑时守卫不触发，测试不是跳过而是**误报失败**（客户端可能连到真守护进程上并握手成功，于是 `err == nil` 触发 `t.Fatal`）。实测有守护进程时 `TestHandshakeSurfacesDaemonReason` / `TestHandshakeReasonDoesNotClaimRejection` 失败，杀掉后三个用例 0.5s 全过。建议改用独占探测（先试着 `Dial` 成功即视为占用）或直接探测 `serial-daemon` 进程 |
+| 50 | **目标端口无应答时 `probe` 必然撞上 10s IPC 超时**，用户看到 `request timeout: ports.probe` 而非「未检测到已知设备」 | 待处理 | v0.7.5.1 冒烟测试实测（**v0.7.5 起就有**，`daemon/probe.go` 本版未改动）。v0.7.5 给 `probeRead` 定的总预算是 `max(3×timeout, 1s)`，而默认 `probe.toml` 是 `timeout_ms=200` → 预算取 1s 下限；**端口静默时每次尝试都会跑满这 1s**（`Read` 返回 `(0,nil)` 不满足任何提前退出条件，一直空转到预算耗尽）。默认配置 3 规则 × 7 波特率 = 21 次尝试，而 `client.Call` 的 IPC 请求超时是**硬编码 10s**（`client/client.go:525`）——于是必然超时。实测同一根回环线上的静默端口：1 次尝试 **1.11s**、7 次 **7.48s**、默认 21 次 **10.18s → `{"error":"request timeout: ports.probe"}`**；不传端口时探全部端口更糟（本机 5 口 × 21 次 ≈ 105s，TODO #14 已记其慢，本条补上「必然超时」这一确定性后果）。影响面：`probe` 只在 CLI/MCP 暴露（GUI 无此功能，前端零引用），而外部测试报告正是用 `serial-cli probe COM5` 发现的多字节截断问题——设备一旦没应答/地址不对/CRC 写错，下一条报告大概率还是「probe 不行」。**可选修法**：① 给 `ProbePorts` 加总预算（如 8s）到点即返回已有结果（推荐，静默端口能正常给出「未检测到已知设备」）；② 给 `ports.probe` 单独放宽 IPC 超时（最简单，但会把调用方干等 21s）；③ 探测改异步 + 进度回报 |
+
+## v0.7.5.1 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 文本模式高亮与光标逐格错位（TODO #43） | 镜像层用 `·` 顶替了空格的宽度，比例字体下每空格错半格到一整格（宋体累计 +77px）。改为真实字符保留原宽度、标记绝对定位叠加。10 种字体实测漂移 0～0.64px |
+| Hex 预处理四条路径分叉（TODO #44） | 抽出 `_normalizeHexInput` 单一实现，发送／自动发送／回写环形缓冲／字节统计共用。`0xAA 0xBB`／`AA,BB`／`0xAA` 自动发送由失败变为正常发出，字节数由 4B 修正为 2B |
+| 1 位数字判绿却发不出去且无提示（TODO #45） | 新增发送框悬浮提示（悬停 + 发送被拦下两条触发），9 语言本地化，5 秒自动消失、不拦鼠标 |
+| 占位符写死中文（TODO #46） | 镜像层改走 `t('send.placeholder')` 并在切语言时重绘 |
+| 自动发送失败弹窗缺分隔符 | 9 种语言的 `serial.start_fail` 都没有尾随冒号，实测显示为 `Start failedinvalid hex: ...`；在代码里补 `': '` |
 
 ## v0.7.5 已完成
 
