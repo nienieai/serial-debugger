@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -253,27 +254,14 @@ func ProbePorts(ports []string, occupiedPorts map[string]bool, cfg *ProbeConfig,
 				}
 
 				p.SetReadTimeout(timeout)
-				// 已知脆弱点：这里只 Read 一次。
-				//
-				// go.bug.st/serial 的 Read 契约是「阻塞到至少一个字节到达」，
-				// 因此一次 Read 可能只拿到响应的头一两个字节（实测在
-				// CH343 交叉互连上只拿到响应的第 1 个字节 `04`），后续字节还在
-				// 路上。此时 min_response_len 与 matchProbeResponse 都会落空，
-				// 设备明明应答了却报「未检测到已知设备」。Modbus 这类多字节响应
-				// 尤其容易踩到；短响应（1–2 字节）的规则不受影响。
-				//
-				// 待办：改成在超时预算内循环读并累积（注意本库 Read 超时返回
-				// (0, nil) 而非错误，且不能靠 time.Now() 与库内部计时比较——
-				// 试过两版循环都会挂住，必须先在真实设备上验证再改）。
-				buf := make([]byte, 256)
-				n, _ := p.Read(buf)
+				resp := probeRead(p, timeout)
 
-				if n < cr.rule.MinResponseLen {
+				if len(resp) < cr.rule.MinResponseLen {
 					continue
 				}
 
-				respHex := strings.ToUpper(hex.EncodeToString(buf[:n]))
-				if matchProbeResponse(respHex, string(buf[:n]), &cr.rule, cr.matchRE) {
+				respHex := strings.ToUpper(hex.EncodeToString(resp))
+				if matchProbeResponse(respHex, string(resp), &cr.rule, cr.matchRE) {
 					results = append(results, ProbeResult{
 						Port:        portName,
 						Baud:        baud,
@@ -290,6 +278,53 @@ func ProbePorts(ports []string, occupiedPorts map[string]bool, cfg *ProbeConfig,
 	}
 
 	return results
+}
+
+// probeRead 在一次探测里把响应读完整。
+//
+// 为什么必须循环而不是单次 Read：Windows 下 go.bug.st/serial 的 Read 一有字节
+// 就返回（其实现里是 `if readed > 0 { return }`），所以一次 Read 常常只拿到
+// 响应的头一两个字节，后面的还在路上。此前 ProbePorts 只 Read 一次，导致：
+//   - 多字节响应被截断，min_response_len 与匹配双双落空——设备明明应答了却
+//     报「未检测到已知设备」
+//   - modbus_crc 类规则对多字节响应**一律失效**（校验 CRC 需要完整帧）
+//
+// 终止条件写成显式的，不依赖 SetReadTimeout 在库内的具体行为：该库为 CH340
+// 打过补丁（其 SetReadTimeout 注释写明「最高位被置位的值会让 CH340 驱动表现得
+// 像超时 0，最坏情况变成自旋」），而本工具的目标设备大量使用 CH340/CH343。
+//   - 尚未收到任何数据：只要没超总预算就继续等（设备可能晚应答）
+//   - 已收到数据但本轮读空：认为这一帧已收完，立即结束
+//
+// 总预算取 max(3×timeout, 1s)，保证「设备无应答」时不会久留。
+// 参数 r 用接口而不是具体类型，便于用管道冒充串口做单元测试。
+func probeRead(r io.Reader, timeout time.Duration) []byte {
+	var resp []byte
+	buf := make([]byte, 256)
+
+	budget := 3 * timeout
+	if budget < time.Second {
+		budget = time.Second
+	}
+	deadline := time.Now().Add(budget)
+
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 {
+			resp = append(resp, buf[:n]...)
+			if len(resp) >= len(buf) {
+				break
+			}
+			continue
+		}
+		if rerr != nil {
+			break
+		}
+		// n == 0 且无错：本轮读空。已收到数据即认为帧结束。
+		if len(resp) > 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	return resp
 }
 
 // matchProbeResponse 根据规则匹配响应。
