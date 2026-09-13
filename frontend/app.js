@@ -39,6 +39,8 @@ const state = {
   iconThemes: [],
   language: 'zh',
   scrollLocked: false,
+  // 历史渲染窗口行数：null = 按视口推导（推荐）；数字 = 设置里手动指定
+  historyWindowRows: null,
   statsBase: {},
   autoCreateSession: false,
   autoSaveHistory: true,
@@ -97,6 +99,7 @@ function saveSettings() {
       iconThemeId: state.iconThemeId,
       language: state.language,
       autoCreateSession: state.autoCreateSession,
+      historyWindowRows: state.historyWindowRows,
       displayColors: JSON.stringify(state.displayColors || _defaultDisplayColors()),
     };
     window.go.main.App.SaveAppSettings(s).catch(() => {});
@@ -184,6 +187,12 @@ async function loadSettings() {
       if (typeof s.displayFontSize === 'number') state.displayFontSize = s.displayFontSize;
       if (typeof s.tabSize === 'number') state.tabSize = s.tabSize;
       if (typeof s.eolSequence === 'string') state.eolSequence = s.eolSequence;
+      // 历史渲染窗口：null/缺失 = 按视口推导
+      if (typeof s.historyWindowRows === 'number' && s.historyWindowRows > 0) {
+        state.historyWindowRows = s.historyWindowRows;
+      } else if (s.historyWindowRows === null) {
+        state.historyWindowRows = null;
+      }
       _applyDisplayStyle();
       if (_statusBar) _statusBar.updateEol();
       // Display color overrides
@@ -2998,11 +3007,8 @@ function bindSendScroll(scrollArea) {
 function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
   updateScrollLockBtns();
-  // If unlocking, scroll to latest data
-  if (!state.scrollLocked) {
-    const display = pageEl('displayContent');
-    if (display) display.scrollTop = display.scrollHeight;
-  }
+  // 冻结/解冻与未读占位块由历史层负责（锁定时视图冻结，但滚动条仍随未读增长）
+  if (typeof onScrollLockChanged === 'function') onScrollLockChanged();
 }
 
 function updateScrollLockBtns() {

@@ -272,6 +272,27 @@ function buildSettingsPage() {
 	hexEscFmtRow.classList.toggle('is-hidden', state.hexEscapeMode !== 'show');
 	panelDisplay.appendChild(bText);
 
+	// 高级：历史渲染窗口行数
+	// 窗口是性能手段（DOM 只保留这么多行）；行数越多，往回翻越少触发加载，
+	// 但每批布局与内存占用也随之上限上升。默认按视口推导。
+	var bAdv = _bubble(t('settings.bubble_advanced','高级'));
+	var winRow = _row(t('settings.history_window','历史窗口行数'),
+		_buildSelect(['auto','150','300','400','600'],
+			[t('settings.history_window_auto','自动（按视口）'),'150','300','400','600'],
+			state.historyWindowRows ? String(state.historyWindowRows) : 'auto',
+			function(v) {
+				state.historyWindowRows = (v === 'auto') ? null : parseInt(v, 10);
+				saveSettings();
+				var tab = getActiveTab();
+				if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
+					renderHistoryLines(state.historyCache[tab.sessionId]);
+				}
+			})
+	);
+	winRow.title = t('settings.history_window_hint','窗口越大，往回翻越少需要加载；布局开销与内存上限也随之上升。默认按视口高度推导。');
+	bAdv.appendChild(winRow);
+	panelDisplay.appendChild(bAdv);
+
 	// Display color overrides — new layout: [name] [bg-color:dark|light] [fg-color:dark|light]
 	var bColor = _bubble(t('settings.bubble_colors_display','数据高亮'), _buildColorResetBtn());
 	var colorGroups = [

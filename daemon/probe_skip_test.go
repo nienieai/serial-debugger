@@ -190,8 +190,48 @@ func TestProbeReadQuietPortIsNotAnError(t *testing.T) {
 	if len(resp) != 0 {
 		t.Errorf("静默端口不应有响应，实际 %q", resp)
 	}
-	// 预算取 max(3×timeout, 1s)
+	// 预算取 max(3×timeout, 300ms)
 	if elapsed > 3*time.Second {
 		t.Errorf("静默端口应在预算内返回，实际耗时 %v", elapsed)
+	}
+}
+
+// 静默端口的单次成本必须由 timeout_ms 决定，不得被隐藏下限抬高。
+//
+// 这里专门盯住那个曾经存在的 1s 下限：timeout=50ms 时预算应是 150ms，
+// 旧实现会跑满 1s。这个下限直接决定了默认 baud_rates 里靠后的档位能否被覆盖。
+func TestProbeReadSilentCostFollowsTimeout(t *testing.T) {
+	start := time.Now()
+	if _, err := probeRead(quietReader{}, 50*time.Millisecond); err != nil {
+		t.Fatalf("读空不是错误，实际: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("太快，预算没生效（应约 150ms）：%v", elapsed)
+	}
+	if elapsed > 600*time.Millisecond {
+		t.Errorf("被隐藏下限抬高了（timeout=50ms 应约 150ms，不该接近 1s）：%v", elapsed)
+	}
+}
+
+// 默认预算必须覆盖**随包配置**的全部档位，否则靠后的波特率会被静默跳过
+// （这正是 230400/460800/921600 曾经永远轮不到的原因）。
+// 谁往 probe.toml 里加波特率或规则而没同步调预算，这条就会报红。
+func TestDefaultBudgetCoversShippedBaudList(t *testing.T) {
+	cfg, err := LoadProbeConfig("") // 空路径 → 内置规则，即随包的 config/probe.toml
+	if err != nil {
+		t.Fatalf("加载内置探测配置失败: %v", err)
+	}
+	per := 3 * time.Duration(cfg.TimeoutMs) * time.Millisecond
+	if per < 300*time.Millisecond {
+		per = 300 * time.Millisecond
+	}
+	total := time.Duration(len(cfg.BaudRates)*len(cfg.Rules)) * per
+	t.Logf("随包配置：%d 档 × %d 规则 × %v = %v，默认预算 %v",
+		len(cfg.BaudRates), len(cfg.Rules), per, total, defaultProbeBudget)
+	if total > defaultProbeBudget {
+		t.Fatalf("默认预算 %v 覆盖不了随包配置（需 %v）：靠后的波特率会被静默跳过",
+			defaultProbeBudget, total)
 	}
 }

@@ -80,7 +80,10 @@ type ProbeOutcome struct {
 // 的前 4 档（115200/9600/19200/38400）——实践中最常见的几档；再往上必然
 // 要等更久，而等更久换来的收益远小于「立刻给结论并说清没试哪些」。
 // 调用方可用 budgetMs 覆盖。
-const defaultProbeBudget = 12 * time.Second
+// 默认预算取值：设备不应答时每次尝试花 max(3×timeout_ms, 300ms)。
+// 默认 timeout_ms=200 → 每次 600ms → 每档（3 条规则）1.8s → 全部 7 档约 12.6s
+// 加上开关串口的开销，15s 能覆盖默认 baud_rates 的全部档位。
+const defaultProbeBudget = 15 * time.Second
 
 // probeMu 保证同一时刻只有一次探测在跑。并发的第二个探测原先会因端口被占
 // 而静默返回空结果，现在直接说明「另一个探测正在进行」，不再伪装成「没有设备」。
@@ -451,7 +454,17 @@ func ProbePorts(ports []string, occupiedPorts map[string]bool, cfg *ProbeConfig,
 //   - 尚未收到任何数据：只要没超总预算就继续等（设备可能晚应答）
 //   - 已收到数据但本轮读空：认为这一帧已收完，立即结束
 //
-// 总预算取 max(3×timeout, 1s)，保证「设备无应答」时不会久留。
+// 总预算取 max(3×timeout, 300ms)。
+//
+// 这个预算的实际含义只有一个：**最多等多久才收到第一个字节**。
+// 因为循环里 `len(resp) > 0` 排在 `After(deadline)` 之前——一旦收到过任何字节，
+// 下一个空读就结束，跟预算多大无关；帧的收尾由 SetReadTimeout 给的读窗口决定。
+//
+// 所以「预算」完全由沉默端口承担成本。此前这里写的是 max(3×timeout, 1s)，
+// 那个 1s 下限在默认 timeout_ms=200 下把每次尝试从 600ms 抬到 1000ms：
+// 每档 3s、7 档 21s，超过当时的 12s 总预算，导致默认列表里后 3 档
+// （含 230400/460800/921600）**永远轮不到**。下限降到 300ms 只是防呆
+// （防止有人把 timeout_ms 填成个位数），默认配置下不再生效。
 // 参数 r 用接口而不是具体类型，便于用管道冒充串口做单元测试。
 //
 // 返回读取过程中遇到的**第一个真实错误**（不含「读空」，静默端口就是读空）。
@@ -463,8 +476,8 @@ func probeRead(r io.Reader, timeout time.Duration) ([]byte, error) {
 	buf := make([]byte, 256)
 
 	budget := 3 * timeout
-	if budget < time.Second {
-		budget = time.Second
+	if budget < 300*time.Millisecond {
+		budget = 300 * time.Millisecond
 	}
 	deadline := time.Now().Add(budget)
 

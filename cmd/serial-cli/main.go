@@ -948,13 +948,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			fmt.Println("未检测到已知设备")
 			break
 		}
-		printJSON(map[string]any{
-			"results":         outcome.Results,
-			"skipped":         outcome.Skipped,
-			"attempts":        outcome.Attempts,
-			"elapsedMs":       outcome.ElapsedMs,
-			"budgetExhausted": outcome.BudgetExhausted,
-		})
+		printJSON(probeOutcomeJSON(outcome))
 		if len(outcome.Results) == 0 {
 			fmt.Fprintln(os.Stderr, "注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
 		}
@@ -1194,8 +1188,26 @@ func exitOnErr(err error) {
 	}
 }
 
-func printHelp() {
-	fmt.Print(`用法:
+// probeOutcomeJSON 是一次探测结果对外的 JSON 形状。
+//
+// 抽成独立函数是为了能在测试里把字段集合锁住：`操作说明.md` 明确承诺了 `busy`
+// （并建议用 `grep busy` 自检），而 CLI 曾经漏掉这个键 —— 守护进程返回了它，
+// 序列化时被丢在门外，于是文档写的自检方法永远匹配不到。外部测试报告点名过这一条。
+func probeOutcomeJSON(o *client.ProbeOutcome) map[string]any {
+	if o == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"results":         o.Results,
+		"skipped":         o.Skipped,
+		"attempts":        o.Attempts,
+		"elapsedMs":       o.ElapsedMs,
+		"budgetExhausted": o.BudgetExhausted,
+		"busy":            o.Busy,
+	}
+}
+
+func printHelp() {	fmt.Print(`用法:
   serial-cli <cmd>              命令行客户端
 
 守护进程:

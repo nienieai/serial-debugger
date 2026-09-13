@@ -583,6 +583,15 @@ button:disabled:active { transform: none; box-shadow: none; }
   flex: 1; overflow-y: auto; padding: var(--reserve-top) 12px 8px 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   font-size: 15px; line-height: 1.6; background: var(--input-bg); min-height: 0;
+  /* 我们自己做滚动锚定（插入上方内容时手动补偿 scrollTop）。
+     浏览器的 overflow-anchor 会与手动补偿叠加成抖动，必须关掉。 */
+  overflow-anchor: none;
+}
+/* 未读占位块：用户往回翻时，视口下方的数据用它撑开高度，
+   视图不动但滚动条继续变化，DOM 仍是 O(窗口)。 */
+.hist-spacer {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; pointer-events: none; opacity: 0.7;
 }
 .display-content .placeholder { color: var(--placeholder); font-style: italic; padding: 8px 0; }
 .data-row { margin-bottom: 2px; }
