@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -191,10 +193,67 @@ func cmdStart() {
 	}
 }
 
+// cmdLogs 打印守护进程日志的末尾若干行。
+//
+// 守护进程日志固定写在 <exe>/logs/daemon.log（daemon/logfile.go）。发布包里
+// serial-daemon.exe 与 serial-cli.exe 同目录，所以这里用自身 exe 目录推导即可，
+// 无需连守护进程——守护进程起不来时才是这个命令最有用的时刻。
+func cmdLogs(args []string) {
+	n := 50
+	if len(args) >= 2 {
+		if v, err := strconv.Atoi(args[1]); err == nil && v > 0 {
+			n = v
+		}
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "无法确定程序目录:", err)
+		os.Exit(1)
+	}
+	path := filepath.Join(filepath.Dir(exe), "logs", "daemon.log")
+
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "无法读取守护进程日志 %s: %v\n", path, err)
+		fmt.Fprintln(os.Stderr, "提示：守护进程启动后才会创建该文件。")
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	// 只保留最后 n 行，避免一次性把大文件读进内存。
+	lines := make([]string, 0, n)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if len(lines) == n {
+			copy(lines, lines[1:])
+			lines = lines[:n-1]
+		}
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "读取日志失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("守护进程日志: %s\n", path)
+	if len(lines) == 0 {
+		fmt.Println("（暂无内容）")
+		return
+	}
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+}
+
 func runCommandInteractive(dc *client.DaemonClient, args []string) {
 	switch args[0] {
 	case "start":
 		cmdStart()
+		return
+	case "logs":
+		cmdLogs(args)
 		return
 	case "status":
 		result, err := client.CallOnce(contract.Status, nil, "cli")
@@ -214,6 +273,11 @@ func runCommand(args []string) {
 	case "start":
 		cmdStart()
 		return
+	case "logs":
+		// 不连守护进程：守护进程起不来时正是最需要看日志的时候，
+		// 若先建连接就会以「连不上」失败，永远读不到原因（TODO #30）。
+		cmdLogs(args)
+		return
 	default:
 		dc, err := client.NewDaemonClient("cli")
 		if err != nil {
@@ -228,10 +292,70 @@ func runCommand(args []string) {
 	}
 }
 
+// queueEntry 是 sendqueue 接受的条目结构，字段与守护进程的 MultistrEntry 一致。
+//
+// 这里刻意**在 CLI 侧**做严格校验：此前把文件解析成 []map[string]any 再走 IPC，
+// 未知字段会连丢两次（CLI 的 map 忽略、守护进程的 struct 再忽略），于是
+// {"data":"ONE"} 这种写错字段名的输入会返回 success:true 但装进去的是**空内容**，
+// 使用者直到发现发不出东西才知道写错了（TODO 已记录）。
+//
+// 额外容忍 "data" 作为 "content" 的别名：这是最常被写错的字段名。
+type queueEntry struct {
+	Enabled bool   `json:"enabled"`
+	Hex     bool   `json:"hex"`
+	Content string `json:"content"`
+	Delay   int    `json:"delay"`
+	Note    string `json:"note"`
+	// 仅为给出更友好的报错而接受，随后回填到 Content。
+	Data string `json:"data"`
+}
+
+// parseQueueEntries 严格解析 sendqueue 的 JSON 文件。
+//
+// 三条硬规则（对应已知的三个静默陷阱）：
+//  1. 未知字段直接报错——不能静默丢掉使用者真正想传的字段
+//  2. 剔除 UTF-8 BOM——PowerShell 5.1 的 Set-Content -Encoding UTF8 会写 BOM，
+//     而 json 解析器会报 `invalid character 'ï'`，属常见跨工具互操作问题
+//  3. 拒绝内容为空的条目——空条目发不出任何字节，却一路 success
+func parseQueueEntries(raw []byte) ([]queueEntry, error) {
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	var entries []queueEntry
+	if err := dec.Decode(&entries); err != nil {
+		return nil, fmt.Errorf(
+			"解析发送队列 JSON 失败: %w\n"+
+				"接受的字段: content(必填) / hex / enabled / delay / note\n"+
+				"示例: [{\"content\":\"ONE\",\"hex\":false,\"enabled\":true}]", err)
+	}
+	// 顶层必须是数组；多余的尾随内容也要报错，避免「只解析了前半段」。
+	if dec.More() {
+		return nil, fmt.Errorf("发送队列 JSON 在数组之后还有多余内容")
+	}
+
+	for i := range entries {
+		if entries[i].Content == "" && entries[i].Data != "" {
+			entries[i].Content = entries[i].Data
+		}
+		if entries[i].Content == "" {
+			return nil, fmt.Errorf(
+				"第 %d 条的 content 为空。空条目发不出任何字节，"+
+					"请检查字段名是否写成了 data/text/value 等", i+1)
+		}
+	}
+	return entries, nil
+}
+
 func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bool) {
 	switch args[0] {
 	case "start":
 		cmdStart()
+		return
+
+	case "logs":
+		cmdLogs(args)
 		return
 
 	case "status":
@@ -691,9 +815,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			errExit(fileErr, interactive)
 			return
 		}
-		var entries []map[string]any
-		if err := json.Unmarshal(fileData, &entries); err != nil {
-			errExit(fmt.Errorf("invalid JSON: %w", err), interactive)
+		entries, err := parseQueueEntries(fileData)
+		if err != nil {
+			errExit(err, interactive)
 			return
 		}
 		// Write via IPC
@@ -1111,6 +1235,9 @@ func printHelp() {
   monitor [timeout]                   实时监听事件（可选超时秒数）
   threads                            线程/会话详情
   goroutines                         Goroutine 调用栈
+  logs [n]                           打印守护进程日志末尾 n 行 (默认 50)
+                                     日志文件: <exe>/logs/daemon.log
+                                     无需守护进程在运行即可查看
 
 其他:
   help                               显示帮助

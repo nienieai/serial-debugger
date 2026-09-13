@@ -198,8 +198,8 @@ function createStatusStats(container) {
 		if (!maxVal || maxVal <= 0) return { text: text + ' (0%)', cls: '' };
 		var pct = Math.round(val / maxVal * 100);
 		var cls = '';
-		if (pct >= 90) cls = 'rate-high';
-		else if (pct >= 80) cls = 'rate-warn';
+		if (pct >= 90) cls = 'rate-red';
+		else if (pct >= 80) cls = 'rate-orange';
 		return { text: text + ' (' + pct + '%)', cls: cls };
 	}
 

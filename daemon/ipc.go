@@ -529,7 +529,12 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 	}
 
 	// Send confirmation on daemon pipe
-	protocol.WriteMessage(daemonConn, protocol.Response{ID: req.ID, Result: map[string]any{"registered": true, "clientId": p.ClientId}})
+	if err := protocol.WriteMessage(daemonConn, protocol.Response{ID: req.ID, Result: map[string]any{"registered": true, "clientId": p.ClientId}}); err != nil {
+		// 写确认失败意味着客户端等不到「已注册」回执，只会看到握手失败。
+		// 这条日志是判定「客户端报的握手失败到底是谁的锅」的关键分界：
+		// 有它 → 守护进程侧写失败；没有它 → 写成功了，问题在客户端读取侧。
+		logOp("错误", "%s:%s 写注册确认失败: %v", sourceLabel(sess.source), p.ClientId, err)
+	}
 
 	// Push initial state after channel established
 	s.pushPortListTo(sess)
@@ -540,6 +545,18 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 	for {
 		data, err := protocol.ReadMessage(reader)
 		if err != nil {
+			// 注册成功却连第一条请求都没来就断开——这是一个必须留痕的异常：
+			// 客户端此时多半报「回连 resp 管道失败」，而本进程其实已经把两条
+			// 回连管道都建好了（否则到不了 addSession 的「已注册」那行）。
+			// 此前这里静默 removeSession，日志里只剩「已注册 → 已断开」这个
+			// 指纹，没有任何原因，定位只能靠猜。
+			if sess.reqCount == 0 {
+				// 注册已成功（addSession 位于两条回连管道都成功之后）却连第一条
+				// 请求都没来——这是判定注册握手异常的关键指纹：客户端此时报的
+				// 是「注册未完成」，而本进程其实已经接受了注册。
+				logOp("错误", "%s:%s 注册后未能开始通信即断开 (PID: %d): %v",
+					sourceLabel(sess.source), sess.clientId, sess.pid, err)
+			}
 			s.removeSession(p.ClientId)
 			return
 		}
@@ -1497,8 +1514,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if proc == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		closeHistoryFile(proc.historyFile)
-		proc.historyFile = nil
+		proc.detachHistoryFile()
 		logOp("操作", "%s 进程 #%s 已分离历史文件", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 

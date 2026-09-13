@@ -110,11 +110,18 @@ type Process struct {
 	config SerialConfig
 	port   serial.Port
 
+	// historyRing / historyFile 由 ringBufMu / histFileMu 保护。
+	//
+	// 生命周期注意：pm.Close() 在释放 pm.mu 之后才调用 closeHistory()，
+	// 因此「已从 pm.processes 摘除」的进程，其指针仍可能被并发请求持有。
+	// 所有使用方必须在**各自持锁之后重新判空**，否则会踩到 unmap 之后的
+	// 内存或已关闭的 fd——dispatch 路径没有 recover，后果是整个守护进程退出。
 	historyRing     *ringbuf.RingBuffer // shared memory ring buffer
 	historyName     string              // shared memory name for clients
-	historyFile     *os.File            // persistent history log file
-	historyFileName string              // current disk file name (for client paging)
-	ringBufMu       sync.Mutex          // serializes writes to ring buffer
+	historyFile     *os.File            // persistent history log file（histFileMu 保护）
+	historyFileName string              // current disk file name（histFileMu 保护）
+	ringBufMu       sync.Mutex          // 串行化 historyRing 的读写与关闭
+	histFileMu      sync.RWMutex        // 保护 historyFile / historyFileName
 	stopCh          chan struct{}
 	stopOnce        sync.Once // ensures stopIO runs only once
 
@@ -200,12 +207,21 @@ func (p *Process) recordHistory(hexData, direction string) {
 	}
 	p.ringBufMu.Unlock()
 
+	// 文件指针与 closeHistory/HistoryDetach 竞争；持读锁期间只读取指针，
+	// 真正的写盘放在锁外，避免把串口读循环卡在磁盘 I/O 上。
+	p.histFileMu.RLock()
+	f := p.historyFile
+	p.histFileMu.RUnlock()
+
 	// Lazy-create history file on first real data (not system events).
-	if p.historyFile == nil && direction != "system" && isHistoryEnabled() {
+	if f == nil && direction != "system" && isHistoryEnabled() {
 		p.newHistoryFile()
+		p.histFileMu.RLock()
+		f = p.historyFile
+		p.histFileMu.RUnlock()
 	}
-	if p.historyFile != nil {
-		appendHistoryPacket(p.historyFile, pkt)
+	if f != nil {
+		appendHistoryPacket(f, pkt)
 	}
 }
 
@@ -261,7 +277,15 @@ func (p *Process) recordSystemEvent(key string, args ...any) {
 
 // writePortSilent writes raw bytes to the serial port without broadcasting
 // events or recording history. Used by auto-send.
+//
+// 必须判空 p.port：空闲进程（尚未连接串口）的 port 是 nil 接口。生产路径上
+// AutoSendStart 有 status=="connected" 守卫，但自动发送跑到一半进程被断开时，
+// 循环仍会继续 tick，此时解引用 nil 会**直接打崩整个守护进程**（dispatch 路径
+// 无 recover，且它是机器级单例）。返回错误让上层按普通发送失败处理即可。
 func (p *Process) writePortSilent(data []byte) error {
+	if p.port == nil {
+		return fmt.Errorf("串口未连接")
+	}
 	p.portWriteMu.Lock()
 	defer p.portWriteMu.Unlock()
 	_, err := p.port.Write(data)
@@ -288,11 +312,30 @@ func (p *Process) startAutoSend(intervalMs int, mode string, loop bool) error {
 	p.autoSendIntervalMs = intervalMs
 	p.autoSendStopCh = make(chan struct{})
 	p.autoSendOnce = sync.Once{}
+	// 计数器归零：此前 start 不复位，sendCount/errorCount 会跨轮累加，
+	// 于是「这一轮到底发了多少」读不出来——实测上一轮 queue 留下的
+	// sendCount=26 会原样出现在下一轮 single 的 status 里。
+	p.autoSendSendCount.Store(0)
+	p.autoSendErrorCount.Store(0)
+	p.autoSendLastSend = time.Time{}
 
 	// For queue mode, load entries from sendq into cache before starting
 	if mode == "queue" {
+		// 统一锁序：先 sendRingMu 再 multistrMu（见 MultistrReload）。
+		p.sendRingMu.Lock()
+		entries := ReadAllEntries(p.sendRing)
+		p.sendRingMu.Unlock()
+
+		// 空队列直接拒绝：此前返回 success 后空转，一个字节不发、零告警，
+		// 脚本化调用完全察觉不到（现象与 single 模式「不发送」一致，
+		// 极易被误判成发送路径坏掉）。
+		if len(entries) == 0 {
+			p.autoSendEnabled = false
+			return fmt.Errorf("发送队列为空，无法按 queue 模式启动自动发送：请先用 sendqueue 装载条目，或改用 single 模式")
+		}
+
 		p.multistrMu.Lock()
-		p.multistrCache = ReadAllEntries(p.sendRing)
+		p.multistrCache = entries
 		p.multistrDirty = false
 		if loop {
 			p.multistrState = "looping"
@@ -345,9 +388,11 @@ func (p *Process) getAutoSendStatus() AutoSendStatus {
 	}
 
 	queueCount := int32(0)
+	p.sendRingMu.Lock()
 	if p.sendRing != nil {
 		queueCount = int32(p.sendRing.UsedSpace())
 	}
+	p.sendRingMu.Unlock()
 
 	p.multistrMu.RLock()
 	entriesCount := len(p.multistrCache)
@@ -496,12 +541,23 @@ func (p *Process) autoSendLoop() {
 // loop=false: sends all enabled entries once then stops.
 func (p *Process) queueSendLoop() {
 	for {
-		// Refresh cache from sendq if dirty
-		p.multistrMu.Lock()
-		if p.multistrDirty {
-			p.multistrCache = ReadAllEntries(p.sendRing)
-			p.multistrDirty = false
+		// Refresh cache from sendq if dirty。
+		// 锁序固定为 sendRingMu → multistrMu，与 MultistrReload 一致，避免死锁。
+		p.multistrMu.RLock()
+		dirty := p.multistrDirty
+		p.multistrMu.RUnlock()
+		if dirty {
+			p.sendRingMu.Lock()
+			entries := ReadAllEntries(p.sendRing)
+			p.sendRingMu.Unlock()
+			p.multistrMu.Lock()
+			if p.multistrDirty {
+				p.multistrCache = entries
+				p.multistrDirty = false
+			}
+			p.multistrMu.Unlock()
 		}
+		p.multistrMu.Lock()
 		state := p.multistrState
 		p.multistrMu.Unlock()
 
@@ -1087,11 +1143,25 @@ func (p *Process) stopIO() {
 	})
 }
 
-// closeSendRing closes the send queue shared memory ring buffer.
-func (p *Process) closeSendRing() {
+// resetSendRing 清空发送队列；持锁后重新判空以避免踩到已 unmap 的环。
+func (p *Process) resetSendRing() {
+	p.sendRingMu.Lock()
 	if p.sendRing != nil {
-		p.sendRing.Close()
-		p.sendRing = nil
+		p.sendRing.Reset()
+	}
+	p.sendRingMu.Unlock()
+}
+
+// closeSendRing closes the send queue shared memory ring buffer.
+//
+// 与 closeHistory 同理：置空必须在 sendRingMu 下完成，使用方持锁后重新判空。
+func (p *Process) closeSendRing() {
+	p.sendRingMu.Lock()
+	ring := p.sendRing
+	p.sendRing = nil
+	p.sendRingMu.Unlock()
+	if ring != nil {
+		ring.Close()
 	}
 }
 
@@ -1104,7 +1174,9 @@ func (p *Process) openHistoryFile() {
 		logOp("错误", "打开历史文件失败 (进程 #%s): %v", p.id, err)
 		return
 	}
+	p.histFileMu.Lock()
 	p.historyFile = f
+	p.histFileMu.Unlock()
 }
 
 func (p *Process) attachHistoryFile(filename string) error {
@@ -1112,13 +1184,26 @@ func (p *Process) attachHistoryFile(filename string) error {
 	if err != nil {
 		return err
 	}
+	p.histFileMu.Lock()
 	p.historyFile = f
 	p.historyFileName = filepath.Base(path)
-	n, err := loadHistoryIntoRing(p.historyRing, path)
+	p.histFileMu.Unlock()
+	// loadHistoryIntoRing 直接向环内写，必须与 readLoop 的 recordHistory
+	// 串行化；同时也避免拿到已 unmap 的环。
+	p.ringBufMu.Lock()
+	n := 0
+	if p.historyRing == nil {
+		err = fmt.Errorf("历史环形缓冲区已关闭")
+	} else {
+		n, err = loadHistoryIntoRing(p.historyRing, path)
+	}
+	p.ringBufMu.Unlock()
 	if err != nil {
+		p.histFileMu.Lock()
 		p.historyFile.Close()
 		p.historyFile = nil
 		p.historyFileName = ""
+		p.histFileMu.Unlock()
 		return fmt.Errorf("加载历史文件失败: %w", err)
 	}
 	if n > 0 {
@@ -1132,19 +1217,36 @@ func (p *Process) newHistoryFile() error {
 	if err != nil {
 		return err
 	}
+	p.histFileMu.Lock()
 	p.historyFile = f
 	p.historyFileName = filepath.Base(path)
+	p.histFileMu.Unlock()
 	return nil
 }
 
-// closeHistory closes the shared memory ring buffer and the history file.
-func (p *Process) closeHistory() {
-	if p.historyRing != nil {
-		p.historyRing.Close()
-		p.historyRing = nil
-	}
-	closeHistoryFile(p.historyFile)
+// detachHistoryFile 关闭当前历史文件但不触碰环形缓冲区。
+func (p *Process) detachHistoryFile() {
+	p.histFileMu.Lock()
+	f := p.historyFile
 	p.historyFile = nil
+	p.historyFileName = ""
+	p.histFileMu.Unlock()
+	closeHistoryFile(f)
+}
+
+// closeHistory closes the shared memory ring buffer and the history file.
+//
+// 必须在 ringBufMu 下置空 historyRing：并发读取方（GetHistory/ClearHistory）
+// 在取到该锁之后要重新判空，否则会在已 unmap 的映射上取快照。
+func (p *Process) closeHistory() {
+	p.ringBufMu.Lock()
+	ring := p.historyRing
+	p.historyRing = nil
+	p.ringBufMu.Unlock()
+	if ring != nil {
+		ring.Close()
+	}
+	p.detachHistoryFile()
 }
 
 // ---- process manager ----
@@ -1467,7 +1569,9 @@ func (pm *ProcessManager) Destroy(id string) error {
 	// Save multistr entries before destroying (use cache if available)
 	entries := proc.multistrCache
 	if len(entries) == 0 {
+		proc.sendRingMu.Lock()
 		entries = ReadAllEntries(proc.sendRing)
+		proc.sendRingMu.Unlock()
 	}
 	if len(entries) > 0 {
 		SaveEntriesToFile(id, entries)
@@ -1574,9 +1678,7 @@ func (pm *ProcessManager) Connect(id string, port string, cfg SerialConfig) erro
 	pm.mu.Unlock()
 
 	// Reset send queue to clear any stale data
-	if proc.sendRing != nil {
-		proc.sendRing.Reset()
-	}
+	proc.resetSendRing()
 
 	proc.recordSystemEvent("sys.port_connected", port, cfg.Baud)
 	proc.startIO(pm.broadcast, pm.pushEvent)
@@ -1632,9 +1734,7 @@ func (pm *ProcessManager) SwitchPort(id string, port string, cfg SerialConfig) e
 			pm.mu.Lock()
 			pm.portMap[oldPort] = id
 			pm.mu.Unlock()
-			if proc.sendRing != nil {
-				proc.sendRing.Reset()
-			}
+			proc.resetSendRing()
 			proc.startIO(pm.broadcast, pm.pushEvent)
 			if pm.onProcessChanged != nil {
 				pm.onProcessChanged()
@@ -1661,9 +1761,7 @@ func (pm *ProcessManager) SwitchPort(id string, port string, cfg SerialConfig) e
 	pm.portMap[port] = id
 	pm.mu.Unlock()
 
-	if proc.sendRing != nil {
-		proc.sendRing.Reset()
-	}
+	proc.resetSendRing()
 
 	proc.startIO(pm.broadcast, pm.pushEvent)
 	if pm.onProcessChanged != nil {
@@ -1774,9 +1872,7 @@ func (pm *ProcessManager) ConnectForward(id string, cfgA, cfgB SerialConfig) err
 	pm.portMap[cfgB.Port] = id
 	pm.mu.Unlock()
 
-	if proc.sendRing != nil {
-		proc.sendRing.Reset()
-	}
+	proc.resetSendRing()
 
 	proc.broadcastFn = pm.broadcast
 	proc.pushEventFn = pm.pushEvent
@@ -2025,16 +2121,21 @@ func (pm *ProcessManager) GetHistory(id string) map[string]any {
 	if proc == nil {
 		return nil
 	}
-	if proc.historyRing == nil {
+
+	// 取锁之后重新判空：proc 指针可能在 pm.mu 释放后被并发 Close 摘除，
+	// closeHistory 已把环 unmap 掉（见 Process.closeHistory 的说明）。
+	proc.ringBufMu.Lock()
+	ring := proc.historyRing
+	if ring == nil {
+		proc.ringBufMu.Unlock()
 		return nil
 	}
-	proc.ringBufMu.Lock()
 
 	// Snapshot the ring buffer — non-destructive, tail/count unchanged.
-	packets := proc.historyRing.Snapshot()
+	packets := ring.Snapshot()
 
 	// Peek the oldest timestamp from the ring (without consuming it).
-	oldestMs := proc.historyRing.OldestTimestampMs()
+	oldestMs := ring.OldestTimestampMs()
 
 	proc.ringBufMu.Unlock()
 
@@ -2047,8 +2148,11 @@ func (pm *ProcessManager) GetHistory(id string) map[string]any {
 	if oldestMs > 0 {
 		result["oldestTs"] = time.UnixMilli(oldestMs).Format("15:04:05.000")
 	}
-	if proc.historyFileName != "" {
-		result["historyFile"] = proc.historyFileName
+	proc.histFileMu.RLock()
+	fileName := proc.historyFileName
+	proc.histFileMu.RUnlock()
+	if fileName != "" {
+		result["historyFile"] = fileName
 	}
 	return result
 }
@@ -2182,8 +2286,14 @@ func (pm *ProcessManager) SendTrigger(id string, raw bool) error {
 		return fmt.Errorf("process %s is not connected", id)
 	}
 
+	// 持锁后重新取环并判空：closeSendRing 可能已把 sendRing 置空并 unmap。
 	proc.sendRingMu.Lock()
-	data, ok := proc.sendRing.Read(65535)
+	ring := proc.sendRing
+	if ring == nil {
+		proc.sendRingMu.Unlock()
+		return fmt.Errorf("send queue is closed")
+	}
+	data, ok := ring.Read(65535)
 	proc.sendRingMu.Unlock()
 
 	if !ok {
@@ -2207,7 +2317,9 @@ func (pm *ProcessManager) SendTrigger(id string, raw bool) error {
 		return nil
 	default:
 		proc.sendRingMu.Lock()
-		proc.sendRing.Write(data)
+		if proc.sendRing != nil {
+			proc.sendRing.Write(data)
+		}
 		proc.sendRingMu.Unlock()
 		return fmt.Errorf("send buffer full")
 	}
@@ -2267,7 +2379,9 @@ func (pm *ProcessManager) MultistrSave(id string) error {
 	if len(cached) > 0 {
 		return SaveEntriesToFile(id, cached)
 	}
+	proc.sendRingMu.Lock()
 	entries := ReadAllEntries(proc.sendRing)
+	proc.sendRingMu.Unlock()
 	return SaveEntriesToFile(id, entries)
 }
 
@@ -2285,8 +2399,11 @@ func (pm *ProcessManager) MultistrLoad(id string) ([]MultistrEntry, error) {
 	if entries == nil {
 		return nil, nil
 	}
-	if err := WriteAllEntries(proc.sendRing, entries); err != nil {
-		return nil, err
+	proc.sendRingMu.Lock()
+	werr := WriteAllEntries(proc.sendRing, entries)
+	proc.sendRingMu.Unlock()
+	if werr != nil {
+		return nil, werr
 	}
 	return entries, nil
 }
@@ -2297,7 +2414,9 @@ func (pm *ProcessManager) MultistrReload(id string) ([]MultistrEntry, error) {
 	if proc == nil {
 		return nil, fmt.Errorf("process not found: %s", id)
 	}
+	proc.sendRingMu.Lock()
 	entries := ReadAllEntries(proc.sendRing)
+	proc.sendRingMu.Unlock()
 	proc.multistrMu.Lock()
 	proc.multistrCache = entries
 	proc.multistrDirty = false
@@ -2311,7 +2430,10 @@ func (pm *ProcessManager) MultistrReadEntries(id string) ([]MultistrEntry, error
 	if proc == nil {
 		return nil, fmt.Errorf("process not found: %s", id)
 	}
-	return ReadAllEntries(proc.sendRing), nil
+	proc.sendRingMu.Lock()
+	entries := ReadAllEntries(proc.sendRing)
+	proc.sendRingMu.Unlock()
+	return entries, nil
 }
 
 // MultistrWriteEntries writes entries to sendq and marks cache dirty.
@@ -2320,7 +2442,10 @@ func (pm *ProcessManager) MultistrWriteEntries(id string, entries []MultistrEntr
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", id)
 	}
-	if err := WriteAllEntries(proc.sendRing, entries); err != nil {
+	proc.sendRingMu.Lock()
+	err := WriteAllEntries(proc.sendRing, entries)
+	proc.sendRingMu.Unlock()
+	if err != nil {
 		return err
 	}
 	proc.multistrMu.Lock()
@@ -2335,6 +2460,7 @@ func (pm *ProcessManager) ClearHistory(id string) error {
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", id)
 	}
+	// 同 GetHistory：持锁后重新判空，避免 Reset 打在已 unmap 的环上。
 	proc.ringBufMu.Lock()
 	if proc.historyRing != nil {
 		proc.historyRing.Reset()
