@@ -19,8 +19,13 @@ import (
 // 用「能快速失败的最小参数」逐个调用：本测试只关心是否被实现，不关心业务结果，
 // 因此缺参数的调用返回什么错误都算通过。
 func TestEveryContractMethodIsDispatched(t *testing.T) {
-	srv := NewIpcServer(NewProcessManager())
+	pm := NewProcessManager()
+	srv := NewIpcServer(pm)
 	defer srv.Shutdown()
+	// process.create 会真的建出一个进程并映射 5MB 共享内存（名字里带本进程实例
+	// 令牌）。不收回的话，同一个测试二进制里**后面**任何再建进程的测试都会撞上
+	// 「共享内存已存在」而失败 —— 谁后跑谁中招。
+	defer pm.DestroyAll()
 
 	// skip 里是本测试不能或不应真正执行的方法。
 	skip := map[contract.Method]string{

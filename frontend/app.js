@@ -41,6 +41,9 @@ const state = {
   scrollLocked: false,
   // 历史渲染窗口行数：null = 按视口推导（推荐）；数字 = 设置里手动指定
   historyWindowRows: null,
+  // 往上翻到顶时自动回补更早的历史（缓存 → 守护进程环 → 磁盘提示）。
+  // 关掉后只摆一个「↑ 向上滚动加载更多」的提示，由用户点了才取。
+  autoRefillHistory: true,
   statsBase: {},
   autoCreateSession: false,
   autoSaveHistory: true,
@@ -100,6 +103,7 @@ function saveSettings() {
       language: state.language,
       autoCreateSession: state.autoCreateSession,
       historyWindowRows: state.historyWindowRows,
+      autoRefillHistory: state.autoRefillHistory,
       displayColors: JSON.stringify(state.displayColors || _defaultDisplayColors()),
     };
     window.go.main.App.SaveAppSettings(s).catch(() => {});
@@ -193,6 +197,7 @@ async function loadSettings() {
       } else if (s.historyWindowRows === null) {
         state.historyWindowRows = null;
       }
+      if (typeof s.autoRefillHistory === 'boolean') state.autoRefillHistory = s.autoRefillHistory;
       _applyDisplayStyle();
       if (_statusBar) _statusBar.updateEol();
       // Display color overrides

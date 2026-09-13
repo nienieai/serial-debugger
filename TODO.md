@@ -42,7 +42,7 @@
 | 9 | 进程数量无上限 | 已知限制 | 每个进程持有 5 MB 历史环 + 1 MB 发送队列。任何本机客户端都可通过 `process.create` 无限创建。正常使用（几个标签页）无影响；若出现失控客户端会耗尽内存 |
 | 10 | `history.attach` 不校验进程是否已连接 | 已缓解 | v0.7.4 把灌入环的那段（`loadHistoryIntoRing`）纳入 `ringBufMu`，不再与 `readLoop` 并发写同一个环，并先判空环。仍不校验进程是否已连接——该入口 GUI/CLI/MCP 均未暴露（`AttachHistoryFile` 绑定无人调用），仅 IPC 层可达 |
 | 11 | 共享环生命周期竞态：进程摘除后指针仍被并发持有 | 已修复 | v0.7.4 修复。`pm.Close()` 在释放 `pm.mu` 之后才调 `closeHistory()`，而 `Process` 指针是裸共享的（`Get` 取到指针即放锁），于是读取方可能在环被 `UnmapViewOfFile` 之后才碰它——`GetHistory`/`ClearHistory` 把快照/清零打在已撤销映射上，`recordHistory` 写已关闭的 fd。实测 `go test -race` 复现：`WARNING: DATA RACE` 紧接 `unexpected fault address ... [signal 0xc0000005]`。严重性在于 dispatch 路径无 `recover`，守护进程一崩即所有会话与串口一起断。修法：环的置空移入保护它的锁内（`ringBufMu` / `sendRingMu`），使用方持锁后重新判空；`historyFile` 指针改用 `histFileMu`；文件指针改动收敛到 `detachHistoryFile()`。`sendRing` 有同样窗口（表现为对 nil 调方法 panic），一并修掉。回归测试 `daemon/ringlife_test.go`，已做变异验证 |
-| 12 | 历史环写满 5 MB 后静默冻结 | 已知限制 | `Write` 返回 false 时该条不再入环（磁盘文件仍在追加）。表现为长时间高速采集后，重新打开标签页只能看到较早的历史。需点「清空历史」或依赖磁盘分页 |
+| 12 | 历史环写满 5 MB 后静默冻结 | 已修复 | v0.7.5.5 修复。`Write` 在环满时返回 `false`，而 `recordHistory` **忽略了这个返回值**——写满那一刻起，新数据既不进环也不被任何人发现（磁盘文件仍在追加）。按 115200 饱和（11.5 KB/s）算，5 MB 约 **7.6 分钟**写满，此后「往回翻」永远翻到同一段、`oldestTs` 永远停在那一刻，而界面上完全看不出来。现改用 `WriteEvict`：空间不足时挤掉最旧的包（真正的环形语义 = 保留**最新**的一段），单包超过整环容量时才记一次 `ringDrops`（随 `session.history` 返回）。回归 `TestWriteEvictKeepsNewest`、`TestWriteEvictWrapAroundIntegrity`、`TestHistoryRingDoesNotFreezeWhenFull` |
 | 13 | IPC 管道对本机任意进程开放，无鉴权 | 已知限制 | `source` 字段（`gui`/`cli`/`mcp`）由客户端自称且影响行为（自动观察进程、查看计数）。单用户桌面场景下可接受，但这是**设计决定**而非疏漏，多用户/多会话环境需重新评估 |
 | 14 | `ports.probe` 不传端口时探测全部端口 | 待处理 | 5 端口 × 7 波特率 × 3 规则，同步阻塞在 dispatch 中，单次可达数分钟。建议要么强制指定端口，要么移入独立 goroutine 并加上限 |
 | 15 | 前端三处功能失效 | 已修复 | v0.7.4 修复，三处均在浏览器中实测确认（`_audit/gui_test/verify_todo15.py`，并做变异验证）：①速率告警色永不出现——`statusbar.js` 产出 `.rate-high`/`.rate-warn`，而 CSS（`style.css:647-648`）只定义 `.rate-orange`/`.rate-red`，前者计算色为落回默认色；改为与 CSS 及 `app.js:3201-3202` 一致的类名 ②下拉框选中态高亮与 `scrollIntoView` 永不生效——`app.js:1161` 加的是 `' selected'`，而 CSS（`.cs-option.is-selected`）与 `app.js:1215` 查的是 `is-selected` ③多标签共用相同 DOM id（`tabpage.js:85` 每页都发 `id="displayContent"`），`i18n.js` 用 `document.getElementById` 只拿到第一个，切换语言时其余标签页的系统消息仍是旧语言；改为按 `.display-content .sys-msg[data-sys-raw]` 遍历全部页面 |
@@ -89,6 +89,28 @@
 | 54 | `config/probe.toml` 顶部注释与实际预算公式脱节 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §4.1）。v0.7.5.3 把每次尝试成本从 1s 降到 600ms、总预算 12s → 15s，但随包配置的注释仍写 `max(3×timeout_ms, 1s) ≈ 3s` 与「默认 12s」，照注释估算会得出「每档 3s、7 档 21s」的旧结论。现按实际公式重写，并在 `daemon/probe.go` 的预算常量旁加提醒：改预算数字必须同步这份注释（功能由 `TestDefaultBudgetCoversShippedBaudList` 兜底，注释漂移只能靠提醒） |
 | 55 | CLI 把未知长选项当成端口名静默接受 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §4.2）。`serial-cli probe --json` 不报错，而是把 `--json` 当作端口，结果里多一条「端口 `--json` 打不开」的 skipped，读者会以为真有个端口有问题。现抽出 `parseProbeArgs`：未知 `-` 前缀参数直接报错，`--config`/`--budget` 缺值或非法值分别报清楚；校验提前到建立连接之前（参数写错不该等连上守护进程才报）。附 3 条单元测试。**未动其他命令**：它们的多余参数会走到「进程不存在」这类明确错误，不会静默产生误导性条目，改动风险大于收益 |
 | 56 | MCP 工具描述里 `budgetMs` 的默认值滞后 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §6.2.4）。`serial_probe_ports` 的 inputSchema 写 `default 12000`，实际已是 15000 |
+
+| 57 | `session.history` 一次返回整环，界面只要一屏 | 已修复 | v0.7.5.5 修复。整环 5MB ≈ 18 万条（实测 180788 条），一次读取要「逐包复制 + 逐条建 `HistoryEntry` + JSON 序列化 15.86 MB + 过桥 + 前端逐条 decode」。新增 `limit`/`beforeTsMs`/`sameTsSkip` 三个参数与 `ringbuf.SnapshotPage`（只复制选中的一页）：**实测 180788 条整取 79.4 ms / JSON 15.86 MB → 一页 5000 条 5.0 ms / 0.44 MB（时间 16×、载荷 36×），首次加载 10000 条 9.8 ms / 0.88 MB。** `limit<=0` 仍是整取（CLI/MCP 老行为不变）。基准 `BenchmarkHistoryRead` |
+| 58 | 前端历史缓存无上限，开一天的标签页会吃满内存 | 已修复 | v0.7.5.5 修复。`state.historyCache[tab]` 只 push 从不裁，等于把整环（以及环里已被挤掉的更早数据）永远留在 JS 里。现改为有界：跟随时保留 10000 条，往回翻时放宽到 40000 条（否则刚回补的一页会被自己立刻裁掉，游标原地不动，「往上翻」就再也翻不动），永远从**最旧**的一端裁，于是「最新的一屏」始终在手上（回到底部不需要任何 RPC），裁到窗口里时同步移除对应的 DOM 行。**实测持续灌 30000 条后缓存停在 10032 条、尾条仍是最新那条**，DOM 稳定在窗口内。夹具 `hist_paging_fixture.py` C 节 |
+| 59 | 「往上翻加载更早」在缓存头仍然不可达 | 已修复 | v0.7.5.5 修复（v0.7.5.3 只修了一半）。上一版把 `expandHistory` 内部的 `return` 挪走了，但**滚动触发器**还是 `if (scrollTop < 80 && _renderStart > 0)`：当窗口正好停在缓存头时 `_renderStart == 0`，滚到顶因此不调用 `expandHistory`，一次 RPC 也不会发。实测把窗口滑到缓存头后滚到顶：0 次调用。现改为只要滚到顶就调用（`expandHistory` 自己判断要不要取更早），并用 `_ringExhausted` 与「游标没动过」双重保险避免滚到顶变成 RPC 风暴 |
+| 60 | 契约测试建出的进程与 5MB 共享内存不回收 | 已修复 | v0.7.5.5 修复（写分页测试时撞到）。`TestEveryContractMethodIsDispatched` 用裸参数调 `process.create`，真的建出一个进程（并映射 5MB 共享内存，名字带本进程实例令牌），而它的 `ProcessManager` 既没 `DestroyAll` 也没人引用。同一个测试二进制里**后面任何再建进程的测试**都会撞上 `共享内存 "serial-tool-history-xxxx-1" 已存在`——谁后跑谁中招。现 `defer pm.DestroyAll()`。这也是「测试之间的隐式顺序依赖」，值得记住 |
+| 61 | 磁盘历史的深分页仍是「从头扫」 | 待处理 | v0.7.5.5 记录。回补到环头之后，磁盘这一侧走的是 `history.search(file, "", 200, offset)`——空关键字顺序扫描 + 递增 `offset`，每翻一页都要从文件头扫到 offset，页数越多越慢，而且方向是从文件**开头**往后，而用户要的是从游标往**更早**。要做对需要给历史文件建一次「条目偏移索引」（4 字节/条，18 万条约 720KB）再按游标二分。当前只在「环已翻完」时才提示，实测触发不到，故未动 |
+| 62 | 冻结回看时的缓存上限是 40000 条 | 已知限制 | v0.7.5.5 记录。往回翻时缓存放宽到 `HISTORY_CACHE_HARD`，超过就从最旧的一端裁（同时移除对应 DOM 行，屏幕上不会留下缓存里不存在的内容）。即**单次回看的最大深度约 40000 条**（约 40 屏），再往回翻会重新取到刚才被裁掉的那一页。放宽或做成设置项需要前向分页（`afterTs`）才能安全地裁掉新的一侧，属下一批 |
+| 63 | 取「最新一页」仍需遍历整个环 | 待处理 | v0.7.5.5 记录。包长可变且只在前缀里，从最新一端往回走无法知道上一个包的起点，所以取最新 N 条只能从最旧一端走一遍（环里 18 万包约 1.5–3 ms，已用快路径把取模/逐字节去掉）。彻底解决要在写侧维护一个「包尾索引」（head 附近 N 个偏移），属可选优化——当前 5 ms/页 已足够 |
+
+## v0.7.5.5 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 历史读取改分页（TODO #57） | `session.history` 新增 `limit`/`beforeTsMs`/`sameTsSkip`，守护进程侧新增 `ringbuf.SnapshotPage`（只复制选中一页）；实测整环 18 万条 79.4ms/15.86MB → 一页 5000 条 5.0ms/0.44MB，基准 `BenchmarkHistoryRead` |
+| 前端历史缓存有界（TODO #58） | 跟随保留 10000 条、回看放宽到 40000 条，从最旧一端裁；实测灌 30000 条后停在 10032 条且尾条为最新 |
+| 「加载更早」滚动触发（TODO #59） | 滚动触发器去掉 `_renderStart > 0` 前置；`_ringExhausted` + 游标推进双重防抖 |
+| 自动回补开关 | `设置 → 高级 → 自动回补更早历史`（开启/关闭，9 语言）：关闭后滚到顶只摆可点提示 |
+| 历史环写满即冻结（TODO #12） | `recordHistory` 不再忽略 `Write` 的返回值；新增 `WriteEvict`，环满时挤掉最旧包，单包超容量才计 `ringDrops` |
+| 事件时间戳与环内时间戳统一 | `RxTxMessage.TsMs` = 写进环的同一个值；分页游标靠它精确对齐（两边各取一次 `time.Now()` 会在毫秒边界错开） |
+| CLI 分页 | `history [pid] [--limit n] [--before ms] [--skip n]`，未知参数报错，附 `history_args_test.go` |
+| MCP 分页 | `serial_history` 新增 `limit`/`beforeTsMs`/`sameTsSkip` 与描述、schema 更新 |
+| 契约测试泄漏共享内存（TODO #60） | `TestEveryContractMethodIsDispatched` 补 `defer pm.DestroyAll()` |
 
 ## v0.7.5.4 已完成
 

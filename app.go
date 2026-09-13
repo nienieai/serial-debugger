@@ -698,8 +698,23 @@ func (a *App) GetThreads() map[string]any {
 	return result
 }
 
-func (a *App) GetSessionHistory(processID string) map[string]any {
-	result, _ := a.call(contract.SessionHistory, map[string]any{"processId": processID})
+// GetSessionHistory 读取一个进程的历史记录。
+//
+// limit <= 0 时回整环（老行为）；limit > 0 时只回一页：`beforeTsMs` 是调用方手上
+// 最旧一条的毫秒时间戳，`sameTsSkip` 是它属于这一毫秒的条数。界面按页回补更早
+// 的历史，避免每次都把 5MB 整环序列化过桥。
+func (a *App) GetSessionHistory(processID string, limit int, beforeTsMs int64, sameTsSkip int) map[string]any {
+	params := map[string]any{"processId": processID}
+	if limit > 0 {
+		params["limit"] = limit
+	}
+	if beforeTsMs > 0 {
+		params["beforeTsMs"] = beforeTsMs
+	}
+	if sameTsSkip > 0 {
+		params["sameTsSkip"] = sameTsSkip
+	}
+	result, _ := a.call(contract.SessionHistory, params)
 	if result != nil {
 		// Decode each history entry's hex into segments for the frontend.
 		a.tabDecodersMu.Lock()

@@ -49,7 +49,7 @@ export function GetI18n(arg1:string):Promise<Record<string, string>>;
 
 export function GetPorts():Promise<Array<Record<string, any>>>;
 
-export function GetSessionHistory(arg1:string):Promise<Record<string, any>>;
+export function GetSessionHistory(arg1:string,arg2:number,arg3:number,arg4:number):Promise<Record<string, any>>;
 
 export function GetSessionStats(arg1:string):Promise<Record<string, any>>;
 

@@ -291,6 +291,17 @@ function buildSettingsPage() {
 	);
 	winRow.title = t('settings.history_window_hint','窗口越大，往回翻越少需要加载；布局开销与内存上限也随之上升。默认按视口高度推导。');
 	bAdv.appendChild(winRow);
+
+	// 自动回补：缓存里没有更早的了，要不要自动去守护进程/磁盘取。
+	// 关掉后翻到顶只摆一个可点的提示 —— 网络/超大历史场景下由人控制请求时机。
+	var refillRow = _row(t('settings.auto_refill','自动回补更早历史'),
+		_buildSelect(['on','off'],
+			[t('settings.auto_refill_on','开启（翻到顶自动加载）'), t('settings.auto_refill_off','关闭（点击提示才加载）')],
+			(state.autoRefillHistory === false) ? 'off' : 'on',
+			function(v) { state.autoRefillHistory = (v === 'on'); saveSettings(); })
+	);
+	refillRow.title = t('settings.auto_refill_hint','关闭后，往前翻到缓存头时只显示「↑ 向上滚动加载更多」，点它才会去取更早的记录。');
+	bAdv.appendChild(refillRow);
 	panelDisplay.appendChild(bAdv);
 
 	// Display color overrides — new layout: [name] [bg-color:dark|light] [fg-color:dark|light]

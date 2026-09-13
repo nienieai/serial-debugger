@@ -230,5 +230,6 @@ func readHistoryEntry(r *bufio.Reader) (HistoryEntry, int64, error) {
 		Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
 		Hex:       string(hexBuf),
 		Direction: byteToDir(dir),
+		TsMs:      ts,
 	}, consumed, nil
 }

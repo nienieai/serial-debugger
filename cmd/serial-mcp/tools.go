@@ -179,9 +179,12 @@ var allTools = []toolDef{
 	},
 	{
 		Name:        "serial_history",
-		Description: "Read data history for a serial process from shared memory.",
+		Description: "Read data history for a serial process from shared memory. Without 'limit' the whole 5MB ring is returned; pass 'limit' to page (use the response's 'hasMore' and the oldest entry's 'tsMs' as the next 'beforeTsMs').",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"processId": {Type: "string", Description: "Process ID."},
+			"processId":  {Type: "string", Description: "Process ID."},
+			"limit":      {Type: "integer", Description: "Return at most this many entries (the newest ones). Omit or 0 for the whole ring."},
+			"beforeTsMs": {Type: "integer", Description: "Paging cursor: only entries older than this Unix-millisecond timestamp."},
+			"sameTsSkip": {Type: "integer", Description: "Paging cursor: how many entries of that same millisecond the caller already holds."},
 		}},
 	},
 	{
@@ -271,7 +274,7 @@ var allTools = []toolDef{
 		}, Required: []string{"processId"}},
 	},
 	{
-		Name:        "serial_probe_ports",
+		Name: "serial_probe_ports",
 		Description: "Probe serial ports to detect device types. Sends probe frames defined in probe.toml and matches responses to identify connected devices (Modbus RTU, MCU control boards, etc.). " +
 			"An empty 'results' does NOT mean 'no device': read 'skipped' (ports that were not actually probed, with the reason — occupied by a session, could not be opened/read, or out of budget) and 'budgetExhausted' before concluding anything. " +
 			"Occupied ports are reported in 'skipped', never silently dropped.",
@@ -638,8 +641,11 @@ func handleSessions(_ json.RawMessage) *toolCallResult {
 
 func handleHistory(raw json.RawMessage) *toolCallResult {
 	var p struct {
-		ProcessID string `json:"processId"`
-		SessionID string `json:"sessionId"`
+		ProcessID  string `json:"processId"`
+		SessionID  string `json:"sessionId"`
+		Limit      int    `json:"limit"`
+		BeforeTsMs int64  `json:"beforeTsMs"`
+		SameTsSkip int    `json:"sameTsSkip"`
 	}
 	json.Unmarshal(raw, &p)
 	pid := p.ProcessID
@@ -652,7 +658,17 @@ func handleHistory(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce(contract.SessionHistory, map[string]any{"processId": pid}, "mcp")
+	params := map[string]any{"processId": pid}
+	if p.Limit > 0 {
+		params["limit"] = p.Limit
+	}
+	if p.BeforeTsMs > 0 {
+		params["beforeTsMs"] = p.BeforeTsMs
+	}
+	if p.SameTsSkip > 0 {
+		params["sameTsSkip"] = p.SameTsSkip
+	}
+	result, err := client.CallOnce(contract.SessionHistory, params, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to read history: %v", err))
 	}

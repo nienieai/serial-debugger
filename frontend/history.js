@@ -22,6 +22,20 @@ var HISTORY_WINDOW_MIN = 150;
 var HISTORY_WINDOW_MAX = 400;
 var HISTORY_WINDOW = HISTORY_WINDOW_MIN; // 兼容旧引用；实际用 historyWindowSize()
 
+// ---- 有界缓存 ----
+// 缓存存在的理由是「往回翻」而不是「全都在手上」：整环 5MB ≈ 19 万条，
+// 全量留在 JS 里既吃内存又要每次重绘时遍历。留多少是有取舍的：
+//   MAX  跟随时保留的条数（正常收数据时的稳态上限）
+//   HARD 往回看时允许涨到的上限（否则刚回补的一页会立刻被自己裁掉）
+//   SLACK 攒够这么多条再裁一次，把 splice 的成本摊薄
+var HISTORY_CACHE_MAX = 10000;
+var HISTORY_CACHE_HARD = 40000;
+var HISTORY_CACHE_SLACK = 512;
+
+// 一页回补多少条；首次加载取 MAX（回看深度至少等于稳态缓存）
+var HISTORY_PAGE_SIZE = 5000;
+var HISTORY_INITIAL = HISTORY_CACHE_MAX;
+
 var _renderStart = -1; // DOM 窗口起点（cache 索引）
 var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
 var _atBottom = true;  // 用户是否贴着底部
@@ -70,7 +84,15 @@ function _histDebug() {
     domRows: display ? display.querySelectorAll('.data-row').length : 0,
     spacer: !!(display && display.querySelector('.hist-spacer')),
     lastFlushMs: +_lastFlushMs.toFixed(2),
-    lastFlushCount: _lastFlushCount
+    lastFlushCount: _lastFlushCount,
+    // 有界缓存 / 分页（夹具用）
+    cacheLen: entries ? entries.length : 0,
+    cacheCap: _frozen ? HISTORY_CACHE_HARD : HISTORY_CACHE_MAX,
+    olderLoading: _olderLoading,
+    ringExhausted: !!(entries && entries._ringExhausted),
+    ringHasMore: !!(entries && entries._ringHasMore),
+    cursorTs: (function () { var c = _cursorFrom(entries); return c ? c.tsMs : 0; })(),
+    cursorSkip: (function () { var c = _cursorFrom(entries); return c ? c.skip : 0; })()
   };
 }
 
@@ -88,6 +110,76 @@ function _histReset() {
 function _activeCache() {
   var tab = getActiveTab();
   return (tab && tab.sessionId) ? state.historyCache[tab.sessionId] : null;
+}
+
+// ---- 有界缓存：裁剪 / 游标 ----
+
+// 同一帧的指纹。时间戳字符串只有时分秒（跨天会撞车），所以用毫秒时间戳 +
+// 方向 + 内容。守护进程的广播事件与写进环里的是**同一个** tsMs，因此前端
+// 手上的那条与环里那条指纹必然相同。
+function _fp(e) {
+  return e.tsMs + '|' + e.direction + '|' + e.hex;
+}
+
+// 分页游标：缓存里最旧一条的毫秒时间戳，以及缓存里一共有几条属于这一毫秒。
+//
+// 为什么不是简单的「比这个时间戳更早」：毫秒会撞车，同一毫秒里的帧常常一起
+// 到达；只用 `ts <` 当游标会把边界那一毫秒剩下的帧永久丢掉。报出「我手上有
+// 几条是这一毫秒的」，守护进程就能正好把缺的那几条补上。
+//
+// system 条目是前端自己造的（没有 tsMs），跳过它们往后找第一条真实数据。
+function _cursorFrom(entries) {
+  if (!entries || entries.length === 0) return null;
+  var i = 0;
+  while (i < entries.length && !(entries[i].tsMs > 0)) i++;
+  if (i >= entries.length) return null;
+  var ts = entries[i].tsMs;
+  var skip = 0;
+  for (var j = i; j < entries.length; j++) {
+    if (entries[j].tsMs !== ts) break;
+    skip++;
+  }
+  return { tsMs: ts, skip: skip };
+}
+
+// 把缓存裁到上限内。永远从**最旧的一端**裁，这样「最新的一屏」永远在手上
+// （回到底部不需要任何 RPC）。
+//
+// 冻结时（用户往回翻或锁定滚动）上限放宽到 HARD：否则刚回补进来的一页会被
+// 立刻裁掉，游标原地不动，往上翻就再也翻不动了。
+//
+// 裁到窗口里时，把对应的 DOM 行也一并去掉 —— 不能留着缓存里已经不存在的行
+// 继续显示（那会让重绘与屏幕对不上）。
+function _trimCache(arr) {
+  if (!arr) return 0;
+  var active = (_activeCache() === arr);
+  var cap = (active && _frozen) ? HISTORY_CACHE_HARD : HISTORY_CACHE_MAX;
+  var over = arr.length - cap;
+  if (over < HISTORY_CACHE_SLACK) return 0;
+
+  var drop = over;
+  arr.splice(0, drop);
+  if (typeof arr._clearedAt === 'number') {
+    arr._clearedAt -= drop;
+    if (arr._clearedAt < 0) delete arr._clearedAt; // 清空标记本身也被裁掉了，它已经没有意义
+  }
+  if (active) {
+    var domDrop = Math.max(0, drop - _renderStart);
+    _renderStart = Math.max(0, _renderStart - drop);
+    _renderEnd = Math.max(0, _renderEnd - drop);
+    if (domDrop > 0) _dropDomRows(domDrop);
+  }
+  return drop;
+}
+
+// 从显示区顶部同步移除 n 行数据行（只在缓存裁到窗口里时才发生）
+function _dropDomRows(n) {
+  var display = pageEl('displayContent');
+  if (!display) return;
+  var rows = display.querySelectorAll('.data-row');
+  for (var i = 0; i < n && i < rows.length; i++) {
+    if (rows[i].parentNode) rows[i].parentNode.removeChild(rows[i]);
+  }
 }
 
 // ---- 单行构造（不再有滚动副作用，贴底统一由批次处理） ----
@@ -171,6 +263,7 @@ function appendSystemMsg(msg) {
     var dup = arr.length > 0 && arr[arr.length - 1].direction === 'system' && arr[arr.length - 1].hex === msg;
     if (!dup) arr.push(entry);
     if (_renderEnd >= 0) _renderEnd = arr.length;
+    _trimCache(arr);
   }
 }
 
@@ -187,9 +280,11 @@ function appendLine(dir, msg) {
   if (!ownerTab) return;
 
   // Always cache the entry for the owning tab, even if not active
-  const entry = { direction: dir, hex: msg.hex, timestamp: msg.timestamp, segments: msg.segments };
+  const entry = { direction: dir, hex: msg.hex, timestamp: msg.timestamp, tsMs: msg.tsMs, segments: msg.segments };
   if (!state.historyCache[ownerTab.sessionId]) { state.historyCache[ownerTab.sessionId] = []; state.historyCache[ownerTab.sessionId]._id = ownerTab.sessionId; }
-  state.historyCache[ownerTab.sessionId].push(entry);
+  var ownerCache = state.historyCache[ownerTab.sessionId];
+  ownerCache.push(entry);
+  _trimCache(ownerCache);
 
   // Only render to DOM if this tab is currently active
   const activeTab = getActiveTab();
@@ -364,7 +459,7 @@ function renderHistoryLines(entries, keepScroll) {
   _renderEnd = end;
 
   var fragment = document.createDocumentFragment();
-  if (start > 0) fragment.appendChild(_moreAboveTip(entries));
+  if (start > 0 || _needsLoadOlderTip(entries)) fragment.appendChild(_moreAboveTip(entries));
 
   for (var i = start; i < end; i++) {
     var entry = entries[i];
@@ -393,10 +488,18 @@ function renderHistoryLines(entries, keepScroll) {
 function _moreAboveTip(entries) {
   var more = document.createElement('div');
   more.className = 'sys-msg';
+  more.setAttribute('data-hist-tip', 'more');
   more.style.cursor = 'pointer';
   more.textContent = '── ' + t('history.more_above', '↑ 向上滚动加载更多') + ' ──';
   more.onclick = function () { expandHistory(entries); };
   return more;
+}
+
+// 关掉自动回补时，窗口已经停在缓存头了也仍然要有东西可点。
+function _needsLoadOlderTip(entries) {
+  if (!entries || state.autoRefillHistory !== false) return false;
+  if (!entries._ringExhausted) return true;
+  return !!entries._historyFile;
 }
 
 function _onDisplayScroll() {
@@ -418,8 +521,27 @@ function _onDisplayScroll() {
     _frozen = true;
     _syncSpacer(display);
   }
-  // 往上翻到顶：加载更早
-  if (display.scrollTop < 80 && _renderStart > 0) expandHistory(_activeCache());
+  // 翻到顶：先看缓存里还有没有（expandHistory 自己处理），没有就去守护进程取。
+  // 注意条件里**不能**再带 `_renderStart > 0`：缓存头正好是窗口起点时
+  // _renderStart==0，那条判断会让「加载更早」整条路不可达。
+  if (display.scrollTop < 80) {
+    if (state.autoRefillHistory === false) {
+      _ensureLoadOlderTip(display, _activeCache());
+    } else {
+      expandHistory(_activeCache());
+    }
+  }
+}
+
+// 关掉「自动回补更早历史」时，翻到顶只摆一个可点的提示，由用户决定要不要取。
+function _ensureLoadOlderTip(display, entries) {
+  if (!display || !entries) return;
+  if (entries._ringExhausted && !entries._historyFile) {
+    _updateDiskTip(t('history.no_more', '没有更多历史记录'));
+    return;
+  }
+  if (display.querySelector('[data-hist-tip="more"]')) return;
+  display.insertBefore(_moreAboveTip(entries), display.firstChild);
 }
 
 // 滚动锁定开关变化时调用（app.js 的 toggleScrollLock）
@@ -467,10 +589,10 @@ function expandHistory(entries) {
     }
   }
   // 去掉旧的「更多」提示后插到最前
-  var oldMore = display.querySelector('.sys-msg');
-  if (oldMore && oldMore.textContent.indexOf('↑') >= 0) oldMore.remove();
+  var oldMore = display.querySelector('[data-hist-tip="more"]');
+  if (oldMore && oldMore.parentNode) oldMore.parentNode.removeChild(oldMore);
   display.insertBefore(frag, display.firstChild);
-  if (newStart > 0) display.insertBefore(_moreAboveTip(entries), display.firstChild);
+  if (newStart > 0 || _needsLoadOlderTip(entries)) display.insertBefore(_moreAboveTip(entries), display.firstChild);
   _renderStart = newStart;
 
   // 窗口有上界：往上加就要从下方裁（裁掉的行数由占位块记着，
@@ -481,8 +603,10 @@ function expandHistory(entries) {
 }
 
 function _fetchOlder(entries, display, prevHeight) {
-  if (_olderLoading) return;
-  if (!entries._id || !state.daemonOnline) {
+  if (_olderLoading || !entries) return;
+  // 环已经翻到头了：不再重复问守护进程（每次滚到顶都问一次会变成 RPC 风暴），
+  // 直接把磁盘提示摆出来。
+  if (!entries._id || !state.daemonOnline || entries._ringExhausted) {
     if (entries._historyFile) _showDiskTip(display, prevHeight);
     return;
   }
@@ -490,21 +614,27 @@ function _fetchOlder(entries, display, prevHeight) {
   _loadOlderFromDaemon(entries._id, entries).then(function (added) {
     _olderLoading = false;
     if (added > 0) {
+      // 前面插了 added 条，窗口索引整体后移，屏幕上看到的内容不动
       _renderStart += added;
       _renderEnd += added;
       expandHistory(entries);
     } else if (entries._historyFile) {
       _showDiskTip(display, prevHeight);
+    } else {
+      _updateDiskTip(t('history.no_more', '没有更多历史记录'));
     }
   }).catch(function () { _olderLoading = false; });
 }
 
 function _showDiskTip(display, prevHeight) {
   if (!display) return;
+  // 已经在提示了就别反复插拔：滚到顶每个 scroll 事件都会走到这里
+  if (display.querySelector('[data-hist-tip="disk"]')) return;
   var old = display.querySelector('.disk-tip');
   if (old) old.remove();
   var tip = document.createElement('div');
   tip.className = 'sys-msg disk-tip';
+  tip.setAttribute('data-hist-tip', 'disk');
   tip.style.cursor = 'pointer';
   tip.textContent = '── ' + t('history.load_disk', '↓ 加载磁盘历史记录') + ' ──';
   tip.onclick = function () {
@@ -526,54 +656,44 @@ function _diskTipClicked(tip) {
   return false;
 }
 
-// Fetch older entries from daemon ring buffer and merge into cache.
-// Returns the number of new entries prepended to the cache.
+// 从守护进程的环里回补一页更早的记录，返回插到缓存前面的条数。
+//
+// 只取一页：整环 5MB ≈ 19 万条，一次全要回来就是「把 5MB JSON 过一遍桥、再逐条
+// decode」，而界面一次只看得见一屏。游标由 _cursorFrom 给出（毫秒时间戳 + 同
+// 毫秒条数），两边对得上才不会重复或漏条。
 async function _loadOlderFromDaemon(sessionId, entries) {
+  if (!sessionId || !state.daemonOnline || !entries || entries.length === 0) return 0;
+  var cur = _cursorFrom(entries);
+  if (!cur) return 0;
+
+  // 游标没动过就别再问了：说明上一次没拿到任何更早的东西，
+  // 否则滚到顶会变成一秒几十次同样的 RPC。
+  if (entries._lastCursorTs === cur.tsMs && entries._lastCursorSkip === cur.skip) {
+    entries._ringExhausted = true;
+    return 0;
+  }
+
+  var data;
   try {
-    const data = await window.go.main.App.GetSessionHistory(sessionId);
-    const history = (data && data.history) ? data.history : [];
-    if (!data) return 0;
-
-    // Save file info for potential disk paging
-    if (data.oldestTs) entries._oldestTs = data.oldestTs;
-    if (data.historyFile) entries._historyFile = data.historyFile;
-
-    if (history.length === 0) return 0;
-
-    // Build fingerprint set from existing cache
-    var seen = new Set();
-    for (var k = 0; k < entries.length; k++) {
-      var e = entries[k];
-      if (e.direction !== 'system') {
-        seen.add(e.timestamp + '|' + e.direction + '|' + e.hex);
-      }
-    }
-
-    // Collect new entries not yet in cache
-    var prepend = [];
-    for (var j = history.length - 1; j >= 0; j--) {
-      var he = history[j];
-      if (he.direction === 'system') continue;
-      var fp = he.timestamp + '|' + he.direction + '|' + he.hex;
-      if (!seen.has(fp)) {
-        prepend.push(he);
-        seen.add(fp);
-      }
-    }
-
-    if (prepend.length > 0) {
-      prepend.reverse();
-      // Prepend to the beginning of the cache array
-      Array.prototype.unshift.apply(entries, prepend);
-      // Adjust clear marker offset
-      if (entries._clearedAt !== undefined) {
-        entries._clearedAt += prepend.length;
-      }
-    }
-    return prepend.length;
+    data = await window.go.main.App.GetSessionHistory(sessionId, HISTORY_PAGE_SIZE, cur.tsMs, cur.skip);
   } catch (e) {
     return 0;
   }
+  if (!data) return 0;
+
+  entries._lastCursorTs = cur.tsMs;
+  entries._lastCursorSkip = cur.skip;
+  if (typeof data.oldestTsMs === 'number') entries._ringOldestTsMs = data.oldestTsMs;
+  if (data.historyFile) entries._historyFile = data.historyFile;
+  entries._ringHasMore = !!data.hasMore;
+  if (!data.hasMore) entries._ringExhausted = true;
+
+  var history = (data.history || []).filter(function (e) { return e.direction !== 'system'; });
+  if (history.length === 0) return 0;
+
+  Array.prototype.unshift.apply(entries, history);
+  if (typeof entries._clearedAt === 'number') entries._clearedAt += history.length;
+  return history.length;
 }
 
 // Search the disk history file for entries older than the ring buffer.
@@ -584,7 +704,7 @@ async function _searchDiskHistory(sessionId, entries) {
   entries._diskLoading = true;
 
   try {
-    var beforeTs = entries._oldestTs || '';
+    var beforeMs = entries._ringOldestTsMs || 0;
     var offset = entries._diskOffset || 0;
     var result = await window.go.main.App.SearchHistory(entries._historyFile, '', 200, offset);
     if (!result || !result.history || result.history.length === 0) {
@@ -597,10 +717,7 @@ async function _searchDiskHistory(sessionId, entries) {
     // Build dedup set from existing cache
     var seen = new Set();
     for (var k = 0; k < entries.length; k++) {
-      var e = entries[k];
-      if (e.direction !== 'system') {
-        seen.add(e.timestamp + '|' + e.direction + '|' + e.hex);
-      }
+      seen.add(_fp(entries[k]));
     }
 
     // Only keep entries older than the ring buffer's oldest AND not already in cache
@@ -608,11 +725,10 @@ async function _searchDiskHistory(sessionId, entries) {
     for (var i = 0; i < diskEntries.length; i++) {
       var de = diskEntries[i];
       if (de.direction === 'system') continue;
-      if (beforeTs && de.timestamp >= beforeTs) continue;
-      var fp = de.timestamp + '|' + de.direction + '|' + de.hex;
-      if (seen.has(fp)) continue;
+      if (beforeMs > 0 && de.tsMs >= beforeMs) continue;
+      if (seen.has(_fp(de))) continue;
       prepend.push(de);
-      seen.add(fp);
+      seen.add(_fp(de));
     }
 
     if (prepend.length > 0) {
@@ -659,19 +775,22 @@ function _updateDiskTip(text) {
 async function mergeRingBuffer(sessionId) {
   if (!sessionId || !state.daemonOnline) return;
   try {
-    const data = await window.go.main.App.GetSessionHistory(sessionId);
+    const data = await window.go.main.App.GetSessionHistory(sessionId, HISTORY_INITIAL, 0, 0);
     const history = (data && data.history) ? data.history : [];
+    if (!state.historyCache[sessionId]) { state.historyCache[sessionId] = []; state.historyCache[sessionId]._id = sessionId; }
+    const arr = state.historyCache[sessionId];
+    if (data && data.historyFile) arr._historyFile = data.historyFile;
+    if (data && typeof data.oldestTsMs === 'number') arr._ringOldestTsMs = data.oldestTsMs;
+    if (data && typeof data.hasMore === 'boolean') arr._ringHasMore = data.hasMore;
     if (history.length > 0) {
-      if (!state.historyCache[sessionId]) { state.historyCache[sessionId] = []; state.historyCache[sessionId]._id = sessionId; }
-      const arr = state.historyCache[sessionId];
       const seen = new Set();
       const scanStart = Math.max(0, arr.length - 200);
       for (let i = scanStart; i < arr.length; i++) {
         const e = arr[i];
-        seen.add(e.timestamp + '|' + e.direction + '|' + e.hex);
+        seen.add(_fp(e));
       }
       for (const entry of history) {
-        const fp = entry.timestamp + '|' + entry.direction + '|' + entry.hex;
+        const fp = _fp(entry);
         const sysFp = entry.direction === 'system' ? 'system|' + entry.hex : null;
         if (!seen.has(fp) && (!sysFp || !seen.has(sysFp))) {
           arr.push(entry);
@@ -680,6 +799,7 @@ async function mergeRingBuffer(sessionId) {
         }
       }
     }
+    _trimCache(arr);
   } catch {}
 }
 
@@ -712,11 +832,14 @@ async function loadTabHistory() {
   _historyLoading = cacheKey;
 
   try {
-    const data = await window.go.main.App.GetSessionHistory(tab.sessionId);
+    // 只取最新的一段：整环 19 万条全要回来是这条路径上唯一的实际开销，
+    // 更早的部分由「往上翻」按页回补（见 _loadOlderFromDaemon）。
+    const data = await window.go.main.App.GetSessionHistory(tab.sessionId, HISTORY_INITIAL, 0, 0);
     const history = (data && data.history) ? data.history : [];
     history._id = tab.sessionId;
-    // Save extra fields for disk paging
-    if (data && data.oldestTs) history._oldestTs = data.oldestTs;
+    // Save extra fields for paging / disk paging
+    if (data && typeof data.oldestTsMs === 'number') history._ringOldestTsMs = data.oldestTsMs;
+    if (data && typeof data.hasMore === 'boolean') { history._ringHasMore = data.hasMore; history._ringExhausted = !data.hasMore; }
     if (data && data.historyFile) history._historyFile = data.historyFile;
     state.historyCache[cacheKey] = history;
     renderHistoryLines(history);

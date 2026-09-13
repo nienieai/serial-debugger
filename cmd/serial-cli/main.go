@@ -971,8 +971,22 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		fmt.Println("daemon shutdown requested")
 
 	case "history":
-		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call(contract.SessionHistory, map[string]any{"processId": pid})
+		hp, perr := parseHistoryArgs(args[1:])
+		if perr != nil {
+			errExit(perr, interactive)
+			return
+		}
+		params := map[string]any{"processId": resolveProcessID(dc, hp.positional, 0)}
+		if hp.limit > 0 {
+			params["limit"] = hp.limit
+		}
+		if hp.beforeMs > 0 {
+			params["beforeTsMs"] = hp.beforeMs
+		}
+		if hp.skip > 0 {
+			params["sameTsSkip"] = hp.skip
+		}
+		result, err := dc.Call(contract.SessionHistory, params)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -1241,7 +1255,63 @@ func parseProbeArgs(args []string) (ports []string, configPath string, budgetMs 
 	return ports, configPath, budgetMs, nil
 }
 
-func printHelp() {	fmt.Print(`用法:
+// historyArgs 是 `history` 命令解析后的参数。
+type historyArgs struct {
+	positional []string // 进程号（可选）
+	limit      int
+	beforeMs   int64
+	skip       int
+}
+
+// parseHistoryArgs 解析 `history` 的参数。
+//
+// 规矩与 parseProbeArgs 一致：未知的长选项必须报错，不能当成进程号 —— 否则
+// `history --json` 会变成「查进程 --json 的历史」这种看不懂的错误。
+func parseHistoryArgs(args []string) (historyArgs, error) {
+	var out historyArgs
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--limit":
+			if i+1 >= len(args) {
+				return out, fmt.Errorf("--limit 需要一个条数")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n <= 0 {
+				return out, fmt.Errorf("--limit 需要正整数条数，实际为 %q", args[i+1])
+			}
+			out.limit = n
+			i++
+		case args[i] == "--before":
+			if i+1 >= len(args) {
+				return out, fmt.Errorf("--before 需要一个毫秒时间戳")
+			}
+			n, err := strconv.ParseInt(args[i+1], 10, 64)
+			if err != nil || n <= 0 {
+				return out, fmt.Errorf("--before 需要正整数毫秒时间戳（取上一条响应里的 tsMs），实际为 %q", args[i+1])
+			}
+			out.beforeMs = n
+			i++
+		case args[i] == "--skip":
+			if i+1 >= len(args) {
+				return out, fmt.Errorf("--skip 需要一个条数")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 0 {
+				return out, fmt.Errorf("--skip 需要非负整数条数，实际为 %q", args[i+1])
+			}
+			out.skip = n
+			i++
+		case len(args[i]) > 1 && strings.HasPrefix(args[i], "-"):
+			return out, fmt.Errorf("未知参数 %q（history 支持：进程号、--limit <条数>、--before <毫秒>、--skip <条数>）", args[i])
+		default:
+			out.positional = append(out.positional, args[i])
+		}
+	}
+	return out, nil
+}
+
+func printHelp() {
+	fmt.Print(`用法:
   serial-cli <cmd>              命令行客户端
 
 守护进程:
@@ -1268,7 +1338,10 @@ func printHelp() {	fmt.Print(`用法:
 
 数据:
   send    <data> [processId] [--hex] 发送数据 (--hex: 十六进制)
-  history [processId]                历史缓冲区（含毫秒时间戳 + Hex）
+  history [processId] [--limit <n>] [--before <ms>] [--skip <n>]
+                                     历史缓冲区（含毫秒时间戳 + Hex）
+                                     --limit 只取最新 n 条；--before/--skip 用上一条
+                                     响应里最旧一条的 tsMs 与同毫秒条数继续往前翻
 
 自动发送:
   autosend start <ms> <mode> [--loop] [pid]  启动自动发送 (mode: single|queue, --loop循环)

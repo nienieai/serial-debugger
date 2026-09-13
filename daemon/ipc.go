@@ -1209,16 +1209,26 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 
 	case contract.SessionHistory:
 		var p struct {
-			ProcessID string `json:"processId"`
+			ProcessID  string `json:"processId"`
+			Limit      int    `json:"limit"`
+			BeforeTsMs int64  `json:"beforeTsMs"`
+			SameTsSkip int    `json:"sameTsSkip"`
 		}
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		result := s.pm.GetHistory(p.ProcessID)
+		if p.Limit < 0 {
+			p.Limit = 0
+		}
+		if p.SameTsSkip < 0 {
+			p.SameTsSkip = 0
+		}
+		result := s.pm.GetHistoryPage(p.ProcessID, p.Limit, p.BeforeTsMs, p.SameTsSkip)
 		if result == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		logOp("操作", "%s 读取历史记录 (进程 %s)", label, p.ProcessID)
+		logOp("操作", "%s 读取历史记录 (进程 %s, limit=%d before=%d skip=%d → %d 条)",
+			label, p.ProcessID, p.Limit, p.BeforeTsMs, p.SameTsSkip, len(result["history"].([]HistoryEntry)))
 		return protocol.Response{ID: req.ID, Result: result}
 
 	case contract.SessionStats:
