@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -92,24 +93,43 @@ const handshakeRetries = 2
 
 // NewDaemonClientWithEvents creates a 3-pipe client with a custom event subscription list.
 //
-// 握手失败会自动重试（见 handshakeRetries 的说明）；全部失败时返回的错误里
-// 带尝试次数与每次的原因。
+// 只有**握手阶段**的失败才重试（见 handshakeRetries 的说明）；连不上守护进程
+// 这类确定性失败立即返回，重试没有意义、还会拖慢并让错误文案失真
+// （曾出现「注册握手失败（已尝试 3 次）: connect to daemon: pipe not available」，
+// 而实际情况只是守护进程没运行）。
 func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient, error) {
 	var lastErr error
 	for attempt := 0; attempt <= handshakeRetries; attempt++ {
-		t0 := time.Now()
 		c, err := connectOnce(source, subscribe)
 		if err == nil {
 			return c, nil
 		}
 		lastErr = err
-		if f, ferr := os.OpenFile(os.Getenv("ST_DIAG_FILE"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); ferr == nil {
-			fmt.Fprintf(f, "ATTEMPT_FAIL #%d elapsed=%.3fs err=%v\n", attempt+1, time.Since(t0).Seconds(), err)
-			f.Close()
+		if errors.Is(err, errConnectPhase) {
+			return nil, err
 		}
 	}
 	return nil, fmt.Errorf("注册握手失败（已尝试 %d 次）: %w", handshakeRetries+1, lastErr)
 }
+
+// errConnectPhase 标记「还没走到握手阶段就失败了」——例如守护进程未运行、
+// 回调管道建不出来。这类失败是确定性的，重试无益。
+var errConnectPhase = errors.New("connect phase")
+
+// connectError 是连接阶段的失败：errors.Is 能把它认成 errConnectPhase，
+// 但 Error() 只返回真实原因——不把内部标记露给用户。
+type connectError struct{ cause error }
+
+func (e *connectError) Error() string { return e.cause.Error() }
+func (e *connectError) Unwrap() error { return e.cause }
+func (e *connectError) Is(target error) bool {
+	// 让 errors.Is(err, errConnectPhase) 成立，同时不污染 Error()。
+	// Unwrap 指回 cause，所以 errConnectPhase 必须由这里匹配。
+	return target == errConnectPhase
+}
+
+// connectErr 把连接阶段的失败包成可分类、且文案干净的错误。
+func connectErr(cause error) error { return &connectError{cause: cause} }
 
 func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	if subscribe == nil {
@@ -126,12 +146,12 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	// 1. Create listeners (client acts as pipe server for resp and sub)
 	respLn, err := pipe.Listen(respName)
 	if err != nil {
-		return nil, fmt.Errorf("create resp pipe: %w", err)
+		return nil, connectErr(err)
 	}
 	subLn, err := pipe.Listen(subName)
 	if err != nil {
 		respLn.Close()
-		return nil, fmt.Errorf("create sub pipe: %w", err)
+		return nil, connectErr(err)
 	}
 
 	// 2. Start Accept goroutines so pipes exist when daemon dials
@@ -162,7 +182,7 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	if err != nil {
 		respLn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("connect to daemon: %w", err)
+		return nil, connectErr(err)
 	}
 
 	regReq := map[string]any{
@@ -182,7 +202,7 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 		daemonConn.Close()
 		respLn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("send register: %w", err)
+		return nil, connectErr(err)
 	}
 
 	// 4. Wait for daemon to connect back on resp and sub
