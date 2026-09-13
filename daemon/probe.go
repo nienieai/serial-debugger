@@ -253,6 +253,18 @@ func ProbePorts(ports []string, occupiedPorts map[string]bool, cfg *ProbeConfig,
 				}
 
 				p.SetReadTimeout(timeout)
+				// 已知脆弱点：这里只 Read 一次。
+				//
+				// go.bug.st/serial 的 Read 契约是「阻塞到至少一个字节到达」，
+				// 因此一次 Read 可能只拿到响应的头一两个字节（实测在
+				// CH343 交叉互连上只拿到响应的第 1 个字节 `04`），后续字节还在
+				// 路上。此时 min_response_len 与 matchProbeResponse 都会落空，
+				// 设备明明应答了却报「未检测到已知设备」。Modbus 这类多字节响应
+				// 尤其容易踩到；短响应（1–2 字节）的规则不受影响。
+				//
+				// 待办：改成在超时预算内循环读并累积（注意本库 Read 超时返回
+				// (0, nil) 而非错误，且不能靠 time.Now() 与库内部计时比较——
+				// 试过两版循环都会挂住，必须先在真实设备上验证再改）。
 				buf := make([]byte, 256)
 				n, _ := p.Read(buf)
 
