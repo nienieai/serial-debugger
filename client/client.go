@@ -911,7 +911,9 @@ func (c *DaemonClient) DetachHistoryFile(processID string) error {
 func CallOnce(method contract.Method, params map[string]any, source string) (map[string]any, error) {
 	conn, err := pipe.Dial(pipe.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("daemon not running: %v", err)
+		// 同 pipe.dialPipe：不能断言「daemon not running」——连接失败也可能是
+		// 端点残留、权限、或对端刚退出。让底层错误自己说话，别把方向带偏。
+		return nil, err
 	}
 	defer conn.Close()
 
