@@ -82,6 +82,24 @@
 | 49 | `fakeDaemonThatRejectsRegister` 的「端点被占用则跳过」守卫在 Windows 上失效 | 待处理 | v0.7.5.1 记录（写发送框回归时撞到）。该守卫靠 `pipe.Listen(pipe.Addr)` 返回错误判断「已有真守护进程」，但 `pipe.createPipeInstance` 用的是 `pipeUnlimitedInstances`，**同名管道允许第二个实例**，于是真守护进程在跑时守卫不触发，测试不是跳过而是**误报失败**（客户端可能连到真守护进程上并握手成功，于是 `err == nil` 触发 `t.Fatal`）。实测有守护进程时 `TestHandshakeSurfacesDaemonReason` / `TestHandshakeReasonDoesNotClaimRejection` 失败，杀掉后三个用例 0.5s 全过。建议改用独占探测（先试着 `Dial` 成功即视为占用）或直接探测 `serial-daemon` 进程 |
 | 50 | **`probe` 的「空结果」有两条静默路径，与「没有设备」不可区分** | 已修复 | v0.7.5.2 修复。**（a）耗时与超时**：`probeRead` 的总预算是 `max(3×timeout, 1s)`，默认 `timeout_ms=200` → 取 1s 下限；端口静默时每次尝试都跑满这 1s。实测同一静默端口：1 次尝试 **1.11s**、7 次 **7.48s**、默认 21 次 **10.18s**，而 `client.Call` 的 IPC 超时是硬编码 10s → 必然 `request timeout: ports.probe`；守护进程并不停，继续扫完（实测后台探测总耗时 **33.2s**）。**（b）假阴性**：这段窗口内再做任何探测都在几十毫秒内返回空结果——报告实测「正确配置 + 编码器在线」也得到 `未检测到已知设备`（§3.3：58ms，已用 MCP 证实与客户端无关）；本地复现：被会话占用 46ms、超时后紧接着 61~65ms，而那次探测**结束后**恢复 1093~1245ms。**（c）根因两条，报告只点到第一条**：① `probe.go` 的 `if occupiedPorts[portName] { continue }`；② `if err != nil { continue }`——`ProbePorts` 内部 open/read 失败被裸 `continue` 吞掉、无日志。本地因果实验证明②才是超时路径的真正机制（`sessions` 显示无任何进程持有端口，跟随探测仍在 65ms 内返回空）。**修法**：`ProbePorts` 改返回 `ProbeOutcome`（results/skipped/attempts/elapsedMs/budgetExhausted/busy），两条路径都显式化并补日志；加默认 12s 总预算（`--budget`/`budgetMs` 可覆盖）+ `ports.probe` 请求超时放宽到 25s；并发探测用 `TryLock` 直接返回 busy；`probeRead` 带出读取错误；`baud_rates` 改为按可能性排序（115200 提到最前——设备不应答时每档约 3s，12s 只够前 4 档，原升序会把最常用的 115200 排在第 4 位，实测预算用尽时它根本没试过）。回归 `daemon/probe_skip_test.go`（6 条，含一条 elapsedMs 必须落到命名返回值的用例）。原文如下（保留溯源）：v0.7.5 起存在，0.7.5.1 轮由外部测试报告与本地复现共同确认 |
 
+| 51 | 历史显示窗口：性能机制放错了位置 | 已修复 | v0.7.5.3 修复。窗口本身是对的（实测 DOM 无上限时单帧成本 139.7µs@2000 节点 → 4005.3µs@20000 节点，O(n²)；有窗口时恒定 ~1000µs），问题在于它只界住了「DOM 有多少」没界住「每帧做多少事」。① **逐条渲染**：每帧两次读 `scrollHeight`（读是 O(节点数)：150 节点 44.3µs、20000 节点 4313µs；写 `scrollTop` 只要 2µs）→ 改为入站帧进队列、rAF 合并成一批，一批一次 fragment/一次裁剪/一次贴底，贴底改写极大值不读；实测吞吐 893 → 242131 帧/秒，持续流入单条 1000µs → 240µs。② **锁定滚动就不裁剪**（贴底与裁剪绑在一个 `if` 里）→ 实测锁定后喂 5000 条 DOM 涨到 5000 行；现裁剪恒做，冻结语义交给 `_frozen`/`_atBottom`。③ **`renderHistoryLines` 的 50ms 节流是「丢弃」不是「合并」** → 实测渲染后立刻清空导致显示区空白、连续切换显示模式后画面与 state 不一致；现改为不丢弃（合并由批量队列承担）。④ **`expandHistory` 在 `_renderStart==0` 时第一步就 return**，而取更早的两条路都在 return 之后 → 「加载更早」整条不可达（实测 0 次 RPC、无提示）；现拆开「扩窗」与「取更早」。⑤ 冻结期间未读区用占位块撑高度：视图不动（实测 scrollTop 变化 0px）、滚动条继续变化（+123002px）、DOM 仍有界。⑥ 窗口行数改为按视口推导（`calcRenderCount()` 此前从未被调用）+ `设置 → 高级 → 历史窗口行数` 可覆盖。⑦ 补 `loadTabHistory`/`clearDisplay` 的 null 守卫，消掉控制台那条 `Cannot set properties of null (setting 'innerHTML')`。夹具 `_audit/sendhl_test/hist_fixture.py`（8 项）+ 两处变异验证 |
+| 52 | `probeRead` 的 1s 隐藏下限让默认波特率永远轮不到 | 已修复 | v0.7.5.3 修复。该预算实际只决定「等第一个字节最多等多久」（循环里 `len(resp) > 0` 排在 `After(deadline)` 之前，收到字节后下一个空读就结束），所以沉默端口独自承担成本。原 `max(3×timeout_ms, 1s)` 在默认 `timeout_ms=200` 下把每次尝试从 600ms 抬到 1000ms → 每档 3s、7 档 21s > 12s 预算 → 默认列表里 230400/460800/921600 永远轮不到。现 `max(3×timeout_ms, 300ms)`（300ms 仅防呆）+ 总预算 15s；实测单次尝试 1106 → 753ms，默认配置 13.4s 覆盖全部 7 档、skipped 为空。新增 `TestDefaultBudgetCoversShippedBaudList` 把预算与随包 `probe.toml` 绑定 |
+| 53 | CLI 的探测输出漏掉 `busy` 字段（文档承诺了它） | 已修复 | v0.7.5.3 修复（0.7.5.2 轮报告 P1）。守护进程返回了 `busy`，CLI 序列化时丢掉，导致 `操作说明.md` 写的 `("busy": true)` 与 `grep busy` 自检永远匹配不到。抽出 `probeOutcomeJSON` 并加 `TestProbeOutcomeJSONIncludesBusy` / `TestProbeOutcomeJSONBusyAlwaysPresent` 锁住字段集合 |
+
+## v0.7.5.3 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 历史窗口按批渲染（TODO #51） | 入站帧队列 + rAF 合并成批；一批一次 fragment/裁剪/贴底；贴底改写不读。吞吐 893 → 242131 帧/秒，持续流入单条 1000 → 240µs |
+| 裁剪恒定执行（TODO #51） | 此前锁定时完全不裁剪，实测喂 5000 条 DOM 5000 行；现恒做，冻结由 `_frozen`/`_atBottom` 表达 |
+| 往回翻：视图冻结但滚动条继续变化（TODO #51） | 未读区用占位块撑高度；实测 scrollTop 变化 0px、内容高度 +123002px、DOM 有界 |
+| 去掉丢弃式重绘节流（TODO #51） | 实测清空后空白、切换显示模式画面不跟随；改为不丢弃 |
+| 「加载更早」可达（TODO #51） | `expandHistory` 拆开「扩窗」与「取更早」，`_renderStart==0` 时仍会去取 |
+| 窗口行数按视口推导 + 高级设置（TODO #51） | 接上从未被调用的 `calcRenderCount()`；`设置 → 高级 → 历史窗口行数`（自动/150/300/400/600），9 语言 |
+| 控制台 null 异常（TODO #51） | `loadTabHistory` / `clearDisplay` 补 null 守卫 |
+| 默认波特率全覆盖（TODO #52，按 C1 方案） | 去掉 1s 隐藏下限 + 预算 15s；13.4s 覆盖全部 7 档、skipped 为空 |
+| CLI 补 `busy`（TODO #53，报告 P1） | 抽出 `probeOutcomeJSON` 并加字段集合测试 |
+
 ## v0.7.5.2 已完成
 
 | 需求 | 说明 |
