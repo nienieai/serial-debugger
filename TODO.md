@@ -107,6 +107,17 @@
 | 69 | 队列 `delay` 显式写 0 被当作「未设置」回落到 1000 ms | 已修复 | v0.7.5.7 修复（外部报告 0.7.5.5 轮 §八，P3）。`delay` 用 `int` 承载，JSON 零值语义把「省略」与「显式 0」混成一件，再被 `delay < 1 → 1000` 兜底 —— 写 0 等于等 1 秒（报告实测 20 条 19.2 s，与 `delay:1000` 几乎一致，想连发只能写 1）。现语义定为：省略/null = 1000（保持文档承诺）、0 = 不额外延时、1–60000 原样、>60000 夹住、负数报错；「省略」与「显式 0」的区分做在 API 边界（CLI 用 `*int`、MCP 写前归一化）。实测 10 条一轮：省略 9102 ms / 0 111 ms / 1 106 ms / 10 213 ms / 1000 9060 ms |
 | 70 | `DecodeEntryContentOnly` 的 delay 下限（5）严于编码器下限（1），delay=1~4 的条目会把二进制头当数据发出去 | 已修复 | v0.7.5.7 修复（查 §八 时顺带发现，报告未覆盖）。`EncodeEntry` 允许 1，而剥头的启发式校验写 `delay < 5 → 这不是条目`，于是 delay=1~4 的条目走 `send.trigger(raw=false)` 时原样发出 `版本+标志+delay+note_len+内容`。该路径由 `App.TriggerSend` 与 IPC `send.trigger{raw:false}` 暴露（GUI 当前未调用、MCP 用 `raw:true`），所以一直没被踩到。两处下限现统一到 `DelayMax` 常量，回归 `TestDecodeEntryContentOnlyStripsHeaderForEveryEncodableDelay` |
 
+| 71 | 凭一份**陈旧事件载荷**就清掉活着的会话，导致「打开串口时多建一个进程 + 多出一个标签页」 | 已修复 | v0.7.5.8 修复（用户人工复测 + 其机器上的 `daemon.log` 定案）。`syncDaemonSessions` 第 3 步只要载荷里没有某个 sessionId 就清掉它；而事件载荷可能是**该进程创建之前**发出的（实测 `processes: []` 落在标签页刚拿到 sessionId 之后）。会话被清 → 标签页看起来空闲 → 点「打开串口」再建一个进程（旧的成孤儿，`daemon.log`: `create idle #1` → 3.4s → `create idle #2` → `connect #2`）→ 孤儿被第 1 步补成多余标签页。现改为：**只有当载荷会移除在线会话时才先 `GetSessions()` 核实**（新增不核实），另保留 0.7.5.6 的孤儿找回作第二道网。夹具 F 节确定性复现（注入陈旧空载荷），变异验证还原后能重建出「1→2 进程 + 多一个标签页」 |
+| 72 | 会话清理的 3 秒宽限期是死代码（`connectedAt` 从来没人写） | 已修复 | v0.7.5.8 修复。第 3 步写着 `if (tab.connectedAt && Date.now() - tab.connectedAt < 3000) return;`，但全仓库**只有这一处读**、没有任何赋值 —— 于是「刚连上就收到不含该会话的事件」时保护完全失效。现于 `openPort` / `openForwardPorts` / 孤儿找回三处写入 `connectedAt` |
+
+## v0.7.5.8 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 陈旧载荷不再清掉活着的会话（TODO #71） | 会移除在线会话时才先 `GetSessions()` 核实；新增不核实 |
+| 宽限期真正生效（TODO #72） | 三处写入 `connectedAt` |
+| 验证 | 夹具 F 节确定性复现 + 变异 D6 还原后重建用户现象；六个变异 6/6 捕获，夹具 28/28 |
+
 ## v0.7.5.7 已完成
 
 | 需求 | 说明 |

@@ -1798,6 +1798,15 @@ function onDaemonGone(reason) {
 // ---- session sync ----
 let syncPending = false;
 
+// 事件载荷用 "processId"，GetSessions 用 "id"；统一成 "id"。
+function _normalizeSessions(list) {
+  return (list || []).map(p => {
+    const e = Object.assign({}, p);
+    if (e.processId !== undefined && e.id === undefined) e.id = e.processId;
+    return e;
+  });
+}
+
 // 把守护进程会话的当前状态写到一个标签页上（标签、在线状态、参数、查看者）。
 // 「找回原有标签页」与「新建标签页」两条路共用，避免两处判断漂移。
 // （第 2 步「更新已有标签页」是它的增量版本：只在实际变化时打 tabsChanged。）
@@ -1831,18 +1840,31 @@ async function syncDaemonSessions(procData) {
   let daemonSessions;
   // Accept process-changed push data or fetch explicitly
   if (procData && procData.processes) {
-    // Event data uses "processId"; normalize to "id" for consistency with GetSessions()
-    daemonSessions = procData.processes.map(p => {
-      const e = Object.assign({}, p);
-      if (e.processId !== undefined && e.id === undefined) e.id = e.processId;
-      return e;
-    });
+    daemonSessions = _normalizeSessions(procData.processes);
   } else {
     try {
-      daemonSessions = await window.go.main.App.GetSessions();
+      daemonSessions = _normalizeSessions(await window.go.main.App.GetSessions());
     } catch { return; }
   }
   if (!daemonSessions) daemonSessions = [];
+
+  // ⚠️ 事件载荷可能是**陈旧**的：它可能是在某个进程创建之前发出的（实测出现过
+  // `processes: []` 落在某个标签页刚拿到 sessionId 之后）。仅凭这样一份载荷就把
+  // 活着的会话清掉，后果是连锁的：
+  //   sessionId 被清 → 标签页看起来是空闲的 → 点「打开串口」时**又建一个进程** →
+  //   旧进程随后被第 1 步补成一个多余标签页（用户实测的「启动串口后自动多了一个
+  //   标签页」，daemon.log 里是 create idle #1 → create idle #2 → connect #2）。
+  // 所以只要这份载荷会**移除**某个在线标签页的会话，就先向守护进程核实一次。
+  if (procData && procData.processes) {
+    const payloadIds = new Set(daemonSessions.map(s => s.id));
+    const wouldDrop = state.tabs.some(t => t.sessionId && !payloadIds.has(t.sessionId));
+    if (wouldDrop) {
+      try {
+        const fresh = _normalizeSessions(await window.go.main.App.GetSessions());
+        if (fresh && fresh.length >= 0) daemonSessions = fresh;
+      } catch {}
+    }
+  }
 
   // Auto-create idle process if daemon just came online with no processes.
   // Skip while a tab is being intentionally closed (suppress window to avoid
@@ -1874,6 +1896,7 @@ async function syncDaemonSessions(procData) {
             _applyDaemonSessionToTab(orphan, ds);
             orphan.sessionId = ds.id;
             orphan._orphanSid = null;
+            orphan.connectedAt = Date.now();   // 让下面的「刚挂上会话」宽限期真正生效
             guiSessionIds.add(ds.id);
             if (ds.id && state.daemonOnline) {
               window.go.main.App.StartTabDecoder(ds.id);
@@ -1960,6 +1983,9 @@ async function syncDaemonSessions(procData) {
   const removed = [];
   state.tabs.forEach((tab, i) => {
     if (tab.sessionId && !dsMap[tab.sessionId]) {
+      // 刚挂上会话的这几秒内一律不动它：连接/重连的窗口期里，事件载荷可能还没有
+      // 这个会话（见上面「陈旧载荷」的说明）。注意 connectedAt 此前**从来没人写过**，
+      // 这道宽限期一直是死代码。
       if (tab.connectedAt && (Date.now() - tab.connectedAt) < 3000) {
         return;
       }
@@ -2759,6 +2785,8 @@ async function openPort() {
       try { tab.sessionId = await window.go.main.App.CreateIdleProcess(); }
       finally { _creatingTab = false; }
     }
+    // 记录「刚挂上会话」的时刻：同步的清理逻辑靠它避开连接窗口期的事件载荷
+    tab.connectedAt = Date.now();
 
     // Connect the idle process to the selected port
     await window.go.main.App.ConnectSession(tab.sessionId, cfg);
@@ -2809,6 +2837,7 @@ async function openForwardPorts() {
       try { tab.sessionId = await window.go.main.App.CreateIdleProcess(); }
       finally { _creatingTab = false; }
     }
+    tab.connectedAt = Date.now();   // 同 openPort：给同步清理留出连接窗口期
 
     await window.go.main.App.ForwardConnect(tab.sessionId, cfgA, cfgB);
 
