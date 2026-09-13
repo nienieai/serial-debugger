@@ -280,7 +280,7 @@ var allTools = []toolDef{
 			"baudRates":  {Type: "array", Description: "Baud rates to try (e.g. [9600, 115200]). Omit to use probe.toml defaults."},
 			"rules":      {Type: "array", Description: "Rule names to apply. Omit to use all rules from probe.toml."},
 			"configPath": {Type: "string", Description: "Path to probe.toml config file. Omit to auto-discover."},
-			"budgetMs":   {Type: "integer", Description: "Overall time budget in ms for the whole call (default 12000). Raise it if a device only answers at a baud rate late in the list; lower it if you want a fast answer."},
+			"budgetMs":   {Type: "integer", Description: "Overall time budget in ms for the whole call (default 15000). Raise it if a device only answers at a baud rate late in the list; lower it if you want a fast answer."},
 		}},
 	},
 }

@@ -83,6 +83,12 @@ type ProbeOutcome struct {
 // 默认预算取值：设备不应答时每次尝试花 max(3×timeout_ms, 300ms)。
 // 默认 timeout_ms=200 → 每次 600ms → 每档（3 条规则）1.8s → 全部 7 档约 12.6s
 // 加上开关串口的开销，15s 能覆盖默认 baud_rates 的全部档位。
+//
+// ⚠️ 改这里的数字（或改 probeRead 里的预算公式、config/probe.toml 的 timeout_ms）
+// 必须同步更新 config/probe.toml 顶部注释里的推导——那份注释是给用户看的唯一
+// 成本说明。0.7.5.3 轮就是漏了这一步（注释还写着旧的 1s 下限与 12s 预算），
+// 被外部测试报告逮到。功能上有 TestDefaultBudgetCoversShippedBaudList 兜底，
+// 但注释漂移只能靠这条提醒。
 const defaultProbeBudget = 15 * time.Second
 
 // probeMu 保证同一时刻只有一次探测在跑。并发的第二个探测原先会因端口被占

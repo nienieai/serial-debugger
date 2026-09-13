@@ -1,4 +1,4 @@
-# serial-debugger — 跨平台串口调试工具 v0.7.5.3
+# serial-debugger — 跨平台串口调试工具 v0.7.5.4
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -200,6 +200,16 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
 ## 版本历史
+
+### 0.7.5.4（2026-09-13）
+
+小版本，修掉 0.7.5.3 轮外部报告的三处发现——**都属文档/提示级，不影响功能**，但都是我自己的疏漏。
+
+- **`config/probe.toml` 的注释没跟着改**（报告 §4.1）。0.7.5.3 把每次尝试的成本从 1 s 降到 600 ms、总预算 12 s 提到 15 s，但随包配置顶部的注释还写着旧的 `max(3×timeout_ms, 1s) ≈ 3s` 与「默认 12s」——读者照注释估算会得出「每档 3 秒、7 档 21 秒」的旧结论，与实测（1.8 s / 12.6 s）不符。现按实际公式重写，并把 `timeout_ms` 说明成「唯一且诚实的旋钮」。另在 `daemon/probe.go` 的预算常量旁加了提醒：改预算数字必须同步这份注释（功能有 `TestDefaultBudgetCoversShippedBaudList` 兜底，注释漂移只能靠提醒）。
+
+- **未知长选项被当成端口名**（报告 §4.2）。`serial-cli probe --json` 不报错，而是把 `--json` 解释成一个端口，结果里多出一条「端口 `--json` 打不开」的 `skipped`——读者会真的以为有个端口有问题。现抽出 `parseProbeArgs`：未知的 `-` 前缀参数直接报 `未知参数 "--json"（probe 支持：端口名…、--config <路径>、--budget <毫秒>）`；`--config` / `--budget` 缺值或值非法也分别报清楚。校验提前到**建立连接之前**——参数写错不该等到连上守护进程才报出来，没有守护进程时更是根本报不出来。附 3 条单元测试（拒绝未知 flag、拒绝缺值、正常用法照旧）。
+
+- **MCP 的 `budgetMs` schema 默认值滞后**（报告 §6.2.4）。工具描述里写 `default 12000`，实际已是 15000。已同步。
 
 ### 0.7.5.3（2026-09-13）
 

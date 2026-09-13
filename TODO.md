@@ -86,6 +86,18 @@
 | 52 | `probeRead` 的 1s 隐藏下限让默认波特率永远轮不到 | 已修复 | v0.7.5.3 修复。该预算实际只决定「等第一个字节最多等多久」（循环里 `len(resp) > 0` 排在 `After(deadline)` 之前，收到字节后下一个空读就结束），所以沉默端口独自承担成本。原 `max(3×timeout_ms, 1s)` 在默认 `timeout_ms=200` 下把每次尝试从 600ms 抬到 1000ms → 每档 3s、7 档 21s > 12s 预算 → 默认列表里 230400/460800/921600 永远轮不到。现 `max(3×timeout_ms, 300ms)`（300ms 仅防呆）+ 总预算 15s；实测单次尝试 1106 → 753ms，默认配置 13.4s 覆盖全部 7 档、skipped 为空。新增 `TestDefaultBudgetCoversShippedBaudList` 把预算与随包 `probe.toml` 绑定 |
 | 53 | CLI 的探测输出漏掉 `busy` 字段（文档承诺了它） | 已修复 | v0.7.5.3 修复（0.7.5.2 轮报告 P1）。守护进程返回了 `busy`，CLI 序列化时丢掉，导致 `操作说明.md` 写的 `("busy": true)` 与 `grep busy` 自检永远匹配不到。抽出 `probeOutcomeJSON` 并加 `TestProbeOutcomeJSONIncludesBusy` / `TestProbeOutcomeJSONBusyAlwaysPresent` 锁住字段集合 |
 
+| 54 | `config/probe.toml` 顶部注释与实际预算公式脱节 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §4.1）。v0.7.5.3 把每次尝试成本从 1s 降到 600ms、总预算 12s → 15s，但随包配置的注释仍写 `max(3×timeout_ms, 1s) ≈ 3s` 与「默认 12s」，照注释估算会得出「每档 3s、7 档 21s」的旧结论。现按实际公式重写，并在 `daemon/probe.go` 的预算常量旁加提醒：改预算数字必须同步这份注释（功能由 `TestDefaultBudgetCoversShippedBaudList` 兜底，注释漂移只能靠提醒） |
+| 55 | CLI 把未知长选项当成端口名静默接受 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §4.2）。`serial-cli probe --json` 不报错，而是把 `--json` 当作端口，结果里多一条「端口 `--json` 打不开」的 skipped，读者会以为真有个端口有问题。现抽出 `parseProbeArgs`：未知 `-` 前缀参数直接报错，`--config`/`--budget` 缺值或非法值分别报清楚；校验提前到建立连接之前（参数写错不该等连上守护进程才报）。附 3 条单元测试。**未动其他命令**：它们的多余参数会走到「进程不存在」这类明确错误，不会静默产生误导性条目，改动风险大于收益 |
+| 56 | MCP 工具描述里 `budgetMs` 的默认值滞后 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §6.2.4）。`serial_probe_ports` 的 inputSchema 写 `default 12000`，实际已是 15000 |
+
+## v0.7.5.4 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 同步 `probe.toml` 注释（TODO #54，报告 §4.1） | 按实际公式重写；`probe.go` 加漂移提醒 |
+| 未知参数应报错（TODO #55，报告 §4.2） | 抽出 `parseProbeArgs` + 提前校验 + 3 条单元测试 |
+| 同步 MCP schema 默认值（TODO #56，报告 §6.2.4） | `default 12000` → `15000` |
+
 ## v0.7.5.3 已完成
 
 | 需求 | 说明 |

@@ -44,3 +44,55 @@ func TestProbeOutcomeJSONBusyAlwaysPresent(t *testing.T) {
 		t.Errorf("busy 应为 false，实际 %v", v)
 	}
 }
+
+// 未知的长选项必须报错，不能被当成端口名。
+//
+// 此前 `probe --json` 会把 `--json` 当成端口，结果里多出一条
+// 「端口 --json 打不开」的 skipped，读者会以为真有个端口有问题
+// （外部测试报告 0.7.5.3 轮 §4.2）。
+func TestParseProbeArgsRejectsUnknownFlags(t *testing.T) {
+	for _, bad := range [][]string{{"--json"}, {"-j"}, {"COM3", "--json"}, {"--nope=1"}} {
+		ports, _, _, err := parseProbeArgs(bad)
+		if err == nil {
+			t.Errorf("%v 应报错，实际把 %v 当成了端口", bad, ports)
+		}
+	}
+}
+
+// 缺值的 --config / --budget 要报清楚，而不是退化成端口名。
+func TestParseProbeArgsRejectsMissingValues(t *testing.T) {
+	if _, _, _, err := parseProbeArgs([]string{"--config"}); err == nil {
+		t.Error("--config 缺值应报错")
+	}
+	if _, _, _, err := parseProbeArgs([]string{"--budget"}); err == nil {
+		t.Error("--budget 缺值应报错")
+	}
+	if _, _, _, err := parseProbeArgs([]string{"--budget", "abc"}); err == nil {
+		t.Error("--budget 非数字应报错")
+	}
+	if _, _, _, err := parseProbeArgs([]string{"--budget", "0"}); err == nil {
+		t.Error("--budget 0 应报错")
+	}
+}
+
+// 正常用法必须照旧工作（端口可以有多个，选项可以混在中间）。
+func TestParseProbeArgsAcceptsValidForms(t *testing.T) {
+	ports, cfg, budget, err := parseProbeArgs([]string{"COM3", "COM4", "--config", "x.toml", "--budget", "3000"})
+	if err != nil {
+		t.Fatalf("正常参数不应报错: %v", err)
+	}
+	if len(ports) != 2 || ports[0] != "COM3" || ports[1] != "COM4" {
+		t.Errorf("端口解析错误: %v", ports)
+	}
+	if cfg != "x.toml" {
+		t.Errorf("configPath 解析错误: %q", cfg)
+	}
+	if budget != 3000 {
+		t.Errorf("budgetMs 解析错误: %d", budget)
+	}
+
+	ports2, cfg2, budget2, err2 := parseProbeArgs(nil)
+	if err2 != nil || len(ports2) != 0 || cfg2 != "" || budget2 != 0 {
+		t.Errorf("无参数应得到空结果: ports=%v cfg=%q budget=%d err=%v", ports2, cfg2, budget2, err2)
+	}
+}

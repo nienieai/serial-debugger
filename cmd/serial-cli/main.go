@@ -269,6 +269,16 @@ func runCommandInteractive(dc *client.DaemonClient, args []string) {
 }
 
 func runCommand(args []string) {
+	// probe 的参数先单独校验一次：参数写错不该等到连上守护进程才报出来，
+	// 没有守护进程时更是根本报不出来（外部报告 §4.2 的 `probe --json` 就撞在这）。
+	// 下面 case 里会再解析一次，成本可忽略。
+	if args[0] == "probe" {
+		if _, _, _, perr := parseProbeArgs(args[1:]); perr != nil {
+			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", perr.Error())
+			os.Exit(1)
+		}
+	}
+
 	switch args[0] {
 	case "start":
 		cmdStart()
@@ -921,19 +931,10 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 
 	case "probe":
-		var ports []string
-		configPath := ""
-		budgetMs := 0
-		for i := 1; i < len(args); i++ {
-			if args[i] == "--config" && i+1 < len(args) {
-				configPath = args[i+1]
-				i++
-			} else if args[i] == "--budget" && i+1 < len(args) {
-				budgetMs, _ = strconv.Atoi(args[i+1])
-				i++
-			} else {
-				ports = append(ports, args[i])
-			}
+		ports, configPath, budgetMs, perr := parseProbeArgs(args[1:])
+		if perr != nil {
+			errExit(perr, interactive)
+			return
 		}
 		outcome, err := dc.ProbePorts(ports, nil, nil, configPath, budgetMs)
 		if err != nil {
@@ -1205,6 +1206,39 @@ func probeOutcomeJSON(o *client.ProbeOutcome) map[string]any {
 		"budgetExhausted": o.BudgetExhausted,
 		"busy":            o.Busy,
 	}
+}
+
+// parseProbeArgs 解析 `probe` 的参数。
+//
+// 未知的长选项**必须报错**：此前 `--json` 这类不存在的 flag 会被当成端口名，
+// 于是结果里多出一条「端口 --json 打不开」的 skipped，读者会真的以为有个端口有问题
+// （外部测试报告 0.7.5.3 轮 §4.2）。缺值的 `--config` / `--budget` 也一并报清楚。
+func parseProbeArgs(args []string) (ports []string, configPath string, budgetMs int, err error) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--config":
+			if i+1 >= len(args) {
+				return nil, "", 0, fmt.Errorf("--config 需要一个配置文件路径")
+			}
+			configPath = args[i+1]
+			i++
+		case args[i] == "--budget":
+			if i+1 >= len(args) {
+				return nil, "", 0, fmt.Errorf("--budget 需要一个毫秒数")
+			}
+			n, aerr := strconv.Atoi(args[i+1])
+			if aerr != nil || n <= 0 {
+				return nil, "", 0, fmt.Errorf("--budget 需要正整数毫秒数，实际为 %q", args[i+1])
+			}
+			budgetMs = n
+			i++
+		case len(args[i]) > 1 && strings.HasPrefix(args[i], "-"):
+			return nil, "", 0, fmt.Errorf("未知参数 %q（probe 支持：端口名…、--config <路径>、--budget <毫秒>）", args[i])
+		default:
+			ports = append(ports, args[i])
+		}
+	}
+	return ports, configPath, budgetMs, nil
 }
 
 func printHelp() {	fmt.Print(`用法:
