@@ -76,16 +76,18 @@ func NewDaemonClient(source string) (*DaemonClient, error) {
 
 // handshakeRetries 是注册握手失败后的重试次数（不含首次）。
 //
-// 为什么需要：在**并发**建立会话时，注册握手会以约 8% 的概率失败——实测
-// 8 路并行 × 60 轮 = 42/480（8.8%），而串行只有 1/300（0.3%）。现场证据是
-// 矛盾的：守护进程侧显示该会话**已完成注册**（`addSession` 位于两条回连管道
-// 都成功之后，且无「写注册确认失败」记录、会话也未被驱逐），客户端侧却在读
-// `daemonConn` 时报错，于是报「注册未完成」。这指向 pipe 层并发下的句柄/缓冲
-// 竞态，尚未定位。
+// 为什么需要：在**机器有负载**时建立会话，注册握手会以可观概率失败。实测同一台
+// i7-3632QM 上：空闲时串行 300 次仅 1 次（0.3%），而制造并发负载后 8 路并行
+// × 60 轮 = 42/480（8.8%）。外部测试机在 Agent 持续占用下测得 6.3%~11%。
 //
-// 在根因查明前，重试是恰当的工程处置：每次重试都用**全新的 clientId**，因而
-// 是全新的 resp/sub 管道名，不会踩到上一次的残留实例。失败仍会被完整记录
-// （见 NewDaemonClientWithEvents 的最终错误），不会把问题藏起来。
+// 现场证据是矛盾的：守护进程侧显示该会话**已完成注册**（`addSession` 位于两条
+// 回连管道都成功之后，且无「写注册确认失败」记录、会话也未被驱逐），客户端侧
+// 却在读 `daemonConn` 时报错，于是报「注册未完成」。指向 pipe 层在负载下的
+// 句柄/缓冲竞态，尚未定位。
+//
+// 注意失败在**时间上相关**：外部报告显示 3 次尝试后失败率仅从 7.8% 降到 6.3%，
+// 若三次独立则应为 0.08% 量级——说明失败会成串发生（同一个持续状态下的几次
+// 尝试一起失败）。因此重试只是缓解，真正解决办法仍待定位根因。
 const handshakeRetries = 2
 
 // NewDaemonClientWithEvents creates a 3-pipe client with a custom event subscription list.
@@ -95,11 +97,16 @@ const handshakeRetries = 2
 func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient, error) {
 	var lastErr error
 	for attempt := 0; attempt <= handshakeRetries; attempt++ {
+		t0 := time.Now()
 		c, err := connectOnce(source, subscribe)
 		if err == nil {
 			return c, nil
 		}
 		lastErr = err
+		if f, ferr := os.OpenFile(os.Getenv("ST_DIAG_FILE"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); ferr == nil {
+			fmt.Fprintf(f, "ATTEMPT_FAIL #%d elapsed=%.3fs err=%v\n", attempt+1, time.Since(t0).Seconds(), err)
+			f.Close()
+		}
 	}
 	return nil, fmt.Errorf("注册握手失败（已尝试 %d 次）: %w", handshakeRetries+1, lastErr)
 }
@@ -204,6 +211,10 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	}()
 
 	// reasonFromMsg 把 daemonConn 上收到的第一条消息翻译成失败原因。
+	//
+	// 关键：成功注册的确认 **不是失败**。守护进程在两条回连管道都成功之后才写
+	// 这条确认（daemon/ipc.go:532，位于 addSession 之后），所以收到它就说明
+	// 登记已完成——不能因为「respCh 还没就绪」就把它当失败。
 	reasonFromMsg := func(msg *protocol.RawMsg) (string, bool) {
 		if msg == nil {
 			return "守护进程已接受注册，但注册确认未到达（连接在注册过程中被关闭）；" +
@@ -212,82 +223,111 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 		if msg.Error != "" {
 			return msg.Error, true
 		}
-		// 成功的注册确认（{"registered":true}）不是失败。
 		return "", false
 	}
 
-	// failFast 把 daemonConn 上的「提前失败」变成一条可读的错误。
-	//
-	// 单独监听它（而不是只在超时分支里顺手取一下）是必要的：守护进程回连失败时
-	// 客户端要等的那条 resp/sub 管道**永远不会来**，所以只等超时的话，即使原因
-	// 在几百微秒内就已到达，用户仍要干等满 5 秒才看到它。实测：原因是 0.5ms
-	// 到达的，而连接要 2s（测试用超时）才断开。
-	failFast := func() (string, bool) {
-		select {
-		case r := <-earlyCh:
-			return reasonFromMsg(r.msg)
-		default:
-			return "", false
-		}
-	}
-
 	var respConn, subConn io.ReadWriteCloser
-	select {
-	case respConn = <-respCh:
-	case err := <-respErrCh:
-		daemonConn.Close()
-		subLn.Close()
-		return nil, fmt.Errorf("resp pipe: %w", err)
-	case r := <-earlyCh:
-		// 到这里说明 resp 回连没成，而 daemonConn 上有结论了。
-		//
-		// 注意措辞：不能断言「守护进程拒绝了注册」——实测反例是守护进程**已经**
-		// 走完注册（日志有「已注册」）却没能把确认送到客户端，说成「拒绝」会把
-		// 排查方向带偏。只陈述观测到的事实。
-		reason, _ := reasonFromMsg(r.msg)
-		if r.err != nil {
-			reason = fmt.Sprintf("守护进程在回连 resp 管道前关闭了连接（读注册管道失败: %v）", r.err)
+	var earlyRes earlyResult
+	earlyDone := false
+
+	// 统一的截止时间：必须让两条管道共享同一个 handshakeTimeout，不能在
+	// respCh 分支里再开一个新的超时窗口，否则最坏情况要等 2×handshakeTimeout
+	// （也会让「握手失败」的重试代价翻倍）。
+	deadline := time.After(handshakeTimeout)
+
+	for respConn == nil || subConn == nil {
+		// 两条管道都已就绪 —— 成功。可能还剩下 earlyCh 的读取结果没取，
+		// 交给调用方在返回前消费（见握手成功后的收尾）。
+		if respConn != nil && subConn != nil {
+			break
 		}
-		daemonConn.Close()
-		respLn.Close()
-		subLn.Close()
-		return nil, fmt.Errorf("注册未完成: %s", reason)
-	case <-time.After(handshakeTimeout):
-		reason := fmt.Sprintf("守护进程未在 %v 内回连 resp 管道", handshakeTimeout)
-		if e, ok := failFast(); ok {
-			reason = "注册未完成: " + e
+		select {
+		case c := <-respCh:
+			respConn = c
+		case c := <-subCh:
+			subConn = c
+		case err := <-respErrCh:
+			daemonConn.Close()
+			if subConn != nil {
+				subConn.Close()
+			}
+			respLn.Close()
+			subLn.Close()
+			return nil, fmt.Errorf("resp pipe: %w", err)
+		case err := <-subErrCh:
+			daemonConn.Close()
+			if respConn != nil {
+				respConn.Close()
+			}
+			respLn.Close()
+			subLn.Close()
+			return nil, fmt.Errorf("sub pipe: %w", err)
+		case r := <-earlyCh:
+			earlyRes, earlyDone = r, true
+			// 只有**错误**才中断握手。成功确认只说明守护进程已登记；
+			// resp/sub 还在路上，必须继续等它们。
+			if reason, failed := reasonFromMsg(r.msg); failed {
+				daemonConn.Close()
+				if respConn != nil {
+					respConn.Close()
+				}
+				if subConn != nil {
+					subConn.Close()
+				}
+				respLn.Close()
+				subLn.Close()
+				return nil, fmt.Errorf("注册未完成: %s", reason)
+			}
+			// 成功确认：无失败原因，继续等在途的 resp / sub 管道。
+		case <-deadline:
+			// 超时：把至今掌握的信息（含 earlyCh 上的结论）拼成可读错误。
+			var missing []string
+			if respConn == nil {
+				missing = append(missing, "resp")
+			}
+			if subConn == nil {
+				missing = append(missing, "sub")
+			}
+			// 非阻塞地收一下 earlyCh：可能刚好在这时到达。
+			if !earlyDone {
+				select {
+				case r := <-earlyCh:
+					earlyRes, earlyDone = r, true
+				default:
+				}
+			}
+			reason := fmt.Sprintf("守护进程未在 %v 内回连 %s 管道",
+				handshakeTimeout, strings.Join(missing, " / "))
+			if earlyDone {
+				if e, failed := reasonFromMsg(earlyRes.msg); failed {
+					reason = "注册未完成: " + e
+				} else {
+					reason = fmt.Sprintf(
+						"守护进程已确认注册，但 %s 管道未在 %v 内就绪（本地 Accept 未完成）",
+						strings.Join(missing, " / "), handshakeTimeout)
+				}
+			}
+			daemonConn.Close()
+			if respConn != nil {
+				respConn.Close()
+			}
+			if subConn != nil {
+				subConn.Close()
+			}
+			respLn.Close()
+			subLn.Close()
+			return nil, fmt.Errorf("%s", reason)
 		}
-		daemonConn.Close()
-		respLn.Close()
-		subLn.Close()
-		return nil, fmt.Errorf("%s", reason)
-	}
-	select {
-	case subConn = <-subCh:
-	case err := <-subErrCh:
-		daemonConn.Close()
-		respConn.Close()
-		respLn.Close() // 此前漏关：握手重试会让每次失败泄漏一个 listener 及其预建管道实例
-		subLn.Close()
-		return nil, fmt.Errorf("sub pipe: %w", err)
-	case <-time.After(handshakeTimeout):
-		reason := fmt.Sprintf("守护进程未在 %v 内回连 sub 管道", handshakeTimeout)
-		if e, ok := failFast(); ok {
-			reason = "注册未完成: " + e
-		}
-		daemonConn.Close()
-		respConn.Close()
-		respLn.Close() // 同上
-		subLn.Close()
-		return nil, fmt.Errorf("%s", reason)
 	}
 
 	// 握手成功：确认 daemonConn 上那条注册响应已被消费。
-	// 正常情况下上面那个 goroutine 早已把它放进 earlyCh；这里只在它尚未
-	// 完成时收取，避免遗留协程在会话期间与后续写入争用这条管道。
-	select {
-	case <-earlyCh:
-	default:
+	// 它可能还没被 earlyCh 的协程读出来（守护进程写得晚），
+	// 此时若直接进入会话期，该协程会与 readRespLoop 争用这条管道。
+	if !earlyDone {
+		select {
+		case <-earlyCh:
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 
 	c := &DaemonClient{
