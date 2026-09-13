@@ -1873,7 +1873,18 @@ async function syncDaemonSessions(procData) {
   // autoCreateSession: add a local tab (no daemon process) when no tabs exist
   if (!suppress && state.autoCreateSession && daemonSessions.length === 0 && state.tabs.length === 0) {
     await addTab(false);  // add tab without switching (switchTo=false)
-    if (state.tabs.length > 0) daemonSessions = [];
+    // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
+    // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
+    // 列表判断「会话还在不在」—— 列表一空，刚挂上去的 sessionId 立刻被当成已消失
+    // 清掉（而 tab.connectedAt 又没人写，3 秒宽限期不生效）。标签页于是变成
+    // 「看起来空闲」，用户点「打开串口」时**又建一个进程**，旧进程随后被第 1 步补成
+    // 一个多余标签页。实测日志（0.7.5.8，用户机器）：
+    //   r4 create idle #1 → 5.2s → r8 create idle #2 → r9 history #1
+    // 正确做法：重新取一份权威列表，让第 1/3 步都看到真实状态。
+    try {
+      const refreshed = _normalizeSessions(await window.go.main.App.GetSessions());
+      if (refreshed && refreshed.length > 0) daemonSessions = refreshed;
+    } catch {}
   }
 
   const dsMap = {};
@@ -2449,6 +2460,10 @@ async function addTab(switchTo) {
     return;
   }
   var newTab2 = { id: state.tabCounter++, label: t('tab.idle_single', '单端口空闲'), sessionId: sid, portOpen: false, mode: 'single', source: 'gui', displayMode: 'text', txDisplayMode: 'text', p1DisplayMode: 'text', p2DisplayMode: 'text', scrollLocked: false, sendRatio: state.sendRatio || 0.3, quickPanelRatio: state.quickPanelRatio, quickPresets: [] };
+  // 刚挂上会话的时刻：同步的第 3 步靠它避开「列表还没包含这个会话」的窗口期
+  //（此前只有 openPort / openForwardPorts 写过这个字段，addTab 没写 —— 于是
+  //  一次不含该会话的同步就能把刚建出来的会话清掉，见文件上方那条日志证据）。
+  if (sid) newTab2.connectedAt = Date.now();
   newTab2._page = new TabPage(state.tabs.length, newTab2);
   var mainContent2 = document.getElementById('mainContent');
   if (mainContent2) { mainContent2.appendChild(newTab2._page.root); initTabPage(newTab2._page.root); }

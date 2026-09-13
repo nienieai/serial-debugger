@@ -1,4 +1,4 @@
-# serial-debugger — 跨平台串口调试工具 v0.7.5.8
+# serial-debugger — 跨平台串口调试工具 v0.7.5.9
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -201,6 +201,36 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
 ## 版本历史
+
+### 0.7.5.9（2026-09-13）
+
+0.7.5.8 之后用户人工复测**仍然**出现「新开守护进程 → 一个标签页 → 打开串口 → 又多一个标签页」。这次拿到了**完整时间戳的日志**，定位到真正的成因——**`autoCreateSession` 的自动建会话把自己的 `sessionId` 清掉了**。
+
+**证据**（用户机器 `0.7.5.8\logs\daemon.log`）：
+
+```
+00:03:07.463 r3 process.list      ← 同步取会话列表（守护进程里是空的）
+00:03:07.491 r4 create idle → #1  ← autoCreateSession 自动建 #1
+00:03:12.758 r8 create idle → #2  ← 5.2 秒后点「打开串口」，又建了一个
+00:03:12.763 r9 history #1        ← 紧接着读 #1 的历史 = 孤儿进程补出来的标签页
+```
+
+**根因**（两处，都在 `syncDaemonSessions` / `addTab`）：
+
+```js
+await addTab(false);
+if (state.tabs.length > 0) daemonSessions = [];   // ← 元凶
+```
+
+这行的本意是「别为刚建出来的进程再建一个标签页」，但**第 3 步正是用这份列表判断「会话还在不在」**——列表一空，刚挂上去的 `sessionId` 立刻被判定为「已消失」而清掉；而 `addTab` 又**从来没写过 `tab.connectedAt`**（0.7.5.8 只在 `openPort`/`openForwardPorts`/孤儿找回三处写了），所以那道 3 秒宽限期在这条路径上不生效。标签页于是变成「看起来空闲」→ 点「打开串口」时 `openPort` **又建一个进程** → 旧进程随即被同步第 1 步补成一个多余标签页。
+
+**修法**：
+- 自动建会话之后**重新取一份权威列表**（而不是清空），让第 1/3 步都看到真实状态；
+- `addTab` 也写 `connectedAt`，让宽限期在这条路径上生效（与上一条互为备份）。
+
+> **为什么 0.7.5.8 没修到**：0.7.5.8 修的是**陈旧事件载荷**清掉会话（另一条路径，确实存在）。本条是自动建会话**自己**把列表清空导致的。两者症状相同、成因不同——这也是为什么我上一轮在开发机复现时看着「自愈」了：那里守护进程恰好紧跟着广播了一次 `process-changed`，孤儿找回把会话救回来了；用户那次没等到。
+
+**验证**：新增 `_audit/sendhl_test/autocreate_unit_fixture.py`——**用桩替换 Go 绑定**（不碰真实守护进程与串口，因此不会打断任何人正在用的会话），确定性地走「空列表 → 自动建会话 → 打开串口」：8 项全绿，轨迹为 `CreateIdleProcess → GetSessions(核实) → ConnectSession:1:COM3`，只有 1 个进程 / 1 个标签页。变异验证 `autocreate_unit_mutation.py` 跑三种组合：**还原两处（= 0.7.5.8 的行为）** 时夹具完整重建出用户的现象（`sid=None`、`CreateIdleProcess` 两次、守护进程剩下 `["1/idle","2/connected"]`）；只还原其中一处仍全绿——如实标注两处互为备份。
 
 ### 0.7.5.8（2026-09-13）
 

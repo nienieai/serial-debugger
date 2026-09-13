@@ -15,19 +15,19 @@
     "#1": {
       "0000": {
         "fixed": {
-          "file_version": "0.7.5.8",
-          "product_version": "0.7.5.8"
+          "file_version": "0.7.5.9",
+          "product_version": "0.7.5.9"
         },
         "info": {
           "0409": {
             "CompanyName": "nienieai",
             "FileDescription": "串口调试工具 命令行客户端",
-            "FileVersion": "0.7.5.8",
+            "FileVersion": "0.7.5.9",
             "InternalName": "serial-cli",
             "LegalCopyright": "Copyright (c) 2026 nienieai (MIT License)",
             "OriginalFilename": "serial-cli.exe",
             "ProductName": "串口调试工具",
-            "ProductVersion": "0.7.5.8"
+            "ProductVersion": "0.7.5.9"
           }
         }
       }
