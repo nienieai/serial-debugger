@@ -923,23 +923,40 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 	case "probe":
 		var ports []string
 		configPath := ""
+		budgetMs := 0
 		for i := 1; i < len(args); i++ {
 			if args[i] == "--config" && i+1 < len(args) {
 				configPath = args[i+1]
+				i++
+			} else if args[i] == "--budget" && i+1 < len(args) {
+				budgetMs, _ = strconv.Atoi(args[i+1])
 				i++
 			} else {
 				ports = append(ports, args[i])
 			}
 		}
-		results, err := dc.ProbePorts(ports, nil, nil, configPath)
+		outcome, err := dc.ProbePorts(ports, nil, nil, configPath, budgetMs)
 		if err != nil {
 			errExit(err, interactive)
 			return
 		}
-		if len(results) == 0 {
+		// 「空结果」有三种截然不同的含义，必须让使用者分得清：
+		//   1. 探测过但没有规则命中        → 未检测到已知设备
+		//   2. 端口被跳过（占用/打不开/…） → 明确列出原因
+		//   3. 超出总预算没轮到            → 明确说明还有哪些没试
+		if len(outcome.Results) == 0 && len(outcome.Skipped) == 0 {
 			fmt.Println("未检测到已知设备")
-		} else {
-			printJSON(map[string]any{"results": results})
+			break
+		}
+		printJSON(map[string]any{
+			"results":         outcome.Results,
+			"skipped":         outcome.Skipped,
+			"attempts":        outcome.Attempts,
+			"elapsedMs":       outcome.ElapsedMs,
+			"budgetExhausted": outcome.BudgetExhausted,
+		})
+		if len(outcome.Results) == 0 {
+			fmt.Fprintln(os.Stderr, "注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
 		}
 
 	case "monitor":
@@ -1190,7 +1207,7 @@ func printHelp() {
 端口:
   ports                              可用串口列表（缓存，不刷新）
   refresh                            刷新串口列表
-  probe  [ports...] [--config <path>]  设备端口探测（发送探针帧识别设备类型）
+  probe  [ports...] [--config <path>] [--budget <ms>]  设备端口探测（发送探针帧识别设备类型）
 
 进程:
   create  [port] [baud] [--mode forward] [--portB <portB>]  创建进程（默认立即连接）

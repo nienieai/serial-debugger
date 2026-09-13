@@ -272,12 +272,15 @@ var allTools = []toolDef{
 	},
 	{
 		Name:        "serial_probe_ports",
-		Description: "Probe serial ports to detect device types. Sends probe frames defined in probe.toml and matches responses to identify connected devices (Modbus RTU, MCU control boards, etc.). Occupied ports are skipped automatically.",
+		Description: "Probe serial ports to detect device types. Sends probe frames defined in probe.toml and matches responses to identify connected devices (Modbus RTU, MCU control boards, etc.). " +
+			"An empty 'results' does NOT mean 'no device': read 'skipped' (ports that were not actually probed, with the reason — occupied by a session, could not be opened/read, or out of budget) and 'budgetExhausted' before concluding anything. " +
+			"Occupied ports are reported in 'skipped', never silently dropped.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"ports":      {Type: "array", Description: "Specific port names to probe (e.g. [\"COM3\"]). Omit to probe all available."},
 			"baudRates":  {Type: "array", Description: "Baud rates to try (e.g. [9600, 115200]). Omit to use probe.toml defaults."},
 			"rules":      {Type: "array", Description: "Rule names to apply. Omit to use all rules from probe.toml."},
 			"configPath": {Type: "string", Description: "Path to probe.toml config file. Omit to auto-discover."},
+			"budgetMs":   {Type: "integer", Description: "Overall time budget in ms for the whole call (default 12000). Raise it if a device only answers at a baud rate late in the list; lower it if you want a fast answer."},
 		}},
 	},
 }
@@ -969,6 +972,7 @@ func handleProbePorts(raw json.RawMessage) *toolCallResult {
 		BaudRates  []int    `json:"baudRates"`
 		Rules      []string `json:"rules"`
 		ConfigPath string   `json:"configPath"`
+		BudgetMs   int      `json:"budgetMs"`
 	}
 	json.Unmarshal(raw, &p)
 
@@ -984,6 +988,9 @@ func handleProbePorts(raw json.RawMessage) *toolCallResult {
 	}
 	if p.ConfigPath != "" {
 		params["configPath"] = p.ConfigPath
+	}
+	if p.BudgetMs > 0 {
+		params["budgetMs"] = p.BudgetMs
 	}
 
 	result, err := client.CallOnce(contract.PortsProbe, params, "mcp")
