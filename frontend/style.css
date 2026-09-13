@@ -742,15 +742,39 @@ button:disabled:active { transform: none; box-shadow: none; }
   color: var(--fg); background: var(--input-bg);
 }
 .send-input-mirror .send-mirror-placeholder { color: var(--placeholder); }
+/* ── 镜像层必须与 textarea 逐格同宽 ────────────────────────────────────────
+   textarea 自身文字是透明的，用户看到的是这一层，但光标与选区由 textarea
+   按「真实文本」排版后绘制。两者推进宽度必须完全一致，否则每替换一个控制
+   字符就错开一点，比例字体下会累积到整整一格。
+   旧做法把真实字符 font-size:0、让标记顶替这一格的宽度：实测设置里 10 种
+   可选字体有 8 种会错位（Cascadia Code/Fira Code/JetBrains Mono/
+   Source Code Pro 每空格 +8px，宋体 +7px）。
+   现在改为：真实字符一律保留原宽度，标记只做绝对定位叠加，不占任何宽度。 */
+.send-input-mirror .ctrl-char,
+.send-input-mirror .ctrl-fchar { position: relative; }
+.send-input-mirror .ctrl-real { font-size: inherit; }
+/* 标记用静态位置定位：水平落在被替换字符的起点、垂直保持基线对齐，
+   同时脱离文档流不占宽度。显式给 left/top 会让它偏离基线，故不写。 */
+.send-input-mirror .ctrl-mark { position: absolute; pointer-events: none; }
+/* Tab：真实 \t 保留原宽度以维持制表位，→ 叠加显示 */
+.send-input-mirror .ctrl-char[data-ws="tab"] .ctrl-real,
+.send-input-mirror .ctrl-fchar[data-ws="tab"] .ctrl-real {
+  color: transparent; position: relative;
+}
 .send-input-mirror .ctrl-char[data-ws="tab"] .ctrl-real::after,
 .send-input-mirror .ctrl-fchar[data-ws="tab"] .ctrl-real::after {
   content: '→'; position: absolute; left: 0; top: 0;
   color: var(--dc-ctrlFg, var(--fg)); font-weight: inherit; font-style: inherit;
   pointer-events: none;
 }
-.send-input-mirror .ctrl-char[data-ws="tab"] .ctrl-real,
-.send-input-mirror .ctrl-fchar[data-ws="tab"] .ctrl-real {
-  font-size: inherit; color: transparent; position: relative;
+/* Send hint — 发送框校验/失败提示（悬浮，不参与布局、不挡操作）。
+   贴右下角、浮在发送按钮上方：短输入只占第一行，这个位置正好是空白区，
+   不会压住用户刚敲进去的字。 */
+.o-send-hint { position: absolute; bottom: 40px; right: 12px; z-index: 4; max-width: 70%; pointer-events: none; }
+.t-send-hint {
+  display: inline-block; background: var(--bg3); color: var(--red);
+  border: 1px solid var(--red); border-radius: 6px; padding: 3px 9px;
+  font-size: 12px; line-height: 1.5; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 /* Send mirror hex coloring */
 .send-input-mirror .send-hex-ok { color: var(--dc-hexTx, var(--fg)); }

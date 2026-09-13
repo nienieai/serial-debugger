@@ -227,7 +227,7 @@ function _renderSendMirror(text, container) {
   if (!text) {
     var ph = document.createElement('span');
     ph.className = 'send-mirror-placeholder';
-    ph.textContent = '输入要发送的数据...';
+    ph.textContent = t('send.placeholder', '输入要发送的数据...');
     frag.appendChild(ph);
   } else {
     for (var i = 0; i < text.length; i++) {
@@ -278,7 +278,7 @@ function _renderSendMirrorHex(text, container) {
   if (!text) {
     var ph = document.createElement('span');
     ph.className = 'send-mirror-placeholder';
-    ph.textContent = '输入要发送的数据...';
+    ph.textContent = t('send.placeholder', '输入要发送的数据...');
     container.innerHTML = '';
     container.appendChild(ph);
     return;
@@ -837,6 +837,8 @@ function applyI18n() {
   // Send input placeholder
   var si = pageEl('sendInput');
   if (si) si.placeholder = t('send.placeholder', '输入要发送的数据...');
+  // 提示文字画在镜像层里（textarea 的 ::placeholder 是透明的），切语言后要重绘
+  if (si) _syncSendMirror(si);
   // P1/P2 display buttons
   var bp1 = pageEl('btnP1Display');
   if (bp1) bp1.textContent = (state.p1DisplayMode === 'hex') ? 'P1 H' : 'P1 文';
@@ -3396,7 +3398,9 @@ async function startAutoSend() {
 
   let fmt = ss.sendFormat;
   if (fmt === 'hex') {
-    data = data.replace(/\s/g, '');
+    data = _normalizeHexInput(data);
+    const problem = _hexInputProblem(data);
+    if (problem) { showSendHint(_hintText(problem)); return; }
     const ab = getAppendBytes('hex');
     if (ab.hex) data += ab.hex;
   } else {
@@ -3413,7 +3417,7 @@ async function startAutoSend() {
     _setAutoSendBtn(true);
   } catch (e) {
     _setAutoSendBtn(false);
-    showAlert(t('cli.error','错误'), t('serial.start_fail','启动失败: ') + e);
+    showAlert(t('cli.error','错误'), t('serial.start_fail','启动失败') + ': ' + e);
   }
 }
 
@@ -3444,6 +3448,61 @@ function getAppendBytes(fmt) {
 	return { text: '\r\n', hex: '0D0A' };
 }
 
+// Hex 发送输入的规范化：去掉 0x/0X 前缀、空白与逗号。
+// 手动发送、自动发送、字节统计三条路径必须共用同一份规则，否则同一份输入
+// 会出现「高亮全绿、手动能发、自动发送却报 invalid hex」这类自相矛盾的行为。
+function _normalizeHexInput(s) {
+	return String(s == null ? '' : s).replace(/0x/gi, '').replace(/[\s,]+/g, '');
+}
+
+// 判定规范化后的 hex 能否发出：可以返回 null，否则返回提示文案所需的键与参数。
+// 与后端 hex.DecodeString 的接受条件一致：非空、偶数位、只含 0-9 A-F。
+function _hexInputProblem(clean) {
+	if (clean === '') return { key: 'send.hint_empty', fb: '没有要发送的数据' };
+	if (clean.length % 2 !== 0) {
+		return { key: 'send.hint_odd', fb: '十六进制位数必须是偶数（当前 %s 位）', arg: clean.length };
+	}
+	var m = clean.match(/[^0-9a-fA-F]/);
+	if (m) return { key: 'send.hint_badchar', fb: "含非十六进制字符「%s」，只能是 0-9 与 A-F", arg: m[0] };
+	return null;
+}
+
+function _hintText(problem) {
+	var s = t(problem.key, problem.fb);
+	return (problem.arg === undefined) ? s : s.replace('%s', problem.arg);
+}
+
+// 悬浮提示：显示在发送框右上角，不参与布局、不拦截点击，5 秒后自动消失。
+var _sendHintTimer = null;
+
+function showSendHint(msg) {
+	if (!msg) return;
+	var page = getActivePage();
+	var el = page && page.sendHint;
+	if (!el) return;
+	el.textContent = msg;
+	el.classList.remove('is-hidden');
+	if (_sendHintTimer) clearTimeout(_sendHintTimer);
+	_sendHintTimer = setTimeout(hideSendHint, 5000);
+}
+
+function hideSendHint() {
+	if (_sendHintTimer) { clearTimeout(_sendHintTimer); _sendHintTimer = null; }
+	var page = getActivePage();
+	if (page && page.sendHint) page.sendHint.classList.add('is-hidden');
+}
+
+// 悬停发送框时，如果当前 hex 输入发不出去，就把原因显示出来。
+function _hintCurrentSendInput() {
+	var ss = getSendState();
+	if (!ss || ss.sendFormat !== 'hex') return;
+	var page = getActivePage();
+	var ta = page && page.sendInput;
+	if (!ta) return;
+	var problem = _hexInputProblem(_normalizeHexInput(ta.value));
+	if (problem) showSendHint(_hintText(problem));
+}
+
 function updateSendInfo() {
 	const el = pageEl('sendInfo');
 	if (!el) return;
@@ -3453,7 +3512,7 @@ function updateSendInfo() {
 	if (!text) { el.textContent = ''; return; }
 	let byteSize;
 	if (ss.sendFormat === 'hex') {
-		text = text.replace(/\s/g, '');
+		text = _normalizeHexInput(text);
 		byteSize = Math.floor(text.length / 2);
 	} else {
 		byteSize = getByteSizeForText(text);
@@ -3480,7 +3539,7 @@ function updateSendInfo() {
 				if (!data2) return;
 				let fmt2 = ss.sendFormat;
 				if (fmt2 === "hex") {
-					data2 = data2.replace(/0x/gi, "").replace(/[\s,]+/g, "");
+					data2 = _normalizeHexInput(data2);
 					const ab3 = getAppendBytes("hex");
 					if (ab3.hex) data2 += ab3.hex;
 				} else {
@@ -3505,7 +3564,10 @@ async function sendData() {
 
   let fmt = ss.sendFormat;
   if (fmt === 'hex') {
-    data = data.replace(/0x/gi, '').replace(/[\s,]+/g, '');
+    data = _normalizeHexInput(data);
+    // 先把「发不出去」的原因挡在这里并说清楚，不要丢给后端再被静默吞掉
+    const problem = _hexInputProblem(data);
+    if (problem) { showSendHint(_hintText(problem)); return; }
     const ab2 = getAppendBytes('hex');
     if (ab2.hex) data += ab2.hex;
   } else {
@@ -3522,7 +3584,9 @@ async function sendData() {
     } else {
       await window.go.main.App.SendDataShm(tab.sessionId, data, fmt);
     }
-  } catch {}
+  } catch (e) {
+    showSendHint(String(e));
+  }
 }
 
 function openDevTools() {

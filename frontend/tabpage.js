@@ -195,6 +195,8 @@ function TabPage(tabIndex, tabData) {
 	});
 	sendInput.addEventListener('keyup', function() { if(_statusBar)_statusBar.updateCursor(); });
 	sendInput.addEventListener('click', function() { if(_statusBar)_statusBar.updateCursor(); });
+	// 悬停时若当前 Hex 输入发不出去，就把原因显示出来
+	sendInput.addEventListener('mouseenter', function() { if (typeof _hintCurrentSendInput === 'function') _hintCurrentSendInput(); });
 	sendInput.addEventListener('keydown', function(e) {
 		if (e.key === 'Enter') {
 			var seq = (typeof state !== 'undefined' && state.eolSequence) ? state.eolSequence : 'lf';
@@ -223,6 +225,12 @@ function TabPage(tabIndex, tabData) {
 	sendWrap.appendChild(sendMirror);
 	sendArea.appendChild(sendWrap);
 	sendWrap.appendChild(sendInput);
+	// 发送框校验/失败悬浮提示（纯展示，不参与布局、不拦截点击）
+	const sendHint = document.createElement('div');
+	sendHint.className = 'o-send-hint t-send-hint is-hidden';
+	sendHint.setAttribute('role', 'status');
+	sendHint.setAttribute('aria-live', 'polite');
+	sendArea.appendChild(sendHint);
 	setTimeout(function() { _syncSendMirror(sendInput); }, 50);
 	const btnSend = document.createElement('button');
 	btnSend.id = 'btnSend';
@@ -300,6 +308,7 @@ self.divider = divider;
 	self.sendControls = sendControls;
 	self.sendInput = sendInput;
 	self.sendInfo = sendInfo;
+	self.sendHint = sendHint;
 	self.sendInterval = inpInterval;
 	self.appendSelect = appendSel;
 	self.btnSend = btnSend;
