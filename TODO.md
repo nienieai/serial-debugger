@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.7.1）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.0）的已完成记录；
 > 更早版本完成情况见 [README.md](README.md)「版本历史」。
 
 ## 待实现
@@ -42,7 +42,7 @@
 | 9 | 进程数量无上限 | 已知限制 | 每个进程持有 5 MB 历史环 + 1 MB 发送队列。任何本机客户端都可通过 `process.create` 无限创建。正常使用（几个标签页）无影响；若出现失控客户端会耗尽内存 |
 | 10 | `history.attach` 不校验进程是否已连接 | 已缓解 | v0.7.4 把灌入环的那段（`loadHistoryIntoRing`）纳入 `ringBufMu`，不再与 `readLoop` 并发写同一个环，并先判空环。仍不校验进程是否已连接——该入口 GUI/CLI/MCP 均未暴露（`AttachHistoryFile` 绑定无人调用），仅 IPC 层可达 |
 | 11 | 共享环生命周期竞态：进程摘除后指针仍被并发持有 | 已修复 | v0.7.4 修复。`pm.Close()` 在释放 `pm.mu` 之后才调 `closeHistory()`，而 `Process` 指针是裸共享的（`Get` 取到指针即放锁），于是读取方可能在环被 `UnmapViewOfFile` 之后才碰它——`GetHistory`/`ClearHistory` 把快照/清零打在已撤销映射上，`recordHistory` 写已关闭的 fd。实测 `go test -race` 复现：`WARNING: DATA RACE` 紧接 `unexpected fault address ... [signal 0xc0000005]`。严重性在于 dispatch 路径无 `recover`，守护进程一崩即所有会话与串口一起断。修法：环的置空移入保护它的锁内（`ringBufMu` / `sendRingMu`），使用方持锁后重新判空；`historyFile` 指针改用 `histFileMu`；文件指针改动收敛到 `detachHistoryFile()`。`sendRing` 有同样窗口（表现为对 nil 调方法 panic），一并修掉。回归测试 `daemon/ringlife_test.go`，已做变异验证 |
-| 12 | 历史环写满 5 MB 后静默冻结 | 已知限制 | `Write` 返回 false 时该条不再入环（磁盘文件仍在追加）。表现为长时间高速采集后，重新打开标签页只能看到较早的历史。需点「清空历史」或依赖磁盘分页 |
+| 12 | 历史环写满 5 MB 后静默冻结 | 已修复 | v0.7.5.5 修复。`Write` 在环满时返回 `false`，而 `recordHistory` **忽略了这个返回值**——写满那一刻起，新数据既不进环也不被任何人发现（磁盘文件仍在追加）。按 115200 饱和（11.5 KB/s）算，5 MB 约 **7.6 分钟**写满，此后「往回翻」永远翻到同一段、`oldestTs` 永远停在那一刻，而界面上完全看不出来。现改用 `WriteEvict`：空间不足时挤掉最旧的包（真正的环形语义 = 保留**最新**的一段），单包超过整环容量时才记一次 `ringDrops`（随 `session.history` 返回）。回归 `TestWriteEvictKeepsNewest`、`TestWriteEvictWrapAroundIntegrity`、`TestHistoryRingDoesNotFreezeWhenFull` |
 | 13 | IPC 管道对本机任意进程开放，无鉴权 | 已知限制 | `source` 字段（`gui`/`cli`/`mcp`）由客户端自称且影响行为（自动观察进程、查看计数）。单用户桌面场景下可接受，但这是**设计决定**而非疏漏，多用户/多会话环境需重新评估 |
 | 14 | `ports.probe` 不传端口时探测全部端口 | 待处理 | 5 端口 × 7 波特率 × 3 规则，同步阻塞在 dispatch 中，单次可达数分钟。建议要么强制指定端口，要么移入独立 goroutine 并加上限 |
 | 15 | 前端三处功能失效 | 已修复 | v0.7.4 修复，三处均在浏览器中实测确认（`_audit/gui_test/verify_todo15.py`，并做变异验证）：①速率告警色永不出现——`statusbar.js` 产出 `.rate-high`/`.rate-warn`，而 CSS（`style.css:647-648`）只定义 `.rate-orange`/`.rate-red`，前者计算色为落回默认色；改为与 CSS 及 `app.js:3201-3202` 一致的类名 ②下拉框选中态高亮与 `scrollIntoView` 永不生效——`app.js:1161` 加的是 `' selected'`，而 CSS（`.cs-option.is-selected`）与 `app.js:1215` 查的是 `is-selected` ③多标签共用相同 DOM id（`tabpage.js:85` 每页都发 `id="displayContent"`），`i18n.js` 用 `document.getElementById` 只拿到第一个，切换语言时其余标签页的系统消息仍是旧语言；改为按 `.display-content .sys-msg[data-sys-raw]` 遍历全部页面 |
@@ -57,7 +57,7 @@
 | 24 | 响应式只有 1 个宽度断点 | 已知限制 | `style.css` 共 5 个 `@media`，其中 4 个是配色（dark/light），宽度断点仅 `min-width: 800px` 一个，且只作用于设置页。主界面在 760px 下靠 flex 自然收缩，无专门窄屏规则 |
 | 25 | `z-index: 1` 被 4 个元素共用，层序依赖 DOM 顺序 | 已知限制 | `#sendMirror`(0)、`#sendInput`、`#btnSend`、`#btnClearFloat`、`.cs-dropdown` 同为 1。目前靠 DOM 顺序得到正确层序、未出问题，但改动顺序即可能破图。整体尺度自洽：内容 0–5 < 拖拽指示 10 < 遮罩 50 < 菜单/弹窗 100 < 子菜单 110 |
 | 26 | 标签栏横向滚动无视觉提示 | 待处理 | `.send-scroll-wrap` 有浮动箭头 + 拖拽滚动，`.tabs-scroll` 只有滚轮映射（`app.js:1567` 的 `deltaY → scrollLeft`），无箭头也无其它提示。13 个标签时最后一个被裁在右边缘，用户未必知道可以滚 |
-| 27 | `daemon not running: ` 前缀仍由底层产生，与 v0.7.0 记录矛盾 | 待处理 | v0.7.0「已完成」表记「去掉 CLI 连接失败时硬套的 `daemon not running: ` 前缀」，CLI 自身那层确实去掉了（`cmd/serial-cli/main.go:220` 有注释说明为何不该断言），但 `client/client.go:742` 与 `pipe/pipe_other.go:92` 仍在用 `fmt.Errorf("daemon not running: %v", err)` 包装，文案仍会透出（实测 `serial-cli check` 输出 `守护进程未运行 (daemon not running: pipe not available: ...)`） |
+| 27 | `daemon not running: ` 前缀仍由底层产生 | 已修复 | v0.7.5 修复。v0.7.0 只清掉了 CLI 那一层，`client.CallOnce` 与 `pipe.dialPipe` 仍在用 `fmt.Errorf("daemon not running: %v", err)` 包装——失败原因可能是端点残留、权限、或对端刚退出，硬套「守护进程未运行」会把排查方向带偏。实测 `check` 输出由 `守护进程未运行 (daemon not running: pipe not available: ...)` 变为 `守护进程未运行 (pipe not available: ...)`。**副产物**：去掉包装后暴露出重试逻辑的误用（连不上也重试 3 次并谎称握手失败），已一并修掉，见 v0.7.5 说明 |
 | 28 | 双击控制台程序表现为「闪退」，且原因不可读 | 部分修复 | v0.7.4 起「守护进程已在运行中」这句会同时落盘（`daemon/logfile.go`），控制台关闭后仍可在 `<exe>/logs/daemon.log` 里查到，不再是永久丢失。**仍未解决**：控制台本身仍是一闪即关，用户当场看不到；③ MCP 双击后静默 EOF 退出仍无任何提示。建议：用 `GetConsoleProcessList` 判断「控制台只有自己一个进程」即视为双击启动，退出前暂停等按键。原始记录：① 守护进程是机器级单例，已有实例时把 `daemon.already_running` 写到 stderr 后 `os.Exit(1)`；② CLI 无参数运行，打印用法后退出；③ MCP 是 stdio 服务器，双击时没有输入流、立即 EOF 退出（静默）。用户无从判断是崩溃还是正常退出（实测事件日志与 WER 均无崩溃记录，可确认非崩溃） |
 | 29 | 守护进程回连失败时原因被丢弃，只剩无信息的超时 | 已修复 | v0.7.4 修复。握手期间起 goroutine 读 `daemonConn`，并且**为它单独设一个 select 分支**——回连失败时客户端要等的 resp 管道永远不会来，只在超时分支里顺手取一下的话，即使原因已到达也要干等满 5 秒。`client/handshake_test.go` 用假守护进程验证，并做变异验证：修复前 `2.0s` + 「守护进程未在 5 秒内回连 resp 管道」，修复后 `0.3–1.5ms` + 守护进程给出的真实原因。原记录：守护进程回连失败时会 `WriteMessage(daemonConn, ...Error)` 说明原因（`daemon/ipc.go:483/491`），但客户端此时阻塞在等 `respCh`（`client/client.go:139-150`），**从不读 `daemonConn`** |
 | 30 | 客户端拉起的守护进程日志被整体丢弃 | 已修复 | v0.7.4 修复：日志双路输出（控制台 + `<exe>/logs/daemon.log`，超 2 MB 启动时轮转为 `.1`），新增 `serial-cli logs [n]` 查看（不连守护进程，起不来时才有用）。两个 Windows 细节都是实测踩出来的：① 必须共享打开——`os.OpenFile` 是独占共享模式，守护进程一运行日志就没人读得到，而「它跑着的时候去看日志」正是唯一用途；② 必须用 `FILE_APPEND_DATA` 而不是 `GENERIC_WRITE`——`CreateFile(OPEN_ALWAYS)` 会停在偏移 0，第二个实例写「已在运行中」时覆盖日志开头，实测留下一截被截断的旧行 |
@@ -69,8 +69,171 @@
 | 36 | 注册握手在**并发/负载**下失败（三轮报告追查） | 已修复 | 根因是 **v0.7.4 引入的回归**：守护进程在两条回连管道都成功之后才写注册确认（`daemon/ipc.go:532`，位于 `addSession` 之后），确认因此可能抢在客户端 `Accept` 交出 respConn/subConn 之前到达；而 v0.7.4 为透传失败原因引入的监听用 select「谁先到按谁处理」，把先到的**成功确认判成了握手失败**。插桩实测：客户端收到 `{"result":{"registered":true}}` 却返回「注册未完成: 」——原因为空，因为 `reasonFromMsg` 对成功确认返回 `("", false)` 而调用方仍按失败处理。这一条解释了全部既有观测：失败总在 ~2ms 内且三次重试**一起**失败（同一竞态被连续触发，故重试无效——报告测到 3 次重试只把 7.8% 降到 6.3%，若独立应为 0.08%）；守护进程侧显示已完成注册、无回连失败、未驱逐、无写确认失败（因为它真的成功了）；失败率随机器变慢而升高（负载越重，Accept 调度越晚，确认越易抢先）。**修法**：用统一截止时间等待两条管道，只在 `msg.Error` 非空时中断握手，成功确认只表示已登记、继续等在途管道。**验证**：新增 `client/handshake_order_test.go`（假守护进程刻意先送确认、延迟 300ms 再连管道），变异验证还原旧逻辑即报出与测试机逐字一致的签名；实机满负载 + 三种并发度共 1180 次调用 **0 失败**，「open COM99 掩盖」0/60。原记录见下方 v0.7.4.2 段 |
 | 37 | `connectOnce` 的 sub 管道失败/超时分支漏关 `respLn` | 已修复 | v0.7.4.2 修复。该分支只关了 `daemonConn`、`respConn`、`subLn`，漏了 `respLn`；加入握手重试后，每次失败都会泄漏一个 listener 及其预建管道实例。同类问题也在 client.go 其余失败分支一并核对补齐 |
 | 38 | 文档承诺「新旧混用会被拦」不成立 | 已修复 | v0.7.4.2 修正文档（外部报告 GAP-3）。`protocolVersion` 只在**破坏性变更**时升号，因此同为协议 1 的不同版本（0.7.4 与 0.7.4.2）是设计上兼容、可以混用的，不会也不应该报错；原 `操作说明.md` 那句「新旧程序混用（换过版本）→ 提示 IPC 协议版本不匹配」暗示任何版本混用都会被拦，属过度承诺。已改为准确表述（比对的是协议号，`check` 会打印双方版本与协议号） |
-| 39 | `probe` 每条规则只读一次串口，多字节响应被截断 | 待处理 | 外部报告连续四版记录「`probe COM5` 检测不到地址 4 的设备」，本机核查时发现这可能是**第二层**原因（第一层是规则里从站地址写死为 01）。`ProbePorts` 对每条规则只调一次 `p.Read`（`daemon/probe.go`），而 `go.bug.st/serial` 的 `Read` 契约是「阻塞到**至少一个**字节到达」——响应字节未到齐就会返回。插桩实测：9 字节的 Modbus 响应只读到第 1 个字节 `04`（`发=040300080001059D 收 n=1 bytes="04"`），于是 `min_response_len`（5）与 `matchProbeResponse` 双双落空，设备明明应答了却报「未检测到已知设备」。同一时刻用工具自身的 `send --hex` + `history` 测同一帧收发完全正常（往返 22 ms），可排除收发链路。**短响应（1–2 字节）不受影响，故平时不一定暴露。** 已尝试两版循环读修复，**均挂住**（日志停在「开始设备探测」后不再前进）——该库超时返回 `(0, nil)` 而非错误，用 `time.Now()` 自判截止会与库内部计时错位。已还原为原实现并在 `daemon/probe.go` 留注释说明，待有真实设备可验证时再改 |
-| 40 | `probe` 规则改从站地址须手工重算 CRC | 待处理 | `probe_hex` 是**含 CRC 的整帧**，改地址不重算 CRC 会因校验失败而设备完全不应答，而报错只是「未检测到已知设备」——用户看不出是自己 CRC 写错。已在 `操作说明.md` 新增 §九 详述并随包交付 `modbus_crc.py`（含已知帧自检、支持 `--sweep` 列出地址 1–16 的帧）。根治方向：把从站地址做成规则字段（如 `slave_addr`），由引擎生成帧并算 CRC，避免脆弱的「整帧 + 手算 CRC」设计 |
+| 39 | `probe` 每条规则只读一次串口，多字节响应被截断 | 已修复 | v0.7.5 修复。外部报告连续四版记录「`probe COM5` 检测不到地址 4 的设备」。`ProbePorts` 对每条规则只调一次 `p.Read`，而 Windows 下 `go.bug.st/serial` 的 `Read` **一有字节就返回**（其实现为 `if readed > 0 { return }`），于是响应被截断。插桩实测 9 字节 Modbus 响应只读到第 1 个字节（`发=040300080001059D 收 n=1 bytes="04"`），`min_response_len` 与匹配双双落空；这也使 `modbus_crc` 类规则对多字节响应一律失效。**修法**：抽出 `probeRead()` 循环累积，终止条件显式化（未收到数据则继续等 / 已收到数据后本轮读空即帧结束），总预算 `max(3×timeout, 1s)`——不依赖 `SetReadTimeout` 在库内的行为，因为该库为 CH340 打过补丁而本工具目标设备大量使用 CH340/CH343。实测 **0/5 → 5/5 命中**，无应答端口仍 0.05s。**注意**：此前两版循环修都会挂住，原因是用 `time.Now()` 自判截止会与库内部计时错位；本版改为只用「本轮是否读到字节」判定 |
+| 40 | `probe` 规则改从站地址须手工重算 CRC | 已文档化 | v0.7.4.3 起文档化。`probe_hex` 是**含 CRC 的整帧**，改地址不重算 CRC 会因校验失败而设备完全不应答，而报错只是「未检测到已知设备」——用户看不出是自己 CRC 写错。已在 `操作说明.md` §九 详述并随包交付 `modbus_crc.py`（含已知帧自检、支持 `--sweep` 列出地址 1–16 的帧）。**仍建议根治**：把从站地址做成规则字段（如 `slave_addr`），由引擎生成帧并算 CRC，替掉「整帧 + 手算 CRC」这个脆弱设计 |
+| 41 | `match_type` 的 `regex` 与 `substring` 匹配对象不同，易误用 | 已文档化 | v0.7.5 文档化（外部报告把它报为「行为不一致」）。`substring` 的 `match_value` 是**十六进制串**，在响应的十六进制文本里找；`regex` 的 `match_value` 是**正则**，匹配**响应原始文本**。所以 `substring "04"` 命中 hex 串 `"040302…"`，而 `regex "^04"` 是在原始字节里找 ASCII 的 `0`/`4`，匹配不到——语义自洽，非缺陷。已在 `操作说明.md` §九 写明差异与各自适用场景。**外部报告已在 0.7.5.1 轮撤回该判断**（§5.1：属设计差异，作者解释正确），并同步修正了 0.7.4.3 报告。**可改进**：给 `match_type` 加白名单校验，写错时明确报错而不是静默不匹配 |
+| 42 | 语言文件中 Tx/Rx 大小写混用 | 已修复 | v0.7.5 修复。`en.json` 的 `stats.*` / `tooltip.*` / `settings.color_*` 用大写 `RX`/`TX`，而 `stat.rx` / `stat.tx` / `display.*` 用 `Rx`/`Tx`，同一界面混用两种写法。统一到 `Rx`/`Tx`——与前端 `history.js` 硬编码的 `'Rx'`/`'Tx'` 及 9 种语言里 8 种的原状一致。改动 `en.json` 14 处、`es.json` 8 处、`fr.json` 8 处；i18n 一致性检查 9 语言 × 374 键全绿 |
+| 43 | 发送框文本模式：镜像层与 textarea 排版逐格错开 | 已修复 | v0.7.5.1 修复（外部测试反馈）。镜像层把空格换成 `·`、并把真实空格设为 `font-size: 0`，这一格的推进宽度于是变成 `·` 的宽度；字体里两者不等宽就逐格错开且随空格数累加。实测设置里 10 种可选字体 **8 种**中招（Cascadia Code/Fira Code/JetBrains Mono/Source Code Pro 每空格 +8px 即整一格、宋体 +7px、楷体 +7.5px、微软雅黑 −0.83px、Segoe UI −0.84px；Consolas 与 Courier New 恰好为 0）。表现为光标不在可见字形上、点选偏移、选中时叠出两层字。改为真实字符保留原宽度＋标记绝对定位叠加（静态位置，保持基线对齐），修复后漂移 0～0.64px。仅作用于 `.send-input-mirror` |
+| 44 | Hex 输入的预处理在四条路径上分叉 | 已修复 | v0.7.5.1 修复。手动发送（`sendData`）与回写环形缓冲都做了 `replace(/0x/gi,'').replace(/[\s,]+/g,'')`，而自动发送（`startAutoSend`）与字节统计（`updateSendInfo`）只有 `replace(/\s/g,'')`。高亮层把 `0x` 当合法前缀、把 `,` 当分隔符，于是「全绿 + 手动能发 + 自动发送报 invalid hex」；字节数也偏大（`0xAA 0xBB` 显示 4B 实际 2B）。实测 `0xAA 0xBB` / `AA,BB` / `0xAA` 自动发送全部失败，修复后正常发出。现抽出 `_normalizeHexInput` 单一实现，四条路径共用，夹具断言其外无残留 |
+| 45 | 1 位十六进制数字高亮判绿但发送必失败，且失败无提示 | 已修复 | v0.7.5.1 修复。同一 1 位数字在落单 token 时判合法（`len>=1 && len<=2`）、在长串按 2 字符切分后落单时判非法，而后端 `hex.DecodeString` 对奇数长度一律拒绝；`sendData` 的 `catch {}` 又把错误整个吞掉，于是 `A`、`AA B` 全绿却「点了发送没反应也没解释」。保留了宽容高亮（便于边打字边看），改为新增发送框悬浮提示：悬停或发送被拦下时在发送按钮上方浮出原因，5 秒自动消失、`pointer-events:none`、9 语言本地化（`send.hint_empty`/`hint_odd`/`hint_badchar`） |
+| 46 | 发送框占位符写死中文，9 种语言的 `send.placeholder` 闲置 | 已修复 | v0.7.5.1 修复。`#sendInput::placeholder` 被设为 `transparent`，用户看到的是镜像层里硬编码的 `'输入要发送的数据...'`。改镜像层走 `t('send.placeholder')`，并在 `applyI18n` 里重绘镜像层 |
+| 47 | 发送框里 `0x` 前缀与合法字节同色，`.send-hex-prefix` 无视觉作用 | 待处理 | v0.7.5.1 记录。`style.css` 里 `.send-hex-prefix` 与 `.send-hex-ok` 都用 `var(--dc-hexTx)`，实测同为 `rgb(217,119,6)`，这个类等于没有区分作用。接收区也是同一套处理（`formatHex` 产出整串由外层统一着色），所以算一致而非缺陷——但若本意是要区分前缀，就是漏配了颜色 |
+| 48 | 发送框 hex 分词：`0x` 紧贴字节串末尾时整段被判红 | 待处理 | v0.7.5.1 记录。`_renderSendMirrorHex` 的前缀识别条件写成 `i + 2 < text.length`（应为 `i + 1 < text.length`），字符串结尾的两字符序列因此不会被当作前缀；渲染阶段有个「token 恰好等于 `0x` 就当前缀」的兜底把多数情况盖住了，但 `AA0x` 这种紧贴写法仍整段标红——而 `_normalizeHexInput` 会把 `0x` 剥掉、实际能发出去（假红灯）。仅显示问题，不影响发送 |
+| 49 | `fakeDaemonThatRejectsRegister` 的「端点被占用则跳过」守卫在 Windows 上失效 | 待处理 | v0.7.5.1 记录（写发送框回归时撞到）。该守卫靠 `pipe.Listen(pipe.Addr)` 返回错误判断「已有真守护进程」，但 `pipe.createPipeInstance` 用的是 `pipeUnlimitedInstances`，**同名管道允许第二个实例**，于是真守护进程在跑时守卫不触发，测试不是跳过而是**误报失败**（客户端可能连到真守护进程上并握手成功，于是 `err == nil` 触发 `t.Fatal`）。实测有守护进程时 `TestHandshakeSurfacesDaemonReason` / `TestHandshakeReasonDoesNotClaimRejection` 失败，杀掉后三个用例 0.5s 全过。建议改用独占探测（先试着 `Dial` 成功即视为占用）或直接探测 `serial-daemon` 进程 |
+| 50 | **`probe` 的「空结果」有两条静默路径，与「没有设备」不可区分** | 已修复 | v0.7.5.2 修复。**（a）耗时与超时**：`probeRead` 的总预算是 `max(3×timeout, 1s)`，默认 `timeout_ms=200` → 取 1s 下限；端口静默时每次尝试都跑满这 1s。实测同一静默端口：1 次尝试 **1.11s**、7 次 **7.48s**、默认 21 次 **10.18s**，而 `client.Call` 的 IPC 超时是硬编码 10s → 必然 `request timeout: ports.probe`；守护进程并不停，继续扫完（实测后台探测总耗时 **33.2s**）。**（b）假阴性**：这段窗口内再做任何探测都在几十毫秒内返回空结果——报告实测「正确配置 + 编码器在线」也得到 `未检测到已知设备`（§3.3：58ms，已用 MCP 证实与客户端无关）；本地复现：被会话占用 46ms、超时后紧接着 61~65ms，而那次探测**结束后**恢复 1093~1245ms。**（c）根因两条，报告只点到第一条**：① `probe.go` 的 `if occupiedPorts[portName] { continue }`；② `if err != nil { continue }`——`ProbePorts` 内部 open/read 失败被裸 `continue` 吞掉、无日志。本地因果实验证明②才是超时路径的真正机制（`sessions` 显示无任何进程持有端口，跟随探测仍在 65ms 内返回空）。**修法**：`ProbePorts` 改返回 `ProbeOutcome`（results/skipped/attempts/elapsedMs/budgetExhausted/busy），两条路径都显式化并补日志；加默认 12s 总预算（`--budget`/`budgetMs` 可覆盖）+ `ports.probe` 请求超时放宽到 25s；并发探测用 `TryLock` 直接返回 busy；`probeRead` 带出读取错误；`baud_rates` 改为按可能性排序（115200 提到最前——设备不应答时每档约 3s，12s 只够前 4 档，原升序会把最常用的 115200 排在第 4 位，实测预算用尽时它根本没试过）。回归 `daemon/probe_skip_test.go`（6 条，含一条 elapsedMs 必须落到命名返回值的用例）。原文如下（保留溯源）：v0.7.5 起存在，0.7.5.1 轮由外部测试报告与本地复现共同确认 |
+
+| 51 | 历史显示窗口：性能机制放错了位置 | 已修复 | v0.7.5.3 修复。窗口本身是对的（实测 DOM 无上限时单帧成本 139.7µs@2000 节点 → 4005.3µs@20000 节点，O(n²)；有窗口时恒定 ~1000µs），问题在于它只界住了「DOM 有多少」没界住「每帧做多少事」。① **逐条渲染**：每帧两次读 `scrollHeight`（读是 O(节点数)：150 节点 44.3µs、20000 节点 4313µs；写 `scrollTop` 只要 2µs）→ 改为入站帧进队列、rAF 合并成一批，一批一次 fragment/一次裁剪/一次贴底，贴底改写极大值不读；实测吞吐 893 → 242131 帧/秒，持续流入单条 1000µs → 240µs。② **锁定滚动就不裁剪**（贴底与裁剪绑在一个 `if` 里）→ 实测锁定后喂 5000 条 DOM 涨到 5000 行；现裁剪恒做，冻结语义交给 `_frozen`/`_atBottom`。③ **`renderHistoryLines` 的 50ms 节流是「丢弃」不是「合并」** → 实测渲染后立刻清空导致显示区空白、连续切换显示模式后画面与 state 不一致；现改为不丢弃（合并由批量队列承担）。④ **`expandHistory` 在 `_renderStart==0` 时第一步就 return**，而取更早的两条路都在 return 之后 → 「加载更早」整条不可达（实测 0 次 RPC、无提示）；现拆开「扩窗」与「取更早」。⑤ 冻结期间未读区用占位块撑高度：视图不动（实测 scrollTop 变化 0px）、滚动条继续变化（+123002px）、DOM 仍有界。⑥ 窗口行数改为按视口推导（`calcRenderCount()` 此前从未被调用）+ `设置 → 高级 → 历史窗口行数` 可覆盖。⑦ 补 `loadTabHistory`/`clearDisplay` 的 null 守卫，消掉控制台那条 `Cannot set properties of null (setting 'innerHTML')`。夹具 `_audit/sendhl_test/hist_fixture.py`（8 项）+ 两处变异验证 |
+| 52 | `probeRead` 的 1s 隐藏下限让默认波特率永远轮不到 | 已修复 | v0.7.5.3 修复。该预算实际只决定「等第一个字节最多等多久」（循环里 `len(resp) > 0` 排在 `After(deadline)` 之前，收到字节后下一个空读就结束），所以沉默端口独自承担成本。原 `max(3×timeout_ms, 1s)` 在默认 `timeout_ms=200` 下把每次尝试从 600ms 抬到 1000ms → 每档 3s、7 档 21s > 12s 预算 → 默认列表里 230400/460800/921600 永远轮不到。现 `max(3×timeout_ms, 300ms)`（300ms 仅防呆）+ 总预算 15s；实测单次尝试 1106 → 753ms，默认配置 13.4s 覆盖全部 7 档、skipped 为空。新增 `TestDefaultBudgetCoversShippedBaudList` 把预算与随包 `probe.toml` 绑定 |
+| 53 | CLI 的探测输出漏掉 `busy` 字段（文档承诺了它） | 已修复 | v0.7.5.3 修复（0.7.5.2 轮报告 P1）。守护进程返回了 `busy`，CLI 序列化时丢掉，导致 `操作说明.md` 写的 `("busy": true)` 与 `grep busy` 自检永远匹配不到。抽出 `probeOutcomeJSON` 并加 `TestProbeOutcomeJSONIncludesBusy` / `TestProbeOutcomeJSONBusyAlwaysPresent` 锁住字段集合 |
+
+| 54 | `config/probe.toml` 顶部注释与实际预算公式脱节 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §4.1）。v0.7.5.3 把每次尝试成本从 1s 降到 600ms、总预算 12s → 15s，但随包配置的注释仍写 `max(3×timeout_ms, 1s) ≈ 3s` 与「默认 12s」，照注释估算会得出「每档 3s、7 档 21s」的旧结论。现按实际公式重写，并在 `daemon/probe.go` 的预算常量旁加提醒：改预算数字必须同步这份注释（功能由 `TestDefaultBudgetCoversShippedBaudList` 兜底，注释漂移只能靠提醒） |
+| 55 | CLI 把未知长选项当成端口名静默接受 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §4.2）。`serial-cli probe --json` 不报错，而是把 `--json` 当作端口，结果里多一条「端口 `--json` 打不开」的 skipped，读者会以为真有个端口有问题。现抽出 `parseProbeArgs`：未知 `-` 前缀参数直接报错，`--config`/`--budget` 缺值或非法值分别报清楚；校验提前到建立连接之前（参数写错不该等连上守护进程才报）。附 3 条单元测试。**未动其他命令**：它们的多余参数会走到「进程不存在」这类明确错误，不会静默产生误导性条目，改动风险大于收益 |
+| 56 | MCP 工具描述里 `budgetMs` 的默认值滞后 | 已修复 | v0.7.5.4 修复（0.7.5.3 轮报告 §6.2.4）。`serial_probe_ports` 的 inputSchema 写 `default 12000`，实际已是 15000 |
+
+| 57 | `session.history` 一次返回整环，界面只要一屏 | 已修复 | v0.7.5.5 修复。整环 5MB ≈ 18 万条（实测 180788 条），一次读取要「逐包复制 + 逐条建 `HistoryEntry` + JSON 序列化 15.86 MB + 过桥 + 前端逐条 decode」。新增 `limit`/`beforeTsMs`/`sameTsSkip` 三个参数与 `ringbuf.SnapshotPage`（只复制选中的一页）：**实测 180788 条整取 79.4 ms / JSON 15.86 MB → 一页 5000 条 5.0 ms / 0.44 MB（时间 16×、载荷 36×），首次加载 10000 条 9.8 ms / 0.88 MB。** `limit<=0` 仍是整取（CLI/MCP 老行为不变）。基准 `BenchmarkHistoryRead` |
+| 58 | 前端历史缓存无上限，开一天的标签页会吃满内存 | 已修复 | v0.7.5.5 修复。`state.historyCache[tab]` 只 push 从不裁，等于把整环（以及环里已被挤掉的更早数据）永远留在 JS 里。现改为有界：跟随时保留 10000 条，往回翻时放宽到 40000 条（否则刚回补的一页会被自己立刻裁掉，游标原地不动，「往上翻」就再也翻不动），永远从**最旧**的一端裁，于是「最新的一屏」始终在手上（回到底部不需要任何 RPC），裁到窗口里时同步移除对应的 DOM 行。**实测持续灌 30000 条后缓存停在 10032 条、尾条仍是最新那条**，DOM 稳定在窗口内。夹具 `hist_paging_fixture.py` C 节 |
+| 59 | 「往上翻加载更早」在缓存头仍然不可达 | 已修复 | v0.7.5.5 修复（v0.7.5.3 只修了一半）。上一版把 `expandHistory` 内部的 `return` 挪走了，但**滚动触发器**还是 `if (scrollTop < 80 && _renderStart > 0)`：当窗口正好停在缓存头时 `_renderStart == 0`，滚到顶因此不调用 `expandHistory`，一次 RPC 也不会发。实测把窗口滑到缓存头后滚到顶：0 次调用。现改为只要滚到顶就调用（`expandHistory` 自己判断要不要取更早），并用 `_ringExhausted` 与「游标没动过」双重保险避免滚到顶变成 RPC 风暴 |
+| 60 | 契约测试建出的进程与 5MB 共享内存不回收 | 已修复 | v0.7.5.5 修复（写分页测试时撞到）。`TestEveryContractMethodIsDispatched` 用裸参数调 `process.create`，真的建出一个进程（并映射 5MB 共享内存，名字带本进程实例令牌），而它的 `ProcessManager` 既没 `DestroyAll` 也没人引用。同一个测试二进制里**后面任何再建进程的测试**都会撞上 `共享内存 "serial-tool-history-xxxx-1" 已存在`——谁后跑谁中招。现 `defer pm.DestroyAll()`。这也是「测试之间的隐式顺序依赖」，值得记住 |
+| 61 | 磁盘历史的深分页仍是「从头扫」 | 待处理 | v0.7.5.5 记录。回补到环头之后，磁盘这一侧走的是 `history.search(file, "", 200, offset)`——空关键字顺序扫描 + 递增 `offset`，每翻一页都要从文件头扫到 offset，页数越多越慢，而且方向是从文件**开头**往后，而用户要的是从游标往**更早**。要做对需要给历史文件建一次「条目偏移索引」（4 字节/条，18 万条约 720KB）再按游标二分。当前只在「环已翻完」时才提示，实测触发不到，故未动 |
+| 62 | 冻结回看时的缓存上限是 40000 条 | 已知限制 | v0.7.5.5 记录。往回翻时缓存放宽到 `HISTORY_CACHE_HARD`，超过就从最旧的一端裁（同时移除对应 DOM 行，屏幕上不会留下缓存里不存在的内容）。即**单次回看的最大深度约 40000 条**（约 40 屏），再往回翻会重新取到刚才被裁掉的那一页。放宽或做成设置项需要前向分页（`afterTs`）才能安全地裁掉新的一侧，属下一批 |
+| 63 | 取「最新一页」仍需遍历整个环 | 待处理 | v0.7.5.5 记录。包长可变且只在前缀里，从最新一端往回走无法知道上一个包的起点，所以取最新 N 条只能从最旧一端走一遍（环里 18 万包约 1.5–3 ms，已用快路径把取模/逐字节去掉）。彻底解决要在写侧维护一个「包尾索引」（head 附近 N 个偏移），属可选优化——当前 5 ms/页 已足够 |
+
+| 64 | 设置标签页被当成会话标签页，串口会挂到设置页上 | 已修复 | v0.7.5.6 修复（手工测试发现）。`openPort`/`openForwardPorts` 用 `getActiveTab()` 取目标，而它把设置页原样返回；设置页的 `_page` 只有 `show`/`hide`，没有 `portSelect`/`btnOpen`，于是 `pageEl()` 的全局回退交出**别的标签页**的端口选择 —— 串口真的打开了却挂在设置页对象上（没有界面能管它），设置页还长出 `sessionId`、标签变成「COM3 @ 115200」。实测：`0:SET sid=3 open=True label=COM3`。现引入 `isSessionTab()`/`activeSessionTab()`/`requireSessionTab()`，会话类入口先过这一关，停在设置页时给可读提示（`serial.need_session_tab`，9 语言）。夹具 `tab_shuffle_fixture.py` A 节 |
+| 65 | 建空闲进程时不挡 `syncDaemonSessions`，同一进程多出一个标签页 | 已修复 | v0.7.5.6 修复。`addTab()` 一直有 `_creatingTab` 保护，`openPort`/`openForwardPorts` 没有：守护进程的 `process-changed` 若抢在 `tab.sessionId = sid` 之前到达，同步会替同一个进程再建一个标签页（追加在末尾，也就是用户看到的「原来的标签页跑到后面」）。现补上同样的保护；夹具 B 节用「把同步插到 `CreateIdleProcess` 返回之前」确定性地复现该窗口，变异验证能报红 |
+| 66 | 僵尸清理把设置页算进「还有别的标签页」 | 已修复 | v0.7.5.6 修复。清理条件 `state.tabs.length > 1` 把设置页也数进去，于是**只要开着设置页**，单独一个空闲会话标签页就会被销毁（用户手上只剩设置页）。现只数会话标签页。夹具 C2 节 |
+| 67 | 会话回归时新建标签页而不是找回原来那个 | 已修复 | v0.7.5.6 修复。同步第 3 步在列表一时不含该会话时清掉 `sessionId`，等它回到列表里第 1 步按「未登记」新建 —— 同一个会话有两个标签页，原标签页的滚动位置与历史缓存全丢。现记 `_orphanSid`，回来时挂回原标签页。夹具 C 节用**标签页 id 不变**来钉住（只断言数量会被「销毁+重建」蒙过去） |
+| 68 | `updateOpenBtn` 经全局回退改到别的标签页的按钮 | 已修复 | v0.7.5.6 修复。切到设置页时 `pageEl('btnOpen')` 回退到 `document.getElementById` = **第一个标签页**的按钮，把它 `display:none`。现只动当前页自己的元素。夹具 D 节 |
+
+| 69 | 队列 `delay` 显式写 0 被当作「未设置」回落到 1000 ms | 已修复 | v0.7.5.7 修复（外部报告 0.7.5.5 轮 §八，P3）。`delay` 用 `int` 承载，JSON 零值语义把「省略」与「显式 0」混成一件，再被 `delay < 1 → 1000` 兜底 —— 写 0 等于等 1 秒（报告实测 20 条 19.2 s，与 `delay:1000` 几乎一致，想连发只能写 1）。现语义定为：省略/null = 1000（保持文档承诺）、0 = 不额外延时、1–60000 原样、>60000 夹住、负数报错；「省略」与「显式 0」的区分做在 API 边界（CLI 用 `*int`、MCP 写前归一化）。实测 10 条一轮：省略 9102 ms / 0 111 ms / 1 106 ms / 10 213 ms / 1000 9060 ms |
+| 70 | `DecodeEntryContentOnly` 的 delay 下限（5）严于编码器下限（1），delay=1~4 的条目会把二进制头当数据发出去 | 已修复 | v0.7.5.7 修复（查 §八 时顺带发现，报告未覆盖）。`EncodeEntry` 允许 1，而剥头的启发式校验写 `delay < 5 → 这不是条目`，于是 delay=1~4 的条目走 `send.trigger(raw=false)` 时原样发出 `版本+标志+delay+note_len+内容`。该路径由 `App.TriggerSend` 与 IPC `send.trigger{raw:false}` 暴露（GUI 当前未调用、MCP 用 `raw:true`），所以一直没被踩到。两处下限现统一到 `DelayMax` 常量，回归 `TestDecodeEntryContentOnlyStripsHeaderForEveryEncodableDelay` |
+
+| 71 | 凭一份**陈旧事件载荷**就清掉活着的会话，导致「打开串口时多建一个进程 + 多出一个标签页」 | 已修复 | v0.7.5.8 修复（用户人工复测 + 其机器上的 `daemon.log` 定案）。`syncDaemonSessions` 第 3 步只要载荷里没有某个 sessionId 就清掉它；而事件载荷可能是**该进程创建之前**发出的（实测 `processes: []` 落在标签页刚拿到 sessionId 之后）。会话被清 → 标签页看起来空闲 → 点「打开串口」再建一个进程（旧的成孤儿，`daemon.log`: `create idle #1` → 3.4s → `create idle #2` → `connect #2`）→ 孤儿被第 1 步补成多余标签页。现改为：**只有当载荷会移除在线会话时才先 `GetSessions()` 核实**（新增不核实），另保留 0.7.5.6 的孤儿找回作第二道网。夹具 F 节确定性复现（注入陈旧空载荷），变异验证还原后能重建出「1→2 进程 + 多一个标签页」 |
+| 72 | 会话清理的 3 秒宽限期是死代码（`connectedAt` 从来没人写） | 已修复 | v0.7.5.8 修复。第 3 步写着 `if (tab.connectedAt && Date.now() - tab.connectedAt < 3000) return;`，但全仓库**只有这一处读**、没有任何赋值 —— 于是「刚连上就收到不含该会话的事件」时保护完全失效。现于 `openPort` / `openForwardPorts` / 孤儿找回三处写入 `connectedAt` |
+
+| 73 | `autoCreateSession` 的自动建会话把自己的 sessionId 清掉（「开串口又多一个标签页」的真因） | 已修复 | v0.7.5.9 修复（用户 0.7.5.8 复测 + 带时间戳的 `daemon.log` 定案）。自动建分支在 `addTab` 之后写了 `daemonSessions = []`，本意是「别为刚建的进程再建一个标签页」，但**第 3 步正是用这份列表判断会话是否存在** —— 列表一空就把刚挂上的 sessionId 清掉。日志实证：`r4 create idle #1` → 5.2s → `r8 create idle #2` → `r9 history #1`（孤儿补出的标签页）。现改为**重新取一份权威列表**。**注意**：0.7.5.8 修的是「陈旧事件载荷」那条路径（另一种成因），本条是自动建会话自己清空列表，两者症状相同成因不同 |
+| 74 | `addTab` 不写 `connectedAt`，宽限期在这条路径上不生效 | 已修复 | v0.7.5.9 修复。0.7.5.8 只给 `openPort`/`openForwardPorts`/孤儿找回三处写了 `connectedAt`，而**自动建会话走的是 `addTab`** —— 于是「列表还没包含这个会话」的窗口期在这条路径上毫无保护。现于 `addTab` 建标签页时一并写入。与 #73 互为备份：变异验证显示只还原任一处夹具仍全绿，还原两处才重建出现象 |
+
+| 75 | CLI 的 `history` / `sendqueue` 先连守护进程、后校验参数 | 待处理 | v0.7.5.9 记录（本轮跑冒烟时撞到）。这两个命令的参数校验发生在 `runCommandWithClient` 内部，而客户端连接在进入它之前就建立了 —— 于是**守护进程不可达时，参数写错的报错会被连接错误盖掉**（实测 `history --json` 在守护进程不可达时只报「注册握手失败…」，看不到「未知参数 --json」）。`probe` 在 0.7.5.4 已把校验提前到建立连接之前（报告 §4.2），这两个命令是同样的改进点。属体验问题，不影响正确性 |
+
+| 76 | `send.trigger{raw:false}` 没有黑盒入口，导致「条目剥头」那条修复无法验收 | 已修复 | v0.7.5.10 修复（0.7.5.7 轮报告 §8 点名）。该路径此前只有 Wails 绑定 `App.TriggerSend`（前端未调用）与裸 IPC 可达，CLI 无命令、MCP 只有 `raw:true` —— 测试方直接写「若需覆盖，需要一个可达入口」。而 `ARCHITECTURE.md` 的「发送模式」表里**本来就写着** `sendone（单条）→ send.trigger`，属文档/实现不一致。现补 `serial-cli sendone [processId] [--raw]`（默认剥头、`--raw` 对照），未知参数报错，附 `sendone_args_test.go` |
+
+| 77 | `autosend status` 的 `queueCount` 是**字节数**而非条目数，`entriesCount` 在 CLI 路径恒为 0 | 待处理 | 0.7.5.10 轮报告 §六 发现（**命名歧义陷阱，非功能缺陷**，也非该版引入——用 0.7.5.8 副本同口径对照，两版一致）。`queueCount = sendRing.UsedSpace()`，即队列里的**字节总数**（实测每条 = 内容长度 + 7：2 字节长度前缀 + 5 字节条目头 + 内容）；`entriesCount = len(p.multistrCache)`，而该缓存只由 `multistr.load`/`multistr.reload`/队列模式自动发送填充，**CLI 的 `sendqueue` 只写环、不填缓存**。于是并列的两个字段一个口径是字节、一个恒为 0，使用者（含测试方，其 0.7.5.7 附录 B 曾把 `queueCount` 当条目数当观测点）会把 `queueCount` 读成「队列里有几条」。建议三选一并同步文档：改名为 `queueBytes`、或新增 `queueEntries` 给出真实条目数、或让 `entriesCount` 反映真实条目数；无论选哪个，都要在 `操作说明.md` 写明 `autosend status` 各字段口径 |
+
+## v0.8.0 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 0.8.0 里程碑（稳定基线） | 把 0.7.5.1 ～ 0.7.5.10 的修复整体转入 `main` 并作为稳定基线交付。**本版不含功能改动**：源码与 0.7.5.10 的区别只有版本号，四个 exe 的行为与 0.7.5.10 完全一致（0.7.5.10 轮外部测试报告 P1 全过、全量回归全绿） |
+| 已知未修项交接 | 0.7.5.10 报告唯一新发现 `queueCount` 口径问题记入 TODO #77，留给 0.8.1；测试方建议把「设置页守卫」移出必验清单（无黑盒入口，属代码级保障），已按此结论执行 |
+
+## v0.7.5.10 已完成
+
+| 需求 | 说明 |
+|------|------|
+| `sendone` 黑盒入口（TODO #76） | 新增 CLI 命令，使「多字符串条目剥头」可按 `delay=1` 的条目在接收端直接验收；ARCHITECTURE 的发送模式表补上「必须有黑盒入口」的说明 |
+
+## v0.7.5.9 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 自动建会话不再清掉自己的会话（TODO #73） | 自动建之后重新取权威列表，不再 `daemonSessions = []` |
+| `addTab` 补 `connectedAt`（TODO #74） | 宽限期在自动建会话路径上生效 |
+| 验证方式升级 | `autocreate_unit_fixture.py`：**桩替换 Go 绑定**，不碰真实守护进程/串口，可在任何人正在用的情况下确定性复现；`autocreate_unit_mutation.py` 三组合变异验证 |
+
+## v0.7.5.8 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 陈旧载荷不再清掉活着的会话（TODO #71） | 会移除在线会话时才先 `GetSessions()` 核实；新增不核实 |
+| 宽限期真正生效（TODO #72） | 三处写入 `connectedAt` |
+| 验证 | 夹具 F 节确定性复现 + 变异 D6 还原后重建用户现象；六个变异 6/6 捕获，夹具 28/28 |
+
+## v0.7.5.7 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 队列 delay 语义（TODO #69） | 省略=1000 / 0=不延时 / 上限 60000 / 负数报错；CLI 与 MCP 边界各自区分「省略 vs 显式 0」 |
+| delay 剥头下限对齐（TODO #70） | `DecodeEntryContentOnly` 不再拒绝 1–4；`send.trigger(raw=false)` 不再把条目头当数据发 |
+| 验证 | CLI 侧 5 档耗时实测 + MCP 侧 3 项实测 + 新增 3 个测试文件（含 serial-mcp 的首个测试） |
+
+## v0.7.5.6 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 设置页不再被当成会话页（TODO #64） | 会话类入口统一走 `isSessionTab`/`requireSessionTab`；停在设置页时给提示而不是静默挂错 |
+| 建进程不再多出标签页（TODO #65） | `openPort`/`openForwardPorts` 补 `_creatingTab` 保护 |
+| 僵尸清理只数会话标签页（TODO #66） | 设置页不占会话位 |
+| 会话回来时找回原标签页（TODO #67） | `_orphanSid` + 重新绑定，不再销毁重建 |
+| 按钮不再被别的页改掉（TODO #68） | `updateOpenBtn` 只动当前页元素 |
+| 夹具稳定性 | 历史窗口夹具的单条渲染成本改为 3 次取最快（并打印样本），阈值不再被调度噪声误报 |
+
+## v0.7.5.5 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 历史读取改分页（TODO #57） | `session.history` 新增 `limit`/`beforeTsMs`/`sameTsSkip`，守护进程侧新增 `ringbuf.SnapshotPage`（只复制选中一页）；实测整环 18 万条 79.4ms/15.86MB → 一页 5000 条 5.0ms/0.44MB，基准 `BenchmarkHistoryRead` |
+| 前端历史缓存有界（TODO #58） | 跟随保留 10000 条、回看放宽到 40000 条，从最旧一端裁；实测灌 30000 条后停在 10032 条且尾条为最新 |
+| 「加载更早」滚动触发（TODO #59） | 滚动触发器去掉 `_renderStart > 0` 前置；`_ringExhausted` + 游标推进双重防抖 |
+| 自动回补开关 | `设置 → 高级 → 自动回补更早历史`（开启/关闭，9 语言）：关闭后滚到顶只摆可点提示 |
+| 历史环写满即冻结（TODO #12） | `recordHistory` 不再忽略 `Write` 的返回值；新增 `WriteEvict`，环满时挤掉最旧包，单包超容量才计 `ringDrops` |
+| 事件时间戳与环内时间戳统一 | `RxTxMessage.TsMs` = 写进环的同一个值；分页游标靠它精确对齐（两边各取一次 `time.Now()` 会在毫秒边界错开） |
+| CLI 分页 | `history [pid] [--limit n] [--before ms] [--skip n]`，未知参数报错，附 `history_args_test.go` |
+| MCP 分页 | `serial_history` 新增 `limit`/`beforeTsMs`/`sameTsSkip` 与描述、schema 更新 |
+| 契约测试泄漏共享内存（TODO #60） | `TestEveryContractMethodIsDispatched` 补 `defer pm.DestroyAll()` |
+
+## v0.7.5.4 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 同步 `probe.toml` 注释（TODO #54，报告 §4.1） | 按实际公式重写；`probe.go` 加漂移提醒 |
+| 未知参数应报错（TODO #55，报告 §4.2） | 抽出 `parseProbeArgs` + 提前校验 + 3 条单元测试 |
+| 同步 MCP schema 默认值（TODO #56，报告 §6.2.4） | `default 12000` → `15000` |
+
+## v0.7.5.3 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 历史窗口按批渲染（TODO #51） | 入站帧队列 + rAF 合并成批；一批一次 fragment/裁剪/贴底；贴底改写不读。吞吐 893 → 242131 帧/秒，持续流入单条 1000 → 240µs |
+| 裁剪恒定执行（TODO #51） | 此前锁定时完全不裁剪，实测喂 5000 条 DOM 5000 行；现恒做，冻结由 `_frozen`/`_atBottom` 表达 |
+| 往回翻：视图冻结但滚动条继续变化（TODO #51） | 未读区用占位块撑高度；实测 scrollTop 变化 0px、内容高度 +123002px、DOM 有界 |
+| 去掉丢弃式重绘节流（TODO #51） | 实测清空后空白、切换显示模式画面不跟随；改为不丢弃 |
+| 「加载更早」可达（TODO #51） | `expandHistory` 拆开「扩窗」与「取更早」，`_renderStart==0` 时仍会去取 |
+| 窗口行数按视口推导 + 高级设置（TODO #51） | 接上从未被调用的 `calcRenderCount()`；`设置 → 高级 → 历史窗口行数`（自动/150/300/400/600），9 语言 |
+| 控制台 null 异常（TODO #51） | `loadTabHistory` / `clearDisplay` 补 null 守卫 |
+| 默认波特率全覆盖（TODO #52，按 C1 方案） | 去掉 1s 隐藏下限 + 预算 15s；13.4s 覆盖全部 7 档、skipped 为空 |
+| CLI 补 `busy`（TODO #53，报告 P1） | 抽出 `probeOutcomeJSON` 并加字段集合测试 |
+
+## v0.7.5.2 已完成
+
+| 需求 | 说明 |
+|------|------|
+| `probe` 空结果与「没有设备」不可区分（TODO #50，报告 P1） | `ProbePorts` 改返回 `ProbeOutcome`：被占用 / 打不开 / 读不了 / 超预算 四条「压根没探成」的路径全部进 `skipped` 并带原因，且补上日志（此前连日志都没有）。实机：并发探测 54ms 返回 `busy`、被会话占用 73ms 返回明确原因，默认配置 12.7s 返回结构化结果并列出未试波特率 |
+| 客户端 10s 超时先于守护进程放弃 | 总预算默认 12s（`--budget` / MCP `budgetMs` 可覆盖），到点返回已有结果并列出未试项；`ports.probe` 请求超时放宽到 25s |
+| 预算内够不到最常用的波特率 | `baud_rates` 改为按可能性排序，115200 提到最前（原升序下 12s 预算用尽时 115200 根本没试过） |
+| 并发探测返回空结果 | `probeMu.TryLock`，第二个探测返回 `busy: true` +「已有另一次设备探测正在进行，本次未执行」 |
+| `probeRead` 丢弃读取错误 | 改为返回错误；串口打开成功但读不了的端口不再被报成「未检测到」 |
+| CLI / MCP / 文档没说清这三种「没检测到」 | CLI 输出带 skipped/attempts/elapsedMs/budgetExhausted 并在 stderr 提示；MCP 描述与 `budgetMs` 参数；`操作说明.md` §九 新增「怎么看探测结果」 |
+
+## v0.7.5.1 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 文本模式高亮与光标逐格错位（TODO #43） | 镜像层用 `·` 顶替了空格的宽度，比例字体下每空格错半格到一整格（宋体累计 +77px）。改为真实字符保留原宽度、标记绝对定位叠加。10 种字体实测漂移 0～0.64px |
+| Hex 预处理四条路径分叉（TODO #44） | 抽出 `_normalizeHexInput` 单一实现，发送／自动发送／回写环形缓冲／字节统计共用。`0xAA 0xBB`／`AA,BB`／`0xAA` 自动发送由失败变为正常发出，字节数由 4B 修正为 2B |
+| 1 位数字判绿却发不出去且无提示（TODO #45） | 新增发送框悬浮提示（悬停 + 发送被拦下两条触发），9 语言本地化，5 秒自动消失、不拦鼠标 |
+| 占位符写死中文（TODO #46） | 镜像层改走 `t('send.placeholder')` 并在切语言时重绘 |
+| 自动发送失败弹窗缺分隔符 | 9 种语言的 `serial.start_fail` 都没有尾随冒号，实测显示为 `Start failedinvalid hex: ...`；在代码里补 `': '` |
+
+## v0.7.5 已完成
+
+| 需求 | 说明 |
+|------|------|
+| `probe` 多字节响应被截断（报告四轮未愈） | `Read` 一有字节就返回而探测只读一次，9 字节响应只读到 1 字节，`modbus_crc` 规则对多字节响应一律失效。改为循环累积并在帧收完后结束。实测 0/5 → 5/5 命中，无应答端口耗时不变 |
+| 端口描述偶发退化为端口名 | 描述靠起 PowerShell 子进程查 WMI（超时 10s），繁忙时返回空 map，而空描述的回退是端口名本身。改为直接读注册表，WMI 保留为兜底。refresh 1–2s → 0.08s |
+| `daemon not running` 断言（#27） | 0.7.0 只清了 CLI 那层，`client.CallOnce` 与 `pipe.dialPipe` 的包装仍在。改为让底层错误自己说话 |
+| 连接阶段失败被误当成握手失败并重试 | 去掉上条包装后暴露：守护进程未运行也报「注册握手失败（已尝试 3 次）」。现按阶段区分，确定性失败立即返回 |
+| Tx/Rx 大小写统一（#42） | `en`/`es`/`fr` 共 30 处大写改为 `Tx`/`Rx`，与前端及其余 8 种语言一致 |
+| 许可证评估 | 评估 Apache-2.0 后决定**保持 MIT**：依赖全为宽松许可证（技术上可行），但其相对 MIT 的核心增量（明示专利授权）对本工具无实际意义，而「必须标注修改过的文件」等义务对嵌入式受众是摩擦。单一版权人，将来可随时再改 |
 
 ## v0.7.4.2 已完成
 

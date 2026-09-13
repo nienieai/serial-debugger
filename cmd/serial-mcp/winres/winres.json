@@ -15,19 +15,19 @@
     "#1": {
       "0000": {
         "fixed": {
-          "file_version": "0.7.4.3",
-          "product_version": "0.7.4.3"
+          "file_version": "0.8.0",
+          "product_version": "0.8.0"
         },
         "info": {
           "0409": {
             "CompanyName": "nienieai",
             "FileDescription": "串口调试工具 MCP 服务",
-            "FileVersion": "0.7.4.3",
+            "FileVersion": "0.8.0",
             "InternalName": "serial-mcp",
             "LegalCopyright": "Copyright (c) 2026 nienieai (MIT License)",
             "OriginalFilename": "serial-mcp.exe",
             "ProductName": "串口调试工具",
-            "ProductVersion": "0.7.4.3"
+            "ProductVersion": "0.8.0"
           }
         }
       }

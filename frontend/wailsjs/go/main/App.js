@@ -94,8 +94,8 @@ export function GetPorts() {
   return window['go']['main']['App']['GetPorts']();
 }
 
-export function GetSessionHistory(arg1) {
-  return window['go']['main']['App']['GetSessionHistory'](arg1);
+export function GetSessionHistory(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['GetSessionHistory'](arg1, arg2, arg3, arg4);
 }
 
 export function GetSessionStats(arg1) {

@@ -231,7 +231,7 @@ sequenceDiagram
 | `forward.create` | `portA baudA portB baudB ...` | `{"processId","success"}`（向后兼容，内部转 process.create） |
 | `process.list` | — | `{"processes":[{processId,status,mode,...}]}` |
 | `session.send` | `processId data format` | `{"success"}`（异步入队） |
-| `session.history` | `processId` | `{"history":[...],"sharedName":"..."}` |
+| `session.history` | `processId limit? beforeTsMs? sameTsSkip?` | `{"history":[...],"sharedName","hasMore","older","oldestTsMs","oldestTs","historyFile"?,"ringDrops"?}` — `limit<=0` 整取（老行为）；`limit>0` 只回最后一页，`beforeTsMs`+`sameTsSkip` 是往更早翻的游标（v0.7.5.5） |
 | `session.stats` | `processId` | `{"stats":{...}}` |
 | `threads` | — | `{"goroutines":N,"sessions":[...]}` |
 | `goroutines` | — | `{"goroutines":N,"stack":"..."}` |
@@ -442,7 +442,7 @@ var All = []Method{ Register, Subscribe, ..., ProcessCreate, ... }
 | `forward.create` | pm.ForwardCreate — 向后兼容，内部转 Create("forward", ...) |
 | `process.list` | pm.List() — 返回 mode 字段 |
 | `session.send` | pm.Send → sendCh 异步入队 |
-| `session.history` | pm.GetHistory → 返回 sharedName + 数据 |
+| `session.history` | pm.GetHistoryPage → 返回 sharedName + 一页数据 + hasMore/游标信息（limit<=0 时整取） |
 | `session.stats` | pm.GetStats |
 | `shutdown` | DestroyAll → 异步 broadcast + close(shutdownCh) + 5s 安全退出 |
 | `send.trigger` | pm.SendTrigger — 从 sendq 读一条 → sendCh（正常广播+历史） |
@@ -598,6 +598,10 @@ entry = timestamp(8B) | direction(1B) | hexLen(2B) | hexData(NB)
 
 **读取路径**：历史读取经 IPC 的 `session.history`，走 `Snapshot` 语义（读不消费、不需写游标），daemon 侧由 `ringBufMu` 串行化。`ringbuf.OpenSharedRing` 从未接通：它只映射 `FILE_MAP_READ`，而返回对象上的 `Read`/`Reset` 会写 tail，按原设计调用会访问冲突。
 
+**分页读取（v0.7.5.5）**：`session.history` 默认带 `limit`，走 `ringbuf.SnapshotPage` —— 只复制选中的一页，全程只记位置（4 字节/包）。游标是 `(beforeTsMs, sameTsSkip)`：前者是调用方手上最旧一条的毫秒时间戳，后者是它手上属于那一毫秒的条数。为什么要后者：毫秒时间戳会撞车，只用 `ts < before` 会把边界那一毫秒剩下的包**永久丢掉**，而放宽成 `ts <=` 又会让同一批包被反复返回。为此**广播事件与写进环的必须是同一个毫秒值**（`RxTxMessage.TsMs` 由写环处产生），否则两边在毫秒边界上会错开。属性测试 `TestHistoryPagingReconstructsFullRing` 断言「一页页翻回来 == 整环」。
+
+**写满即挤出（v0.7.5.5）**：`recordHistory` 走 `ringbuf.WriteEvict`。此前用 `Write` 且忽略返回值，环满 5 MB 后历史**永久停住**（磁盘仍在追加，界面看不出来）；`WriteEvict` 空间不足时挤掉最旧的包，保留最新的一段，只有单包超过整环容量才计 `ringDrops`。
+
 ### 3.7.1 历史持久化（双写）
 
 `recordHistory()` 写环形缓冲区后，同步追加到磁盘文件。文件格式与环形缓冲区包格式完全一致。
@@ -628,7 +632,7 @@ ring buffer 自动添加 `[2B LE len]` 前缀分帧。
 |------|------|------|
 | sendall（非 loop） | `autosend.start {mode:"queue", loop:false}` | 遍历已启用条目一轮 → 自动停止 |
 | loop（循环） | `autosend.start {mode:"queue", loop:true}` | 持续循环已启用条目，轮次间隔 `intervalMs` |
-| sendone（单条） | `send.trigger` | 从 sendq 读一条进 sendCh |
+| sendone（单条） | `send.trigger` | 从 sendq 读一条进 sendCh。`raw:false`（CLI `sendone` 不带 `--raw`）会走 `DecodeEntryContentOnly` 剥掉条目头 —— **这条路径必须有黑盒入口**，否则「剥头是否覆盖全部 delay 取值」无法验收（v0.7.5.10 补上 `serial-cli sendone`；此前只有 Wails 绑定与裸 IPC） |
 
 **发送流程**：
 ```
@@ -1081,7 +1085,7 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `sendqueue` | `<file> [pid]` | 从 JSON 文件写多行到 sendq 共享内存 |
 | `autosend` | `start <ms> <mode> [--loop] [pid]`<br/>`stop [pid]` / `status [pid]`<br/>`interval <ms> [pid]` | `autosend.start` / `autosend.stop` / `autosend.status` / `autosend.interval` |
 | `multistr` | `save [pid]` / `load [pid]`<br/>`reload [pid]` / `status [pid]` | `multistr.save` / `multistr.load` / `multistr.reload` / `autosend.status`（**`multistr.status` 这个 IPC 方法并不存在**，v0.7.0 前 CLI 与 MCP 都误用了该名字、实际发的都是 `autosend.status`；v0.7.0 起方法名是 `contract` 常量，写不出不存在的名字，但这个工具名/命令名的历史叫法保留） |
-| `history` | `[pid]` | `session.history`（经 IPC 读取共享内存环的快照） |
+| `history` | `[pid] [--limit n] [--before ms] [--skip n]` | `session.history`（读取共享内存环；`--limit` 只取最新 n 条，`--before`/`--skip` 用上一条响应里最旧一条的 `tsMs` 与同毫秒条数继续往前翻） |
 | `history-files` | — | `history.files`（列出历史记录文件） |
 | `history-search` | `<file> <kw> [limit]` | `history.search`（分页搜索关键字） |
 | `history-enable` | `[true\|false]` | `history.enable`（开关自动保存，默认 true） |
@@ -1104,6 +1108,8 @@ serial-cli start
 serial-cli open COM4 9600
 serial-cli send "AT\r\n"
 serial-cli send 01030008000105c8 --hex
+serial-cli sendone             # 从发送队列取一条发出（= 快捷面板的单条发送，剥掉条目头）
+serial-cli sendone --raw       # 对照：原样把队列里的字节发出去
 serial-cli history
 serial-cli close
 serial-cli probe               # 探测所有未连接端口
@@ -1439,7 +1445,7 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.7.4.3"`），改一处全部同步。
+版本号统一在 `version/version.go`（`const Version = "0.8.0"`），改一处全部同步。
 
 Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
 

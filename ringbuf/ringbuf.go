@@ -152,6 +152,58 @@ func (rb *RingBuffer) Write(pkt []byte) bool {
 	return true
 }
 
+// WriteEvict 写入一个包；空间不足时先挤掉最旧的包，直到装得下。
+//
+// 为什么需要它：Write 在环满时返回 false，而守护进程的记录路径此前忽略了这个
+// 返回值 —— 于是一旦写满 5MB，历史就**永久停在那一刻**，之后收到的数据既不进
+// 环也不被任何人发现（磁盘文件仍在写，但界面上「往回翻」永远翻到同一段）。
+// 环形缓冲的正确语义是保留**最新**的一段，所以这里挤掉旧的。
+//
+// 调用方必须与 Write 走同一把互斥（守护进程是 ringBufMu）：本方法不加锁，
+// 因为 Write 也不加，而跨进程读者从未接通（见 ARCHITECTURE 关于 OpenSharedRing
+// 的说明）。单个包超过整个环容量时返回 false。
+func (rb *RingBuffer) WriteEvict(pkt []byte) bool {
+	if len(pkt) > 0xFFFF {
+		return false
+	}
+	required := uint32(len(pkt) + lenPrefixSize)
+	if required > rb.bufferSize {
+		return false
+	}
+	for rb.FreeSpace() < required {
+		if !rb.discardOldest() {
+			return false
+		}
+	}
+	return rb.Write(pkt)
+}
+
+// discardOldest 丢掉最旧的一个包。不加锁，理由同 WriteEvict。
+func (rb *RingBuffer) discardOldest() bool {
+	if atomic.LoadUint32(rb.countPtr()) < lenPrefixSize {
+		return false
+	}
+	tail := atomic.LoadUint32(rb.tailPtr())
+	buf := rb.data[rb.dataStart : rb.dataStart+rb.bufferSize]
+	var pktLen uint32
+	if tail+lenPrefixSize <= rb.bufferSize {
+		pktLen = uint32(buf[tail]) | uint32(buf[tail+1])<<8
+	} else {
+		pktLen = uint32(buf[tail]) | uint32(buf[(tail+1)%rb.bufferSize])<<8
+	}
+	if atomic.LoadUint32(rb.countPtr()) < lenPrefixSize+pktLen {
+		return false // 尾部不完整，宁可不动也不要破坏计数
+	}
+	if next := tail + lenPrefixSize + pktLen; next >= rb.bufferSize {
+		tail = next - rb.bufferSize
+	} else {
+		tail = next
+	}
+	atomic.StoreUint32(rb.tailPtr(), tail)
+	atomic.AddUint32(rb.countPtr(), -(lenPrefixSize + pktLen))
+	return true
+}
+
 // ── Read (public, locked) ──
 
 // Read extracts one packet. Returns (nil, false) if no complete packet
@@ -274,6 +326,10 @@ func (rb *RingBuffer) DrainAll() [][]byte {
 // Snapshot copies all packets without consuming them. The buffer state
 // (tail, count) is unchanged after the call; callers get an independent
 // copy that can be safely parsed without affecting other readers.
+//
+// 一次性取整环的版本，保留给需要全部数据的调用方；守护进程的历史读取走
+// SnapshotPage（只复制一页，见下），因为整环 5MB 逐包复制的开销远大于
+// 一次性取回对界面的价值。
 func (rb *RingBuffer) Snapshot() [][]byte {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
@@ -311,6 +367,145 @@ func (rb *RingBuffer) Snapshot() [][]byte {
 		remaining -= lenPrefixSize + pktLen
 	}
 	return out
+}
+
+// PageResult 是一次分页快照的结果。
+type PageResult struct {
+	// Packets 是本次选中的包，按时间升序。
+	Packets [][]byte
+	// Older 是比 Packets 更早、但**仍在环里**的包数量。
+	Older int
+	// HasMore 等价于 Older > 0，单独给出来是因为调用方真正要问的就是
+	// 「环里还有没有更早的」——这决定了要不要继续往磁盘翻。
+	HasMore bool
+	// OldestMs 是环里最旧包的毫秒时间戳，环为空时为 0。
+	OldestMs int64
+}
+
+// SnapshotPage 是 Snapshot 的分页版本：只复制「调用方还没有的那一段」里的
+// 最后 limit 个包，用于前端有界缓存向上回补。
+//
+// 游标语义（beforeMs + sameTsSkip）：
+//
+//	beforeMs <= 0       取最新的 limit 个（首次加载）
+//	beforeMs > 0        只考虑 ts < beforeMs 的包，外加 ts == beforeMs 这一毫秒组里
+//	                    除**最新** sameTsSkip 个之外的部分
+//
+// 为什么要 sameTsSkip：毫秒时间戳会撞车（同一毫秒内到达多帧是常态），只用
+// `ts < beforeMs` 做游标会把边界那一毫秒剩下的包永久丢掉，而只用 `<` 之外的
+// 任何近似判断又会让同一批包被反复返回。调用方报出「我手上有几条是 beforeMs
+// 这一毫秒的」，两个方向就都对上了。
+//
+// 不走 Snapshot 再切片：整环可能有两万个包、5MB，逐包复制一遍是这条路径上
+// 唯一的实际开销；这里全程只记位置（4 字节/包），最后才复制选中的那几个。
+func (rb *RingBuffer) SnapshotPage(limit int, beforeMs int64, sameTsSkip int) PageResult {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	var res PageResult
+
+	count := atomic.LoadUint32(rb.countPtr())
+	if count < lenPrefixSize {
+		return res
+	}
+
+	tail := atomic.LoadUint32(rb.tailPtr())
+	buf := rb.data[rb.dataStart : rb.dataStart+rb.bufferSize]
+	remaining := count
+
+	var offsets []uint32   // 严格早于游标的包
+	var eqOffsets []uint32 // 与游标同一毫秒的包
+	first := true
+
+	for remaining >= lenPrefixSize {
+		start := tail
+
+		// 快路径：包不跨过缓冲区末端时，长度前缀与时间戳都能直接按切片读。
+		// 整环 19 万个包，逐字节 + 取模的写法会把这条路径压到十几毫秒。
+		var pktLen uint32
+		if start+lenPrefixSize <= rb.bufferSize {
+			pktLen = uint32(buf[start]) | uint32(buf[start+1])<<8
+		} else {
+			pktLen = uint32(buf[start]) | uint32(buf[(start+1)%rb.bufferSize])<<8
+		}
+
+		if lenPrefixSize+pktLen > remaining {
+			break // 损坏条目，与 Snapshot 同样停下
+		}
+		remaining -= lenPrefixSize + pktLen
+
+		var tsMs int64
+		if pktLen >= 8 {
+			if off := start + lenPrefixSize; off+8 <= rb.bufferSize {
+				tsMs = int64(binary.LittleEndian.Uint64(buf[off:]))
+			} else {
+				var b [8]byte
+				for i := uint32(0); i < 8; i++ {
+					b[i] = buf[(off+i)%rb.bufferSize]
+				}
+				tsMs = int64(binary.LittleEndian.Uint64(b[:]))
+			}
+		}
+		if first {
+			res.OldestMs = tsMs
+			first = false
+		}
+
+		// 环是按时间升序的：撞到比游标新的一侧就可以停，后面只会更新。
+		if beforeMs > 0 && tsMs > beforeMs {
+			break
+		}
+		if beforeMs > 0 && tsMs == beforeMs {
+			eqOffsets = append(eqOffsets, start)
+		} else {
+			offsets = append(offsets, start)
+		}
+
+		// 单次减法代替取模：step < bufferSize，最多溢出一轮
+		if next := start + lenPrefixSize + pktLen; next >= rb.bufferSize {
+			tail = next - rb.bufferSize
+		} else {
+			tail = next
+		}
+	}
+
+	// 同一毫秒组在时间上整体晚于 offsets，接在后面。
+	// 留下的是这一组里**最旧**的 keep 条：调用方手上是最新的 sameTsSkip 条。
+	keep := len(eqOffsets) - sameTsSkip
+	if keep < 0 {
+		keep = 0 // 调用方持有的比环里留着的还多（被挤掉了），这一组就都别给了
+	}
+	all := offsets
+	all = append(all, eqOffsets[:keep]...)
+
+	if limit > 0 && len(all) > limit {
+		res.Older = len(all) - limit
+		all = all[len(all)-limit:]
+	}
+	res.HasMore = res.Older > 0
+
+	if len(all) == 0 {
+		return res
+	}
+	res.Packets = make([][]byte, 0, len(all))
+	for _, o := range all {
+		var pktLen uint32
+		if o+lenPrefixSize <= rb.bufferSize {
+			pktLen = uint32(buf[o]) | uint32(buf[o+1])<<8
+		} else {
+			pktLen = uint32(buf[o]) | uint32(buf[(o+1)%rb.bufferSize])<<8
+		}
+		pkt := make([]byte, pktLen)
+		if off := o + lenPrefixSize; off+pktLen <= rb.bufferSize {
+			copy(pkt, buf[off:off+pktLen]) // 快路径：整包连续
+		} else {
+			for i := uint32(0); i < pktLen; i++ {
+				pkt[i] = buf[(off+i)%rb.bufferSize]
+			}
+		}
+		res.Packets = append(res.Packets, pkt)
+	}
+	return res
 }
 
 // OldestTimestampMs returns the timestamp (Unix milliseconds) of the oldest

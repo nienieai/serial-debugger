@@ -21,11 +21,42 @@ type MultistrEntry struct {
 	Note    string `json:"note"`
 }
 
+// ── 条目延迟（delay）的语义 ──
+//
+// 一个字段被三处判断（写环、剥头的启发式校验、发送循环），必须只有一个答案：
+//
+//	0        不额外延时，立即发下一条
+//	1–60000  按该毫秒数等待
+//	>60000   夹到 60000
+//	负数     按 0 处理
+//
+// **「省略 delay」不在这里兜底**：它落成默认 1000 ms 是**API 边界**的规矩
+// （CLI/MCP 的 JSON 里「没写这个键」与「写了 0」是两回事），由边界负责区分。
+// 之前 EncodeEntry 里 `delay < 1 → 1000` 把两者混成一件，于是显式写 0 会变成
+// 等 1 秒 —— 外部测试报告 0.7.5.5 轮 §八 实测 20 条花了 19.2 s。
+const (
+	// DelayImmediate 表示不额外延时
+	DelayImmediate = 0
+	// DelayMax 是 delay 的上限（线格式里是 2 字节，但要留出语义余量）
+	DelayMax = 60000
+)
+
+// NormalizeDelay 把任意 delay 值规格化到线格式允许的范围。
+func NormalizeDelay(d int) int {
+	if d < 0 {
+		return DelayImmediate
+	}
+	if d > DelayMax {
+		return DelayMax
+	}
+	return d
+}
+
 // ── binary format (ring buffer handles [2B len] framing) ──
 //
 // [1B version = 0x01]
 // [1B flags]                bit0=enabled, bit1=hex
-// [2B LE delay_ms]          per-entry delay (1–60000)
+// [2B LE delay_ms]          per-entry delay (0–60000, 0 = 不额外延时)
 // [1B note_len]             note length in bytes (0–255)
 // [note_len B note_utf8]
 // [remaining bytes content]
@@ -53,14 +84,9 @@ func EncodeEntry(e MultistrEntry) []byte {
 	}
 	buf[1] = flags
 
-	delay := e.Delay
-	if delay < 1 {
-		delay = 1000
-	}
-	if delay > 60000 {
-		delay = 60000
-	}
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(delay))
+	// delay 的语义见文件上方「条目延迟」一节：这里只做区间规格化，
+	// 不把 0 变成默认值（那是 API 边界的事）。
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(NormalizeDelay(e.Delay)))
 
 	buf[4] = byte(len(noteBytes))
 	copy(buf[5:5+len(noteBytes)], noteBytes)
@@ -113,9 +139,13 @@ func DecodeEntryContentOnly(data []byte) []byte {
 	if flags > 0x03 {
 		return data
 	}
-	// Validate delay: must be in 5–60000 ms range
+	// Validate delay: 线格式允许 0–60000（0 = 不额外延时）。
+	//
+	// 这里此前写的是 `delay < 5`，而 EncodeEntry 的旧下限是 1 —— 于是 delay=1~4 的
+	// 条目走到这条路径时会被判成「不是条目」，整段二进制（版本+标志+delay+note_len）
+	// 被原样当数据发出去。两处下限现在统一到同一个常量上。
 	delay := int(binary.LittleEndian.Uint16(data[2:4]))
-	if delay < 5 || delay > 60000 {
+	if delay > DelayMax {
 		return data
 	}
 	noteLen := int(data[4])

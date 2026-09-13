@@ -269,6 +269,16 @@ func runCommandInteractive(dc *client.DaemonClient, args []string) {
 }
 
 func runCommand(args []string) {
+	// probe 的参数先单独校验一次：参数写错不该等到连上守护进程才报出来，
+	// 没有守护进程时更是根本报不出来（外部报告 §4.2 的 `probe --json` 就撞在这）。
+	// 下面 case 里会再解析一次，成本可忽略。
+	if args[0] == "probe" {
+		if _, _, _, perr := parseProbeArgs(args[1:]); perr != nil {
+			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", perr.Error())
+			os.Exit(1)
+		}
+	}
+
 	switch args[0] {
 	case "start":
 		cmdStart()
@@ -300,14 +310,36 @@ func runCommand(args []string) {
 // 使用者直到发现发不出东西才知道写错了（TODO 已记录）。
 //
 // 额外容忍 "data" 作为 "content" 的别名：这是最常被写错的字段名。
+//
+// Delay 用指针：**「没写这个键」与「写了 0」是两件事** —— 省略落成默认 1000 ms，
+// 显式 0 是「不额外延时」。用 int 时两者都是 0，再被下游 `delay < 1 → 1000` 兜底，
+// 于是显式写 0 变成等 1 秒（外部测试报告 0.7.5.5 轮 §八：20 条花了 19.2 s）。
 type queueEntry struct {
 	Enabled bool   `json:"enabled"`
 	Hex     bool   `json:"hex"`
 	Content string `json:"content"`
-	Delay   int    `json:"delay"`
+	Delay   *int   `json:"delay"`
 	Note    string `json:"note"`
 	// 仅为给出更友好的报错而接受，随后回填到 Content。
 	Data string `json:"data"`
+}
+
+// queueDelayDefault 与文档承诺一致：省略 delay 时按 1000 ms。
+const queueDelayDefault = 1000
+
+// resolveQueueDelay 把「可选 delay」解析成确定值。
+func resolveQueueDelay(d *int) (int, error) {
+	if d == nil {
+		return queueDelayDefault, nil
+	}
+	if *d < 0 {
+		return 0, fmt.Errorf("delay 不能为负（%d）：省略它表示默认 %d ms，"+
+			"写 0 表示不额外延时", *d, queueDelayDefault)
+	}
+	if *d > 60000 {
+		return 60000, nil
+	}
+	return *d, nil
 }
 
 // parseQueueEntries 严格解析 sendqueue 的 JSON 文件。
@@ -323,27 +355,35 @@ func parseQueueEntries(raw []byte) ([]queueEntry, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 
-	var entries []queueEntry
-	if err := dec.Decode(&entries); err != nil {
+	var parsed []queueEntry
+	if err := dec.Decode(&parsed); err != nil {
 		return nil, fmt.Errorf(
 			"解析发送队列 JSON 失败: %w\n"+
 				"接受的字段: content(必填) / hex / enabled / delay / note\n"+
-				"示例: [{\"content\":\"ONE\",\"hex\":false,\"enabled\":true}]", err)
+				"delay: 省略 = 默认 %d ms；写 0 = 不额外延时（立即发下一条）\n"+
+				"示例: [{\"content\":\"ONE\",\"hex\":false,\"enabled\":true}]", err, queueDelayDefault)
 	}
 	// 顶层必须是数组；多余的尾随内容也要报错，避免「只解析了前半段」。
 	if dec.More() {
 		return nil, fmt.Errorf("发送队列 JSON 在数组之后还有多余内容")
 	}
 
-	for i := range entries {
-		if entries[i].Content == "" && entries[i].Data != "" {
-			entries[i].Content = entries[i].Data
+	entries := make([]queueEntry, 0, len(parsed))
+	for i := range parsed {
+		if parsed[i].Content == "" && parsed[i].Data != "" {
+			parsed[i].Content = parsed[i].Data
 		}
-		if entries[i].Content == "" {
+		if parsed[i].Content == "" {
 			return nil, fmt.Errorf(
 				"第 %d 条的 content 为空。空条目发不出任何字节，"+
 					"请检查字段名是否写成了 data/text/value 等", i+1)
 		}
+		d, err := resolveQueueDelay(parsed[i].Delay)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 条: %w", i+1, err)
+		}
+		parsed[i].Delay = &d
+		entries = append(entries, parsed[i])
 	}
 	return entries, nil
 }
@@ -674,6 +714,28 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		fmt.Println(`{"success": true}`)
 
+	case "sendone":
+		// 从发送队列取一条发出去 —— 对应 ARCHITECTURE.md「发送模式」表里的
+		// sendone（单条）→ send.trigger。此前**只有 Wails 绑定 App.TriggerSend
+		// 与裸 IPC 能走这条路径**，CLI/MCP 都没有入口，于是「raw=false 会把多字符串
+		// 条目头剥掉」这条修复在验收上不可证（外部测试报告 0.7.5.7 轮 §8 点名）。
+		//
+		// 默认 raw=false（与 GUI 快捷面板同语义：按条目内容发送、剥掉二进制头）；
+		// --raw 用于对照：原样把队列里的字节发出去。
+		raw, pid, perr := parseSendoneArgs(args[1:])
+		if perr != nil {
+			errExit(perr, interactive)
+			return
+		}
+		if pid == "" {
+			pid = firstConnectedIDDC(dc)
+		}
+		if err := dc.SendTrigger(pid, raw); err != nil {
+			errExit(err, interactive)
+			return
+		}
+		fmt.Printf(`{"success": true, "processId": %q, "raw": %v}`+"\n", pid, raw)
+
 	case "forward":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "用法: serial-cli forward <portA> <portB> [baudA] [baudB]")
@@ -921,25 +983,27 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 
 	case "probe":
-		var ports []string
-		configPath := ""
-		for i := 1; i < len(args); i++ {
-			if args[i] == "--config" && i+1 < len(args) {
-				configPath = args[i+1]
-				i++
-			} else {
-				ports = append(ports, args[i])
-			}
+		ports, configPath, budgetMs, perr := parseProbeArgs(args[1:])
+		if perr != nil {
+			errExit(perr, interactive)
+			return
 		}
-		results, err := dc.ProbePorts(ports, nil, nil, configPath)
+		outcome, err := dc.ProbePorts(ports, nil, nil, configPath, budgetMs)
 		if err != nil {
 			errExit(err, interactive)
 			return
 		}
-		if len(results) == 0 {
+		// 「空结果」有三种截然不同的含义，必须让使用者分得清：
+		//   1. 探测过但没有规则命中        → 未检测到已知设备
+		//   2. 端口被跳过（占用/打不开/…） → 明确列出原因
+		//   3. 超出总预算没轮到            → 明确说明还有哪些没试
+		if len(outcome.Results) == 0 && len(outcome.Skipped) == 0 {
 			fmt.Println("未检测到已知设备")
-		} else {
-			printJSON(map[string]any{"results": results})
+			break
+		}
+		printJSON(probeOutcomeJSON(outcome))
+		if len(outcome.Results) == 0 {
+			fmt.Fprintln(os.Stderr, "注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
 		}
 
 	case "monitor":
@@ -959,8 +1023,22 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		fmt.Println("daemon shutdown requested")
 
 	case "history":
-		pid := resolveProcessID(dc, args, 1)
-		result, err := dc.Call(contract.SessionHistory, map[string]any{"processId": pid})
+		hp, perr := parseHistoryArgs(args[1:])
+		if perr != nil {
+			errExit(perr, interactive)
+			return
+		}
+		params := map[string]any{"processId": resolveProcessID(dc, hp.positional, 0)}
+		if hp.limit > 0 {
+			params["limit"] = hp.limit
+		}
+		if hp.beforeMs > 0 {
+			params["beforeTsMs"] = hp.beforeMs
+		}
+		if hp.skip > 0 {
+			params["sameTsSkip"] = hp.skip
+		}
+		result, err := dc.Call(contract.SessionHistory, params)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -1177,6 +1255,130 @@ func exitOnErr(err error) {
 	}
 }
 
+// probeOutcomeJSON 是一次探测结果对外的 JSON 形状。
+//
+// 抽成独立函数是为了能在测试里把字段集合锁住：`操作说明.md` 明确承诺了 `busy`
+// （并建议用 `grep busy` 自检），而 CLI 曾经漏掉这个键 —— 守护进程返回了它，
+// 序列化时被丢在门外，于是文档写的自检方法永远匹配不到。外部测试报告点名过这一条。
+func probeOutcomeJSON(o *client.ProbeOutcome) map[string]any {
+	if o == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"results":         o.Results,
+		"skipped":         o.Skipped,
+		"attempts":        o.Attempts,
+		"elapsedMs":       o.ElapsedMs,
+		"budgetExhausted": o.BudgetExhausted,
+		"busy":            o.Busy,
+	}
+}
+
+// parseProbeArgs 解析 `probe` 的参数。
+//
+// 未知的长选项**必须报错**：此前 `--json` 这类不存在的 flag 会被当成端口名，
+// 于是结果里多出一条「端口 --json 打不开」的 skipped，读者会真的以为有个端口有问题
+// （外部测试报告 0.7.5.3 轮 §4.2）。缺值的 `--config` / `--budget` 也一并报清楚。
+func parseProbeArgs(args []string) (ports []string, configPath string, budgetMs int, err error) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--config":
+			if i+1 >= len(args) {
+				return nil, "", 0, fmt.Errorf("--config 需要一个配置文件路径")
+			}
+			configPath = args[i+1]
+			i++
+		case args[i] == "--budget":
+			if i+1 >= len(args) {
+				return nil, "", 0, fmt.Errorf("--budget 需要一个毫秒数")
+			}
+			n, aerr := strconv.Atoi(args[i+1])
+			if aerr != nil || n <= 0 {
+				return nil, "", 0, fmt.Errorf("--budget 需要正整数毫秒数，实际为 %q", args[i+1])
+			}
+			budgetMs = n
+			i++
+		case len(args[i]) > 1 && strings.HasPrefix(args[i], "-"):
+			return nil, "", 0, fmt.Errorf("未知参数 %q（probe 支持：端口名…、--config <路径>、--budget <毫秒>）", args[i])
+		default:
+			ports = append(ports, args[i])
+		}
+	}
+	return ports, configPath, budgetMs, nil
+}
+
+// historyArgs 是 `history` 命令解析后的参数。
+type historyArgs struct {
+	positional []string // 进程号（可选）
+	limit      int
+	beforeMs   int64
+	skip       int
+}
+
+// parseHistoryArgs 解析 `history` 的参数。
+//
+// 规矩与 parseProbeArgs 一致：未知的长选项必须报错，不能当成进程号 —— 否则
+// `history --json` 会变成「查进程 --json 的历史」这种看不懂的错误。
+func parseHistoryArgs(args []string) (historyArgs, error) {
+	var out historyArgs
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--limit":
+			if i+1 >= len(args) {
+				return out, fmt.Errorf("--limit 需要一个条数")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n <= 0 {
+				return out, fmt.Errorf("--limit 需要正整数条数，实际为 %q", args[i+1])
+			}
+			out.limit = n
+			i++
+		case args[i] == "--before":
+			if i+1 >= len(args) {
+				return out, fmt.Errorf("--before 需要一个毫秒时间戳")
+			}
+			n, err := strconv.ParseInt(args[i+1], 10, 64)
+			if err != nil || n <= 0 {
+				return out, fmt.Errorf("--before 需要正整数毫秒时间戳（取上一条响应里的 tsMs），实际为 %q", args[i+1])
+			}
+			out.beforeMs = n
+			i++
+		case args[i] == "--skip":
+			if i+1 >= len(args) {
+				return out, fmt.Errorf("--skip 需要一个条数")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 0 {
+				return out, fmt.Errorf("--skip 需要非负整数条数，实际为 %q", args[i+1])
+			}
+			out.skip = n
+			i++
+		case len(args[i]) > 1 && strings.HasPrefix(args[i], "-"):
+			return out, fmt.Errorf("未知参数 %q（history 支持：进程号、--limit <条数>、--before <毫秒>、--skip <条数>）", args[i])
+		default:
+			out.positional = append(out.positional, args[i])
+		}
+	}
+	return out, nil
+}
+
+// parseSendoneArgs 解析 `sendone` 的参数：位置参数是进程号，另有 --raw。
+//
+// 与 probe / history 同一套规矩：未知的 `-` 前缀参数必须报错，不能当成进程号。
+func parseSendoneArgs(args []string) (raw bool, pid string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--raw":
+			raw = true
+		case len(args[i]) > 1 && strings.HasPrefix(args[i], "-"):
+			return false, "", fmt.Errorf("未知参数 %q（sendone 支持：进程号、--raw）", args[i])
+		default:
+			pid = args[i]
+		}
+	}
+	return raw, pid, nil
+}
+
 func printHelp() {
 	fmt.Print(`用法:
   serial-cli <cmd>              命令行客户端
@@ -1190,7 +1392,7 @@ func printHelp() {
 端口:
   ports                              可用串口列表（缓存，不刷新）
   refresh                            刷新串口列表
-  probe  [ports...] [--config <path>]  设备端口探测（发送探针帧识别设备类型）
+  probe  [ports...] [--config <path>] [--budget <ms>]  设备端口探测（发送探针帧识别设备类型）
 
 进程:
   create  [port] [baud] [--mode forward] [--portB <portB>]  创建进程（默认立即连接）
@@ -1205,7 +1407,12 @@ func printHelp() {
 
 数据:
   send    <data> [processId] [--hex] 发送数据 (--hex: 十六进制)
-  history [processId]                历史缓冲区（含毫秒时间戳 + Hex）
+  sendone [processId] [--raw]        从发送队列取一条发出去（多字符串面板的单条发送）
+                                     默认剥掉条目头按内容发；--raw 原样发队列字节
+  history [processId] [--limit <n>] [--before <ms>] [--skip <n>]
+                                     历史缓冲区（含毫秒时间戳 + Hex）
+                                     --limit 只取最新 n 条；--before/--skip 用上一条
+                                     响应里最旧一条的 tsMs 与同毫秒条数继续往前翻
 
 自动发送:
   autosend start <ms> <mode> [--loop] [pid]  启动自动发送 (mode: single|queue, --loop循环)
@@ -1213,6 +1420,7 @@ func printHelp() {
   autosend status [pid]                      查看自动发送状态
   autosend interval <ms> [pid]               修改自动发送间隔
   sendqueue <json-file> [pid]                从JSON文件读取条目数组写入发送队列
+                                             delay: 省略=默认1000ms，写0=不额外延时
 
 多字符串:
   multistr save [pid]                        持久化当前条目到磁盘

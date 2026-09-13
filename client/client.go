@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -92,24 +93,43 @@ const handshakeRetries = 2
 
 // NewDaemonClientWithEvents creates a 3-pipe client with a custom event subscription list.
 //
-// 握手失败会自动重试（见 handshakeRetries 的说明）；全部失败时返回的错误里
-// 带尝试次数与每次的原因。
+// 只有**握手阶段**的失败才重试（见 handshakeRetries 的说明）；连不上守护进程
+// 这类确定性失败立即返回，重试没有意义、还会拖慢并让错误文案失真
+// （曾出现「注册握手失败（已尝试 3 次）: connect to daemon: pipe not available」，
+// 而实际情况只是守护进程没运行）。
 func NewDaemonClientWithEvents(source string, subscribe []string) (*DaemonClient, error) {
 	var lastErr error
 	for attempt := 0; attempt <= handshakeRetries; attempt++ {
-		t0 := time.Now()
 		c, err := connectOnce(source, subscribe)
 		if err == nil {
 			return c, nil
 		}
 		lastErr = err
-		if f, ferr := os.OpenFile(os.Getenv("ST_DIAG_FILE"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); ferr == nil {
-			fmt.Fprintf(f, "ATTEMPT_FAIL #%d elapsed=%.3fs err=%v\n", attempt+1, time.Since(t0).Seconds(), err)
-			f.Close()
+		if errors.Is(err, errConnectPhase) {
+			return nil, err
 		}
 	}
 	return nil, fmt.Errorf("注册握手失败（已尝试 %d 次）: %w", handshakeRetries+1, lastErr)
 }
+
+// errConnectPhase 标记「还没走到握手阶段就失败了」——例如守护进程未运行、
+// 回调管道建不出来。这类失败是确定性的，重试无益。
+var errConnectPhase = errors.New("connect phase")
+
+// connectError 是连接阶段的失败：errors.Is 能把它认成 errConnectPhase，
+// 但 Error() 只返回真实原因——不把内部标记露给用户。
+type connectError struct{ cause error }
+
+func (e *connectError) Error() string { return e.cause.Error() }
+func (e *connectError) Unwrap() error { return e.cause }
+func (e *connectError) Is(target error) bool {
+	// 让 errors.Is(err, errConnectPhase) 成立，同时不污染 Error()。
+	// Unwrap 指回 cause，所以 errConnectPhase 必须由这里匹配。
+	return target == errConnectPhase
+}
+
+// connectErr 把连接阶段的失败包成可分类、且文案干净的错误。
+func connectErr(cause error) error { return &connectError{cause: cause} }
 
 func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	if subscribe == nil {
@@ -126,12 +146,12 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	// 1. Create listeners (client acts as pipe server for resp and sub)
 	respLn, err := pipe.Listen(respName)
 	if err != nil {
-		return nil, fmt.Errorf("create resp pipe: %w", err)
+		return nil, connectErr(err)
 	}
 	subLn, err := pipe.Listen(subName)
 	if err != nil {
 		respLn.Close()
-		return nil, fmt.Errorf("create sub pipe: %w", err)
+		return nil, connectErr(err)
 	}
 
 	// 2. Start Accept goroutines so pipes exist when daemon dials
@@ -162,7 +182,7 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 	if err != nil {
 		respLn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("connect to daemon: %w", err)
+		return nil, connectErr(err)
 	}
 
 	regReq := map[string]any{
@@ -182,7 +202,7 @@ func connectOnce(source string, subscribe []string) (*DaemonClient, error) {
 		daemonConn.Close()
 		respLn.Close()
 		subLn.Close()
-		return nil, fmt.Errorf("send register: %w", err)
+		return nil, connectErr(err)
 	}
 
 	// 4. Wait for daemon to connect back on resp and sub
@@ -502,12 +522,25 @@ func (c *DaemonClient) Call(method contract.Method, params map[string]any) (map[
 			return nil, fmt.Errorf("%s", msg.Error)
 		}
 		return msg.Result, nil
-	case <-time.After(10 * time.Second):
+	case <-time.After(requestTimeoutFor(method)):
 		c.pendMu.Lock()
 		delete(c.pending, id)
 		c.pendMu.Unlock()
 		return nil, fmt.Errorf("request timeout: %s", method)
 	}
+}
+
+// requestTimeoutFor 返回某个方法允许等待的最长时间。
+//
+// 默认 10s；ports.probe 单独放宽：它在守护进程侧有总预算（默认 12s）加上打开
+// 串口等开销，10s 的通用超时曾经先于守护进程放弃——客户端一走，守护进程还在
+// 扫，那段窗口里端口被占，后续任何探测都会得到空结果（与「没有设备」同形）。
+// 这里给足余量，确保「客户端放弃」不再先于「守护进程给出结论」。
+func requestTimeoutFor(method contract.Method) time.Duration {
+	if method == contract.PortsProbe {
+		return 25 * time.Second
+	}
+	return 10 * time.Second
 }
 
 // Subscribe updates the event subscription list.
@@ -696,8 +729,24 @@ func (c *DaemonClient) SwitchPort(processId string, port string, cfg map[string]
 	return err
 }
 
+// ProbeOutcome 是一次设备探测的结果。
+//
+// 关键：Results 为空**不等于**没有设备。Skipped 列出「本轮压根没探成」的端口
+// 及原因（被会话占用 / 串口打不开 / 读不了 / 超出总预算没轮到），
+// BudgetExhausted 表示到点即停、后面还有端口或波特率没试。此前这些情况
+// 与「探测完成但没有规则命中」返回同一个空结果，会把在线设备报成「未检测到」。
+type ProbeOutcome struct {
+	Results         []map[string]any
+	Skipped         []map[string]any
+	Attempts        int
+	ElapsedMs       int64
+	BudgetExhausted bool
+	Busy            bool
+}
+
 // ProbePorts triggers device probing on specified ports (or all available).
-func (c *DaemonClient) ProbePorts(ports []string, baudRates []int, rules []string, configPath string) ([]map[string]any, error) {
+// budgetMs > 0 覆盖守护进程侧的总预算（默认 12s）。
+func (c *DaemonClient) ProbePorts(ports []string, baudRates []int, rules []string, configPath string, budgetMs int) (*ProbeOutcome, error) {
 	params := map[string]any{}
 	if len(ports) > 0 {
 		params["ports"] = ports
@@ -711,18 +760,41 @@ func (c *DaemonClient) ProbePorts(ports []string, baudRates []int, rules []strin
 	if configPath != "" {
 		params["configPath"] = configPath
 	}
+	if budgetMs > 0 {
+		params["budgetMs"] = budgetMs
+	}
 	result, err := c.Call(contract.PortsProbe, params)
 	if err != nil {
 		return nil, err
 	}
-	results, _ := result["results"].([]any)
-	out := make([]map[string]any, 0, len(results))
-	for _, r := range results {
-		if m, ok := r.(map[string]any); ok {
+	return probeOutcomeFromMap(result), nil
+}
+
+// probeOutcomeFromMap 把守护进程返回的原始 map 转成 ProbeOutcome。
+func probeOutcomeFromMap(result map[string]any) *ProbeOutcome {
+	out := &ProbeOutcome{}
+	out.Results = mapSlice(result["results"])
+	out.Skipped = mapSlice(result["skipped"])
+	if v, ok := result["attempts"].(float64); ok {
+		out.Attempts = int(v)
+	}
+	if v, ok := result["elapsedMs"].(float64); ok {
+		out.ElapsedMs = int64(v)
+	}
+	out.BudgetExhausted, _ = result["budgetExhausted"].(bool)
+	out.Busy, _ = result["busy"].(bool)
+	return out
+}
+
+func mapSlice(v any) []map[string]any {
+	items, _ := v.([]any)
+	out := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok {
 			out = append(out, m)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // AutoSendStart starts auto-send on a process.
@@ -911,7 +983,9 @@ func (c *DaemonClient) DetachHistoryFile(processID string) error {
 func CallOnce(method contract.Method, params map[string]any, source string) (map[string]any, error) {
 	conn, err := pipe.Dial(pipe.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("daemon not running: %v", err)
+		// 同 pipe.dialPipe：不能断言「daemon not running」——连接失败也可能是
+		// 端点残留、权限、或对端刚退出。让底层错误自己说话，别把方向带偏。
+		return nil, err
 	}
 	defer conn.Close()
 

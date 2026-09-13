@@ -89,7 +89,10 @@ func cancelPending(conn io.ReadWriteCloser) {}
 func dialPipe(addr string) (io.ReadWriteCloser, error) {
 	conn, err := net.Dial("unix", addr)
 	if err != nil {
-		return nil, fmt.Errorf("daemon not running: %v", err)
+		// 不要在这里断言「daemon not running」：连接失败可能是守护进程没运行，
+		// 也可能是 socket 文件残留、权限不对、或对端已退出。硬套一个错误结论
+		// 会把排查方向带偏（v0.7.0 已从 CLI 那层去掉该前缀，底层这里漏掉了）。
+		return nil, fmt.Errorf("connect to %s: %w", addr, err)
 	}
 	return conn.(io.ReadWriteCloser), nil
 }

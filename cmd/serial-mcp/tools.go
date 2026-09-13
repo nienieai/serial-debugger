@@ -179,9 +179,12 @@ var allTools = []toolDef{
 	},
 	{
 		Name:        "serial_history",
-		Description: "Read data history for a serial process from shared memory.",
+		Description: "Read data history for a serial process from shared memory. Without 'limit' the whole 5MB ring is returned; pass 'limit' to page (use the response's 'hasMore' and the oldest entry's 'tsMs' as the next 'beforeTsMs').",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
-			"processId": {Type: "string", Description: "Process ID."},
+			"processId":  {Type: "string", Description: "Process ID."},
+			"limit":      {Type: "integer", Description: "Return at most this many entries (the newest ones). Omit or 0 for the whole ring."},
+			"beforeTsMs": {Type: "integer", Description: "Paging cursor: only entries older than this Unix-millisecond timestamp."},
+			"sameTsSkip": {Type: "integer", Description: "Paging cursor: how many entries of that same millisecond the caller already holds."},
 		}},
 	},
 	{
@@ -243,10 +246,10 @@ var allTools = []toolDef{
 	},
 	{
 		Name:        "serial_sendqueue",
-		Description: "Write multi-string entries to the send queue. Each entry: {enabled, hex, content, delay, note}.",
+		Description: "Write multi-string entries to the send queue. Each entry: {enabled, hex, content, delay, note}. 'delay' is the per-entry gap in ms: omit it for the 1000ms default, pass 0 to send the next entry immediately (no extra delay), max 60000.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"processId": {Type: "string", Description: "Process ID."},
-			"entries":   {Type: "array", Description: "Array of entry objects with fields: enabled, hex, content, delay, note."},
+			"entries":   {Type: "array", Description: "Array of entry objects: {enabled, hex, content, delay, note}. Per-entry 'delay' in ms: omit for the 1000ms default, 0 = no extra delay, max 60000."},
 		}, Required: []string{"processId", "entries"}},
 	},
 	{
@@ -271,13 +274,16 @@ var allTools = []toolDef{
 		}, Required: []string{"processId"}},
 	},
 	{
-		Name:        "serial_probe_ports",
-		Description: "Probe serial ports to detect device types. Sends probe frames defined in probe.toml and matches responses to identify connected devices (Modbus RTU, MCU control boards, etc.). Occupied ports are skipped automatically.",
+		Name: "serial_probe_ports",
+		Description: "Probe serial ports to detect device types. Sends probe frames defined in probe.toml and matches responses to identify connected devices (Modbus RTU, MCU control boards, etc.). " +
+			"An empty 'results' does NOT mean 'no device': read 'skipped' (ports that were not actually probed, with the reason — occupied by a session, could not be opened/read, or out of budget) and 'budgetExhausted' before concluding anything. " +
+			"Occupied ports are reported in 'skipped', never silently dropped.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"ports":      {Type: "array", Description: "Specific port names to probe (e.g. [\"COM3\"]). Omit to probe all available."},
 			"baudRates":  {Type: "array", Description: "Baud rates to try (e.g. [9600, 115200]). Omit to use probe.toml defaults."},
 			"rules":      {Type: "array", Description: "Rule names to apply. Omit to use all rules from probe.toml."},
 			"configPath": {Type: "string", Description: "Path to probe.toml config file. Omit to auto-discover."},
+			"budgetMs":   {Type: "integer", Description: "Overall time budget in ms for the whole call (default 15000). Raise it if a device only answers at a baud rate late in the list; lower it if you want a fast answer."},
 		}},
 	},
 }
@@ -635,8 +641,11 @@ func handleSessions(_ json.RawMessage) *toolCallResult {
 
 func handleHistory(raw json.RawMessage) *toolCallResult {
 	var p struct {
-		ProcessID string `json:"processId"`
-		SessionID string `json:"sessionId"`
+		ProcessID  string `json:"processId"`
+		SessionID  string `json:"sessionId"`
+		Limit      int    `json:"limit"`
+		BeforeTsMs int64  `json:"beforeTsMs"`
+		SameTsSkip int    `json:"sameTsSkip"`
 	}
 	json.Unmarshal(raw, &p)
 	pid := p.ProcessID
@@ -649,7 +658,17 @@ func handleHistory(raw json.RawMessage) *toolCallResult {
 			return errResult("No connected process")
 		}
 	}
-	result, err := client.CallOnce(contract.SessionHistory, map[string]any{"processId": pid}, "mcp")
+	params := map[string]any{"processId": pid}
+	if p.Limit > 0 {
+		params["limit"] = p.Limit
+	}
+	if p.BeforeTsMs > 0 {
+		params["beforeTsMs"] = p.BeforeTsMs
+	}
+	if p.SameTsSkip > 0 {
+		params["sameTsSkip"] = p.SameTsSkip
+	}
+	result, err := client.CallOnce(contract.SessionHistory, params, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to read history: %v", err))
 	}
@@ -893,6 +912,11 @@ func handleSendQueue(raw json.RawMessage) *toolCallResult {
 	if len(p.Entries) == 0 {
 		return errResult("entries array must not be empty")
 	}
+	// delay 的「省略」与「显式 0」是两件事：省略落成默认 1000 ms，显式 0 是不额外延时。
+	// 直接透传的话两者都是 Go 零值，下游无法区分（外部测试报告 0.7.5.5 轮 §八）。
+	if err := normalizeEntryDelays(p.Entries); err != nil {
+		return errResult(err.Error())
+	}
 	if p.ProcessID == "" {
 		p.ProcessID = firstConnectedID()
 		if p.ProcessID == "" {
@@ -945,6 +969,45 @@ func handleMultistrLoad(raw json.RawMessage) *toolCallResult {
 	return okResult(result)
 }
 
+// normalizeEntryDelays 在 MCP 边界上把每条条目的 delay 落成确定值。
+//
+// 「省略 delay」与「显式写 0」必须在进入守护进程前就分开：JSON 解到
+// []map[string]any 后两者都是「没有键」或「0」，守护进程侧只看得到 int，
+// 分不出来。规矩与 CLI 的 sendqueue 一致：
+//
+//	省略 / null → 1000（文档承诺的默认值）
+//	0           → 0（不额外延时）
+//	1–60000     → 原样
+//	>60000      → 夹到 60000
+//	负数 / 非整数 → 报错
+func normalizeEntryDelays(entries []map[string]any) error {
+	const def, max = 1000, 60000
+	for i, e := range entries {
+		v, ok := e["delay"]
+		if !ok || v == nil {
+			entries[i]["delay"] = def
+			continue
+		}
+		f, ok := v.(float64) // JSON 数字解到 map[string]any 就是 float64
+		if !ok {
+			return fmt.Errorf("entries[%d].delay must be a number", i)
+		}
+		d := int(f)
+		if float64(d) != f {
+			return fmt.Errorf("entries[%d].delay must be a whole number of milliseconds", i)
+		}
+		if d < 0 {
+			return fmt.Errorf("entries[%d].delay must not be negative "+
+				"(omit it for the %dms default, write 0 for no extra delay)", i, def)
+		}
+		if d > max {
+			d = max
+		}
+		entries[i]["delay"] = d
+	}
+	return nil
+}
+
 func handleMultistrStatus(raw json.RawMessage) *toolCallResult {
 	var p struct {
 		ProcessID string `json:"processId"`
@@ -969,6 +1032,7 @@ func handleProbePorts(raw json.RawMessage) *toolCallResult {
 		BaudRates  []int    `json:"baudRates"`
 		Rules      []string `json:"rules"`
 		ConfigPath string   `json:"configPath"`
+		BudgetMs   int      `json:"budgetMs"`
 	}
 	json.Unmarshal(raw, &p)
 
@@ -984,6 +1048,9 @@ func handleProbePorts(raw json.RawMessage) *toolCallResult {
 	}
 	if p.ConfigPath != "" {
 		params["configPath"] = p.ConfigPath
+	}
+	if p.BudgetMs > 0 {
+		params["budgetMs"] = p.BudgetMs
 	}
 
 	result, err := client.CallOnce(contract.PortsProbe, params, "mcp")

@@ -34,12 +34,18 @@ type RxTxMessage struct {
 	Hex       string `json:"hex"`
 	Direction string `json:"direction"`
 	Timestamp string `json:"timestamp"`
+	// TsMs 是这一帧的毫秒时间戳，与写进环形缓冲/历史文件的**同一个**值。
+	// 前端拿它做「回补更早历史」的分页游标：时间戳字符串只有时分秒，
+	// 跨天会撞车，而且没法跟环里的 int64 精确比较。
+	TsMs int64 `json:"tsMs"`
 }
 
 type HistoryEntry struct {
 	Timestamp string `json:"timestamp"`
 	Hex       string `json:"hex"`
 	Direction string `json:"direction"`
+	// TsMs 见 RxTxMessage.TsMs。
+	TsMs int64 `json:"tsMs"`
 }
 
 type SendErrorInfo struct {
@@ -122,6 +128,7 @@ type Process struct {
 	historyFileName string              // current disk file name（histFileMu 保护）
 	ringBufMu       sync.Mutex          // 串行化 historyRing 的读写与关闭
 	histFileMu      sync.RWMutex        // 保护 historyFile / historyFileName
+	ringDrops       atomic.Int64        // 环装不下的包数（单包超过整环容量时才会非 0）
 	stopCh          chan struct{}
 	stopOnce        sync.Once // ensures stopIO runs only once
 
@@ -192,7 +199,15 @@ func (p *Process) viewerSummary() map[string]int {
 }
 
 func (p *Process) recordHistory(hexData, direction string) {
-	ts := time.Now().UnixMilli()
+	p.recordHistoryAt(time.Now().UnixMilli(), hexData, direction)
+}
+
+// recordHistoryAt 用调用方给定的毫秒时间戳记一条历史。
+//
+// 广播事件与环形缓冲必须共用**同一个** ts：前端的分页游标是拿事件的 ts 去环里
+// 定位的，两边各取一次 time.Now() 会在毫秒边界上错开，表现为回补时偶发重复行
+// 或漏行（概率约等于两次调用之间跨过毫秒边界的概率）。
+func (p *Process) recordHistoryAt(ts int64, hexData, direction string) {
 	// Serialize: | timestamp(8B) | direction(1B) | hexLen(2B) | hexData(N) |
 	pktLen := 8 + 1 + 2 + len(hexData)
 	pkt := make([]byte, pktLen)
@@ -203,7 +218,11 @@ func (p *Process) recordHistory(hexData, direction string) {
 
 	p.ringBufMu.Lock()
 	if p.historyRing != nil {
-		p.historyRing.Write(pkt)
+		// WriteEvict 而不是 Write：环满时挤掉最旧的，否则历史会永久停在
+		// 写满那一刻（Write 返回 false，而这里过去忽略了返回值）。
+		if !p.historyRing.WriteEvict(pkt) {
+			p.ringDrops.Add(1)
+		}
 	}
 	p.ringBufMu.Unlock()
 
@@ -675,15 +694,19 @@ func (p *Process) sendOneRound() {
 
 		hexData := strings.ToUpper(hex.EncodeToString(raw))
 		if p.broadcastFn != nil {
+			tsMs := time.Now().UnixMilli()
 			p.broadcastFn(RxTxMessage{
 				ProcessID: p.id,
 				Data:      string(raw),
 				Hex:       hexData,
 				Direction: "tx",
-				Timestamp: time.Now().Format("15:04:05.000"),
+				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
+				TsMs:      tsMs,
 			})
+			p.recordHistoryAt(tsMs, hexData, "tx")
+		} else {
+			p.recordHistory(hexData, "tx")
 		}
-		p.recordHistory(hexData, "tx")
 		if p.pushEventFn != nil {
 			p.pushEventFn(protocol.Event{
 				Event: "stats-count",
@@ -695,21 +718,24 @@ func (p *Process) sendOneRound() {
 			})
 		}
 
-		// Wait per-entry delay (interruptible)
-		delay := entry.Delay
-		if delay < 1 {
-			p.autoSendMu.RLock()
-			delay = p.autoSendIntervalMs
-			p.autoSendMu.RUnlock()
-			if delay < 1 {
-				delay = 100
+		// Wait per-entry delay (interruptible).
+		// delay=0 表示不额外延时：立即发下一条（不再回落到 autoSendIntervalMs，
+		// 那会把「显式不延时」变成「等一个周期」）。上限/负数已由 EncodeEntry 规格化。
+		delay := NormalizeDelay(entry.Delay)
+		if delay > 0 {
+			timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-p.autoSendStopCh:
+				return
 			}
-		}
-		timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-p.autoSendStopCh:
-			return
+		} else {
+			// 即使不等，也要能被打断（否则一个 0 延时的 loop 会转满一圈才停）
+			select {
+			case <-p.autoSendStopCh:
+				return
+			default:
+			}
 		}
 	}
 }
@@ -831,15 +857,19 @@ func (p *Process) forwardLoop(direction string, src, dst serial.Port, portBytes 
 			p.bytesWritten.Add(int64(n))
 
 			if p.broadcastFn != nil {
+				tsMs := time.Now().UnixMilli()
 				p.broadcastFn(RxTxMessage{
 					ProcessID: p.id,
 					Data:      string(data),
 					Hex:       hexData,
 					Direction: direction,
-					Timestamp: time.Now().Format("15:04:05.000"),
+					Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
+					TsMs:      tsMs,
 				})
+				p.recordHistoryAt(tsMs, hexData, direction)
+			} else {
+				p.recordHistory(hexData, direction)
 			}
-			p.recordHistory(hexData, direction)
 
 			if p.pushEventFn != nil {
 				p.pushEventFn(protocol.Event{
@@ -899,14 +929,16 @@ func (p *Process) readLoop(broadcast func(RxTxMessage)) {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 			hexData := strings.ToUpper(hex.EncodeToString(data))
+			tsMs := time.Now().UnixMilli()
 			broadcast(RxTxMessage{
 				ProcessID: p.id,
 				Data:      string(data),
 				Hex:       hexData,
 				Direction: "rx",
-				Timestamp: time.Now().Format("15:04:05.000"),
+				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
+				TsMs:      tsMs,
 			})
-			p.recordHistory(hexData, "rx")
+			p.recordHistoryAt(tsMs, hexData, "rx")
 
 			if p.pushEventFn != nil {
 				p.pushEventFn(protocol.Event{
@@ -958,15 +990,17 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 			}
 			p.bytesWritten.Add(int64(len(job.raw)))
 			hexData := strings.ToUpper(hex.EncodeToString(job.raw))
+			tsMs := time.Now().UnixMilli()
 			msg := RxTxMessage{
 				ProcessID: p.id,
 				Data:      string(job.raw),
 				Hex:       hexData,
 				Direction: "tx",
-				Timestamp: time.Now().Format("15:04:05.000"),
+				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
+				TsMs:      tsMs,
 			}
 			broadcast(msg)
-			p.recordHistory(hexData, "tx")
+			p.recordHistoryAt(tsMs, hexData, "tx")
 			if pushEvent != nil {
 				pushEvent(protocol.Event{
 					Event: "stats-count",
@@ -2112,11 +2146,23 @@ func (pm *ProcessManager) ConnectedCount() int {
 	return count
 }
 
-// GetHistory returns entries from the shared memory ring buffer, the oldest
-// timestamp (for cold-data paging), the history file name, and the shared
-// memory name. Uses Snapshot so the ring buffer is NOT drained — multiple
-// clients can independently read the same data.
+// GetHistory 返回整环快照。保留给「不限量」的调用方（CLI / MCP / 老的 GUI），
+// GUI 的历史窗口走 GetHistoryPage。
 func (pm *ProcessManager) GetHistory(id string) map[string]any {
+	return pm.GetHistoryPage(id, 0, 0, 0)
+}
+
+// GetHistoryPage 返回共享内存环里的一段历史。
+//
+//	limit <= 0        不限量（整环，等价于老的 GetHistory）
+//	limit > 0         只回最后一页；配合 beforeMs/sameTsSkip 向上翻页
+//	beforeMs <= 0     从最新的一端取
+//	beforeMs > 0      游标：调用方手上最旧的一条的时间戳；sameTsSkip 是它手上
+//	                  属于这一毫秒的条数（见 ringbuf.SnapshotPage 的说明）
+//
+// 为什么要有分页：整环 5MB ≈ 19 万条，一次 JSON 序列化 + Wails 跨桥 + 前端
+// 逐条 decode 是历史读取路径上唯一的实际开销，而界面真正需要的只有尾部一屏。
+func (pm *ProcessManager) GetHistoryPage(id string, limit int, beforeMs int64, sameTsSkip int) map[string]any {
 	proc := pm.Get(id)
 	if proc == nil {
 		return nil
@@ -2131,22 +2177,25 @@ func (pm *ProcessManager) GetHistory(id string) map[string]any {
 		return nil
 	}
 
-	// Snapshot the ring buffer — non-destructive, tail/count unchanged.
-	packets := ring.Snapshot()
-
-	// Peek the oldest timestamp from the ring (without consuming it).
-	oldestMs := ring.OldestTimestampMs()
+	// 非破坏性读取，tail/count 不变；只复制选中的那一段。
+	page := ring.SnapshotPage(limit, beforeMs, sameTsSkip)
 
 	proc.ringBufMu.Unlock()
 
-	entries := parseHistoryPackets(packets)
+	entries := parseHistoryPackets(page.Packets)
 
 	result := map[string]any{
 		"history":    entries,
 		"sharedName": proc.historyName,
+		"hasMore":    page.HasMore,
+		"older":      page.Older,
 	}
-	if oldestMs > 0 {
-		result["oldestTs"] = time.UnixMilli(oldestMs).Format("15:04:05.000")
+	if page.OldestMs > 0 {
+		result["oldestTsMs"] = page.OldestMs
+		result["oldestTs"] = time.UnixMilli(page.OldestMs).Format("15:04:05.000")
+	}
+	if d := proc.ringDrops.Load(); d > 0 {
+		result["ringDrops"] = d
 	}
 	proc.histFileMu.RLock()
 	fileName := proc.historyFileName
@@ -2173,6 +2222,7 @@ func parseHistoryPackets(packets [][]byte) []HistoryEntry {
 			Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
 			Hex:       string(pkt[11 : 11+int(hexLen)]),
 			Direction: byteToDir(dir),
+			TsMs:      ts,
 		})
 	}
 	return entries

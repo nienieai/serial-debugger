@@ -1209,16 +1209,26 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 
 	case contract.SessionHistory:
 		var p struct {
-			ProcessID string `json:"processId"`
+			ProcessID  string `json:"processId"`
+			Limit      int    `json:"limit"`
+			BeforeTsMs int64  `json:"beforeTsMs"`
+			SameTsSkip int    `json:"sameTsSkip"`
 		}
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		result := s.pm.GetHistory(p.ProcessID)
+		if p.Limit < 0 {
+			p.Limit = 0
+		}
+		if p.SameTsSkip < 0 {
+			p.SameTsSkip = 0
+		}
+		result := s.pm.GetHistoryPage(p.ProcessID, p.Limit, p.BeforeTsMs, p.SameTsSkip)
 		if result == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		logOp("操作", "%s 读取历史记录 (进程 %s)", label, p.ProcessID)
+		logOp("操作", "%s 读取历史记录 (进程 %s, limit=%d before=%d skip=%d → %d 条)",
+			label, p.ProcessID, p.Limit, p.BeforeTsMs, p.SameTsSkip, len(result["history"].([]HistoryEntry)))
 		return protocol.Response{ID: req.ID, Result: result}
 
 	case contract.SessionStats:
@@ -1529,6 +1539,8 @@ func (s *IpcServer) handlePortsProbe(req *protocol.Request, label string) protoc
 		BaudRates  []int    `json:"baudRates"`
 		Rules      []string `json:"rules"`
 		ConfigPath string   `json:"configPath"`
+		// BudgetMs 覆盖总预算（默认 8s）。0 表示用默认值。
+		BudgetMs int `json:"budgetMs"`
 	}
 	if err := convParams(req.Params, &params); err != nil {
 		return protocol.Response{ID: req.ID, Error: "invalid params: " + err.Error()}
@@ -1564,8 +1576,22 @@ func (s *IpcServer) handlePortsProbe(req *protocol.Request, label string) protoc
 
 	logOp("操作", "%s 开始设备探测 (端口: %d, 规则: %s)", label, len(ports), configPath)
 
-	results := ProbePorts(ports, occupied, cfg, params.BaudRates, params.Rules)
-	return protocol.Response{ID: req.ID, Result: map[string]any{"results": results}}
+	budget := time.Duration(params.BudgetMs) * time.Millisecond
+	outcome := ProbePorts(ports, occupied, cfg, params.BaudRates, params.Rules, budget)
+
+	// 结果里必须带上 skipped / budgetExhausted / busy：
+	// 空 results 曾经既可能是「没设备」也可能是「压根没探成」，两者同形。
+	logOp("操作", "%s 探测结束：命中 %d，跳过 %d，尝试 %d 次，耗时 %dms，预算用尽=%v",
+		label, len(outcome.Results), len(outcome.Skipped), outcome.Attempts, outcome.ElapsedMs, outcome.BudgetExhausted)
+
+	return protocol.Response{ID: req.ID, Result: map[string]any{
+		"results":         outcome.Results,
+		"skipped":         outcome.Skipped,
+		"attempts":        outcome.Attempts,
+		"elapsedMs":       outcome.ElapsedMs,
+		"budgetExhausted": outcome.BudgetExhausted,
+		"busy":            outcome.Busy,
+	}}
 }
 
 func logIPCForSession(sess *clientSession, req *protocol.Request, resp protocol.Response, dt time.Duration) {
