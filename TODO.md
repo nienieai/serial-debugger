@@ -104,6 +104,17 @@
 | 67 | 会话回归时新建标签页而不是找回原来那个 | 已修复 | v0.7.5.6 修复。同步第 3 步在列表一时不含该会话时清掉 `sessionId`，等它回到列表里第 1 步按「未登记」新建 —— 同一个会话有两个标签页，原标签页的滚动位置与历史缓存全丢。现记 `_orphanSid`，回来时挂回原标签页。夹具 C 节用**标签页 id 不变**来钉住（只断言数量会被「销毁+重建」蒙过去） |
 | 68 | `updateOpenBtn` 经全局回退改到别的标签页的按钮 | 已修复 | v0.7.5.6 修复。切到设置页时 `pageEl('btnOpen')` 回退到 `document.getElementById` = **第一个标签页**的按钮，把它 `display:none`。现只动当前页自己的元素。夹具 D 节 |
 
+| 69 | 队列 `delay` 显式写 0 被当作「未设置」回落到 1000 ms | 已修复 | v0.7.5.7 修复（外部报告 0.7.5.5 轮 §八，P3）。`delay` 用 `int` 承载，JSON 零值语义把「省略」与「显式 0」混成一件，再被 `delay < 1 → 1000` 兜底 —— 写 0 等于等 1 秒（报告实测 20 条 19.2 s，与 `delay:1000` 几乎一致，想连发只能写 1）。现语义定为：省略/null = 1000（保持文档承诺）、0 = 不额外延时、1–60000 原样、>60000 夹住、负数报错；「省略」与「显式 0」的区分做在 API 边界（CLI 用 `*int`、MCP 写前归一化）。实测 10 条一轮：省略 9102 ms / 0 111 ms / 1 106 ms / 10 213 ms / 1000 9060 ms |
+| 70 | `DecodeEntryContentOnly` 的 delay 下限（5）严于编码器下限（1），delay=1~4 的条目会把二进制头当数据发出去 | 已修复 | v0.7.5.7 修复（查 §八 时顺带发现，报告未覆盖）。`EncodeEntry` 允许 1，而剥头的启发式校验写 `delay < 5 → 这不是条目`，于是 delay=1~4 的条目走 `send.trigger(raw=false)` 时原样发出 `版本+标志+delay+note_len+内容`。该路径由 `App.TriggerSend` 与 IPC `send.trigger{raw:false}` 暴露（GUI 当前未调用、MCP 用 `raw:true`），所以一直没被踩到。两处下限现统一到 `DelayMax` 常量，回归 `TestDecodeEntryContentOnlyStripsHeaderForEveryEncodableDelay` |
+
+## v0.7.5.7 已完成
+
+| 需求 | 说明 |
+|------|------|
+| 队列 delay 语义（TODO #69） | 省略=1000 / 0=不延时 / 上限 60000 / 负数报错；CLI 与 MCP 边界各自区分「省略 vs 显式 0」 |
+| delay 剥头下限对齐（TODO #70） | `DecodeEntryContentOnly` 不再拒绝 1–4；`send.trigger(raw=false)` 不再把条目头当数据发 |
+| 验证 | CLI 侧 5 档耗时实测 + MCP 侧 3 项实测 + 新增 3 个测试文件（含 serial-mcp 的首个测试） |
+
 ## v0.7.5.6 已完成
 
 | 需求 | 说明 |

@@ -310,14 +310,36 @@ func runCommand(args []string) {
 // 使用者直到发现发不出东西才知道写错了（TODO 已记录）。
 //
 // 额外容忍 "data" 作为 "content" 的别名：这是最常被写错的字段名。
+//
+// Delay 用指针：**「没写这个键」与「写了 0」是两件事** —— 省略落成默认 1000 ms，
+// 显式 0 是「不额外延时」。用 int 时两者都是 0，再被下游 `delay < 1 → 1000` 兜底，
+// 于是显式写 0 变成等 1 秒（外部测试报告 0.7.5.5 轮 §八：20 条花了 19.2 s）。
 type queueEntry struct {
 	Enabled bool   `json:"enabled"`
 	Hex     bool   `json:"hex"`
 	Content string `json:"content"`
-	Delay   int    `json:"delay"`
+	Delay   *int   `json:"delay"`
 	Note    string `json:"note"`
 	// 仅为给出更友好的报错而接受，随后回填到 Content。
 	Data string `json:"data"`
+}
+
+// queueDelayDefault 与文档承诺一致：省略 delay 时按 1000 ms。
+const queueDelayDefault = 1000
+
+// resolveQueueDelay 把「可选 delay」解析成确定值。
+func resolveQueueDelay(d *int) (int, error) {
+	if d == nil {
+		return queueDelayDefault, nil
+	}
+	if *d < 0 {
+		return 0, fmt.Errorf("delay 不能为负（%d）：省略它表示默认 %d ms，"+
+			"写 0 表示不额外延时", *d, queueDelayDefault)
+	}
+	if *d > 60000 {
+		return 60000, nil
+	}
+	return *d, nil
 }
 
 // parseQueueEntries 严格解析 sendqueue 的 JSON 文件。
@@ -333,27 +355,35 @@ func parseQueueEntries(raw []byte) ([]queueEntry, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 
-	var entries []queueEntry
-	if err := dec.Decode(&entries); err != nil {
+	var parsed []queueEntry
+	if err := dec.Decode(&parsed); err != nil {
 		return nil, fmt.Errorf(
 			"解析发送队列 JSON 失败: %w\n"+
 				"接受的字段: content(必填) / hex / enabled / delay / note\n"+
-				"示例: [{\"content\":\"ONE\",\"hex\":false,\"enabled\":true}]", err)
+				"delay: 省略 = 默认 %d ms；写 0 = 不额外延时（立即发下一条）\n"+
+				"示例: [{\"content\":\"ONE\",\"hex\":false,\"enabled\":true}]", err, queueDelayDefault)
 	}
 	// 顶层必须是数组；多余的尾随内容也要报错，避免「只解析了前半段」。
 	if dec.More() {
 		return nil, fmt.Errorf("发送队列 JSON 在数组之后还有多余内容")
 	}
 
-	for i := range entries {
-		if entries[i].Content == "" && entries[i].Data != "" {
-			entries[i].Content = entries[i].Data
+	entries := make([]queueEntry, 0, len(parsed))
+	for i := range parsed {
+		if parsed[i].Content == "" && parsed[i].Data != "" {
+			parsed[i].Content = parsed[i].Data
 		}
-		if entries[i].Content == "" {
+		if parsed[i].Content == "" {
 			return nil, fmt.Errorf(
 				"第 %d 条的 content 为空。空条目发不出任何字节，"+
 					"请检查字段名是否写成了 data/text/value 等", i+1)
 		}
+		d, err := resolveQueueDelay(parsed[i].Delay)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 条: %w", i+1, err)
+		}
+		parsed[i].Delay = &d
+		entries = append(entries, parsed[i])
 	}
 	return entries, nil
 }
@@ -1349,6 +1379,7 @@ func printHelp() {
   autosend status [pid]                      查看自动发送状态
   autosend interval <ms> [pid]               修改自动发送间隔
   sendqueue <json-file> [pid]                从JSON文件读取条目数组写入发送队列
+                                             delay: 省略=默认1000ms，写0=不额外延时
 
 多字符串:
   multistr save [pid]                        持久化当前条目到磁盘

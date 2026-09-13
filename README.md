@@ -1,4 +1,4 @@
-# serial-debugger — 跨平台串口调试工具 v0.7.5.6
+# serial-debugger — 跨平台串口调试工具 v0.7.5.7
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -201,6 +201,28 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
 ## 版本历史
+
+### 0.7.5.7（2026-09-13）
+
+**先记 0.7.5.5 的验收结论**（外部测试报告）：上轮 3 项全部关闭；本版两个 P1 实测通过——历史分页 **8 页 / 799 条、条目级重复 0、1200 帧零缺失**；环写满后仍在记录（灌 7.37 MB 后新数据可读出、`oldestTsMs` 在滑动、`ringDrops` 未出现）；CLI / GUI / MCP 三客户端回归全绿。报告只留了 1 条 P3，就是下面第一条。
+
+- **队列条目的 `delay` 显式写 `0` 被当成「没写」**（报告 §八，P3）。`delay` 字段此前用 `int` 承载，JSON 的零值语义让「省略」与「显式 0」都变成 0，再被下游 `delay < 1 → 1000` 兜底——于是**写 0 等于等 1 秒**：报告实测 20 条花 19.2 s，与 `delay: 1000` 几乎一致，想连发只能写 `1`，与直觉相反。现明确语义并让三处判断一致：
+
+  | 写法 | 含义 |
+  |------|------|
+  | 省略 / `null` | 默认 **1000 ms**（保持文档承诺） |
+  | `0` | **不额外延时**，立即发下一条 |
+  | `1`–`60000` | 按该毫秒数 |
+  | `>60000` | 夹到 `60000` |
+  | 负数 / 非整数 | **报错**（不再静默按默认值走） |
+
+  「省略」与「显式 0」的区分做在 **API 边界**（`serial-cli sendqueue` 用 `*int`、MCP `serial_sendqueue` 在写之前归一化），守护进程侧只看确定值。**实测（10 条一轮）：省略 9102 ms、`delay=0` 111 ms、`delay=1` 106 ms、`delay=10` 213 ms、`delay=1000` 9060 ms**；MCP 侧同样验证（省略 9134 ms / 显式 0 108 ms / 负数报错）。
+
+- **同一字段上还藏着一个更隐蔽的 bug**（本轮新发现，报告未覆盖）：`DecodeEntryContentOnly` 校验 delay 时写的是 **`delay < 5` 就判定「这不是一个条目」**，而编码器允许写下限 **1**。于是 `delay = 1`～`4` 的条目走 `send.trigger(raw=false)` 这条路径时，**整段二进制（版本+标志+delay+note_len+内容）会被当作数据发给串口**，而不是只发内容。该路径由 `App.TriggerSend` 与 IPC `send.trigger{raw:false}` 暴露（当前 GUI 未调用它，MCP 走的是 `raw:true`），所以一直没被踩到。现两处下限统一到同一个常量，并补 `TestDecodeEntryContentOnlyStripsHeaderForEveryEncodableDelay`（覆盖 0/1/2/4/5/10/999/1000/60000）。
+
+- 新增测试：`daemon/multistr_delay_test.go`（编码/剥头/规格化）、`cmd/serial-cli/queue_delay_test.go`（省略 vs 显式 0 vs 负数 vs 上限）、`cmd/serial-mcp/delay_test.go`（MCP 边界归一化，该包的首个测试文件）。
+
+> 版本关系：**0.7.5.6** 修的是 GUI 标签页错位（设置页被当成会话页），**0.7.5.7 = 0.7.5.6 + 本报告这条 P3 + 上面那个隐蔽 bug**，可以直接测 0.7.5.7。
 
 ### 0.7.5.6（2026-09-13）
 

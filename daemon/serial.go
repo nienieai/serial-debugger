@@ -718,21 +718,24 @@ func (p *Process) sendOneRound() {
 			})
 		}
 
-		// Wait per-entry delay (interruptible)
-		delay := entry.Delay
-		if delay < 1 {
-			p.autoSendMu.RLock()
-			delay = p.autoSendIntervalMs
-			p.autoSendMu.RUnlock()
-			if delay < 1 {
-				delay = 100
+		// Wait per-entry delay (interruptible).
+		// delay=0 表示不额外延时：立即发下一条（不再回落到 autoSendIntervalMs，
+		// 那会把「显式不延时」变成「等一个周期」）。上限/负数已由 EncodeEntry 规格化。
+		delay := NormalizeDelay(entry.Delay)
+		if delay > 0 {
+			timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-p.autoSendStopCh:
+				return
 			}
-		}
-		timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-p.autoSendStopCh:
-			return
+		} else {
+			// 即使不等，也要能被打断（否则一个 0 延时的 loop 会转满一圈才停）
+			select {
+			case <-p.autoSendStopCh:
+				return
+			default:
+			}
 		}
 	}
 }

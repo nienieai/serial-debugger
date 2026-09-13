@@ -246,10 +246,10 @@ var allTools = []toolDef{
 	},
 	{
 		Name:        "serial_sendqueue",
-		Description: "Write multi-string entries to the send queue. Each entry: {enabled, hex, content, delay, note}.",
+		Description: "Write multi-string entries to the send queue. Each entry: {enabled, hex, content, delay, note}. 'delay' is the per-entry gap in ms: omit it for the 1000ms default, pass 0 to send the next entry immediately (no extra delay), max 60000.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
 			"processId": {Type: "string", Description: "Process ID."},
-			"entries":   {Type: "array", Description: "Array of entry objects with fields: enabled, hex, content, delay, note."},
+			"entries":   {Type: "array", Description: "Array of entry objects: {enabled, hex, content, delay, note}. Per-entry 'delay' in ms: omit for the 1000ms default, 0 = no extra delay, max 60000."},
 		}, Required: []string{"processId", "entries"}},
 	},
 	{
@@ -912,6 +912,11 @@ func handleSendQueue(raw json.RawMessage) *toolCallResult {
 	if len(p.Entries) == 0 {
 		return errResult("entries array must not be empty")
 	}
+	// delay 的「省略」与「显式 0」是两件事：省略落成默认 1000 ms，显式 0 是不额外延时。
+	// 直接透传的话两者都是 Go 零值，下游无法区分（外部测试报告 0.7.5.5 轮 §八）。
+	if err := normalizeEntryDelays(p.Entries); err != nil {
+		return errResult(err.Error())
+	}
 	if p.ProcessID == "" {
 		p.ProcessID = firstConnectedID()
 		if p.ProcessID == "" {
@@ -962,6 +967,45 @@ func handleMultistrLoad(raw json.RawMessage) *toolCallResult {
 		return errResult(fmt.Sprintf("Failed to load entries: %v", err))
 	}
 	return okResult(result)
+}
+
+// normalizeEntryDelays 在 MCP 边界上把每条条目的 delay 落成确定值。
+//
+// 「省略 delay」与「显式写 0」必须在进入守护进程前就分开：JSON 解到
+// []map[string]any 后两者都是「没有键」或「0」，守护进程侧只看得到 int，
+// 分不出来。规矩与 CLI 的 sendqueue 一致：
+//
+//	省略 / null → 1000（文档承诺的默认值）
+//	0           → 0（不额外延时）
+//	1–60000     → 原样
+//	>60000      → 夹到 60000
+//	负数 / 非整数 → 报错
+func normalizeEntryDelays(entries []map[string]any) error {
+	const def, max = 1000, 60000
+	for i, e := range entries {
+		v, ok := e["delay"]
+		if !ok || v == nil {
+			entries[i]["delay"] = def
+			continue
+		}
+		f, ok := v.(float64) // JSON 数字解到 map[string]any 就是 float64
+		if !ok {
+			return fmt.Errorf("entries[%d].delay must be a number", i)
+		}
+		d := int(f)
+		if float64(d) != f {
+			return fmt.Errorf("entries[%d].delay must be a whole number of milliseconds", i)
+		}
+		if d < 0 {
+			return fmt.Errorf("entries[%d].delay must not be negative "+
+				"(omit it for the %dms default, write 0 for no extra delay)", i, def)
+		}
+		if d > max {
+			d = max
+		}
+		entries[i]["delay"] = d
+	}
+	return nil
 }
 
 func handleMultistrStatus(raw json.RawMessage) *toolCallResult {
