@@ -1,4 +1,4 @@
-# serial-debugger — 跨平台串口调试工具 v0.7.5.9
+# serial-debugger — 跨平台串口调试工具 v0.7.5.10
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -201,6 +201,16 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
 ## 版本历史
+
+### 0.7.5.10（2026-09-13）
+
+补上 0.7.5.7 报告 **§8 点名的那条可验证性缺口**：`send.trigger{raw:false}`（多字符串条目剥头）此前**只有 Wails 绑定 `App.TriggerSend` 与裸 IPC 能走**，CLI 没有命令、MCP 只有 `raw:true`，于是「剥头是否覆盖全部 `delay` 取值」这条修复**在验收上不可证**——测试方明确写了「若需覆盖，需要一个可达入口」。
+
+- **新增 `serial-cli sendone [processId] [--raw]`**：从发送队列取一条发出去，与 GUI 快捷面板同语义（`raw=false` 走 `DecodeEntryContentOnly` 剥掉条目头）；`--raw` 用于对照——原样把队列里的字节发出去。未知参数报错（与 `probe`/`history` 同一套规矩），附单元测试 `sendone_args_test.go`。
+- **`ARCHITECTURE.md` 本来就写着这个映射**（「发送模式」表里的 `sendone（单条）` → `send.trigger`），但实现里没有这个命令——属文档/实现不一致。本版补齐，并把「这条路径必须有黑盒入口」这句话写进了那张表。
+- **验收方法**（也写进了给测试的说明）：队列里放一条 `delay: 1` 的条目（`[{"content":"ABCD","hex":false,"enabled":true,"delay":1}]`），`serial-cli sendone` 发一次，接收端应当只收到 **4 字节 `41 42 43 44`**；修复前会多出 5 字节二进制头（`01 01 01 00 00` + 内容）。`--raw` 可用来对照这条头确实存在。
+
+> 说明：剥头逻辑本身在 0.7.5.7 已修并有单元测试（`TestDecodeEntryContentOnlyStripsHeaderForEveryEncodableDelay` 覆盖 0/1/2/4/5/10/999/1000/60000），本版补的是**黑盒可达的入口**——只有入口可达，那条修复才算验收通过。
 
 ### 0.7.5.9（2026-09-13）
 

@@ -632,7 +632,7 @@ ring buffer 自动添加 `[2B LE len]` 前缀分帧。
 |------|------|------|
 | sendall（非 loop） | `autosend.start {mode:"queue", loop:false}` | 遍历已启用条目一轮 → 自动停止 |
 | loop（循环） | `autosend.start {mode:"queue", loop:true}` | 持续循环已启用条目，轮次间隔 `intervalMs` |
-| sendone（单条） | `send.trigger` | 从 sendq 读一条进 sendCh |
+| sendone（单条） | `send.trigger` | 从 sendq 读一条进 sendCh。`raw:false`（CLI `sendone` 不带 `--raw`）会走 `DecodeEntryContentOnly` 剥掉条目头 —— **这条路径必须有黑盒入口**，否则「剥头是否覆盖全部 delay 取值」无法验收（v0.7.5.10 补上 `serial-cli sendone`；此前只有 Wails 绑定与裸 IPC） |
 
 **发送流程**：
 ```
@@ -1108,6 +1108,8 @@ serial-cli start
 serial-cli open COM4 9600
 serial-cli send "AT\r\n"
 serial-cli send 01030008000105c8 --hex
+serial-cli sendone             # 从发送队列取一条发出（= 快捷面板的单条发送，剥掉条目头）
+serial-cli sendone --raw       # 对照：原样把队列里的字节发出去
 serial-cli history
 serial-cli close
 serial-cli probe               # 探测所有未连接端口
@@ -1443,7 +1445,7 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.7.5.9"`），改一处全部同步。
+版本号统一在 `version/version.go`（`const Version = "0.7.5.10"`），改一处全部同步。
 
 Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
 

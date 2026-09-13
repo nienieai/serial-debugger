@@ -714,6 +714,28 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		fmt.Println(`{"success": true}`)
 
+	case "sendone":
+		// 从发送队列取一条发出去 —— 对应 ARCHITECTURE.md「发送模式」表里的
+		// sendone（单条）→ send.trigger。此前**只有 Wails 绑定 App.TriggerSend
+		// 与裸 IPC 能走这条路径**，CLI/MCP 都没有入口，于是「raw=false 会把多字符串
+		// 条目头剥掉」这条修复在验收上不可证（外部测试报告 0.7.5.7 轮 §8 点名）。
+		//
+		// 默认 raw=false（与 GUI 快捷面板同语义：按条目内容发送、剥掉二进制头）；
+		// --raw 用于对照：原样把队列里的字节发出去。
+		raw, pid, perr := parseSendoneArgs(args[1:])
+		if perr != nil {
+			errExit(perr, interactive)
+			return
+		}
+		if pid == "" {
+			pid = firstConnectedIDDC(dc)
+		}
+		if err := dc.SendTrigger(pid, raw); err != nil {
+			errExit(err, interactive)
+			return
+		}
+		fmt.Printf(`{"success": true, "processId": %q, "raw": %v}`+"\n", pid, raw)
+
 	case "forward":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "用法: serial-cli forward <portA> <portB> [baudA] [baudB]")
@@ -1340,6 +1362,23 @@ func parseHistoryArgs(args []string) (historyArgs, error) {
 	return out, nil
 }
 
+// parseSendoneArgs 解析 `sendone` 的参数：位置参数是进程号，另有 --raw。
+//
+// 与 probe / history 同一套规矩：未知的 `-` 前缀参数必须报错，不能当成进程号。
+func parseSendoneArgs(args []string) (raw bool, pid string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--raw":
+			raw = true
+		case len(args[i]) > 1 && strings.HasPrefix(args[i], "-"):
+			return false, "", fmt.Errorf("未知参数 %q（sendone 支持：进程号、--raw）", args[i])
+		default:
+			pid = args[i]
+		}
+	}
+	return raw, pid, nil
+}
+
 func printHelp() {
 	fmt.Print(`用法:
   serial-cli <cmd>              命令行客户端
@@ -1368,6 +1407,8 @@ func printHelp() {
 
 数据:
   send    <data> [processId] [--hex] 发送数据 (--hex: 十六进制)
+  sendone [processId] [--raw]        从发送队列取一条发出去（多字符串面板的单条发送）
+                                     默认剥掉条目头按内容发；--raw 原样发队列字节
   history [processId] [--limit <n>] [--before <ms>] [--skip <n>]
                                      历史缓冲区（含毫秒时间戳 + Hex）
                                      --limit 只取最新 n 条；--before/--skip 用上一条
