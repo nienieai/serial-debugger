@@ -720,7 +720,9 @@ button:disabled:active { transform: none; box-shadow: none; }
   height: 5px; flex-shrink: 0; cursor: ns-resize;
   margin-bottom: -3px; margin-right: -3px;
   background: linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
-  transition: background 0.15s; position: relative; z-index: 3;
+  /* z-index 要高于状态栏（4）：拖到最底时它会有 3px 压在状态栏上沿，
+     低于状态栏就抓不到，用户就「拖回不来了」。 */
+  transition: background 0.15s; position: relative; z-index: 10;
 }
 .o-divider::before { content: ""; position: absolute; top: -5px; left: 0; right: 0; bottom: -5px; }
 .o-divider:hover, .o-divider.is-active { background: var(--accent); }
@@ -1184,6 +1186,8 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   padding: 0 8px; background: var(--bg2); border-top: 1px solid var(--border);
   flex-shrink: 0; height: 24px; user-select: none; position: relative; z-index: 4;
 }
+/* 分隔条收到底、与状态栏上沿重合时，隐掉状态栏这条边框，避免出现"双线" */
+.statusbar.is-flush-bottom { border-top-color: transparent; }
 .statusbar-left { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .statusbar-right { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 #statusbar-stats { display: inline-flex; gap: 14px; margin-left: 10px; }

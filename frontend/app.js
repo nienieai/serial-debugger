@@ -4353,15 +4353,31 @@ function initDividerDrag() {
   document.addEventListener('mousemove', function(e) {
     if (!_divDragState) return;
     var appRect = document.getElementById('app').getBoundingClientRect();
-    var topH = 26 + 36 + 40;
     var bottomH = 24;
     var dividerH = 5;
-    var yMin = topH;
-    var yMax = appRect.height - bottomH - dividerH;
-    var avail = yMax - yMin;
+    // 上下限都是**几何位置**，不是比例：
+    //   上 = 配置栏下沿（分隔条贴住浮动配置栏下方，显示区被压到刚好藏在栏后面）
+    //   下 = 窗口底部状态栏上沿（发送区可以完全贴边收掉）
+    // 之前用写死的 102 当上限，分隔条会钻进浮动的配置栏底下，抓不到了。
+    var pg = _divDragState.page;
+    var cfg = pg ? pg.querySelector('.config-bar') : null;
+    var yMin = Math.round(cfg ? cfg.getBoundingClientRect().bottom : 106);
+    // 下边界：状态栏上沿。发送区会被完全收起，分隔条自然落在行底，
+    // 它的线与状态栏上边框重合 —— 此时把状态栏那条边框隐掉（见 applySendRatio
+    // 里的 is-flush-bottom），观感上就是原来那条单线，不会出现"双线"。
+    var bottomEdge = appRect.bottom - bottomH;
+    var yMax = Math.round(bottomEdge);
+    var avail = Math.max(1, yMax - yMin);
     var clampedY = Math.max(yMin, Math.min(yMax, e.clientY - appRect.top));
-    var sendH = yMax - clampedY;
-    state.sendRatio = avail > 0 ? sendH / avail : 0.3;
+    // 比例由**几何**反算，让分隔条 1:1 跟着光标走。
+    // 之前直接用 (yMax - y)/avail，而 flex 分配里还要减去分隔条自身高度、
+    // 外加显示区的 min-height，结果分隔条落后光标 20 多像素（拖动时"黏"）。
+    var row = pg ? pg.querySelector('.content-row') : null;
+    var rowRect = row ? row.getBoundingClientRect() : null;
+    var rowH = rowRect ? rowRect.height : Math.max(1, yMax - yMin);
+    var rowTop = rowRect ? rowRect.top : yMin;
+    var displayH = clampedY - rowTop;
+    state.sendRatio = Math.max(0, Math.min(1, 1 - displayH / Math.max(1, rowH - dividerH)));
     applySendRatio();
   });
   document.addEventListener('mouseup', function() {
@@ -4391,16 +4407,28 @@ function applySendRatio() {
     if (divider) divider.style.display = 'none';
     return;
   }
-  var r = state.sendRatio;
+  // 比例允许走到两个端点（贴住配置栏下方 / 完全贴底），所以不再夹 [0.05,0.95]。
+  var r = Math.max(0, Math.min(1, state.sendRatio));
   displayArea.style.flex = (1 - r) + ' 1 0px';
-  displayArea.style.minHeight = '40px';
-  // 注意：原来这里写的是 style.overflow = 'is-hidden'，把类名当成了 overflow 值。
-  // CSSOM 会静默忽略非法值，所以这两个分支从未生效过（面板只是被 flex 压到 0 高度，
-  // 留下 4px 残条）。要隐藏必须切换类。
-  displayArea.classList.toggle('is-hidden', r >= 0.97);
+  // 显示区最小高度 = 配置栏高度：压到最小时，分隔条正好贴在配置栏下沿，
+  // 仍然抓得到（此前是 40px，会让分隔条缩到浮动配置栏底下）。
+  var cfgBar = page.querySelector ? page.querySelector('.config-bar') : null;
+  var reserve = 44;
+  if (cfgBar) {
+    var ch = Math.round(cfgBar.getBoundingClientRect().height);
+    if (ch > 0) reserve = ch;
+  }
+  displayArea.style.minHeight = reserve + 'px';
+  // 两个极端都不整块隐藏：隐藏会让分隔条跳到内容区顶部（= 配置栏底下）而抓不到。
+  displayArea.classList.remove('is-hidden');
   sendArea.style.display = '';
   sendArea.style.flex = r + ' 1 0px';
   sendArea.style.minHeight = '0px';
+  // 下边界回到原来的观感：发送区完全收起（不再留 3px 残条），分隔条贴到行底，
+  // 自然就在状态栏上沿之上、仍抓得到。
   sendArea.classList.toggle('is-hidden', r <= 0.01);
+  // 收起到底时，分隔条的线和状态栏上边框重合：隐掉状态栏那条，避免"双线"
+  var sbEl = document.querySelector('.statusbar');
+  if (sbEl) sbEl.classList.toggle('is-flush-bottom', r <= 0.01);
   if (divider) divider.style.display = '';
 }
