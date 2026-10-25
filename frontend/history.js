@@ -443,6 +443,7 @@ function _updateUnreadChrome(display) {
 // 自绘滚动条：原生条隐藏（CSS），轨道与滑块只按真实内容计算。
 function initDisplayScrollbar(display) {
   if (!display) return;
+  _initSelectionBackdropToggle();
   var host = display.parentNode;
   if (!host || host.querySelector('.hist-scrollbar')) return;
 
@@ -517,6 +518,27 @@ function initDisplayScrollbar(display) {
 
 function _syncCustomScrollbar(display) {
   if (display && typeof display._syncScrollbar === 'function') display._syncScrollbar();
+}
+
+// 选中文本时不显示浮动条垫底（模糊/渐变）：那层会压住选择高亮，选到靠下的
+// 数据行时看不到自己选中了哪一段。selectionchange 只在结束时收尾，很轻。
+function _initSelectionBackdropToggle() {
+  if (window.__selBackdropBound) return;
+  window.__selBackdropBound = true;
+  document.addEventListener('selectionchange', function() {
+    var page = (typeof getActivePage === 'function') ? getActivePage() : null;
+    if (!page || !page.displayArea) return;
+    var sel = window.getSelection();
+    var inDisplay = false;
+    if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+      try {
+        var r = sel.getRangeAt(0);
+        inDisplay = page.displayArea.contains(r.startContainer) ||
+                    page.displayArea.contains(r.endContainer);
+      } catch (e) { inDisplay = false; }
+    }
+    page.displayArea.classList.toggle('is-selecting', !!inDisplay);
+  });
 }
 
 // ---- 窗口重绘 ----

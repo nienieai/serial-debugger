@@ -888,6 +888,9 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .c-fwd-float-btns button { font-size: 13px; padding: 0 10px; height: 28px; line-height: 28px; border-radius: 6px; width: max-content; }
 
+/* 选中数据文本时撤掉垫底：模糊会把选择高亮一起糊掉，看不出选中了哪几行 */
+.display-area.is-selecting .c-fwd-float-btns::before { display: none; }
+
 /* Display toggle buttons — use timestamp colors, same pattern as fwd-btn */
 .disp-btn-rx { color: var(--dc-tsRx); border-color: var(--dc-tsRx); }
 .disp-btn-rx:hover { background: var(--hover); }
