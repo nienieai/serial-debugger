@@ -11,9 +11,9 @@
   color-scheme: light dark;
 
   /* 顶部悬浮条预留：须 >= config-bar 高度（44px）与清空浮动按钮底边
-     （top 48 + height 28 = 76px）中的较大者，否则第一条数据行会被按钮压住。
+     （top 54 + height 28 = 82px）中的较大者，否则第一条数据行会被按钮压住。
      .c-clear-btn 的 top 由本值倒推，改一处即可。 */
-  --reserve-top: 76px;
+  --reserve-top: 82px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -380,7 +380,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* Clear display float button */
 .c-clear-btn {
   /* calc 结果即 --reserve-top，两者必须一致，否则会压住第一条数据行 */
-  position: absolute; top: calc(var(--reserve-top) - 28px); right: 8px; z-index: 1;
+  position: absolute; top: calc(var(--reserve-top) - 28px); right: 20px; z-index: 1;
   padding: 0 12px; font-size: 13px; height: 28px; line-height: 28px;
   background: var(--bg2); border: 1px solid var(--border);
   transition: background 0.15s; border-radius: 6px;
@@ -389,7 +389,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 
 /* Send button */
 .c-send-btn {
-  position: absolute; right: 8px; bottom: 6px;
+  position: absolute; right: 20px; bottom: 6px;
   padding: 5px 12px; font-size: 13px; z-index: 1; white-space: nowrap;
   display: inline-flex; align-items: center; gap: 4px;
 }
@@ -861,7 +861,18 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 #sendInput::placeholder { color: transparent; }
 #sendInput:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
-#sendInput::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 发送框滚动条：宽到能抓住（原来 0 宽，等于没有）。
+   关键是不能破坏「textarea 与镜像层逐格同宽」：
+   textarea 用 scrollbar-gutter: stable 始终预留 10px，镜像层右 padding 补成
+   12 + 10 = 22px，两者内容宽度才一致。镜像层自己的滚动条藏掉（它 pointer-events
+   为 none，本来也拖不动）。 */
+#sendInput { scrollbar-gutter: stable; scrollbar-width: auto; }
+#sendInput::-webkit-scrollbar { width: 10px; height: 10px; }
+#sendInput::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
+#sendInput::-webkit-scrollbar-track { background: transparent; }
+.send-input-mirror { padding-right: 22px; scrollbar-width: none; }
+.send-input-mirror::-webkit-scrollbar { width: 0; height: 0; }
 #sendInfo { font-size: 12px; color: var(--placeholder); white-space: nowrap; min-width: 80px; flex-shrink: 0; text-align: right; }
 [dir="rtl"] #sendInfo { text-align: left; }
 
