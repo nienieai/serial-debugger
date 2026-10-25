@@ -2993,17 +2993,17 @@ function swapForwardPorts() {
   });
 }
 
-// 串口详细设置（转发的端口 / 波特率）↔ 工具栏 同步。
+// 串口详细设置 ↔ 工具栏 同步。
 //
-// 只有这四项在两边是彼此独立的元素：设置弹窗里转发列用 portSelectASettings /
-// baudSelectASettings / portSelectBSettings / baudSelectBSettings，工具栏用
-// portSelectA / baudSelectA / portSelectB / baudSelectB。其余参数（数据位、
-// 停止位、校验位）两边用的是同一组 id（两个节点同 id），属另一个问题，不在
-// 本次范围内。
+// 两边真正独立的只有转发的**端口与波特率**这四项：工具栏的转发行只有
+// P1/P2 的端口 + 波特率；数据位 / 停止位 / 校验位只存在于弹窗里，由
+// openForwardPorts 直接读弹窗元素，本来就不需要同步（同一份 DOM）。
 //
-// 赋值必须走 _setSelectValue：直接写 .value 既不是 attribute 变更、也不派发
-// change，自定义下拉框触发器上显示的文字不会跟着变（TODO #79 的同一个坑）。
-function _settingsPortPairs() {
+// 赋值必须走 _applySelectValue：直接写 .value 既不是 attribute 变更、也不派发
+// change，自定义下拉框触发器上显示的文字不会跟着变（TODO #79 的同一个坑）；
+// 另外目标 <select> 里若没有这个选项，写 .value 会静默变成 selectedIndex=-1，
+// 触发器文字同样纹丝不动 —— 这两条叠在一起就是「改了详细设置、主页面没反应」。
+function _settingsSyncPairs() {
   return [
     ['portSelectASettings', 'portSelectA'],
     ['baudSelectASettings', 'baudSelectA'],
@@ -3012,15 +3012,33 @@ function _settingsPortPairs() {
   ];
 }
 
-// 写值并刷新自定义下拉框的显示文字；值没变则什么都不做。
-function _setSelectValue(id, value) {
-  var el = pageEl(id);
+// 把值写进 <select>：缺选项就补一个，然后无条件刷新触发器文字。
+function _applySelectValue(el, value) {
   if (!el || value === undefined || value === null) return false;
   var str = String(value);
-  if (el.value === str) return false;
-  el.value = str;
+  var has = false;
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === str) { has = true; break; }
+  }
+  if (!has) {
+    var opt = document.createElement('option');
+    opt.value = str;
+    opt.textContent = str;
+    el.appendChild(opt);
+  }
+  if (el.value !== str) el.value = str;
   _refreshCustomSelectFor(el);
   return true;
+}
+
+function _setSelectValue(id, value) {
+  var el = pageEl(id);
+  if (!el) {
+    // 只在真出问题时打一行：DevTools 在开发版里是开着的，便于定位
+    console.warn('[settings-sync] 工具栏元素不存在:', id);
+    return false;
+  }
+  return _applySelectValue(el, value);
 }
 
 function _refreshCustomSelectFor(el) {
@@ -3031,7 +3049,7 @@ function _refreshCustomSelectFor(el) {
 // 弹窗 → 工具栏（关闭弹窗时兜底调用；改值时也会即时同步）
 function _syncSettingsToBar() {
   if (activeMode() !== 'forward') return;
-  _settingsPortPairs().forEach(function(pair) {
+  _settingsSyncPairs().forEach(function(pair) {
     var from = document.getElementById(pair[0]);
     if (from && from.value) _setSelectValue(pair[1], from.value);
   });
@@ -3040,21 +3058,22 @@ function _syncSettingsToBar() {
 // 工具栏 → 弹窗（打开弹窗时调用）
 function _syncBarToSettings() {
   if (activeMode() !== 'forward') return;
-  _settingsPortPairs().forEach(function(pair) {
+  _settingsSyncPairs().forEach(function(pair) {
     var to = document.getElementById(pair[0]);
     var from = pageEl(pair[1]);
     if (!to || !from || !from.value) return;
-    if (to.value === from.value) return;
-    to.value = from.value;
-    _refreshCustomSelectFor(to);
+    _applySelectValue(to, from.value);
   });
 }
 
-// 设置弹窗里改端口 / 波特率 → 立刻同步到工具栏，不必等弹窗关闭
+// 设置弹窗里改端口 / 波特率 / 数据位 / 停止位 / 校验位 → 立刻同步到工具栏
 function _bindSettingsPortSync() {
-  _settingsPortPairs().forEach(function(pair) {
+  _settingsSyncPairs().forEach(function(pair) {
     var from = document.getElementById(pair[0]);
-    if (!from) return;
+    if (!from) {
+      console.warn('[settings-sync] 弹窗元素不存在:', pair[0]);
+      return;
+    }
     from.addEventListener('change', function() {
       if (!from.value) return;
       _setSelectValue(pair[1], from.value);
