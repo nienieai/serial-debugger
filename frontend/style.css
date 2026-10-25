@@ -359,13 +359,16 @@ button:disabled:active { transform: none; box-shadow: none; }
 .c-port-btn { flex-shrink: 0; height: 30px; line-height: 30px; padding: 0 8px; font-size: 13px; }
 .c-settings-btn { width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0; }
 
-/* Status bar daemon toggle — combined dot + text, no rounding */
+/* Status bar daemon toggle — 与状态栏同底同高，并贴住左边缘 */
 .c-status-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--border); border-radius: 0; background: var(--input-bg); color: var(--fg);
-  font-size: 13px; cursor: pointer; padding: 0 8px; height: 22px;
+  border: 1px solid transparent; border-radius: 0;
+  background: var(--bg2); color: var(--fg);
+  font-size: 13px; cursor: pointer; padding: 0 8px; height: 24px;
 }
 .c-status-btn:hover { background: var(--hover); border-color: var(--accent); }
+/* 抵消状态栏自身的左内边距，让「运行中」贴住最左边 */
+.statusbar-left > .c-status-btn:first-child { margin-left: -8px; }
 
 /* Scroll lock — 24px for send-controls / forward row */
 .c-scroll-btn {
