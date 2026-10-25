@@ -1600,6 +1600,7 @@ window.addEventListener('DOMContentLoaded', () => {
   } catch {}
 
   initDividerDrag();
+  startClientsRefresh();
   initQuickPanelDrag();
   initHistoryScroll();
   initMenuClick();
@@ -2203,6 +2204,30 @@ function updateSyncIndicator() {
   const cliCount = stateClients.filter(c => c.source === 'cli').length;
   const mcpCount = stateClients.filter(c => c.source === 'mcp').length;
   if (_statusBar) _statusBar.updateClients({gui: guiCount, cli: cliCount, mcp: mcpCount});
+  // 悬停能看到具体是哪些会话，排查「计数和标签页对不上」时有用
+  var guiBadge = document.querySelector('.gui-badge');
+  if (guiBadge) {
+    guiBadge.title = stateClients
+      .filter(function(c) { return c.source === 'gui'; })
+      .map(function(c) { return (c.clientId || '?') + ' (PID ' + (c.pid || '?') + ')'; })
+      .join('\n');
+  }
+}
+
+// 客户端列表的权威刷新：clients-changed 是推送，个别情况下会漏（例如订阅那
+// 一刻的竞态），此时状态栏会一直显示旧的计数。每 5 秒拉一次兜底。
+function startClientsRefresh() {
+  setInterval(function() {
+    if (!state.daemonOnline) return;
+    try {
+      window.go.main.App.GetClients().then(function(list) {
+        if (Array.isArray(list)) {
+          stateClients = list;
+          updateSyncIndicator();
+        }
+      }).catch(function() {});
+    } catch (e) {}
+  }, 5000);
 }
 
 // Returns true when the active "tab" is a real session tab (not settings/welcome).
