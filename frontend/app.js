@@ -1558,6 +1558,8 @@ window.addEventListener('DOMContentLoaded', () => {
   createThemeOverlay();
   if (typeof createSettingsOverlay === 'function') {
   createSettingsOverlay();
+  // 弹窗里的端口 / 波特率一改就同步到工具栏
+  _bindSettingsPortSync();
   // Initialize custom selects in settings overlay
   setTimeout(function() {
     var so = document.getElementById('settingsOverlay');
@@ -2991,58 +2993,73 @@ function swapForwardPorts() {
   });
 }
 
-function _syncSettingsToBar() {
-  // Forward: sync settings popup → config bar
-  if (activeMode() === 'forward') {
-    const pairs = [
-      ['portSelectASettings', 'portSelectA'],
-      ['baudSelectASettings', 'baudSelectA'],
-      ['dataBitsSelectA', 'dataBitsSelectA'],
-      ['stopBitsSelectA', 'stopBitsSelectA'],
-      ['paritySelectA', 'paritySelectA'],
-      ['portSelectBSettings', 'portSelectB'],
-      ['baudSelectBSettings', 'baudSelectB'],
-      ['dataBitsSelectB', 'dataBitsSelectB'],
-      ['stopBitsSelectB', 'stopBitsSelectB'],
-      ['paritySelectB', 'paritySelectB'],
-    ];
-    pairs.forEach(([fromId, toId]) => {
-      const from = pageEl(fromId);
-      const to = pageEl(toId);
-      if (from && to && from.value) to.value = from.value;
-    });
-  } else {
-    // Single: sync settings popup → config bar
-    const pairs = [
-      ['baudSelect', 'baudSelect'],
-      ['dataBitsSelect', 'dataBitsSelect'],
-      ['stopBitsSelect', 'stopBitsSelect'],
-      ['paritySelect', 'paritySelect'],
-    ];
-  }
+// 串口详细设置（转发的端口 / 波特率）↔ 工具栏 同步。
+//
+// 只有这四项在两边是彼此独立的元素：设置弹窗里转发列用 portSelectASettings /
+// baudSelectASettings / portSelectBSettings / baudSelectBSettings，工具栏用
+// portSelectA / baudSelectA / portSelectB / baudSelectB。其余参数（数据位、
+// 停止位、校验位）两边用的是同一组 id（两个节点同 id），属另一个问题，不在
+// 本次范围内。
+//
+// 赋值必须走 _setSelectValue：直接写 .value 既不是 attribute 变更、也不派发
+// change，自定义下拉框触发器上显示的文字不会跟着变（TODO #79 的同一个坑）。
+function _settingsPortPairs() {
+  return [
+    ['portSelectASettings', 'portSelectA'],
+    ['baudSelectASettings', 'baudSelectA'],
+    ['portSelectBSettings', 'portSelectB'],
+    ['baudSelectBSettings', 'baudSelectB'],
+  ];
 }
 
+// 写值并刷新自定义下拉框的显示文字；值没变则什么都不做。
+function _setSelectValue(id, value) {
+  var el = pageEl(id);
+  if (!el || value === undefined || value === null) return false;
+  var str = String(value);
+  if (el.value === str) return false;
+  el.value = str;
+  _refreshCustomSelectFor(el);
+  return true;
+}
+
+function _refreshCustomSelectFor(el) {
+  var wrap = (el && el.closest) ? el.closest('.cs-wrap') : null;
+  if (wrap && typeof _csRefresh === 'function') _csRefresh(wrap);
+}
+
+// 弹窗 → 工具栏（关闭弹窗时兜底调用；改值时也会即时同步）
+function _syncSettingsToBar() {
+  if (activeMode() !== 'forward') return;
+  _settingsPortPairs().forEach(function(pair) {
+    var from = document.getElementById(pair[0]);
+    if (from && from.value) _setSelectValue(pair[1], from.value);
+  });
+}
+
+// 工具栏 → 弹窗（打开弹窗时调用）
 function _syncBarToSettings() {
-  // Forward: sync config bar → settings popup
-  if (activeMode() === 'forward') {
-    const pairs = [
-      ['portSelectA', 'portSelectASettings'],
-      ['baudSelectA', 'baudSelectASettings'],
-      ['dataBitsSelectA', 'dataBitsSelectA'],
-      ['stopBitsSelectA', 'stopBitsSelectA'],
-      ['paritySelectA', 'paritySelectA'],
-      ['portSelectB', 'portSelectBSettings'],
-      ['baudSelectB', 'baudSelectBSettings'],
-      ['dataBitsSelectB', 'dataBitsSelectB'],
-      ['stopBitsSelectB', 'stopBitsSelectB'],
-      ['paritySelectB', 'paritySelectB'],
-    ];
-    pairs.forEach(([fromId, toId]) => {
-      const from = document.getElementById(fromId);
-      const to = document.getElementById(toId);
-      if (from && to && from.value) to.value = from.value;
+  if (activeMode() !== 'forward') return;
+  _settingsPortPairs().forEach(function(pair) {
+    var to = document.getElementById(pair[0]);
+    var from = pageEl(pair[1]);
+    if (!to || !from || !from.value) return;
+    if (to.value === from.value) return;
+    to.value = from.value;
+    _refreshCustomSelectFor(to);
+  });
+}
+
+// 设置弹窗里改端口 / 波特率 → 立刻同步到工具栏，不必等弹窗关闭
+function _bindSettingsPortSync() {
+  _settingsPortPairs().forEach(function(pair) {
+    var from = document.getElementById(pair[0]);
+    if (!from) return;
+    from.addEventListener('change', function() {
+      if (!from.value) return;
+      _setSelectValue(pair[1], from.value);
     });
-  }
+  });
 }
 
 function openSettingsPage() {
