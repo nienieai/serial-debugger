@@ -826,9 +826,6 @@ function applyI18n() {
   // Settings button
   var bs = pageEl('btnSettings');
   if (bs) bs.title = t('btn.settings', '详细设置');
-  // Mode toggle
-  var bm = pageEl('btnModeToggle');
-  if (bm) bm.textContent = (activeMode() === 'forward') ? ('↔ ' + t('btn.forward', '端口转发')) : ('⇄ ' + t('btn.single', '单端口'));
   // Display toggle
   var bd = pageEl('btnToggleDisplay');
   if (bd) {
@@ -958,7 +955,6 @@ function applyI18n() {
 
 function updateToggleSizers() {
   var btns = [
-    { id: 'btnModeToggle', a: '⇄ ' + t('btn.single','单端口'), b: '↔ ' + t('btn.forward','端口转发') },
     { id: 'btnToggleDisplay', a: '⇃ ' + t('display.rx_text_short','字'), b: '⇃ ' + t('display.rx_hex_short','H') },
     { id: 'btnToggleSend', a: '↾ ' + t('display.tx_text_short','字'), b: '↾ ' + t('display.tx_hex_short','H') },
     { id: 'btnSendQuick', a: t('send.tx_text_short','字'), b: t('send.tx_hex_short','H') },
@@ -1036,43 +1032,12 @@ function updateFwdBtns() {
   }
 }
 
-async function toggleMode() {
-  const tab = getActiveTab();
-  if (!tab || !tab.sessionId) return;
-
-  if (tab.portOpen) {
-    showAlert(t('confirm.title','提示'), t('serial.close_first','请先关闭所有串口连接再切换模式'));
-    return;
-  }
-
-  const newMode = tab.mode === 'forward' ? 'single' : 'forward';
-
-  if (!state.daemonOnline) {
-    tab.mode = newMode;
-    state.currentMode = newMode;
-    updateModeUI();
-    return;
-  }
-
-  try {
-    await window.go.main.App.SetProcessMode(tab.sessionId, newMode);
-    tab.mode = newMode;
-    state.currentMode = newMode;
-    tab.label = newMode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
-    updateModeUI();
-    updateOpenBtn();
-    renderTabs();
-  } catch (e) {
-    showAlert(t('cli.error','错误'), t('serial.mode_fail','切换模式失败: ') + e);
-  }
-}
-
 function updateModeUI() {
-  // Settings tab has no port UI — bail out early
   var activeTab = getActiveTab();
-  if (activeTab && activeTab.type === 'settings') return;
+  // 设置页 / 新建选择页都没有端口 UI：直接返回，避免 pageEl 走到全局回退
+  // 去操作第一个标签页的元素（见 TODO #64 / #68）。
+  if (activeTab && !isSessionTab(activeTab)) return;
 
-  const btn = pageEl('btnModeToggle');
   const singleRow = pageEl('singlePortRow');
   const forwardRow = pageEl('forwardPortRow');
   const sendArea = pageEl('sendArea');
@@ -1088,7 +1053,6 @@ function updateModeUI() {
   var fwdMarkers = fwdBtns ? fwdBtns.querySelectorAll('.is-hidden-fwd') : [];
 
   if (mode === 'forward') {
-    if (btn) { btn.textContent = '↔ ' + t('btn.forward', '端口转发'); btn.classList.add('is-forward'); }
     if (singleRow) singleRow.classList.add('is-hidden');
     if (forwardRow) forwardRow.classList.remove('is-hidden');
     if (sendArea) sendArea.classList.add('is-hidden');
@@ -1104,7 +1068,6 @@ function updateModeUI() {
     singleMarkers.forEach(function(b) { b.classList.remove('is-hidden'); });
     fwdMarkers.forEach(function(b) { b.classList.add('is-hidden'); });
   } else {
-    if (btn) { btn.textContent = '⇄ ' + t('btn.single', '单端口'); btn.classList.remove('is-forward'); }
     if (singleRow) singleRow.classList.remove('is-hidden');
     if (forwardRow) forwardRow.classList.add('is-hidden');
     if (sendArea) sendArea.classList.remove('is-hidden');
@@ -1872,7 +1835,7 @@ async function syncDaemonSessions(procData) {
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
   // autoCreateSession: add a local tab (no daemon process) when no tabs exist
   if (!suppress && state.autoCreateSession && daemonSessions.length === 0 && state.tabs.length === 0) {
-    await addTab(false);  // add tab without switching (switchTo=false)
+    await autoCreateIdleSession();  // 自动补一个单端口空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
     // 列表判断「会话还在不在」—— 列表一空，刚挂上去的 sessionId 立刻被当成已消失
@@ -2432,58 +2395,166 @@ function _setPortOptions(sel, optionsHtml, placeholder) {
 // ---- tabs ----
 let _creatingTab = false;
 
-async function addTab(switchTo) {
-  // Cannot create tabs when daemon is offline — the tab would be a zombie
-  // with no sessionId and no ability to send/receive data.
+// 新建会话：先开一个「选择页」标签（两张调色盘卡片），选定模式之后才在守护
+// 进程里建空闲进程，并把这个标签页**原地**换成会话页 —— 所以直接关掉选择页
+// 不会留下孤儿进程（旧流程先把进程建出来再建页，关掉就漏了）。
+function openNewSessionTab() {
   if (!state.daemonOnline) return;
-  // Create idle process on daemon, then add a local tab for it.
-  // Use _creatingTab flag to prevent syncDaemonSessions from creating
-  // a duplicate tab when the process-changed event fires mid-await.
-  let sid = null;
-  if (state.daemonOnline) {
-    _creatingTab = true;
-    try { sid = await window.go.main.App.CreateIdleProcess(); } catch {}
+  // 已经有一个选择页就切过去，不重复开
+  var existing = state.tabs.findIndex(function(x) { return x.type === 'new'; });
+  if (existing >= 0) { switchTab(existing); return; }
+
+  var tab = {
+    id: state.tabCounter++,
+    label: t('newtab.title', '新建会话'),
+    type: 'new',
+    portOpen: false,
+    mode: 'single',
+    source: 'gui'
+  };
+  tab._page = createModeChooserPage();
+  var mc = document.getElementById('mainContent');
+  if (mc) mc.appendChild(tab._page.root);
+
+  var oldPage = getActivePage();
+  if (oldPage) oldPage.hide();
+  if (state._welcomePage) state._welcomePage.hide();
+
+  state.tabs.push(tab);
+  state.activeTab = state.tabs.length - 1;
+  tab._page.show();
+
+  renderTabs();
+  updateEmptyState();
+  updateOpenBtn();
+  updateSyncIndicator();
+  _updateStatsVisible();
+  updateDaemonUI();
+}
+
+// 在守护进程里建空闲进程；转发模式再把进程切成 forward。
+// 失败时把可能已经建出来的进程收掉，不留孤儿。
+async function _createIdleProcessOfMode(mode) {
+  var sid = null;
+  _creatingTab = true;
+  try {
+    sid = await window.go.main.App.CreateIdleProcess();
+    if (sid && mode === 'forward') {
+      await window.go.main.App.SetProcessMode(sid, 'forward');
+    }
+    return sid;
+  } catch (e) {
+    if (sid) { try { await window.go.main.App.CloseSession(sid); } catch (_) {} }
+    showAlert(t('cli.error', '错误'), t('serial.mode_fail', '切换模式失败: ') + e);
+    return null;
+  } finally {
     _creatingTab = false;
   }
-  // Check if syncDaemonSessions already created a tab for this process
-  if (sid && state.tabs.some(t => t.sessionId === sid)) {
-    if (switchTo !== false) {
-      state.activeTab = state.tabs.findIndex(t => t.sessionId === sid);
-      state.currentMode = 'single';
-      updateModeUI();
-      loadTabHistory();
-    }
-    updateEmptyState();
-    renderTabs();
-    updateOpenBtn();
-    updateSyncIndicator();
+}
+
+// 会话标签页的公共字段（选择页转换与自动建会话共用）。
+function _sessionTabDefaults(mode, id) {
+  var fwd = (mode === 'forward');
+  var tabId = (typeof id === 'number') ? id : state.tabCounter++;
+  return {
+    id: tabId,
+    label: fwd ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲'),
+    portOpen: false,
+    mode: fwd ? 'forward' : 'single',
+    source: 'gui',
+    displayMode: 'text',
+    txDisplayMode: 'text',
+    p1DisplayMode: 'text',
+    p2DisplayMode: 'text',
+    scrollLocked: false,
+    sendRatio: state.sendRatio || 0.3,
+    quickPanelRatio: state.quickPanelRatio,
+    quickPresets: []
+  };
+}
+
+// 选择页卡片被点：建进程 → 原地换成会话页。
+async function chooseNewSessionMode(mode) {
+  var tab = getActiveTab();
+  if (!tab || tab.type !== 'new') return;
+  if (!state.daemonOnline) return;
+  if (tab._choosing) return;   // 防连点：两次点击只建一个进程
+  tab._choosing = true;
+  _setChooserBusy(tab, true);
+
+  var sid = await _createIdleProcessOfMode(mode);
+  if (!sid) {
+    tab._choosing = false;
+    _setChooserBusy(tab, false);
     return;
   }
-  var newTab2 = { id: state.tabCounter++, label: t('tab.idle_single', '单端口空闲'), sessionId: sid, portOpen: false, mode: 'single', source: 'gui', displayMode: 'text', txDisplayMode: 'text', p1DisplayMode: 'text', p2DisplayMode: 'text', scrollLocked: false, sendRatio: state.sendRatio || 0.3, quickPanelRatio: state.quickPanelRatio, quickPresets: [] };
-  // 刚挂上会话的时刻：同步的第 3 步靠它避开「列表还没包含这个会话」的窗口期
-  //（此前只有 openPort / openForwardPorts 写过这个字段，addTab 没写 —— 于是
-  //  一次不含该会话的同步就能把刚建出来的会话清掉，见文件上方那条日志证据）。
-  if (sid) newTab2.connectedAt = Date.now();
-  newTab2._page = new TabPage(state.tabs.length, newTab2);
-  var mainContent2 = document.getElementById('mainContent');
-  if (mainContent2) { mainContent2.appendChild(newTab2._page.root); initTabPage(newTab2._page.root); }
-  state.tabs.push(newTab2);
-  // Start per-tab Go decode worker
-  if (sid && state.daemonOnline) {
-    window.go.main.App.StartTabDecoder(sid);
-    window.go.main.App.SetTabEncoding(sid, state.encoding);
+  _convertChooserToSession(tab, sid, mode);
+}
+
+function _setChooserBusy(tab, busy) {
+  if (!tab || !tab._page || !tab._page.root) return;
+  tab._page.root.classList.toggle('is-busy', !!busy);
+  var cards = tab._page.root.querySelectorAll('.c-mode-card');
+  for (var i = 0; i < cards.length; i++) cards[i].disabled = !!busy;
+}
+
+// 选择页 → 会话页：同一个标签、同一个下标，不新增标签页。
+function _convertChooserToSession(tab, sid, mode) {
+  var idx = state.tabs.indexOf(tab);
+  if (idx < 0) return;
+
+  var keepId = tab.id;
+  if (tab._page) { tab._page.hide(); tab._page.destroy(); }
+
+  var defaults = _sessionTabDefaults(mode, keepId);
+  for (var k in defaults) {
+    if (Object.prototype.hasOwnProperty.call(defaults, k)) tab[k] = defaults[k];
   }
-  if (switchTo !== false) {
-    // Hide currently visible page before switching
-    var oldPage = getActivePage();
-    if (oldPage) oldPage.hide();
-    if (state._welcomePage) state._welcomePage.hide();
-    state.activeTab = state.tabs.length - 1;
-    state.currentMode = 'single';
-    // Show new tab's page
-    if (newTab2._page) newTab2._page.show();
-    updateModeUI();
-    loadTabHistory();
+  delete tab.type;
+  delete tab._choosing;
+  tab.sessionId = sid;
+  // 刚挂上会话的时刻：同步第 3 步靠它避开「列表还没包含这个会话」的窗口期（TODO #74）
+  tab.connectedAt = Date.now();
+  tab._page = new TabPage(idx, tab);
+
+  var mc = document.getElementById('mainContent');
+  if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  tab._page.show();
+
+  if (state.daemonOnline) {
+    try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
+  }
+
+  state.activeTab = idx;
+  state.currentMode = tab.mode;
+  updateModeUI();
+  renderTabs();
+  updateOpenBtn();
+  updateSyncIndicator();
+  updateEmptyState();
+  loadTabHistory();
+}
+
+// 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
+// 这个时机用户不在交互中）。
+async function autoCreateIdleSession() {
+  if (!state.daemonOnline) return;
+  var sid = await _createIdleProcessOfMode('single');
+  if (!sid) return;
+  if (state.tabs.some(function(x) { return x.sessionId === sid; })) return;
+
+  var tab = _sessionTabDefaults('single');
+  tab.sessionId = sid;
+  tab.connectedAt = Date.now();
+  tab._page = new TabPage(state.tabs.length, tab);
+  var mc = document.getElementById('mainContent');
+  if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  state.tabs.push(tab);
+
+  if (state.daemonOnline) {
+    try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
   }
   updateEmptyState();
   renderTabs();
@@ -2491,21 +2562,24 @@ async function addTab(switchTo) {
   updateSyncIndicator();
 }
 
+
 function switchTab(idx) {
   var oldTab = getActiveTab();
   var newTab = state.tabs[idx];
   if (!newTab) return;
 
-  // Settings tab (in either direction): just show/hide, no per-tab state
-  if (newTab.type === 'settings' || (oldTab && oldTab.type === 'settings')) {
+  // 非会话标签页（设置页 / 新建选择页，任一方向）：只显示隐藏，不碰会话状态
+  if (!isSessionTab(newTab) || (oldTab && !isSessionTab(oldTab))) {
     if (oldTab && oldTab._page) oldTab._page.hide();
     state.activeTab = idx;
     if (newTab.type === 'settings') {
       if (newTab._page) { newTab._page.show(); renderSettingsThemeGrid(); renderSettingsIconGrid(); }
     } else if (newTab._page) {
       newTab._page.show();
-      loadTabHistory();
-      refreshStatsDOM();
+      if (isSessionTab(newTab)) {
+        loadTabHistory();
+        refreshStatsDOM();
+      }
     }
     updateModeUI();
     renderTabs();
@@ -2672,11 +2746,12 @@ function renderTabs() {
     btn.ondragend = () => { btn.classList.remove('tab-dragging'); _tabHideIndicator(); };
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
-    const tag = isSettings ? '' : (isFwd ? ' ↔' : '');
-    // Status dot (gear icon for settings)
+    const isChooser = (t.type === 'new');
+    const tag = (isSettings || isChooser) ? '' : (isFwd ? ' ↔' : '');
+    // Status dot (gear icon for settings, plus icon for the new-session page)
     const dot = document.createElement('span');
-    if (isSettings) {
-      dot.innerHTML = icon('settings', 14, 14);
+    if (isSettings || isChooser) {
+      dot.innerHTML = icon(isSettings ? 'settings' : 'plus', 14, 14);
       dot.style.cssText = 'display:flex;align-items:center;margin-right:2px;';
     } else {
       dot.className = 'tab-dot' + (t.portOpen ? ' live' : '');
@@ -2693,7 +2768,9 @@ function renderTabs() {
         const vb = document.createElement("span"); vb.style.cssText = "color:"+s[1]+";font-size:11px;font-weight:bold"; vb.textContent = cnt; btn.appendChild(vb);
       }
     });
-    if (t.syncedParams) {
+    if (isChooser) {
+      btn.title = window.t('newtab.hint', '选择一种模式开始');
+    } else if (t.syncedParams) {
       btn.title = `会话: ${t.label}
 数据位:${t.syncedParams.dataBits} 停止位:${t.syncedParams.stopBits} 校验:${t.syncedParams.parity}`;
     } else {
