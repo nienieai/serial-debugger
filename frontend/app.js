@@ -4431,4 +4431,10 @@ function applySendRatio() {
   var sbEl = document.querySelector('.statusbar');
   if (sbEl) sbEl.classList.toggle('is-flush-bottom', r <= 0.01);
   if (divider) divider.style.display = '';
+  // 改完高度后，如果本来就在跟最新（未冻结、未锁定），重新贴底。
+  // 否则视口一变，滚动位置就"掉队"了，看上去像"拖一下就再也不跟着滚了"。
+  var dc = page.displayContent;
+  if (dc && !state.scrollLocked && typeof _frozen !== 'undefined' && !_frozen) {
+    dc.scrollTop = dc.scrollHeight;
+  }
 }

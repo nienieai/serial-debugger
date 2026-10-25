@@ -488,7 +488,16 @@ function initDisplayScrollbar(display) {
     var ratio = (m.sh - m.ch) / Math.max(1, m.trackH - m.th);
     display.scrollTop = drag.top + (e.clientY - drag.y) * ratio;
   });
-  function endDrag() { drag = null; }
+  function endDrag() {
+    drag = null;
+    // 拖到底（或拖回底部附近）时立刻恢复跟随，不等下一次数据到达。
+    // 否则松手后画面还停在冻结状态，看起来像"滚不动了"。
+    var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
+    if (atBottom && !state.scrollLocked && _frozen) {
+      _frozen = false;
+      renderHistoryLines(_activeCache());
+    }
+  }
   thumb.addEventListener('pointerup', endDrag);
   thumb.addEventListener('pointercancel', endDrag);
 
