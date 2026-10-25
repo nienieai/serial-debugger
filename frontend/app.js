@@ -2480,10 +2480,12 @@ function _sessionTabDefaults(mode, id) {
     portOpen: false,
     mode: fwd ? 'forward' : 'single',
     source: 'gui',
-    displayMode: 'text',
-    txDisplayMode: 'text',
-    p1DisplayMode: 'text',
-    p2DisplayMode: 'text',
+    // 新页沿用当前全局的显示模式（否则一旦发生 tabsChanged，同步会拿这里的
+    // 'text' 回填全局，把用户选好的 Hex 顶掉）
+    displayMode: state.displayMode || 'text',
+    txDisplayMode: state.txDisplayMode || 'text',
+    p1DisplayMode: state.p1DisplayMode || 'text',
+    p2DisplayMode: state.p2DisplayMode || 'text',
     scrollLocked: false,
     sendRatio: state.sendRatio || 0.3,
     quickPanelRatio: state.quickPanelRatio,
@@ -3206,8 +3208,27 @@ function updateOpenBtn() {
 }
 
 // ---- display ----
+
+// 把当前的显示模式写回标签页自己的副本。
+//
+// state.*DisplayMode 只是「当前活动页」的镜像，每个标签页另有一份 tab.*DisplayMode。
+// 此前这份副本只在切标签时写（switchTab 的 oldTab.displayMode = ...），而
+// syncDaemonSessions 在会话状态变化时会**用副本回填全局**（tabsChanged 分支）——
+// 打开/关闭串口正好会让 portOpen / label 变化 -> tabsChanged -> 把用户刚切的
+// 文本/Hex 覆盖回旧值（表现为开关串口时显示样式跳变）。所以每次切换都要落盘。
+function _persistDisplayModes() {
+  var tab = getActiveTab();
+  if (!tab || !isSessionTab(tab)) return;
+  tab.displayMode = state.displayMode;
+  tab.txDisplayMode = state.txDisplayMode;
+  tab.p1DisplayMode = state.p1DisplayMode;
+  tab.p2DisplayMode = state.p2DisplayMode;
+  tab.scrollLocked = state.scrollLocked;
+}
+
 function toggleDisplayMode() {
   state.displayMode = state.displayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   const btn = pageEl('btnToggleDisplay');
   if (!btn) return;
   if (state.displayMode === 'hex') {
@@ -3276,6 +3297,7 @@ function bindSendScroll(scrollArea) {
 
 function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
+  _persistDisplayModes();
   updateScrollLockBtns();
   // 冻结/解冻与未读占位块由历史层负责（锁定时视图冻结，但滚动条仍随未读增长）
   if (typeof onScrollLockChanged === 'function') onScrollLockChanged();
@@ -3297,6 +3319,7 @@ function updateScrollLockBtns() {
 
 function toggleP1Display() {
   state.p1DisplayMode = state.p1DisplayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   const btn = pageEl('btnP1Display');
   if (btn) {
     if (state.p1DisplayMode === 'hex') {
@@ -3317,6 +3340,7 @@ function toggleP1Display() {
 
 function toggleP2Display() {
   state.p2DisplayMode = state.p2DisplayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   const btn = pageEl('btnP2Display');
   if (btn) {
     if (state.p2DisplayMode === 'hex') {
@@ -3348,6 +3372,7 @@ function toggleSendFormat() {
 
 function toggleTxDisplay() {
   state.txDisplayMode = state.txDisplayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   var btn = pageEl('btnToggleSend');
   if (!btn) return;
   if (state.txDisplayMode === 'hex') {
