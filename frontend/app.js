@@ -2333,6 +2333,13 @@ function updatePortList(ports) {
     _applyPortOptions('portSelectASettings', html, t('status.port1', '-- 端口1 --'));
     _applyPortOptions('portSelectBSettings', html, t('status.port2', '-- 端口2 --'));
   }
+  // 上面那五个 _applyPortOptions 走的是 document.getElementById —— 多标签时
+  // 只能命中文档里**第一个**同名元素，于是除第一个标签页以外，其余页面的端口
+  // 下拉永远只剩占位符（截图里工具栏展开只有「-- 端口1 --」一项）。这里按每个
+  // 标签页自己的 root 再填一遍。
+  state.tabs.forEach(function(tb) {
+    if (tb && tb._page && tb._page.root) _populateTabPortSelects(tb._page.root);
+  });
   updatePortOccupied();
 }
 
@@ -2372,16 +2379,25 @@ function initTabPage(pageRoot) {
     var scrollArea = pageRoot.querySelector('.send-scroll-area');
     if (scrollArea) bindSendScroll(scrollArea);
   }
-  // Populate port selects from cached port list (use pageRoot directly,
-  // not pageEl(), because this tab may not be the active one yet)
-  if (state.lastPorts) {
-    var selP = pageRoot.querySelector('#portSelect');
-    if (selP) _setPortOptions(selP, state.lastPorts, t('status.select_port', '-- 选择端口 --'));
-    var selA = pageRoot.querySelector('#portSelectA');
-    if (selA) _setPortOptions(selA, state.lastPorts, t('status.port1', '-- 端口1 --'));
-    var selB = pageRoot.querySelector('#portSelectB');
-    if (selB) _setPortOptions(selB, state.lastPorts, t('status.port2', '-- 端口2 --'));
-  }
+  // 端口下拉按本页 root 填充（不能用 getElementById：每个标签页都有一份同 id）
+  _populateTabPortSelects(pageRoot);
+}
+
+// 按 root 作用域填充端口下拉：portSelect / portSelectA / portSelectB。
+// 多标签时每个页面各有一份同 id 的 <select>，getElementById 只能拿到第一个，
+// 所以必须限定在 root 里查。
+function _populateTabPortSelects(root) {
+  if (!root || !root.querySelector || !state.lastPorts) return;
+  [
+    ['#portSelect', t('status.select_port', '-- 选择端口 --')],
+    ['#portSelectA', t('status.port1', '-- 端口1 --')],
+    ['#portSelectB', t('status.port2', '-- 端口2 --')],
+  ].forEach(function(spec) {
+    var sel = root.querySelector(spec[0]);
+    if (!sel) return;
+    _setPortOptions(sel, state.lastPorts, spec[1]);
+    _refreshCustomSelectFor(sel);
+  });
 }
 
 function _setPortOptions(sel, optionsHtml, placeholder) {
@@ -2569,6 +2585,8 @@ function switchTab(idx) {
   var oldTab = getActiveTab();
   var newTab = state.tabs[idx];
   if (!newTab) return;
+  // 切到这一页时补齐端口下拉（页面可能在端口列表到达之前就建好了）
+  if (newTab._page && newTab._page.root) _populateTabPortSelects(newTab._page.root);
 
   // 非会话标签页（设置页 / 新建选择页，任一方向）：只显示隐藏，不碰会话状态
   if (!isSessionTab(newTab) || (oldTab && !isSessionTab(oldTab))) {
