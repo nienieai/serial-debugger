@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 
@@ -24,13 +25,17 @@ func main() {
 		MinWidth:  640,
 		MinHeight: 480,
 		Debug: options.Debug{
-			OpenInspectorOnStartup: false,
+			OpenInspectorOnStartup: uiDevMode,
 		},
 		EnableDefaultContextMenu: true,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:     uiAssets(),
+			Middleware: uiAssetMiddleware(),
 		},
-		OnStartup:  app.Startup,
+		OnStartup: func(ctx context.Context) {
+			app.Startup(ctx)
+			uiStartHotReload(ctx)
+		},
 		OnShutdown: app.Shutdown,
 		Bind: []any{
 			app,
