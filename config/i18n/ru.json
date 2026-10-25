@@ -85,6 +85,7 @@
   "history.more_above": "↑ Прокрутите вверх для загрузки",
   "history.placeholder": "Ожидание данных...",
   "history.unseen": "↓ %s не показано",
+  "history.unseen_click": "Перейти к последнему",
   "history.cleared": "История очищена",
   "history.load_disk": "↓ Загрузить историю с диска",
   "history.loading": "Загрузка…",

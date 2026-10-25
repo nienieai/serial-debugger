@@ -85,6 +85,7 @@
   "history.more_above": "↑ Défiler vers le haut pour charger plus",
   "history.placeholder": "En attente de données...",
   "history.unseen": "↓ %s non affichés",
+  "history.unseen_click": "Aller au plus récent",
   "history.cleared": "Historique effacé",
   "history.load_disk": "↓ Charger l'historique du disque",
   "history.loading": "Chargement…",

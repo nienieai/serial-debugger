@@ -85,6 +85,7 @@
   "history.more_above": "↑ Desplazar arriba para cargar más",
   "history.placeholder": "Esperando datos...",
   "history.unseen": "↓ %s sin mostrar",
+  "history.unseen_click": "Ir a lo más reciente",
   "history.cleared": "Historial borrado",
   "history.load_disk": "↓ Cargar historial del disco",
   "history.loading": "Cargando…",

@@ -85,6 +85,7 @@
   "history.more_above": "↑ 위로 스크롤하여 더 불러오기",
   "history.placeholder": "데이터 대기 중...",
   "history.unseen": "↓ %s개 미표시",
+  "history.unseen_click": "최신으로 이동",
   "history.cleared": "기록이 지워졌습니다",
   "history.load_disk": "↓ 디스크 기록 불러오기",
   "history.loading": "불러오는 중…",

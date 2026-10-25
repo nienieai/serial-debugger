@@ -40,8 +40,7 @@ var _renderStart = -1; // DOM 窗口起点（cache 索引）
 var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
 var _atBottom = true;  // 用户是否贴着底部
 var _frozen = false;   // 冻结：锁定滚动，或用户往回翻离开了底部
-var _spacer = null;    // 未读区占位块
-var _healing = false;  // _syncSpacer 触发自愈重绘时的递归挡板
+var _healing = false;  // 未读提示自愈重绘时的递归挡板
 var _appendQueue = []; // 待渲染队列
 var _flushScheduled = false;
 var _flushTimer = null;
@@ -83,7 +82,7 @@ function _histDebug() {
     atBottom: _atBottom,
     scrollLocked: !!state.scrollLocked,
     domRows: display ? display.querySelectorAll('.data-row').length : 0,
-    spacer: !!(display && display.querySelector('.hist-spacer')),
+    spacer: !!(display && display.querySelector('.hist-unread')),
     lastFlushMs: +_lastFlushMs.toFixed(2),
     lastFlushCount: _lastFlushCount,
     // 有界缓存 / 分页（夹具用）
@@ -101,7 +100,6 @@ function _histReset() {
   _appendQueue = [];
   _flushScheduled = false;
   if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null; }
-  _spacer = null;
   _renderStart = -1;
   _renderEnd = -1;
   _atBottom = true;
@@ -318,14 +316,14 @@ function _flushAppends() {
   var q = _appendQueue;
   _appendQueue = [];
   if (!display) return;
-  if (q.length === 0) { _syncSpacer(display); return; }
+  if (q.length === 0) { _updateUnreadChrome(display); return; }
 
   var t0 = performance.now();
 
   if (display.querySelector('.placeholder')) display.innerHTML = '';
 
   // 冻结：视图不动，未读交给占位块撑高度（滚动条继续变化，但 DOM 不增长）
-  if (_frozen) { _syncSpacer(display); return; }
+  if (_frozen) { _updateUnreadChrome(display); return; }
 
   var win = historyWindowSize();
   // 一批可能远超窗口：只渲染窗口装得下的最新那部分，多建的本来也会被裁掉
@@ -346,7 +344,7 @@ function _flushAppends() {
   _renderEnd = entries ? entries.length : _renderEnd;
   _trimToWindow(display, win);
   _stickToBottom(display);
-  _syncSpacer(display);
+  _updateUnreadChrome(display);
 
   _lastFlushMs = performance.now() - t0;
   _lastFlushCount = q.length;
@@ -386,36 +384,34 @@ function _trimToWindow(display, win, fromBottom) {
   }
 }
 
-// ---- 未读区占位块 ----
+// ---- 未读提示 + 自绘滚动条 ----
+//
+// 以前冻结时往滚动区里塞一块「占位块」撑高度，想让滚动条跟着未读数变长。代价
+// 太大：那块空白可以被滚进去（整屏空白），并且把「是否到底」的判据污染掉。
+// 现在两者分离：
+//   · 自绘滚动条只反映**真实内容**（拖到底就是真到底）
+//   · 未读数放在右下角一个小胶囊里，点它直接回到最新一条
 
-function _avgRowHeight(display) {
-  var rows = display.querySelectorAll('.data-row');
-  if (rows.length === 0) {
-    var fs = state.displayFontSize || 15;
-    return Math.max(8, fs * 1.6) * 2;
-  }
-  var n = Math.min(5, rows.length), sum = 0, cnt = 0;
-  for (var i = rows.length - n; i < rows.length; i++) {
-    var h = rows[i].offsetHeight;
-    if (h > 0) { sum += h; cnt++; }
-  }
-  if (cnt === 0) return Math.max(8, (state.displayFontSize || 15) * 1.6) * 2;
-  return sum / cnt;
+function _unreadCount() {
+  var entries = _activeCache();
+  if (!entries || _renderEnd < 0) return 0;
+  return Math.max(0, entries.length - _renderEnd);
 }
 
-function _syncSpacer(display) {
-  var entries = _activeCache();
-  var hidden = (entries && _renderEnd >= 0) ? Math.max(0, entries.length - _renderEnd) : 0;
-  if (!_frozen || hidden <= 0) { _removeSpacer(); return; }
+function _updateUnreadChrome(display) {
+  if (!display) display = pageEl('displayContent');
+  if (!display) return;
+  var host = display.parentNode;
+  if (!host) return;
 
-  // 防御：冻结时视图里必须还有内容。占位块的用途是「撑住已冻结的那一屏」，
-  // 一旦数据行被缓存裁剪 / 切页 / 异常路径删光，它就变成整屏空白（现象：
-  // 只剩「↓ N 条未显示」）。这里按当前窗口重新渲染一次；用 _healing 挡住递归。
-  if (!_healing && display.querySelectorAll('.data-row').length === 0) {
+  // 防御：冻结时视图里必须还有内容（缓存裁剪 / 切页等异常路径会把行清空）。
+  // 用 _healing 挡住递归。
+  if (_frozen && _unreadCount() > 0 && !_healing &&
+      display.querySelectorAll('.data-row').length === 0) {
     _healing = true;
     var prevTop = display.scrollTop;
     try {
-      renderHistoryLines(entries, true);
+      renderHistoryLines(_activeCache(), true);
       display.scrollTop = prevTop;
     } finally {
       _healing = false;
@@ -423,28 +419,95 @@ function _syncSpacer(display) {
     return;
   }
 
-  if (!_spacer || !_spacer.parentNode) {
-    _spacer = document.createElement('div');
-    _spacer.className = 'sys-msg hist-spacer';
-    display.appendChild(_spacer);
+  var unread = _frozen ? _unreadCount() : 0;
+  var chip = host.querySelector('.hist-unread');
+  if (unread <= 0) {
+    if (chip && chip.parentNode) chip.parentNode.removeChild(chip);
+  } else {
+    if (!chip) {
+      chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'hist-unread';
+      chip.title = t('history.unseen_click', '回到最新一条');
+      chip.addEventListener('click', function() {
+        _frozen = false;
+        renderHistoryLines(_activeCache());
+      });
+      host.appendChild(chip);
+    }
+    chip.textContent = t('history.unseen', '↓ %s 条未显示').replace('%s', unread);
   }
-  _spacer.setAttribute('data-sys-raw', '');
-  _spacer.textContent = '── ' + t('history.unseen', '↓ %s 条未显示').replace('%s', hidden) + ' ──';
-  // 高度按实测平均行高估算：视图不动，但滚动条的变化幅度与方向都对。
-  //
-  // 上限是**一屏**：占位块再高就会变成一块可以滚进去的死空白 —— 实测「有数据
-  // 时上滚一下、再下滚」正好落进这块空区域，画面上什么都没有，只有居中的
-  // 「↓ N 条未显示」，而且因为 scrollHeight 被撑得很长，永远判不成「到底」，
-  // 也就永远不会解冻。截到一屏后：滚动条仍会随未读数变长，往下滚一屏就能
-  // 回到真实内容底部并解除冻结。
-  var h = Math.round(hidden * _avgRowHeight(display));
-  var cap = Math.max(120, display.clientHeight || 400);
-  _spacer.style.height = Math.min(h, cap) + 'px';
+  _syncCustomScrollbar(display);
 }
 
-function _removeSpacer() {
-  if (_spacer && _spacer.parentNode) _spacer.parentNode.removeChild(_spacer);
-  _spacer = null;
+// 自绘滚动条：原生条隐藏（CSS），轨道与滑块只按真实内容计算。
+function initDisplayScrollbar(display) {
+  if (!display) return;
+  var host = display.parentNode;
+  if (!host || host.querySelector('.hist-scrollbar')) return;
+
+  var track = document.createElement('div');
+  track.className = 'hist-scrollbar';
+  var thumb = document.createElement('div');
+  thumb.className = 'hist-scrollbar-thumb';
+  track.appendChild(thumb);
+  host.appendChild(track);
+
+  var drag = null;
+
+  function metrics() {
+    var sh = Math.max(1, display.scrollHeight);
+    var ch = display.clientHeight;
+    var trackH = Math.max(1, track.clientHeight);
+    var th = Math.min(trackH, Math.max(24, Math.round(trackH * (ch / sh))));
+    return { sh: sh, ch: ch, trackH: trackH, th: th };
+  }
+
+  function sync() {
+    var m = metrics();
+    if (m.sh <= m.ch + 1) { track.style.display = 'none'; return; }
+    track.style.display = '';
+    thumb.style.height = m.th + 'px';
+    var maxTop = m.trackH - m.th;
+    var top = (display.scrollTop / Math.max(1, m.sh - m.ch)) * maxTop;
+    thumb.style.transform = 'translateY(' + Math.max(0, Math.min(maxTop, top)) + 'px)';
+    thumb.classList.toggle('is-frozen', !!_frozen);
+  }
+
+  display._syncScrollbar = sync;
+
+  thumb.addEventListener('pointerdown', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    try { thumb.setPointerCapture(e.pointerId); } catch (err) {}
+    drag = { y: e.clientY, top: display.scrollTop };
+  });
+  thumb.addEventListener('pointermove', function(e) {
+    if (!drag) return;
+    var m = metrics();
+    var ratio = (m.sh - m.ch) / Math.max(1, m.trackH - m.th);
+    display.scrollTop = drag.top + (e.clientY - drag.y) * ratio;
+  });
+  function endDrag() { drag = null; }
+  thumb.addEventListener('pointerup', endDrag);
+  thumb.addEventListener('pointercancel', endDrag);
+
+  // 点轨道空白：翻一屏
+  track.addEventListener('pointerdown', function(e) {
+    if (e.target === thumb) return;
+    var before = thumb.getBoundingClientRect().top + thumb.offsetHeight / 2;
+    display.scrollTop += (e.clientY < before) ? -display.clientHeight * 0.9 : display.clientHeight * 0.9;
+  });
+
+  display.addEventListener('scroll', sync);
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(sync).observe(display); } catch (err) {}
+  }
+  sync();
+}
+
+function _syncCustomScrollbar(display) {
+  if (display && typeof display._syncScrollbar === 'function') display._syncScrollbar();
 }
 
 // ---- 窗口重绘 ----
@@ -458,7 +521,7 @@ function renderHistoryLines(entries, keepScroll) {
   var display = pageEl('displayContent');
   if (!display) return;
 
-  _removeSpacer();
+  _updateUnreadChrome();
   display.innerHTML = '';
   if (entries.length === 0) {
     display.innerHTML = '<div class="placeholder">' + t('placeholder.no_process', '无串口进程') + '</div>';
@@ -522,7 +585,7 @@ function renderHistoryLines(entries, keepScroll) {
     _atBottom = true;
   }
   display.onscroll = _onDisplayScroll;
-  _syncSpacer(display);
+  _updateUnreadChrome(display);
 }
 
 function _moreAboveTip(entries) {
@@ -545,13 +608,8 @@ function _needsLoadOlderTip(entries) {
 function _onDisplayScroll() {
   var display = pageEl('displayContent');
   if (!display) return;
-  // 「到底了没有」要按**真实内容**的底部算，不能按 scrollHeight —— 未读占位块
-  // 是一段很高的空区域，往下滚会滚进它里面：那里没有任何数据行，画面就是空白，
-  // 而 scrollHeight 又因为占位块变长，永远判断不成「到底」，于是永远不解冻。
-  // 这正是「有数据来时上滚一下再下滚 → 只剩『↓ N 条未显示』」的成因。
-  var spacerH = _spacer ? _spacer.offsetHeight : 0;
-  var realBottom = display.scrollHeight - spacerH;
-  var atBottom = display.scrollTop + display.clientHeight >= realBottom - 4;
+  // 滚动条只反映真实内容（未读改用右下角胶囊提示），所以到底的判断就是原生语义。
+  var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
   var wasFrozen = _frozen;
   _atBottom = atBottom;
   var shouldFreeze = !!state.scrollLocked || !atBottom;
@@ -559,13 +617,13 @@ function _onDisplayScroll() {
   if (wasFrozen && !shouldFreeze) {
     // 回到底部：解除冻结，把未读补上
     _frozen = false;
-    _removeSpacer();
+    _updateUnreadChrome();
     renderHistoryLines(_activeCache());
     return;
   }
   if (!wasFrozen && shouldFreeze) {
     _frozen = true;
-    _syncSpacer(display);
+    _updateUnreadChrome(display);
   }
   // 翻到顶：先看缓存里还有没有（expandHistory 自己处理），没有就去守护进程取。
   // 注意条件里**不能**再带 `_renderStart > 0`：缓存头正好是窗口起点时
@@ -597,11 +655,11 @@ function onScrollLockChanged() {
   if (state.scrollLocked) {
     _frozen = true;
     _atBottom = false;
-    _syncSpacer(display);
+    _updateUnreadChrome(display);
     return;
   }
   _frozen = false;
-  _removeSpacer();
+  _updateUnreadChrome();
   renderHistoryLines(_activeCache());
 }
 
@@ -645,7 +703,7 @@ function expandHistory(entries) {
   // 所以往下滚时它们仍在缓存里，且滚动条高度不撒谎）
   _trimToWindow(display, win, true);
   display.scrollTop = Math.max(0, display.scrollHeight - prevHeight);
-  _syncSpacer(display);
+  _updateUnreadChrome(display);
 }
 
 function _fetchOlder(entries, display, prevHeight) {

@@ -85,6 +85,7 @@
   "history.more_above": "↑ 向上捲動載入更多",
   "history.placeholder": "等待資料...",
   "history.unseen": "↓ %s 則未顯示",
+  "history.unseen_click": "回到最新一筆",
   "history.cleared": "歷史記錄已清空",
   "history.load_disk": "↓ 載入磁碟歷史記錄",
   "history.loading": "載入中…",

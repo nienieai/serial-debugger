@@ -85,6 +85,7 @@
   "history.more_above": "↑ 向上滚动加载更多",
   "history.placeholder": "等待数据...",
   "history.unseen": "↓ %s 条未显示",
+  "history.unseen_click": "回到最新一条",
   "history.cleared": "历史记录已清空",
   "history.load_disk": "↓ 加载磁盘历史记录",
   "history.loading": "加载中...",

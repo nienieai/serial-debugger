@@ -618,19 +618,40 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* ---- 14. Components: Display + Send ---- */
 .display-area { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; overflow: hidden; padding-top: 0; }
 .display-content {
-  flex: 1; overflow-y: auto; padding: var(--reserve-top) 12px 8px 12px;
+  flex: 1; overflow-y: auto; padding: var(--reserve-top) 16px 8px 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   font-size: 15px; line-height: 1.6; background: var(--input-bg); min-height: 0;
   /* 我们自己做滚动锚定（插入上方内容时手动补偿 scrollTop）。
      浏览器的 overflow-anchor 会与手动补偿叠加成抖动，必须关掉。 */
   overflow-anchor: none;
+  /* 原生滚动条隐藏：位置由 .hist-scrollbar 自绘（只反映真实内容） */
+  scrollbar-width: none;
 }
-/* 未读占位块：用户往回翻时，视口下方的数据用它撑开高度，
-   视图不动但滚动条继续变化，DOM 仍是 O(窗口)。 */
-.hist-spacer {
-  display: flex; align-items: center; justify-content: center;
-  width: 100%; pointer-events: none; opacity: 0.7;
+.display-content::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 自绘滚动条：轨道 + 滑块，固定叠在显示区右侧 */
+.hist-scrollbar {
+  position: absolute; top: 6px; right: 3px; bottom: 6px; width: 8px;
+  z-index: 6; border-radius: 4px; background: transparent;
 }
+.hist-scrollbar:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.hist-scrollbar-thumb {
+  position: absolute; left: 0; top: 0; width: 100%;
+  background: var(--scrollbar-thumb); border-radius: 4px;
+  transition: background .12s;
+}
+.hist-scrollbar-thumb:hover { background: var(--accent); }
+.hist-scrollbar-thumb.is-frozen { background: var(--accent); opacity: .55; }
+
+/* 未读提示：冻结时右下角的小胶囊，点一下回到最新一条 */
+.hist-unread {
+  position: absolute; right: 18px; bottom: 10px; z-index: 7;
+  padding: 4px 10px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--bg2); color: var(--fg);
+  font-size: 12px; line-height: 1.2; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.hist-unread:hover { border-color: var(--accent); color: var(--accent); }
 .display-content .placeholder { color: var(--placeholder); font-style: italic; padding: 8px 0; }
 .data-row { margin-bottom: 2px; }
 .ts-line { line-height: 1.4; }

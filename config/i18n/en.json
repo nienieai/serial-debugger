@@ -85,6 +85,7 @@
   "history.more_above": "↑ Scroll up to load more",
   "history.placeholder": "Waiting for data...",
   "history.unseen": "↓ %s not shown",
+  "history.unseen_click": "Jump to latest",
   "history.cleared": "History cleared",
   "history.load_disk": "↓ Load disk history",
   "history.loading": "Loading…",

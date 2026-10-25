@@ -2381,6 +2381,10 @@ function initTabPage(pageRoot) {
   }
   // 端口下拉按本页 root 填充（不能用 getElementById：每个标签页都有一份同 id）
   _populateTabPortSelects(pageRoot);
+  // 自绘滚动条（原生条已隐藏），只反映真实内容
+  if (typeof initDisplayScrollbar === 'function') {
+    initDisplayScrollbar(pageRoot.querySelector('#displayContent'));
+  }
 }
 
 // 按 root 作用域填充端口下拉：portSelect / portSelectA / portSelectB。
