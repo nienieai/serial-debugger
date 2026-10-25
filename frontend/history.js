@@ -476,6 +476,17 @@ function initDisplayScrollbar(display) {
   }
 
   display._syncScrollbar = sync;
+  display._scrollbarTrack = track;
+
+  // 轨道的上沿不能进到浮动配置栏底下：配置栏是 absolute 叠在内容上的，
+  // 轨道默认 top:6px 会从配置栏底边钻出来（截图里就是"滚动条跑到上面去了"）。
+  display._syncScrollbarInset = function() {
+    var page = display.closest('.tab-page');
+    var cfg = page ? page.querySelector('.config-bar') : null;
+    var h = cfg ? Math.round(cfg.getBoundingClientRect().height) : 44;
+    track.style.top = (h + 6) + 'px';
+  };
+  display._syncScrollbarInset();
 
   thumb.addEventListener('pointerdown', function(e) {
     e.preventDefault();

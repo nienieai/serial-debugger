@@ -4402,6 +4402,7 @@ function applySendRatio() {
     displayArea.style.flex = '1 1 0px';
     displayArea.style.minHeight = '';
     displayArea.classList.remove('is-hidden');
+    displayArea.classList.remove('is-collapsed');
     sendArea.style.display = 'none';
     sendArea.classList.remove('is-hidden');
     if (divider) divider.style.display = 'none';
@@ -4437,4 +4438,9 @@ function applySendRatio() {
   if (dc && !state.scrollLocked && typeof _frozen !== 'undefined' && !_frozen) {
     dc.scrollTop = dc.scrollHeight;
   }
+  // 压到只剩配置栏那么高时，把显示区里的按钮/数据流/滚动条整体收起来：
+  // 否则它们会从浮动配置栏的模糊层后面透出来（截图里的"数据流/按键没隐藏"）。
+  var dispH = Math.round(displayArea.getBoundingClientRect().height);
+  displayArea.classList.toggle('is-collapsed', dispH <= reserve + 4);
+  if (dc && typeof dc._syncScrollbarInset === 'function') dc._syncScrollbarInset();
 }
