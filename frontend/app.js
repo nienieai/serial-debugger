@@ -319,8 +319,11 @@ function _renderSendMirrorHex(text, container) {
   }
   if (cur) tokens.push(cur);
   // Render tokens
-  for (var t = 0; t < tokens.length; t++) {
-    var tok = tokens[t];
+  // 注意循环变量不能叫 t：var 会提升到整个函数作用域，把上面的 i18n t() 顶掉，
+  // 于是「内容为空 → 显示占位符」那条分支会抛 TypeError: t is not a function，
+  // 表现就是切到 Hex 后镜像层不刷新、按钮文案也不更新（旧文本残留）。
+  for (var ti = 0; ti < tokens.length; ti++) {
+    var tok = tokens[ti];
     if (tok === ' ' || tok === ',' || tok === '\r' || tok === '\n') {
       frag.appendChild(document.createTextNode(tok));
     } else if (tok === '0x' || tok === '0X') {
