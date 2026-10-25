@@ -421,10 +421,7 @@ async function setEncoding(enc) {
     }
   }
   // Re-render active tab
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
 }
 
 // ---- alert helper ----
@@ -3210,6 +3207,18 @@ function updateOpenBtn() {
   pageEl('btnSend').disabled = !(tab.portOpen && activeMode() === 'single');
 }
 
+// 切换显示模式后重绘历史：冻结/回看时保持原来的窗口与滚动位置，
+// 否则用户往回翻出来看的那一段会突然被拽回最新一条（未读提示也随之消失）。
+function _rerenderHistoryKeepingView() {
+  var tab = getActiveTab();
+  if (!tab || !tab.sessionId || !state.historyCache[tab.sessionId]) return;
+  var display = pageEl('displayContent');
+  var keep = !!_frozen;
+  var st = display ? display.scrollTop : 0;
+  renderHistoryLines(state.historyCache[tab.sessionId], keep);
+  if (display && keep) display.scrollTop = st;
+}
+
 // ---- display ----
 
 // 把当前的显示模式写回标签页自己的副本。
@@ -3243,10 +3252,7 @@ function toggleDisplayMode() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
@@ -3335,10 +3341,7 @@ function toggleP1Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
 }
 
 function toggleP2Display() {
@@ -3356,10 +3359,7 @@ function toggleP2Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
 }
 
 function toggleSendFormat() {
@@ -3554,10 +3554,7 @@ function toggleCrVisible() {
   state.crVisible = !state.crVisible;
   updateTextMenu();
   // Re-render to show/hide CR bubbles
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
@@ -3579,20 +3576,14 @@ function setHexEscapeMode(mode) {
   state.hexEscapeMode = mode;
   _updateHexEscFmtRow();
   updateTextMenu();
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
 function setHexEscapeFormat(fmt) {
   if (state.hexEscapeFormat === fmt) return;
   state.hexEscapeFormat = fmt;
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 

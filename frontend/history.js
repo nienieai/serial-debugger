@@ -41,6 +41,7 @@ var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
 var _atBottom = true;  // 用户是否贴着底部
 var _frozen = false;   // 冻结：锁定滚动，或用户往回翻离开了底部
 var _spacer = null;    // 未读区占位块
+var _healing = false;  // _syncSpacer 触发自愈重绘时的递归挡板
 var _appendQueue = []; // 待渲染队列
 var _flushScheduled = false;
 var _flushTimer = null;
@@ -359,9 +360,24 @@ function _stickToBottom(display) {
 }
 
 // 只裁剪数据行，不碰提示行与占位块；始终执行（无论是否锁定/冻结）
-function _trimToWindow(display, win) {
+//
+// fromBottom：往上翻加载更早时，新行插在**顶部**，超出的部分要从**底部**裁。
+// 此前一律从顶部裁，于是刚插进去的那批又被自己删掉（_renderStart 反而被加回
+// 原值），表现为「滚到顶加载更早，画面纹丝不动」。
+function _trimToWindow(display, win, fromBottom) {
   var rows = display.querySelectorAll('.data-row');
   var excess = rows.length - win;
+  if (excess <= 0) return;
+  if (fromBottom) {
+    for (var b = 0; b < excess; b++) {
+      var tail = rows[rows.length - 1 - b];
+      if (!tail || !tail.parentNode) continue;
+      tail.parentNode.removeChild(tail);
+    }
+    var kept = rows.length - excess;
+    _renderEnd = Math.max(_renderStart + kept, _renderStart);
+    return;
+  }
   for (var i = 0; i < excess; i++) {
     var el = rows[i];
     if (!el || !el.parentNode) continue;
@@ -392,6 +408,21 @@ function _syncSpacer(display) {
   var hidden = (entries && _renderEnd >= 0) ? Math.max(0, entries.length - _renderEnd) : 0;
   if (!_frozen || hidden <= 0) { _removeSpacer(); return; }
 
+  // 防御：冻结时视图里必须还有内容。占位块的用途是「撑住已冻结的那一屏」，
+  // 一旦数据行被缓存裁剪 / 切页 / 异常路径删光，它就变成整屏空白（现象：
+  // 只剩「↓ N 条未显示」）。这里按当前窗口重新渲染一次；用 _healing 挡住递归。
+  if (!_healing && display.querySelectorAll('.data-row').length === 0) {
+    _healing = true;
+    var prevTop = display.scrollTop;
+    try {
+      renderHistoryLines(entries, true);
+      display.scrollTop = prevTop;
+    } finally {
+      _healing = false;
+    }
+    return;
+  }
+
   if (!_spacer || !_spacer.parentNode) {
     _spacer = document.createElement('div');
     _spacer.className = 'sys-msg hist-spacer';
@@ -399,9 +430,16 @@ function _syncSpacer(display) {
   }
   _spacer.setAttribute('data-sys-raw', '');
   _spacer.textContent = '── ' + t('history.unseen', '↓ %s 条未显示').replace('%s', hidden) + ' ──';
-  // 高度按实测平均行高估算：视图不动，但滚动条的变化幅度与方向都对
+  // 高度按实测平均行高估算：视图不动，但滚动条的变化幅度与方向都对。
+  //
+  // 上限是**一屏**：占位块再高就会变成一块可以滚进去的死空白 —— 实测「有数据
+  // 时上滚一下、再下滚」正好落进这块空区域，画面上什么都没有，只有居中的
+  // 「↓ N 条未显示」，而且因为 scrollHeight 被撑得很长，永远判不成「到底」，
+  // 也就永远不会解冻。截到一屏后：滚动条仍会随未读数变长，往下滚一屏就能
+  // 回到真实内容底部并解除冻结。
   var h = Math.round(hidden * _avgRowHeight(display));
-  _spacer.style.height = Math.min(h, 8000000) + 'px';
+  var cap = Math.max(120, display.clientHeight || 400);
+  _spacer.style.height = Math.min(h, cap) + 'px';
 }
 
 function _removeSpacer() {
@@ -475,7 +513,9 @@ function renderHistoryLines(entries, keepScroll) {
   }
   display.appendChild(fragment);
 
-  _frozen = !!state.scrollLocked;
+  // keepScroll 表示这是「在原有窗口上重绘」（切显示模式等）：此时不要把用户
+  // 往回翻出来的冻结状态清掉，否则一换模式就被拽回最新一条、未读提示也消失。
+  _frozen = !!state.scrollLocked || (!!keepScroll && _frozen);
   _atBottom = !_frozen;
   if (!keepScroll) {
     display.scrollTop = 1e9;
@@ -505,7 +545,13 @@ function _needsLoadOlderTip(entries) {
 function _onDisplayScroll() {
   var display = pageEl('displayContent');
   if (!display) return;
-  var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
+  // 「到底了没有」要按**真实内容**的底部算，不能按 scrollHeight —— 未读占位块
+  // 是一段很高的空区域，往下滚会滚进它里面：那里没有任何数据行，画面就是空白，
+  // 而 scrollHeight 又因为占位块变长，永远判断不成「到底」，于是永远不解冻。
+  // 这正是「有数据来时上滚一下再下滚 → 只剩『↓ N 条未显示』」的成因。
+  var spacerH = _spacer ? _spacer.offsetHeight : 0;
+  var realBottom = display.scrollHeight - spacerH;
+  var atBottom = display.scrollTop + display.clientHeight >= realBottom - 4;
   var wasFrozen = _frozen;
   _atBottom = atBottom;
   var shouldFreeze = !!state.scrollLocked || !atBottom;
@@ -597,7 +643,7 @@ function expandHistory(entries) {
 
   // 窗口有上界：往上加就要从下方裁（裁掉的行数由占位块记着，
   // 所以往下滚时它们仍在缓存里，且滚动条高度不撒谎）
-  _trimToWindow(display, win);
+  _trimToWindow(display, win, true);
   display.scrollTop = Math.max(0, display.scrollHeight - prevHeight);
   _syncSpacer(display);
 }
