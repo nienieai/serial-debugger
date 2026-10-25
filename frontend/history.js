@@ -440,25 +440,31 @@ function _updateUnreadChrome(display) {
   _syncCustomScrollbar(display);
 }
 
-// 自绘滚动条：原生条隐藏（CSS），轨道与滑块只按真实内容计算。
-function initDisplayScrollbar(display) {
-  if (!display) return;
-  _initSelectionBackdropToggle();
-  var host = display.parentNode;
+// 自绘滚动条（显示区与发送框共用同一套外观）。
+// 原生条隐藏（CSS），轨道与滑块只按真实内容计算；opts:
+//   className  额外类名（发送框用 is-send）
+//   top        轨道上沿（像素）；不给就按配置栏高度算，避免钻到浮动栏底下
+//   onRelease  松手回调（显示区用它解冻）
+function _initOverlayScrollbar(box, opts) {
+  if (!box) return;
+  opts = opts || {};
+  var host = box.parentNode;
   if (!host || host.querySelector('.hist-scrollbar')) return;
 
   var track = document.createElement('div');
-  track.className = 'hist-scrollbar';
+  track.className = 'hist-scrollbar' + (opts.className ? ' ' + opts.className : '');
   var thumb = document.createElement('div');
   thumb.className = 'hist-scrollbar-thumb';
   track.appendChild(thumb);
   host.appendChild(track);
 
+  if (typeof opts.top === 'number') track.style.top = opts.top + 'px';
+
   var drag = null;
 
   function metrics() {
-    var sh = Math.max(1, display.scrollHeight);
-    var ch = display.clientHeight;
+    var sh = Math.max(1, box.scrollHeight);
+    var ch = box.clientHeight;
     var trackH = Math.max(1, track.clientHeight);
     var th = Math.min(trackH, Math.max(24, Math.round(trackH * (ch / sh))));
     return { sh: sh, ch: ch, trackH: trackH, th: th };
@@ -470,45 +476,41 @@ function initDisplayScrollbar(display) {
     track.style.display = '';
     thumb.style.height = m.th + 'px';
     var maxTop = m.trackH - m.th;
-    var top = (display.scrollTop / Math.max(1, m.sh - m.ch)) * maxTop;
+    var top = (box.scrollTop / Math.max(1, m.sh - m.ch)) * maxTop;
     thumb.style.transform = 'translateY(' + Math.max(0, Math.min(maxTop, top)) + 'px)';
-    thumb.classList.toggle('is-frozen', !!_frozen);
+    if (opts.frozenClass) thumb.classList.toggle('is-frozen', !!_frozen);
   }
 
-  display._syncScrollbar = sync;
-  display._scrollbarTrack = track;
+  box._syncScrollbar = sync;
+  box._scrollbarTrack = track;
 
-  // 轨道的上沿不能进到浮动配置栏底下：配置栏是 absolute 叠在内容上的，
-  // 轨道默认 top:6px 会从配置栏底边钻出来（截图里就是"滚动条跑到上面去了"）。
-  display._syncScrollbarInset = function() {
-    var page = display.closest('.tab-page');
-    var cfg = page ? page.querySelector('.config-bar') : null;
-    var h = cfg ? Math.round(cfg.getBoundingClientRect().height) : 44;
-    track.style.top = (h + 6) + 'px';
-  };
-  display._syncScrollbarInset();
+  if (typeof opts.top !== 'number') {
+    // 轨道的上沿不能进到浮动配置栏底下：配置栏是 absolute 叠在内容上的，
+    // 轨道默认 top:6px 会从配置栏底边钻出来。
+    box._syncScrollbarInset = function() {
+      var page = box.closest('.tab-page');
+      var cfg = page ? page.querySelector('.config-bar') : null;
+      var h = cfg ? Math.round(cfg.getBoundingClientRect().height) : 44;
+      track.style.top = (h + 6) + 'px';
+    };
+    box._syncScrollbarInset();
+  }
 
   thumb.addEventListener('pointerdown', function(e) {
     e.preventDefault();
     e.stopPropagation();
     try { thumb.setPointerCapture(e.pointerId); } catch (err) {}
-    drag = { y: e.clientY, top: display.scrollTop };
+    drag = { y: e.clientY, top: box.scrollTop };
   });
   thumb.addEventListener('pointermove', function(e) {
     if (!drag) return;
     var m = metrics();
     var ratio = (m.sh - m.ch) / Math.max(1, m.trackH - m.th);
-    display.scrollTop = drag.top + (e.clientY - drag.y) * ratio;
+    box.scrollTop = drag.top + (e.clientY - drag.y) * ratio;
   });
   function endDrag() {
     drag = null;
-    // 拖到底（或拖回底部附近）时立刻恢复跟随，不等下一次数据到达。
-    // 否则松手后画面还停在冻结状态，看起来像"滚不动了"。
-    var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
-    if (atBottom && !state.scrollLocked && _frozen) {
-      _frozen = false;
-      renderHistoryLines(_activeCache());
-    }
+    if (typeof opts.onRelease === 'function') opts.onRelease();
   }
   thumb.addEventListener('pointerup', endDrag);
   thumb.addEventListener('pointercancel', endDrag);
@@ -517,14 +519,37 @@ function initDisplayScrollbar(display) {
   track.addEventListener('pointerdown', function(e) {
     if (e.target === thumb) return;
     var before = thumb.getBoundingClientRect().top + thumb.offsetHeight / 2;
-    display.scrollTop += (e.clientY < before) ? -display.clientHeight * 0.9 : display.clientHeight * 0.9;
+    box.scrollTop += (e.clientY < before) ? -box.clientHeight * 0.9 : box.clientHeight * 0.9;
   });
 
-  display.addEventListener('scroll', sync);
+  box.addEventListener('scroll', sync);
+  // 输入改变高度时不一定触发 scroll（比如光标在顶部），补一次
+  box.addEventListener('input', sync);
   if (window.ResizeObserver) {
-    try { new ResizeObserver(sync).observe(display); } catch (err) {}
+    try { new ResizeObserver(sync).observe(box); } catch (err) {}
   }
   sync();
+}
+
+function initDisplayScrollbar(display) {
+  if (!display) return;
+  _initSelectionBackdropToggle();
+  _initOverlayScrollbar(display, {
+    frozenClass: true,
+    onRelease: function() {
+      // 拖到底（或拖回底部附近）时立刻恢复跟随，不等下一次数据到达。
+      var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
+      if (atBottom && !state.scrollLocked && _frozen) {
+        _frozen = false;
+        renderHistoryLines(_activeCache());
+      }
+    },
+  });
+}
+
+// 发送框滚动条：与显示区同一套外观，上沿从工具栏底边（40px）开始。
+function initSendScrollbar(box) {
+  _initOverlayScrollbar(box, { className: 'is-send', top: 40 });
 }
 
 function _syncCustomScrollbar(display) {

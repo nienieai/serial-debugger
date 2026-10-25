@@ -864,16 +864,12 @@ button:disabled:active { transform: none; box-shadow: none; }
    必须显式写 none —— 不写的话浏览器会补一个默认的焦点环。 */
 #sendInput:focus { outline: none; }
 
-/* 发送框滚动条：宽到能抓住（原来 0 宽，等于没有）。
-   关键是不能破坏「textarea 与镜像层逐格同宽」：
-   textarea 用 scrollbar-gutter: stable 始终预留 10px，镜像层右 padding 补成
-   12 + 10 = 22px，两者内容宽度才一致。镜像层自己的滚动条藏掉（它 pointer-events
-   为 none，本来也拖不动）。 */
-#sendInput { scrollbar-gutter: stable; scrollbar-width: auto; }
-#sendInput::-webkit-scrollbar { width: 10px; height: 10px; }
-#sendInput::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
-#sendInput::-webkit-scrollbar-track { background: transparent; }
-.send-input-mirror { padding-right: 22px; scrollbar-width: none; }
+/* 发送框滚动条：与显示区共用同一套自绘外观（`.hist-scrollbar`），所以原生条
+   一律藏掉。这样两者宽度/颜色/圆角完全一致，且轨道上沿由 JS 设成 40px
+   （工具栏底边），不会钻到工具栏底下。 */
+#sendInput { scrollbar-width: none; }
+#sendInput::-webkit-scrollbar { width: 0; height: 0; }
+.send-input-mirror { padding-right: 12px; scrollbar-width: none; }
 .send-input-mirror::-webkit-scrollbar { width: 0; height: 0; }
 #sendInfo { font-size: 12px; color: var(--placeholder); white-space: nowrap; min-width: 80px; flex-shrink: 0; text-align: right; }
 [dir="rtl"] #sendInfo { text-align: left; }

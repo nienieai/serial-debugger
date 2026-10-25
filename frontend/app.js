@@ -2385,6 +2385,9 @@ function initTabPage(pageRoot) {
   if (typeof initDisplayScrollbar === 'function') {
     initDisplayScrollbar(pageRoot.querySelector('#displayContent'));
   }
+  if (typeof initSendScrollbar === 'function') {
+    initSendScrollbar(pageRoot.querySelector('#sendInput'));
+  }
 }
 
 // 按 root 作用域填充端口下拉：portSelect / portSelectA / portSelectB。
