@@ -873,9 +873,16 @@ button:disabled:active { transform: none; box-shadow: none; }
   position: absolute; bottom: 0; left: 0; right: 0; z-index: 3;
   display: flex; gap: 6px; padding: 8px 8px 4px 8px;
 }
-.c-fwd-display .c-fwd-float-btns::before {
+/* 浮动按钮条的垫底：模糊优先，模糊不可用时退回渐变遮罩。
+   以前只写了 backdrop-filter，且只在 .c-fwd-display 下生效 —— 一旦模糊层没
+   渲染（软件合成/层叠上下文变化），按钮就直接压在数据行上，文字全透出来。 */
+.c-fwd-float-btns::before {
   content: ''; position: absolute; inset: 0; z-index: -1;
   backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  background: linear-gradient(to top,
+    color-mix(in srgb, var(--input-bg) 88%, transparent) 0%,
+    color-mix(in srgb, var(--input-bg) 55%, transparent) 55%,
+    transparent 100%);
   mask-image: linear-gradient(to top, black 75%, transparent 100%);
   -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
 }
