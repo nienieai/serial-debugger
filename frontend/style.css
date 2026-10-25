@@ -860,7 +860,9 @@ button:disabled:active { transform: none; box-shadow: none; }
   white-space: pre-wrap; word-break: break-all; overflow-wrap: break-word;
 }
 #sendInput::placeholder { color: transparent; }
-#sendInput:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+/* 发送框不画焦点框：光标本身已经能说明焦点在哪，1px 描边只是噪音。
+   必须显式写 none —— 不写的话浏览器会补一个默认的焦点环。 */
+#sendInput:focus { outline: none; }
 
 /* 发送框滚动条：宽到能抓住（原来 0 宽，等于没有）。
    关键是不能破坏「textarea 与镜像层逐格同宽」：
