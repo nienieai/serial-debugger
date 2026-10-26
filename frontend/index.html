@@ -14,7 +14,7 @@
       <div class="menu-item">
         <span class="menu-label">文件</span>
         <div class="menu-dropdown">
-          <button id="menuNewSession" onclick="addTab()"><span class="menu-chk"></span><span class="menu-text">新建会话</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
+          <button id="menuNewSession" onclick="openNewSessionTab()"><span class="menu-chk"></span><span class="menu-text">新建会话</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
           <button id="menuCloseSession" onclick="closeCurrentTab()"><span class="menu-chk"></span><span class="menu-text">关闭会话</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
           <div class="menu-sep"></div>
           <button id="menuAutoSaveHistory" onclick="toggleAutoSaveHistory()"><span class="menu-chk chk on"></span><span class="menu-text">自动保存历史</span><span class="menu-shortcut"></span><span class="menu-arrow"></span></button>
@@ -104,8 +104,14 @@
   </div>
 
   <div class="tabs-bar" id="tabsBar">
-    <div class="tabs-scroll" id="tabsScroll"></div>
-    <button class="tab-btn tab-new" id="tabAddBtn" onclick="addTab()" data-i18n-title="tooltip.new_tab" title="新建会话">+</button>
+    <!-- 视口包一层：箭头必须绝对定位在滚动容器**之外**，放进 .tabs-scroll 里会
+         随内容一起滚走；这样也不用在 JS 里算 + 按钮的宽度 -->
+    <div class="tabs-viewport">
+      <div class="tabs-scroll" id="tabsScroll"></div>
+      <span class="send-scroll-arrow tabs-scroll-arrow tabs-scroll-arrow--left is-hidden" aria-hidden="true">‹</span>
+      <span class="send-scroll-arrow tabs-scroll-arrow tabs-scroll-arrow--right is-hidden" aria-hidden="true">›</span>
+    </div>
+    <button class="tab-btn tab-new" id="tabAddBtn" onclick="openNewSessionTab()" data-i18n-title="tooltip.new_tab" title="新建会话">+</button>
   </div>
 
   <div class="main-content" id="mainContent"></div>

@@ -308,8 +308,11 @@ function _renderSendMirrorHex(text, container) {
     } else if (ch === ' ' || ch === ',') {
       if (cur) { tokens.push(cur); cur = ''; }
       tokens.push(ch);
-    } else if (ch === '0' && i + 2 < text.length && (text[i+1] === 'x' || text[i+1] === 'X')) {
+    } else if (ch === '0' && i + 1 < text.length && (text[i+1] === 'x' || text[i+1] === 'X')) {
       // 0x / 0X — push as display token preserving case
+      // 边界是 i+1（不是 i+2）：原写成 i+2 < length 时，紧贴末尾的「AA0x」里的
+      // 0x 不被当作前缀，整段并进 hex token → 含 x 判非法 → 整段标红（假红灯），
+      // 而 _normalizeHexInput 会把 0x 剥掉、实际能发出去（TODO #48）。
       if (cur) { tokens.push(cur); cur = ''; }
       tokens.push(text[i+1] === 'X' ? '0X' : '0x');
       i += 1; // skip the x/X
@@ -319,8 +322,11 @@ function _renderSendMirrorHex(text, container) {
   }
   if (cur) tokens.push(cur);
   // Render tokens
-  for (var t = 0; t < tokens.length; t++) {
-    var tok = tokens[t];
+  // 注意循环变量不能叫 t：var 会提升到整个函数作用域，把上面的 i18n t() 顶掉，
+  // 于是「内容为空 → 显示占位符」那条分支会抛 TypeError: t is not a function，
+  // 表现就是切到 Hex 后镜像层不刷新、按钮文案也不更新（旧文本残留）。
+  for (var ti = 0; ti < tokens.length; ti++) {
+    var tok = tokens[ti];
     if (tok === ' ' || tok === ',' || tok === '\r' || tok === '\n') {
       frag.appendChild(document.createTextNode(tok));
     } else if (tok === '0x' || tok === '0X') {
@@ -418,10 +424,7 @@ async function setEncoding(enc) {
     }
   }
   // Re-render active tab
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
 }
 
 // ---- alert helper ----
@@ -826,9 +829,6 @@ function applyI18n() {
   // Settings button
   var bs = pageEl('btnSettings');
   if (bs) bs.title = t('btn.settings', '详细设置');
-  // Mode toggle
-  var bm = pageEl('btnModeToggle');
-  if (bm) bm.textContent = (activeMode() === 'forward') ? ('↔ ' + t('btn.forward', '端口转发')) : ('⇄ ' + t('btn.single', '单端口'));
   // Display toggle
   var bd = pageEl('btnToggleDisplay');
   if (bd) {
@@ -958,7 +958,6 @@ function applyI18n() {
 
 function updateToggleSizers() {
   var btns = [
-    { id: 'btnModeToggle', a: '⇄ ' + t('btn.single','单端口'), b: '↔ ' + t('btn.forward','端口转发') },
     { id: 'btnToggleDisplay', a: '⇃ ' + t('display.rx_text_short','字'), b: '⇃ ' + t('display.rx_hex_short','H') },
     { id: 'btnToggleSend', a: '↾ ' + t('display.tx_text_short','字'), b: '↾ ' + t('display.tx_hex_short','H') },
     { id: 'btnSendQuick', a: t('send.tx_text_short','字'), b: t('send.tx_hex_short','H') },
@@ -1036,43 +1035,12 @@ function updateFwdBtns() {
   }
 }
 
-async function toggleMode() {
-  const tab = getActiveTab();
-  if (!tab || !tab.sessionId) return;
-
-  if (tab.portOpen) {
-    showAlert(t('confirm.title','提示'), t('serial.close_first','请先关闭所有串口连接再切换模式'));
-    return;
-  }
-
-  const newMode = tab.mode === 'forward' ? 'single' : 'forward';
-
-  if (!state.daemonOnline) {
-    tab.mode = newMode;
-    state.currentMode = newMode;
-    updateModeUI();
-    return;
-  }
-
-  try {
-    await window.go.main.App.SetProcessMode(tab.sessionId, newMode);
-    tab.mode = newMode;
-    state.currentMode = newMode;
-    tab.label = newMode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
-    updateModeUI();
-    updateOpenBtn();
-    renderTabs();
-  } catch (e) {
-    showAlert(t('cli.error','错误'), t('serial.mode_fail','切换模式失败: ') + e);
-  }
-}
-
 function updateModeUI() {
-  // Settings tab has no port UI — bail out early
   var activeTab = getActiveTab();
-  if (activeTab && activeTab.type === 'settings') return;
+  // 设置页 / 新建选择页都没有端口 UI：直接返回，避免 pageEl 走到全局回退
+  // 去操作第一个标签页的元素（见 TODO #64 / #68）。
+  if (activeTab && !isSessionTab(activeTab)) return;
 
-  const btn = pageEl('btnModeToggle');
   const singleRow = pageEl('singlePortRow');
   const forwardRow = pageEl('forwardPortRow');
   const sendArea = pageEl('sendArea');
@@ -1088,7 +1056,6 @@ function updateModeUI() {
   var fwdMarkers = fwdBtns ? fwdBtns.querySelectorAll('.is-hidden-fwd') : [];
 
   if (mode === 'forward') {
-    if (btn) { btn.textContent = '↔ ' + t('btn.forward', '端口转发'); btn.classList.add('is-forward'); }
     if (singleRow) singleRow.classList.add('is-hidden');
     if (forwardRow) forwardRow.classList.remove('is-hidden');
     if (sendArea) sendArea.classList.add('is-hidden');
@@ -1104,7 +1071,6 @@ function updateModeUI() {
     singleMarkers.forEach(function(b) { b.classList.remove('is-hidden'); });
     fwdMarkers.forEach(function(b) { b.classList.add('is-hidden'); });
   } else {
-    if (btn) { btn.textContent = '⇄ ' + t('btn.single', '单端口'); btn.classList.remove('is-forward'); }
     if (singleRow) singleRow.classList.remove('is-hidden');
     if (forwardRow) forwardRow.classList.add('is-hidden');
     if (sendArea) sendArea.classList.remove('is-hidden');
@@ -1163,33 +1129,47 @@ function _csPortalCleanup() {
   if (_csResizeObserver) { _csResizeObserver.disconnect(); _csResizeObserver = null; }
 }
 
+// 下拉内容签名：值 + 显示文字 + option 上的类（占用高亮）+ 当前选中项。
+// 只用来判断「要不要重建」，所以用拼接字符串即可，N 只有几个到几十个。
+function _csOptionsSig(sel) {
+  var parts = [String(sel.selectedIndex)];
+  for (var i = 0; i < sel.options.length; i++) {
+    var o = sel.options[i];
+    parts.push(o.value + '\u0001' + (o.textContent || o.text || '') + '\u0001' + o.className);
+  }
+  return parts.join('\u0002');
+}
+
+// 刷新自定义下拉。
+//
+// 原实现每次调用都重拼 dd.innerHTML 并给每个 .cs-option 重新绑 mousedown，
+// 而这个函数在每个 <select> 上挂着 MutationObserver（childList+subtree+attributes），
+// 于是「切标签 / 开完串口 / 端口列表刷新」这类路径会放大成 3×N 次整表重建
+// （TODO #79 ①）。现在：① 内容签名没变就直接返回（只更新触发器文字）；
+// ② 点击用事件委托，一次绑定，重建后不用再绑。
 function _csRefresh(wrap) {
   var sel = wrap.querySelector('select');
-  var dd = wrap.querySelector('.cs-dropdown');
-  // Dropdown may have been portalled to body — look there too
-  if (!dd) dd = document.querySelector('.cs-dropdown.is-portalled');
   var trigText = wrap.querySelector('.cs-text');
   if (!sel || !trigText) return;
-  var html = '';
-  for (var i = 0; i < sel.options.length; i++) {
-    var opt = sel.options[i];
-    var cls = 'cs-option';
-    if (i === sel.selectedIndex) cls += ' is-selected';
-    if (opt.className) cls += ' ' + opt.className;
-    html += '<div class="' + cls + '" data-val="' + escHtml(opt.value) + '">' + escHtml(opt.textContent || opt.text) + '</div>';
+  var dd = wrap.querySelector('.cs-dropdown');
+  // 下拉打开时会被 portal 到 body；只有它确实属于这个 wrap 才认
+  if (!dd && _csOpen === wrap) dd = document.querySelector('.cs-dropdown.is-portalled');
+  var sig = _csOptionsSig(sel);
+  if (dd && dd._csSig !== sig) {
+    var html = '';
+    for (var i = 0; i < sel.options.length; i++) {
+      var opt = sel.options[i];
+      var cls = 'cs-option';
+      if (i === sel.selectedIndex) cls += ' is-selected';
+      if (opt.className) cls += ' ' + opt.className;
+      html += '<div class="' + cls + '" data-val="' + escHtml(opt.value) + '">' + escHtml(opt.textContent || opt.text) + '</div>';
+    }
+    dd.innerHTML = html;
+    dd._csSig = sig;
   }
-  dd.innerHTML = html;
   if (sel.selectedIndex >= 0) {
     trigText.textContent = sel.options[sel.selectedIndex].textContent || sel.options[sel.selectedIndex].text;
   }
-  dd.querySelectorAll('.cs-option').forEach(function(optEl) {
-    optEl.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      sel.value = optEl.dataset.val;
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-      _csClose(wrap);
-    });
-  });
 }
 
 function _csOpenDropdown(wrap) {
@@ -1278,6 +1258,16 @@ function initCustomSelect(sel) {
   var dd = document.createElement('div');
   dd.className = 'cs-dropdown';
   wrap.appendChild(dd);
+  // 选中项走事件委托：下拉重建（dd.innerHTML=…）之后不用再逐项绑 mousedown，
+  // 监听器挂在 dd 上跟着元素走（portal 到 body 也照样生效）。
+  dd.addEventListener('mousedown', function(e) {
+    var optEl = e.target && e.target.closest ? e.target.closest('.cs-option') : null;
+    if (!optEl || !dd.contains(optEl)) return;
+    e.preventDefault();
+    sel.value = optEl.dataset.val;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    _csClose(wrap);
+  });
 
   var isBaud = sel.classList.contains('baud-sel');
 
@@ -1587,6 +1577,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   initStatusBar();
+  bindTabsScroll();
   // Fetch version once
   window.go.main.App.GetVersion().then(function(v) { window._appVersion = v || '0.6.1'; document.title = '串口调试工具 v' + window._appVersion; }).catch(function() { window._appVersion = '0.6.1'; });
   // Create global overlays (moved from static HTML to JS)
@@ -1595,6 +1586,8 @@ window.addEventListener('DOMContentLoaded', () => {
   createThemeOverlay();
   if (typeof createSettingsOverlay === 'function') {
   createSettingsOverlay();
+  // 弹窗里的端口 / 波特率一改就同步到工具栏
+  _bindSettingsPortSync();
   // Initialize custom selects in settings overlay
   setTimeout(function() {
     var so = document.getElementById('settingsOverlay');
@@ -1635,6 +1628,7 @@ window.addEventListener('DOMContentLoaded', () => {
   } catch {}
 
   initDividerDrag();
+  startClientsRefresh();
   initQuickPanelDrag();
   initHistoryScroll();
   initMenuClick();
@@ -1872,7 +1866,7 @@ async function syncDaemonSessions(procData) {
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
   // autoCreateSession: add a local tab (no daemon process) when no tabs exist
   if (!suppress && state.autoCreateSession && daemonSessions.length === 0 && state.tabs.length === 0) {
-    await addTab(false);  // add tab without switching (switchTo=false)
+    await autoCreateIdleSession();  // 自动补一个单端口空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
     // 列表判断「会话还在不在」—— 列表一空，刚挂上去的 sessionId 立刻被当成已消失
@@ -2101,34 +2095,66 @@ function syncAutoSendState(daemonSessions) {
   }
 }
 
-function _markOccupied(selId) {
-  const sel = document.getElementById(selId);
+// 标注「已被其它标签页占用」的端口选项。
+// sel 是本页的 <select> 元素（不能用 id 查：多标签时每个页面各有一份同 id），
+// owner 是这个下拉所属的标签页 —— 前向模式下「自己另一个端口」不能算被别人占用。
+function _markOccupied(sel, owner) {
   if (!sel) return;
-  const tab = getActiveTab();
-  const myPort = (tab && tab.portOpen && tab.syncedParams) ? tab.syncedParams.portName : '';
-  const myPortB = (tab && tab.portOpen && tab.mode === 'forward' && tab.syncedParams) ? tab.syncedParams.forwardPortB : '';
-  // Extract individual ports for the active forward tab
+  const tab = owner || getActiveTab();
+  // Extract individual ports for this page's forward tab
   const myPorts = tab && tab.mode === 'forward' && tab.portOpen ? _forwardPorts(tab) : null;
+  const selId = sel.id;
+  let changed = false;
   for (let i = 0; i < sel.options.length; i++) {
     const opt = sel.options[i];
     const portName = opt.value;
-    if (!portName) { opt.className = ''; continue; }
     let occupied = false;
-    for (let j = 0; j < state.tabs.length; j++) {
-      if (j === state.activeTab) continue;
-      const t = state.tabs[j];
-      if (!t.portOpen || !t.syncedParams) continue;
-      if (_tabHasPort(t, portName)) { occupied = true; break; }
-    }
-    // In forward mode, mark own other port as occupied to prevent self-duplicate
-    if (!occupied && tab && tab.portOpen && tab.mode === 'forward' && myPorts) {
-      if ((selId === 'portSelectA' && portName === myPorts[1]) ||
-          (selId === 'portSelectB' && portName === myPorts[0])) {
-        occupied = true;
+    if (portName) {
+      for (let j = 0; j < state.tabs.length; j++) {
+        const t = state.tabs[j];
+        if (t === tab) continue;
+        if (!t.portOpen || !t.syncedParams) continue;
+        if (_tabHasPort(t, portName)) { occupied = true; break; }
+      }
+      // In forward mode, mark own other port as occupied to prevent self-duplicate
+      if (!occupied && myPorts) {
+        if ((selId === 'portSelectA' && portName === myPorts[1]) ||
+            (selId === 'portSelectB' && portName === myPorts[0])) {
+          occupied = true;
+        }
       }
     }
-    opt.className = occupied ? 'port-occupied' : '';
+    const want = occupied ? 'port-occupied' : '';
+    // 只在真的变了时写：这个 select 上挂着 MutationObserver（attributes: true），
+    // 无条件写 className 每次都会把整份下拉重建一遍（TODO #79 ①）。
+    if (opt.className !== want) {
+      opt.className = want;
+      changed = true;
+    }
   }
+  // 已渲染的下拉是一份 <div class="cs-option"> 副本，标完要同步过去，
+  // 否则得重新打开下拉才看得见（旧 bug 的次要原因）。
+  if (changed) _syncOccupiedDropdown(sel);
+}
+
+// 把 select 上的占用类同步到已渲染的 .cs-option 副本（按 option 值对齐，不重建 DOM）。
+function _syncOccupiedDropdown(sel) {
+  const wrap = sel.closest ? sel.closest('.cs-wrap') : null;
+  if (!wrap) return;
+  let dd = wrap.querySelector('.cs-dropdown');
+  // 下拉打开时会被 portal 到 body 上
+  if (!dd && _csOpen === wrap) dd = document.querySelector('.cs-dropdown.is-portalled');
+  if (!dd) return;
+  dd.querySelectorAll('.cs-option').forEach(function(item) {
+    let opt = null;
+    for (let i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === item.dataset.val) { opt = sel.options[i]; break; }
+    }
+    const want = !!opt && opt.className.indexOf('port-occupied') >= 0;
+    if (item.classList.contains('port-occupied') !== want) {
+      item.classList.toggle('port-occupied', want);
+    }
+  });
 }
 
 // Check if a tab uses the given port (handles both single and forward mode).
@@ -2151,10 +2177,14 @@ function _forwardPorts(t) {
   return [parts[0] || '', parts[1] || t.syncedParams.forwardPortB || ''];
 }
 
+// 每个标签页都有自己的三份端口下拉（同 id），必须按页 root 逐份标注。
 function updatePortOccupied() {
-  _markOccupied('portSelect');
-  _markOccupied('portSelectA');
-  _markOccupied('portSelectB');
+  state.tabs.forEach(function(tb) {
+    if (!tb || !tb._page || !tb._page.root || !tb._page.root.querySelector) return;
+    ['#portSelect', '#portSelectA', '#portSelectB'].forEach(function(spec) {
+      _markOccupied(tb._page.root.querySelector(spec), tb);
+    });
+  });
 }
 
 function _syncPortSelectsFromTab() {
@@ -2238,19 +2268,43 @@ function updateSyncIndicator() {
   const cliCount = stateClients.filter(c => c.source === 'cli').length;
   const mcpCount = stateClients.filter(c => c.source === 'mcp').length;
   if (_statusBar) _statusBar.updateClients({gui: guiCount, cli: cliCount, mcp: mcpCount});
+  // 悬停能看到具体是哪些会话，排查「计数和标签页对不上」时有用
+  var guiBadge = document.querySelector('.gui-badge');
+  if (guiBadge) {
+    guiBadge.title = stateClients
+      .filter(function(c) { return c.source === 'gui'; })
+      .map(function(c) { return (c.clientId || '?') + ' (PID ' + (c.pid || '?') + ')'; })
+      .join('\n');
+  }
 }
 
-// Returns true when the active "tab" is a real session tab (not settings/welcome).
-function _hasSessionTab() {
-  return isSessionTab(getActiveTab());
+// 客户端列表的权威刷新：clients-changed 是推送，个别情况下会漏（例如订阅那
+// 一刻的竞态），此时状态栏会一直显示旧的计数。每 5 秒拉一次兜底。
+function startClientsRefresh() {
+  setInterval(function() {
+    if (!state.daemonOnline) return;
+    try {
+      window.go.main.App.GetClients().then(function(list) {
+        if (Array.isArray(list)) {
+          stateClients = list;
+          updateSyncIndicator();
+        }
+      }).catch(function() {});
+    } catch (e) {}
+  }, 5000);
 }
 
-// Show/hide status-bar stats: visible only when daemon is online and the
-// active tab is a real session tab (not settings, not welcome).
+// 状态栏统计在会话页上**始终显示**（空闲会话显示 0，不隐藏）；只有设置页 /
+// 欢迎页 / 守护进程离线时才整块隐藏。
+// 数字是否可信交给 refreshStatsDOM：端口没连上就拿 0 顶掉，避免把上一次连接的
+// 数字（以及最后一次 stats-rate 事件的速率）一直挂在下面。
 function _updateStatsVisible() {
-  const vis = state.daemonOnline && _hasSessionTab();
+  const tab = getActiveTab();
+  const vis = state.daemonOnline && isSessionTab(tab);
   const el = document.getElementById('statusbar-stats');
   if (el) el.style.display = vis ? '' : 'none';
+  // 藏起来的同时清零：否则下一次显示会先闪一遍上次会话的残留数字
+  if (!vis && _statusBar) _statusBar.resetStats();
 }
 
 function updateDaemonUI() {
@@ -2362,12 +2416,17 @@ function updatePortList(ports) {
   }
   if (html !== state.lastPorts) {
     state.lastPorts = html;
-    _applyPortOptions('portSelect', html, t('status.select_port', '-- 选择端口 --'));
-    _applyPortOptions('portSelectA', html, t('status.port1', '-- 端口1 --'));
-    _applyPortOptions('portSelectB', html, t('status.port2', '-- 端口2 --'));
+    // 三个工具栏下拉不在这里填了：它们走 document.getElementById，多标签时只能
+    // 命中文档里**第一个**同名元素，于是除第一个标签页以外，其余页面的端口下拉
+    // 永远只剩占位符。统一交给下面的 _populateTabPortSelects 按页 root 填 ——
+    // 顺带省掉「第一页被填两遍」的那次多余重建（TODO #79 ①）。
+    // 设置弹窗里的两份是全文档唯一实例，仍用 id 定位。
     _applyPortOptions('portSelectASettings', html, t('status.port1', '-- 端口1 --'));
     _applyPortOptions('portSelectBSettings', html, t('status.port2', '-- 端口2 --'));
   }
+  state.tabs.forEach(function(tb) {
+    if (tb && tb._page && tb._page.root) _populateTabPortSelects(tb._page.root);
+  });
   updatePortOccupied();
 }
 
@@ -2407,16 +2466,32 @@ function initTabPage(pageRoot) {
     var scrollArea = pageRoot.querySelector('.send-scroll-area');
     if (scrollArea) bindSendScroll(scrollArea);
   }
-  // Populate port selects from cached port list (use pageRoot directly,
-  // not pageEl(), because this tab may not be the active one yet)
-  if (state.lastPorts) {
-    var selP = pageRoot.querySelector('#portSelect');
-    if (selP) _setPortOptions(selP, state.lastPorts, t('status.select_port', '-- 选择端口 --'));
-    var selA = pageRoot.querySelector('#portSelectA');
-    if (selA) _setPortOptions(selA, state.lastPorts, t('status.port1', '-- 端口1 --'));
-    var selB = pageRoot.querySelector('#portSelectB');
-    if (selB) _setPortOptions(selB, state.lastPorts, t('status.port2', '-- 端口2 --'));
+  // 端口下拉按本页 root 填充（不能用 getElementById：每个标签页都有一份同 id）
+  _populateTabPortSelects(pageRoot);
+  // 自绘滚动条（原生条已隐藏），只反映真实内容
+  if (typeof initDisplayScrollbar === 'function') {
+    initDisplayScrollbar(pageRoot.querySelector('#displayContent'));
   }
+  if (typeof initSendScrollbar === 'function') {
+    initSendScrollbar(pageRoot.querySelector('#sendInput'));
+  }
+}
+
+// 按 root 作用域填充端口下拉：portSelect / portSelectA / portSelectB。
+// 多标签时每个页面各有一份同 id 的 <select>，getElementById 只能拿到第一个，
+// 所以必须限定在 root 里查。
+function _populateTabPortSelects(root) {
+  if (!root || !root.querySelector || !state.lastPorts) return;
+  [
+    ['#portSelect', t('status.select_port', '-- 选择端口 --')],
+    ['#portSelectA', t('status.port1', '-- 端口1 --')],
+    ['#portSelectB', t('status.port2', '-- 端口2 --')],
+  ].forEach(function(spec) {
+    var sel = root.querySelector(spec[0]);
+    if (!sel) return;
+    _setPortOptions(sel, state.lastPorts, spec[1]);
+    _refreshCustomSelectFor(sel);
+  });
 }
 
 function _setPortOptions(sel, optionsHtml, placeholder) {
@@ -2432,58 +2507,168 @@ function _setPortOptions(sel, optionsHtml, placeholder) {
 // ---- tabs ----
 let _creatingTab = false;
 
-async function addTab(switchTo) {
-  // Cannot create tabs when daemon is offline — the tab would be a zombie
-  // with no sessionId and no ability to send/receive data.
+// 新建会话：先开一个「选择页」标签（两张调色盘卡片），选定模式之后才在守护
+// 进程里建空闲进程，并把这个标签页**原地**换成会话页 —— 所以直接关掉选择页
+// 不会留下孤儿进程（旧流程先把进程建出来再建页，关掉就漏了）。
+function openNewSessionTab() {
   if (!state.daemonOnline) return;
-  // Create idle process on daemon, then add a local tab for it.
-  // Use _creatingTab flag to prevent syncDaemonSessions from creating
-  // a duplicate tab when the process-changed event fires mid-await.
-  let sid = null;
-  if (state.daemonOnline) {
-    _creatingTab = true;
-    try { sid = await window.go.main.App.CreateIdleProcess(); } catch {}
+  // 已经有一个选择页就切过去，不重复开
+  var existing = state.tabs.findIndex(function(x) { return x.type === 'new'; });
+  if (existing >= 0) { switchTab(existing); return; }
+
+  var tab = {
+    id: state.tabCounter++,
+    label: t('newtab.title', '新建会话'),
+    type: 'new',
+    portOpen: false,
+    mode: 'single',
+    source: 'gui'
+  };
+  tab._page = createModeChooserPage();
+  var mc = document.getElementById('mainContent');
+  if (mc) mc.appendChild(tab._page.root);
+
+  var oldPage = getActivePage();
+  if (oldPage) oldPage.hide();
+  if (state._welcomePage) state._welcomePage.hide();
+
+  state.tabs.push(tab);
+  state.activeTab = state.tabs.length - 1;
+  tab._page.show();
+
+  renderTabs();
+  updateEmptyState();
+  updateOpenBtn();
+  updateSyncIndicator();
+  _updateStatsVisible();
+  updateDaemonUI();
+}
+
+// 在守护进程里建空闲进程；转发模式再把进程切成 forward。
+// 失败时把可能已经建出来的进程收掉，不留孤儿。
+async function _createIdleProcessOfMode(mode) {
+  var sid = null;
+  _creatingTab = true;
+  try {
+    sid = await window.go.main.App.CreateIdleProcess();
+    if (sid && mode === 'forward') {
+      await window.go.main.App.SetProcessMode(sid, 'forward');
+    }
+    return sid;
+  } catch (e) {
+    if (sid) { try { await window.go.main.App.CloseSession(sid); } catch (_) {} }
+    showAlert(t('cli.error', '错误'), t('serial.mode_fail', '切换模式失败: ') + e);
+    return null;
+  } finally {
     _creatingTab = false;
   }
-  // Check if syncDaemonSessions already created a tab for this process
-  if (sid && state.tabs.some(t => t.sessionId === sid)) {
-    if (switchTo !== false) {
-      state.activeTab = state.tabs.findIndex(t => t.sessionId === sid);
-      state.currentMode = 'single';
-      updateModeUI();
-      loadTabHistory();
-    }
-    updateEmptyState();
-    renderTabs();
-    updateOpenBtn();
-    updateSyncIndicator();
+}
+
+// 会话标签页的公共字段（选择页转换与自动建会话共用）。
+function _sessionTabDefaults(mode, id) {
+  var fwd = (mode === 'forward');
+  var tabId = (typeof id === 'number') ? id : state.tabCounter++;
+  return {
+    id: tabId,
+    label: fwd ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲'),
+    portOpen: false,
+    mode: fwd ? 'forward' : 'single',
+    source: 'gui',
+    // 新页沿用当前全局的显示模式（否则一旦发生 tabsChanged，同步会拿这里的
+    // 'text' 回填全局，把用户选好的 Hex 顶掉）
+    displayMode: state.displayMode || 'text',
+    txDisplayMode: state.txDisplayMode || 'text',
+    p1DisplayMode: state.p1DisplayMode || 'text',
+    p2DisplayMode: state.p2DisplayMode || 'text',
+    scrollLocked: false,
+    sendRatio: state.sendRatio || 0.3,
+    quickPanelRatio: state.quickPanelRatio,
+    quickPresets: []
+  };
+}
+
+// 选择页卡片被点：建进程 → 原地换成会话页。
+async function chooseNewSessionMode(mode) {
+  var tab = getActiveTab();
+  if (!tab || tab.type !== 'new') return;
+  if (!state.daemonOnline) return;
+  if (tab._choosing) return;   // 防连点：两次点击只建一个进程
+  tab._choosing = true;
+  _setChooserBusy(tab, true);
+
+  var sid = await _createIdleProcessOfMode(mode);
+  if (!sid) {
+    tab._choosing = false;
+    _setChooserBusy(tab, false);
     return;
   }
-  var newTab2 = { id: state.tabCounter++, label: t('tab.idle_single', '单端口空闲'), sessionId: sid, portOpen: false, mode: 'single', source: 'gui', displayMode: 'text', txDisplayMode: 'text', p1DisplayMode: 'text', p2DisplayMode: 'text', scrollLocked: false, sendRatio: state.sendRatio || 0.3, quickPanelRatio: state.quickPanelRatio, quickPresets: [] };
-  // 刚挂上会话的时刻：同步的第 3 步靠它避开「列表还没包含这个会话」的窗口期
-  //（此前只有 openPort / openForwardPorts 写过这个字段，addTab 没写 —— 于是
-  //  一次不含该会话的同步就能把刚建出来的会话清掉，见文件上方那条日志证据）。
-  if (sid) newTab2.connectedAt = Date.now();
-  newTab2._page = new TabPage(state.tabs.length, newTab2);
-  var mainContent2 = document.getElementById('mainContent');
-  if (mainContent2) { mainContent2.appendChild(newTab2._page.root); initTabPage(newTab2._page.root); }
-  state.tabs.push(newTab2);
-  // Start per-tab Go decode worker
-  if (sid && state.daemonOnline) {
-    window.go.main.App.StartTabDecoder(sid);
-    window.go.main.App.SetTabEncoding(sid, state.encoding);
+  _convertChooserToSession(tab, sid, mode);
+}
+
+function _setChooserBusy(tab, busy) {
+  if (!tab || !tab._page || !tab._page.root) return;
+  tab._page.root.classList.toggle('is-busy', !!busy);
+  var cards = tab._page.root.querySelectorAll('.c-mode-card');
+  for (var i = 0; i < cards.length; i++) cards[i].disabled = !!busy;
+}
+
+// 选择页 → 会话页：同一个标签、同一个下标，不新增标签页。
+function _convertChooserToSession(tab, sid, mode) {
+  var idx = state.tabs.indexOf(tab);
+  if (idx < 0) return;
+
+  var keepId = tab.id;
+  if (tab._page) { tab._page.hide(); tab._page.destroy(); }
+
+  var defaults = _sessionTabDefaults(mode, keepId);
+  for (var k in defaults) {
+    if (Object.prototype.hasOwnProperty.call(defaults, k)) tab[k] = defaults[k];
   }
-  if (switchTo !== false) {
-    // Hide currently visible page before switching
-    var oldPage = getActivePage();
-    if (oldPage) oldPage.hide();
-    if (state._welcomePage) state._welcomePage.hide();
-    state.activeTab = state.tabs.length - 1;
-    state.currentMode = 'single';
-    // Show new tab's page
-    if (newTab2._page) newTab2._page.show();
-    updateModeUI();
-    loadTabHistory();
+  delete tab.type;
+  delete tab._choosing;
+  tab.sessionId = sid;
+  // 刚挂上会话的时刻：同步第 3 步靠它避开「列表还没包含这个会话」的窗口期（TODO #74）
+  tab.connectedAt = Date.now();
+  tab._page = new TabPage(idx, tab);
+
+  var mc = document.getElementById('mainContent');
+  if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  tab._page.show();
+
+  if (state.daemonOnline) {
+    try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
+  }
+
+  state.activeTab = idx;
+  state.currentMode = tab.mode;
+  updateModeUI();
+  renderTabs();
+  updateOpenBtn();
+  updateSyncIndicator();
+  updateEmptyState();
+  loadTabHistory();
+}
+
+// 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
+// 这个时机用户不在交互中）。
+async function autoCreateIdleSession() {
+  if (!state.daemonOnline) return;
+  var sid = await _createIdleProcessOfMode('single');
+  if (!sid) return;
+  if (state.tabs.some(function(x) { return x.sessionId === sid; })) return;
+
+  var tab = _sessionTabDefaults('single');
+  tab.sessionId = sid;
+  tab.connectedAt = Date.now();
+  tab._page = new TabPage(state.tabs.length, tab);
+  var mc = document.getElementById('mainContent');
+  if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  state.tabs.push(tab);
+
+  if (state.daemonOnline) {
+    try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
   }
   updateEmptyState();
   renderTabs();
@@ -2491,21 +2676,26 @@ async function addTab(switchTo) {
   updateSyncIndicator();
 }
 
+
 function switchTab(idx) {
   var oldTab = getActiveTab();
   var newTab = state.tabs[idx];
   if (!newTab) return;
+  // 切到这一页时补齐端口下拉（页面可能在端口列表到达之前就建好了）
+  if (newTab._page && newTab._page.root) _populateTabPortSelects(newTab._page.root);
 
-  // Settings tab (in either direction): just show/hide, no per-tab state
-  if (newTab.type === 'settings' || (oldTab && oldTab.type === 'settings')) {
+  // 非会话标签页（设置页 / 新建选择页，任一方向）：只显示隐藏，不碰会话状态
+  if (!isSessionTab(newTab) || (oldTab && !isSessionTab(oldTab))) {
     if (oldTab && oldTab._page) oldTab._page.hide();
     state.activeTab = idx;
     if (newTab.type === 'settings') {
       if (newTab._page) { newTab._page.show(); renderSettingsThemeGrid(); renderSettingsIconGrid(); }
     } else if (newTab._page) {
       newTab._page.show();
-      loadTabHistory();
-      refreshStatsDOM();
+      if (isSessionTab(newTab)) {
+        loadTabHistory();
+        refreshStatsDOM();
+      }
     }
     updateModeUI();
     renderTabs();
@@ -2662,7 +2852,10 @@ function renderTabs() {
   state.tabs.forEach((t, i) => {
     if (t._page && t._page.isWelcome) return;  // skip welcome tab
     const btn = document.createElement('button');
-	    btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '') + (t.mode === 'forward' ? ' tab-forward' : '');
+    // 转发色只在**真的在转发**时加：`.tab-forward` 用 !important 压过 `.tab-idle`，
+    // 之前只要 mode=forward 就一直绿着，于是「端口转发空闲」看起来像在跑。
+    btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '')
+      + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
     if (!t.portOpen) btn.className += ' tab-idle';
     btn.draggable = true;
     btn.dataset.tabIdx = i;
@@ -2672,11 +2865,12 @@ function renderTabs() {
     btn.ondragend = () => { btn.classList.remove('tab-dragging'); _tabHideIndicator(); };
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
-    const tag = isSettings ? '' : (isFwd ? ' ↔' : '');
-    // Status dot (gear icon for settings)
+    const isChooser = (t.type === 'new');
+    const tag = (isSettings || isChooser) ? '' : (isFwd ? ' ↔' : '');
+    // Status dot (gear icon for settings, plus icon for the new-session page)
     const dot = document.createElement('span');
-    if (isSettings) {
-      dot.innerHTML = icon('settings', 14, 14);
+    if (isSettings || isChooser) {
+      dot.innerHTML = icon(isSettings ? 'settings' : 'plus', 14, 14);
       dot.style.cssText = 'display:flex;align-items:center;margin-right:2px;';
     } else {
       dot.className = 'tab-dot' + (t.portOpen ? ' live' : '');
@@ -2693,7 +2887,9 @@ function renderTabs() {
         const vb = document.createElement("span"); vb.style.cssText = "color:"+s[1]+";font-size:11px;font-weight:bold"; vb.textContent = cnt; btn.appendChild(vb);
       }
     });
-    if (t.syncedParams) {
+    if (isChooser) {
+      btn.title = window.t('newtab.hint', '选择一种模式开始');
+    } else if (t.syncedParams) {
       btn.title = `会话: ${t.label}
 数据位:${t.syncedParams.dataBits} 停止位:${t.syncedParams.stopBits} 校验:${t.syncedParams.parity}`;
     } else {
@@ -2720,6 +2916,9 @@ function renderTabs() {
     var bar = document.getElementById('tabsBar');
     if (bar) bar.appendChild(indicator);
   }
+  // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
+  // 变多而触发）—— 见 bindTabsScroll / TODO #26。
+  if (typeof _updateTabArrows === 'function') _updateTabArrows();
 }
 
 // ---- port open/close ----
@@ -2815,6 +3014,8 @@ async function openPort() {
     updatePortOccupied();
     renderTabs();
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0 };
+    refreshStatsDOM();
+    _updateStatsVisible();
     await mergeRingBuffer(tab.sessionId);
     appendSystemMsg(`串口已打开: ${cfg.port} @ ${cfg.baud}`);
     saveSettings();
@@ -2865,6 +3066,8 @@ async function openForwardPorts() {
     updatePortOccupied();
     renderTabs();
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
+    refreshStatsDOM();
+    _updateStatsVisible();
     await mergeRingBuffer(tab.sessionId);
     appendSystemMsg('端口转发已启动: ' + cfgA.port + ' ↔ ' + cfgB.port);
     saveSettings();
@@ -2881,16 +3084,21 @@ async function closePort() {
       await window.go.main.App.DisconnectSession(tab.sessionId);
     }
   } catch {}
-  refreshStatsDOM();
   await mergeRingBuffer(tab.sessionId);
   appendSystemMsg(t('sys.port_closed_label', '串口已关闭: %s').replace('%s', tab.label));
   tab.portOpen = false;
   tab.label = tab.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
   tab.syncedParams = null;
+  // 会话还在（空闲进程），但字节/速率是那次连接的，重连会从 0 重新计
+  delete state.statsBase[tab.sessionId];
   updateOpenBtn();
   updateSyncIndicator();
   updatePortOccupied();
   renderTabs();
+  // 关掉端口后统计区不隐藏，但数字要归零（此前只刷新字节，速率一直停在
+  // 最后一次 stats-rate 事件上，见 TODO #82）
+  refreshStatsDOM();
+  _updateStatsVisible();
 }
 
 function swapForwardPorts() {
@@ -2914,58 +3122,92 @@ function swapForwardPorts() {
   });
 }
 
-function _syncSettingsToBar() {
-  // Forward: sync settings popup → config bar
-  if (activeMode() === 'forward') {
-    const pairs = [
-      ['portSelectASettings', 'portSelectA'],
-      ['baudSelectASettings', 'baudSelectA'],
-      ['dataBitsSelectA', 'dataBitsSelectA'],
-      ['stopBitsSelectA', 'stopBitsSelectA'],
-      ['paritySelectA', 'paritySelectA'],
-      ['portSelectBSettings', 'portSelectB'],
-      ['baudSelectBSettings', 'baudSelectB'],
-      ['dataBitsSelectB', 'dataBitsSelectB'],
-      ['stopBitsSelectB', 'stopBitsSelectB'],
-      ['paritySelectB', 'paritySelectB'],
-    ];
-    pairs.forEach(([fromId, toId]) => {
-      const from = pageEl(fromId);
-      const to = pageEl(toId);
-      if (from && to && from.value) to.value = from.value;
-    });
-  } else {
-    // Single: sync settings popup → config bar
-    const pairs = [
-      ['baudSelect', 'baudSelect'],
-      ['dataBitsSelect', 'dataBitsSelect'],
-      ['stopBitsSelect', 'stopBitsSelect'],
-      ['paritySelect', 'paritySelect'],
-    ];
-  }
+// 串口详细设置 ↔ 工具栏 同步。
+//
+// 两边真正独立的只有转发的**端口与波特率**这四项：工具栏的转发行只有
+// P1/P2 的端口 + 波特率；数据位 / 停止位 / 校验位只存在于弹窗里，由
+// openForwardPorts 直接读弹窗元素，本来就不需要同步（同一份 DOM）。
+//
+// 赋值必须走 _applySelectValue：直接写 .value 既不是 attribute 变更、也不派发
+// change，自定义下拉框触发器上显示的文字不会跟着变（TODO #79 的同一个坑）；
+// 另外目标 <select> 里若没有这个选项，写 .value 会静默变成 selectedIndex=-1，
+// 触发器文字同样纹丝不动 —— 这两条叠在一起就是「改了详细设置、主页面没反应」。
+function _settingsSyncPairs() {
+  return [
+    ['portSelectASettings', 'portSelectA'],
+    ['baudSelectASettings', 'baudSelectA'],
+    ['portSelectBSettings', 'portSelectB'],
+    ['baudSelectBSettings', 'baudSelectB'],
+  ];
 }
 
-function _syncBarToSettings() {
-  // Forward: sync config bar → settings popup
-  if (activeMode() === 'forward') {
-    const pairs = [
-      ['portSelectA', 'portSelectASettings'],
-      ['baudSelectA', 'baudSelectASettings'],
-      ['dataBitsSelectA', 'dataBitsSelectA'],
-      ['stopBitsSelectA', 'stopBitsSelectA'],
-      ['paritySelectA', 'paritySelectA'],
-      ['portSelectB', 'portSelectBSettings'],
-      ['baudSelectB', 'baudSelectBSettings'],
-      ['dataBitsSelectB', 'dataBitsSelectB'],
-      ['stopBitsSelectB', 'stopBitsSelectB'],
-      ['paritySelectB', 'paritySelectB'],
-    ];
-    pairs.forEach(([fromId, toId]) => {
-      const from = document.getElementById(fromId);
-      const to = document.getElementById(toId);
-      if (from && to && from.value) to.value = from.value;
-    });
+// 把值写进 <select>：缺选项就补一个，然后无条件刷新触发器文字。
+function _applySelectValue(el, value) {
+  if (!el || value === undefined || value === null) return false;
+  var str = String(value);
+  var has = false;
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === str) { has = true; break; }
   }
+  if (!has) {
+    var opt = document.createElement('option');
+    opt.value = str;
+    opt.textContent = str;
+    el.appendChild(opt);
+  }
+  if (el.value !== str) el.value = str;
+  _refreshCustomSelectFor(el);
+  return true;
+}
+
+function _setSelectValue(id, value) {
+  var el = pageEl(id);
+  if (!el) {
+    // 只在真出问题时打一行：DevTools 在开发版里是开着的，便于定位
+    console.warn('[settings-sync] 工具栏元素不存在:', id);
+    return false;
+  }
+  return _applySelectValue(el, value);
+}
+
+function _refreshCustomSelectFor(el) {
+  var wrap = (el && el.closest) ? el.closest('.cs-wrap') : null;
+  if (wrap && typeof _csRefresh === 'function') _csRefresh(wrap);
+}
+
+// 弹窗 → 工具栏（关闭弹窗时兜底调用；改值时也会即时同步）
+function _syncSettingsToBar() {
+  if (activeMode() !== 'forward') return;
+  _settingsSyncPairs().forEach(function(pair) {
+    var from = document.getElementById(pair[0]);
+    if (from && from.value) _setSelectValue(pair[1], from.value);
+  });
+}
+
+// 工具栏 → 弹窗（打开弹窗时调用）
+function _syncBarToSettings() {
+  if (activeMode() !== 'forward') return;
+  _settingsSyncPairs().forEach(function(pair) {
+    var to = document.getElementById(pair[0]);
+    var from = pageEl(pair[1]);
+    if (!to || !from || !from.value) return;
+    _applySelectValue(to, from.value);
+  });
+}
+
+// 设置弹窗里改端口 / 波特率 / 数据位 / 停止位 / 校验位 → 立刻同步到工具栏
+function _bindSettingsPortSync() {
+  _settingsSyncPairs().forEach(function(pair) {
+    var from = document.getElementById(pair[0]);
+    if (!from) {
+      console.warn('[settings-sync] 弹窗元素不存在:', pair[0]);
+      return;
+    }
+    from.addEventListener('change', function() {
+      if (!from.value) return;
+      _setSelectValue(pair[1], from.value);
+    });
+  });
 }
 
 function openSettingsPage() {
@@ -3074,9 +3316,40 @@ function updateOpenBtn() {
   pageEl('btnSend').disabled = !(tab.portOpen && activeMode() === 'single');
 }
 
+// 切换显示模式后重绘历史：冻结/回看时保持原来的窗口与滚动位置，
+// 否则用户往回翻出来看的那一段会突然被拽回最新一条（未读提示也随之消失）。
+function _rerenderHistoryKeepingView() {
+  var tab = getActiveTab();
+  if (!tab || !tab.sessionId || !state.historyCache[tab.sessionId]) return;
+  var display = pageEl('displayContent');
+  var keep = !!_frozen;
+  var st = display ? display.scrollTop : 0;
+  renderHistoryLines(state.historyCache[tab.sessionId], keep);
+  if (display && keep) display.scrollTop = st;
+}
+
 // ---- display ----
+
+// 把当前的显示模式写回标签页自己的副本。
+//
+// state.*DisplayMode 只是「当前活动页」的镜像，每个标签页另有一份 tab.*DisplayMode。
+// 此前这份副本只在切标签时写（switchTab 的 oldTab.displayMode = ...），而
+// syncDaemonSessions 在会话状态变化时会**用副本回填全局**（tabsChanged 分支）——
+// 打开/关闭串口正好会让 portOpen / label 变化 -> tabsChanged -> 把用户刚切的
+// 文本/Hex 覆盖回旧值（表现为开关串口时显示样式跳变）。所以每次切换都要落盘。
+function _persistDisplayModes() {
+  var tab = getActiveTab();
+  if (!tab || !isSessionTab(tab)) return;
+  tab.displayMode = state.displayMode;
+  tab.txDisplayMode = state.txDisplayMode;
+  tab.p1DisplayMode = state.p1DisplayMode;
+  tab.p2DisplayMode = state.p2DisplayMode;
+  tab.scrollLocked = state.scrollLocked;
+}
+
 function toggleDisplayMode() {
   state.displayMode = state.displayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   const btn = pageEl('btnToggleDisplay');
   if (!btn) return;
   if (state.displayMode === 'hex') {
@@ -3088,10 +3361,7 @@ function toggleDisplayMode() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
@@ -3143,8 +3413,33 @@ function bindSendScroll(scrollArea) {
   updateArrows();
 }
 
+var _updateTabArrows = null;
+
+// 标签栏「还能往两边滚」的提示（TODO #26）。
+// 滚轮映射与拖拽在 DOMContentLoaded 里另有绑定，这里只负责箭头显隐；箭头本身
+// 复用发送区的 .send-scroll-arrow（绝对定位 + pointer-events:none，不吃布局）。
+function bindTabsScroll() {
+  var bar = document.getElementById('tabsBar');
+  var scroll = document.getElementById('tabsScroll');
+  if (!bar || !scroll) return;
+  var left = bar.querySelector('.tabs-scroll-arrow--left');
+  var right = bar.querySelector('.tabs-scroll-arrow--right');
+  if (!left || !right) return;
+  function update() {
+    var max = scroll.scrollWidth - scroll.clientWidth;
+    left.classList.toggle('is-hidden', scroll.scrollLeft <= 1);
+    right.classList.toggle('is-hidden', scroll.scrollLeft >= max - 1);
+  }
+  scroll.addEventListener('scroll', update, { passive: true });
+  if (typeof ResizeObserver === 'function') new ResizeObserver(update).observe(scroll);
+  window.addEventListener('resize', update);
+  _updateTabArrows = update;
+  update();
+}
+
 function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
+  _persistDisplayModes();
   updateScrollLockBtns();
   // 冻结/解冻与未读占位块由历史层负责（锁定时视图冻结，但滚动条仍随未读增长）
   if (typeof onScrollLockChanged === 'function') onScrollLockChanged();
@@ -3166,6 +3461,7 @@ function updateScrollLockBtns() {
 
 function toggleP1Display() {
   state.p1DisplayMode = state.p1DisplayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   const btn = pageEl('btnP1Display');
   if (btn) {
     if (state.p1DisplayMode === 'hex') {
@@ -3178,14 +3474,12 @@ function toggleP1Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
 }
 
 function toggleP2Display() {
   state.p2DisplayMode = state.p2DisplayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   const btn = pageEl('btnP2Display');
   if (btn) {
     if (state.p2DisplayMode === 'hex') {
@@ -3198,10 +3492,7 @@ function toggleP2Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
 }
 
 function toggleSendFormat() {
@@ -3217,6 +3508,7 @@ function toggleSendFormat() {
 
 function toggleTxDisplay() {
   state.txDisplayMode = state.txDisplayMode === 'text' ? 'hex' : 'text';
+  _persistDisplayModes();
   var btn = pageEl('btnToggleSend');
   if (!btn) return;
   if (state.txDisplayMode === 'hex') {
@@ -3270,14 +3562,22 @@ function onStatsCount(data) {
     b.rx = data.bytesRead || 0;
   }
   if (_statusBar) {
-    _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
+    // 先切模式再写值：updateStatsBytes 按当前模式挑 p1/p2 还是 tx/rx，
+    // 反过来写会拿单端口的数字去填 P1/P2（或反之），要等下一次事件才纠正
     _statusBar.setStatsMode(isFwd);
+    _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
   }
 }
 
 function onStatsRate(data) {
   const tab = getActiveTab();
   if (!tab || !tab.sessionId || data.processId !== tab.sessionId) return;
+  const sid = tab.sessionId;
+  if (!state.statsBase[sid]) { state.statsBase[sid] = { tx: 0, rx: 0, p1: 0, p2: 0 }; }
+  const b = state.statsBase[sid];
+  // 速率也按会话缓存：此前只写进 DOM，切标签/重连后停在别人的最后一个速率上
+  b.txRate = data.writeRateBps || 0;
+  b.rxRate = data.readRateBps || 0;
   const isFwd = activeMode() === 'forward';
   if (_statusBar) {
     _statusBar.setStatsMode(isFwd);
@@ -3295,6 +3595,18 @@ function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
   if (tab && tab.sessionId) {
+    // 端口没连上：一律显示 0（会话统计是按连接计的）。
+    // 不去读缓存、也不去拉 daemon —— 空闲进程的计数没有意义，读出来只会让
+    // 上一次连接的数字继续挂着（用户实测的那条 P2:389/s）。
+    if (!tab.portOpen) {
+      if (_statusBar) {
+        // 模式也得定：转发页空闲时箭头仍应是 P1/P2（此前提前返回，把它留在
+        // 上一个标签页的 TX/RX 上）
+        _statusBar.setStatsMode(activeMode() === 'forward');
+        _statusBar.resetStats();
+      }
+      return;
+    }
     if (!state.statsBase[tab.sessionId]) {
       // No local stats yet — fetch from daemon asynchronously
       state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
@@ -3310,8 +3622,8 @@ function refreshStatsDOM() {
           b.p2 = s.bytesPort2 || 0;
           if (getActiveTab() === tab) {
             if (_statusBar) {
-              _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
               _statusBar.setStatsMode(isFwd);
+              _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
             }
           }
         }).catch(function() {});
@@ -3319,8 +3631,17 @@ function refreshStatsDOM() {
     }
     const b = state.statsBase[tab.sessionId];
     if (b && _statusBar) {
-      _statusBar.updateStatsBytes({tx: b.tx || 0, rx: b.rx || 0, p1: b.p1 || 0, p2: b.p2 || 0});
+      // 同 onStatsCount：先定模式再写值，否则 P1/P2 会先显示单端口的数字
       _statusBar.setStatsMode(isFwd);
+      _statusBar.updateStatsBytes({tx: b.tx || 0, rx: b.rx || 0, p1: b.p1 || 0, p2: b.p2 || 0});
+      // 速率按会话缓存回放（没收到过就是 0）：否则切标签会留着上一个会话的速率
+      _statusBar.updateStatsRates({
+        txRate: b.txRate || 0,
+        rxRate: b.rxRate || 0,
+        p1Rate: b.txRate || 0,
+        p2Rate: b.rxRate || 0,
+        maxBps: (tab.syncedParams && tab.syncedParams.baud) ? tab.syncedParams.baud / 10 : 0
+      });
     }
   } else {
     if (_statusBar) _statusBar.resetStats();
@@ -3395,10 +3716,7 @@ function toggleCrVisible() {
   state.crVisible = !state.crVisible;
   updateTextMenu();
   // Re-render to show/hide CR bubbles
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
@@ -3420,20 +3738,14 @@ function setHexEscapeMode(mode) {
   state.hexEscapeMode = mode;
   _updateHexEscFmtRow();
   updateTextMenu();
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
 function setHexEscapeFormat(fmt) {
   if (state.hexEscapeFormat === fmt) return;
   state.hexEscapeFormat = fmt;
-  const tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  _rerenderHistoryKeepingView();
   saveSettings();
 }
 
@@ -4199,15 +4511,31 @@ function initDividerDrag() {
   document.addEventListener('mousemove', function(e) {
     if (!_divDragState) return;
     var appRect = document.getElementById('app').getBoundingClientRect();
-    var topH = 26 + 36 + 40;
     var bottomH = 24;
     var dividerH = 5;
-    var yMin = topH;
-    var yMax = appRect.height - bottomH - dividerH;
-    var avail = yMax - yMin;
+    // 上下限都是**几何位置**，不是比例：
+    //   上 = 配置栏下沿（分隔条贴住浮动配置栏下方，显示区被压到刚好藏在栏后面）
+    //   下 = 窗口底部状态栏上沿（发送区可以完全贴边收掉）
+    // 之前用写死的 102 当上限，分隔条会钻进浮动的配置栏底下，抓不到了。
+    var pg = _divDragState.page;
+    var cfg = pg ? pg.querySelector('.config-bar') : null;
+    var yMin = Math.round(cfg ? cfg.getBoundingClientRect().bottom : 106);
+    // 下边界：状态栏上沿。发送区会被完全收起，分隔条自然落在行底，
+    // 它的线与状态栏上边框重合 —— 此时把状态栏那条边框隐掉（见 applySendRatio
+    // 里的 is-flush-bottom），观感上就是原来那条单线，不会出现"双线"。
+    var bottomEdge = appRect.bottom - bottomH;
+    var yMax = Math.round(bottomEdge);
+    var avail = Math.max(1, yMax - yMin);
     var clampedY = Math.max(yMin, Math.min(yMax, e.clientY - appRect.top));
-    var sendH = yMax - clampedY;
-    state.sendRatio = avail > 0 ? sendH / avail : 0.3;
+    // 比例由**几何**反算，让分隔条 1:1 跟着光标走。
+    // 之前直接用 (yMax - y)/avail，而 flex 分配里还要减去分隔条自身高度、
+    // 外加显示区的 min-height，结果分隔条落后光标 20 多像素（拖动时"黏"）。
+    var row = pg ? pg.querySelector('.content-row') : null;
+    var rowRect = row ? row.getBoundingClientRect() : null;
+    var rowH = rowRect ? rowRect.height : Math.max(1, yMax - yMin);
+    var rowTop = rowRect ? rowRect.top : yMin;
+    var displayH = clampedY - rowTop;
+    state.sendRatio = Math.max(0, Math.min(1, 1 - displayH / Math.max(1, rowH - dividerH)));
     applySendRatio();
   });
   document.addEventListener('mouseup', function() {
@@ -4232,21 +4560,45 @@ function applySendRatio() {
     displayArea.style.flex = '1 1 0px';
     displayArea.style.minHeight = '';
     displayArea.classList.remove('is-hidden');
+    displayArea.classList.remove('is-collapsed');
     sendArea.style.display = 'none';
     sendArea.classList.remove('is-hidden');
     if (divider) divider.style.display = 'none';
     return;
   }
-  var r = state.sendRatio;
+  // 比例允许走到两个端点（贴住配置栏下方 / 完全贴底），所以不再夹 [0.05,0.95]。
+  var r = Math.max(0, Math.min(1, state.sendRatio));
   displayArea.style.flex = (1 - r) + ' 1 0px';
-  displayArea.style.minHeight = '40px';
-  // 注意：原来这里写的是 style.overflow = 'is-hidden'，把类名当成了 overflow 值。
-  // CSSOM 会静默忽略非法值，所以这两个分支从未生效过（面板只是被 flex 压到 0 高度，
-  // 留下 4px 残条）。要隐藏必须切换类。
-  displayArea.classList.toggle('is-hidden', r >= 0.97);
+  // 显示区最小高度 = 配置栏高度：压到最小时，分隔条正好贴在配置栏下沿，
+  // 仍然抓得到（此前是 40px，会让分隔条缩到浮动配置栏底下）。
+  var cfgBar = page.querySelector ? page.querySelector('.config-bar') : null;
+  var reserve = 44;
+  if (cfgBar) {
+    var ch = Math.round(cfgBar.getBoundingClientRect().height);
+    if (ch > 0) reserve = ch;
+  }
+  displayArea.style.minHeight = reserve + 'px';
+  // 两个极端都不整块隐藏：隐藏会让分隔条跳到内容区顶部（= 配置栏底下）而抓不到。
+  displayArea.classList.remove('is-hidden');
   sendArea.style.display = '';
   sendArea.style.flex = r + ' 1 0px';
   sendArea.style.minHeight = '0px';
+  // 下边界回到原来的观感：发送区完全收起（不再留 3px 残条），分隔条贴到行底，
+  // 自然就在状态栏上沿之上、仍抓得到。
   sendArea.classList.toggle('is-hidden', r <= 0.01);
+  // 收起到底时，分隔条的线和状态栏上边框重合：隐掉状态栏那条，避免"双线"
+  var sbEl = document.querySelector('.statusbar');
+  if (sbEl) sbEl.classList.toggle('is-flush-bottom', r <= 0.01);
   if (divider) divider.style.display = '';
+  // 改完高度后，如果本来就在跟最新（未冻结、未锁定），重新贴底。
+  // 否则视口一变，滚动位置就"掉队"了，看上去像"拖一下就再也不跟着滚了"。
+  var dc = page.displayContent;
+  if (dc && !state.scrollLocked && typeof _frozen !== 'undefined' && !_frozen) {
+    dc.scrollTop = dc.scrollHeight;
+  }
+  // 压到只剩配置栏那么高时，把显示区里的按钮/数据流/滚动条整体收起来：
+  // 否则它们会从浮动配置栏的模糊层后面透出来（截图里的"数据流/按键没隐藏"）。
+  var dispH = Math.round(displayArea.getBoundingClientRect().height);
+  displayArea.classList.toggle('is-collapsed', dispH <= reserve + 4);
+  if (dc && typeof dc._syncScrollbarInset === 'function') dc._syncScrollbarInset();
 }

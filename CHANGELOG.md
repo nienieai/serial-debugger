@@ -1,6 +1,6 @@
 # 版本历史（Changelog）
 
-> 本文件由 `README.md` 拆出，收录 **0.1.0 ～ 0.8.0** 共 48 个版本的变更记录。
+> 本文件由 `README.md` 拆出，收录 **0.1.0 ～ 0.8.1** 共 49 个版本的变更记录。
 >
 > - 想快速认识这个工具：[README.md](README.md)
 > - 想做但还没做的事、已知问题：[TODO.md](TODO.md)
@@ -10,6 +10,60 @@
 > 这几项是本项目最主要的调试资产，也是外部测试报告能逐项复核的依据。
 
 ---
+
+## 0.8.1（2026-10-26）
+
+**GUI 交互与渲染的一轮集中修复**：32 个提交、22 个文件（+1493 / −351），全部落在前端与 GUI 侧；**协议号仍是 1**，守护进程 / CLI / MCP 的行为没有变化。这一轮没有外部测试报告驱动，来源是实际使用中的逐条反馈，每条都配了 Playwright 夹具与变异验证（见文末「本轮怎么验」）。
+
+### 新建会话先选模式
+
+- 删掉工具栏那个「⇄ 单端口」切换按钮：模式在**建标签页时**就定下来。点 `+` 先开一张选择页（单端口 / 端口转发两张卡片），选定后才建空闲进程并**原地**换成会话页。旧流程是先把进程建出来再建页，直接关掉选择页就会漏出一个孤儿进程。
+- `isSessionTab()` 统一标识「不是会话页」（设置页 / 欢迎页 / 选择页），`updateModeUI` / `switchTab` / `renderTabs` / `updatePortOpenBtn` 全部按它区分。
+
+### 前端热重载（开发用）
+
+- 新增构建标签 `hotreload`：`wails build -devtools -tags hotreload` 之后前端从磁盘读、改完保存即整页刷新。发布构建不带这个标签时这套代码**完全不参与编译**（落地在 `devui_hotreload.go` / `devui_release.go`，发布 exe 里搜不到 `hotreload`）。
+- 踩过的坑：标签不能叫 `dev`（Wails 内部用 `//go:build dev`），且 `-devtools` 本身就是个构建标签。
+
+### 端口下拉：同步、按页填充、占用高亮
+
+- **详细设置 → 工具栏即时同步（TODO #79 ②）**：改端口/波特率后工具栏的值**和显示文字**同步更新，目标下拉缺该选项时先补一个再落值。根因是程序化写 `el.value` 既不是 attribute、也不派发 `change`，而 `.cs-text` 只在 `_csRefresh` 里更新。同时 `_populateTabPortSelects(root)` 改为按**每个标签页的 root** 填充 —— 此前 `document.getElementById` 只命中第一页，第二个标签页起端口列表永远是空的。
+- **占用高亮按页标注（TODO #81）**：`_markOccupied` 改收元素、`updatePortOccupied()` 逐页 `root.querySelector(...)`；自排除用**本页**所属标签页判定（旧实现用 `getActiveTab()` 并跳过 `state.activeTab`，只有活动页恰好是第一页时才碰巧对）。新增 `_syncOccupiedDropdown()` 把占用类同步到已渲染的 `.cs-option` 副本，不必重开下拉才看得见。
+- **不再整表重建（TODO #79 ①）**：`_csRefresh` 增加选项签名短路（值 + 文字 + 类 + 选中项），签名没变只更新触发器文字；`.cs-option` 的点击改为挂在 `dd` 上的事件委托；`updatePortList` 不再对工具栏下拉做 `getElementById` 空填。**实测：内容未变时连刷 5 次 / `updatePortOccupied` 连调两次 / 同一份端口列表再刷一次，都是 0 次重建**；占用状态变化只切类，同样 0 次重建。
+
+### 历史视图
+
+- **上滚再下滚整屏空白**：占位块撑高度那套机制会给滚动容器加出最多约 11000px 的空滚区，滚进去就是空白、而且永远不再算「在底部」。改为自绘滚动条 + 右下角未读胶囊，占位机制整体删除；`expandHistory` 的裁剪方向改成从底部裁。
+- **自绘滚动条**：显示区与发送框共用 `_initOverlayScrollbar()`（8px、同一套颜色、支持拖动与点轨道翻页），原生滚动条全部隐藏；显示区轨道从配置栏底边起，发送框轨道从工具栏底边起。
+- **拖动后「滚不动」**：松手回到底部即恢复跟随；`applySendRatio` 改完高度后若在跟随则重新贴底。
+- 冻结回看时选中高亮会被浮动条的模糊垫底盖住 → 选中时撤掉垫底。
+
+### 分隔条
+
+- 上限按配置栏实测下沿夹紧（此前 `elementFromPoint` 命中的是悬浮栏，分隔条被压在它下面拿不到鼠标）、下边界贴底且只剩一条线（收起时隐掉状态栏上边框）；拖动比例改由几何反算，实测 **1:1 跟手**（此前有 22px 滞后）。
+
+### 状态栏
+
+- 「运行中」与任务栏同色同高并贴左；客户端计数加 5 秒权威兜底刷新（`GetClients()`），徽章悬停列出具体 clientId —— 此前 `clients-changed` 偶发漏推送会让计数停在旧值。
+- **统计残留（TODO #82）**：没开端口的页面上仍挂着上一次会话的 `P2:389/s (3%)`。两条独立原因：`_updateStatsVisible()` 不看 `portOpen`；速率只写进 DOM、从不按会话缓存也从不清理。现在统计区**始终显示**（空闲时是 0），速率按会话缓存并随 `refreshStatsDOM` 回放；顺带修了 `setStatsMode` 与写值的先后 —— 切到转发页时 `P1/P2` 会先拿到单端口的数字。
+
+### 显示与发送格式
+
+- **开关串口不再把文本/Hex 冲回文本**：新增 `_persistDisplayModes()` 在切换时写回标签页副本，避免 `syncDaemonSessions` 用旧副本回填全局。
+- **Hex 发送后按钮仍显示「字」并残留文本（TODO #80）**：根因是 `_renderSendMirrorHex` 里 `for (var t = ...)` 的 `var` 提升把 i18n 的 `t()` 顶掉，`toggleSendFormat` 在 `_syncSendMirror` 处抛 `TypeError` 中断。循环变量改名即修复。
+- **Hex 着色（TODO #47 / #48）**：`0x` 前缀改用弱化色（此前与字节同色，那个类等于没作用）；前缀识别边界 `i + 2` → `i + 1`，`AA0x` 这种紧贴末尾的写法不再整段标红。
+
+### 标签栏与图标
+
+- **滚动提示（TODO #26）**：标签栏加左右浮动箭头（`‹` / `›`，复用发送区的 `.send-scroll-arrow`，点击穿透、不占布局）；视口 `flex-grow: 0`，所以「+」仍紧跟最后一个标签，只有溢出时才被收到右边缘。
+- **转发标签着色（TODO #83）**：`.tab-forward` 的 `!important` 会把 `.tab-idle` 的灰色压掉，空闲转发页看起来像在跑；改为只在 `mode === 'forward' && portOpen` 时加。
+- **主题按钮图标（TODO #84）**：`data-icon="theme_palette"` 这个键两头都不存在，且 `.c-theme-btn` 没清 `padding`（全局 `5px 14px` 把 28px 按钮的内容区压成 0，图标被 `flex-shrink` 挤成 0 宽）。补图标 + `_initIcons()` 改为与兜底表合并 + 按钮 `padding: 0`、`> svg` 钉死 18px。
+
+### 本轮怎么验
+
+- GUI 侧 14 组 Playwright 夹具（Chromium + 假 Wails 绑定，不碰真实串口/守护进程）：`mode_picker_smoke` 12、`mode_picker_flow` 13、`settings_port_sync` 10、`display_mode_stable` 9、`sendformat_switch` 9、`history_blank_repro` 13、`divider_probe` 9、`port_occupied_pages` 19、`dropdown_no_rebuild` 10、`send_hex_prefix` 9、`statusbar_stats_reset` 16、`tabs_scroll_hint` 15、`tab_forward_color` 9、`theme_icon` 10。
+- **变异验证 12/12**：把每处修复改回旧写法，对应夹具必须变红（`mutation_round_batch.py`），避免「夹具绿但根本没盯住这个行为」。
+- 协议号仍为 **1**；守护进程 / CLI / MCP 未改动。
 
 ## 0.8.0（2026-09-14）
 

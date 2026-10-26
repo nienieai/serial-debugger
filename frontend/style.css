@@ -11,9 +11,9 @@
   color-scheme: light dark;
 
   /* 顶部悬浮条预留：须 >= config-bar 高度（44px）与清空浮动按钮底边
-     （top 48 + height 28 = 76px）中的较大者，否则第一条数据行会被按钮压住。
+     （top 54 + height 28 = 82px）中的较大者，否则第一条数据行会被按钮压住。
      .c-clear-btn 的 top 由本值倒推，改一处即可。 */
-  --reserve-top: 76px;
+  --reserve-top: 82px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -135,6 +135,44 @@ button:disabled:active { transform: none; box-shadow: none; }
 .o-empty__btn  { padding: 8px 24px; font-size: 15px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; }
 .o-empty__btn:hover { opacity: 0.85; }
 
+/* New-session chooser — 两张"调色盘"卡片（单端口 / 端口转发） */
+.o-chooser { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; padding: 24px; }
+.o-chooser__inner { display: flex; flex-direction: column; align-items: center; }
+.o-chooser__title { font-size: 18px; font-weight: 600; color: var(--fg); margin-bottom: 6px; }
+.o-chooser__hint  { font-size: 12px; color: var(--placeholder); margin-bottom: 18px; }
+.o-chooser__grid  { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.o-chooser.is-busy .c-mode-card { opacity: 0.55; }
+
+.c-mode-card {
+  display: flex; flex-direction: column; gap: 10px;
+  width: 208px; padding: 14px; text-align: left;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--input-bg); color: var(--fg);
+  cursor: pointer; font: inherit;
+  transition: border-color .15s, transform .15s;
+}
+.c-mode-card:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+.c-mode-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.c-mode-card:disabled { cursor: default; }
+.c-mode-card__head { display: flex; align-items: center; gap: 8px; }
+.c-mode-card__icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  background: var(--bg3); color: var(--accent); font-size: 15px; line-height: 1;
+}
+.c-mode-card__name { font-size: 14px; font-weight: 600; }
+.c-mode-card__desc { font-size: 12px; line-height: 1.4; color: var(--placeholder); }
+/* 连接示意：一条 2px 的线 + 两个端点，转发模式额外画上 ↔ */
+.c-mode-card__preview { display: flex; align-items: center; gap: 6px; height: 18px; margin-top: 2px; }
+.c-mode-card__dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--accent); }
+.c-mode-card__wire {
+  flex: 1; height: 18px; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; line-height: 1; color: var(--accent);
+  background: linear-gradient(var(--border), var(--border)) center / 100% 2px no-repeat;
+}
+.c-mode-card--forward .c-mode-card__preview .c-mode-card__dot:first-child { background: var(--fwd-p1); }
+.c-mode-card--forward .c-mode-card__preview .c-mode-card__dot:last-child { background: var(--fwd-p2); }
+
 /* ---- 7. Components: Menu ---- */
 .header {
   display: flex; justify-content: space-between; align-items: center;
@@ -206,10 +244,17 @@ button:disabled:active { transform: none; box-shadow: none; }
   background: transparent; border: none; color: var(--fg) !important;
   cursor: pointer; width: 28px; height: 100%; min-width: 28px;
   display: flex; align-items: center; justify-content: center;
+  /* padding 必须清零：全局 button 的 5px 14px 内边距会把 28px 按钮的内容区压成
+     0px，里面的图标（flex 子项）于是被 flex-shrink 挤到 0 宽 —— 图标键存在也
+     看不见。 */
+  padding: 0;
   margin-left: auto; flex-shrink: 0;
 }
 .c-theme-btn:hover { background: var(--hover); }
 .c-theme-btn .theme-icon { width: 18px; height: 18px; flex-shrink: 0; pointer-events: none; }
+/* _populateIcons 塞进来的是裸 <svg>（没有 .theme-icon 类），同样要钉住尺寸并
+   禁止收缩，否则仍是 0 宽。 */
+.c-theme-btn > svg { width: 18px; height: 18px; flex-shrink: 0; pointer-events: none; }
 
 .cr-bubble {
   display: inline; color: var(--fg); background: var(--border);
@@ -227,13 +272,27 @@ button:disabled:active { transform: none; box-shadow: none; }
   content: ''; position: absolute; bottom: 0; left: 0; right: 0;
   height: 1px; background: var(--border); z-index: 1; pointer-events: none;
 }
+/* 视口：包住滚动容器，给左右箭头（.tabs-scroll-arrow）提供定位上下文。
+   align-self: stretch 保证它撑满标签栏高度，箭头才能上下贴边。
+   flex-grow 必须是 0：视口宽度跟着标签走，「+」按钮才会紧跟在最后一个标签后面
+   （grow 会把视口拉满整条，把「+」顶到最右边）；标签溢出时靠 flex-shrink 收窄
+   到可用宽度，右箭头正好贴在可见区域的右边缘。 */
+.tabs-viewport {
+  position: relative; flex: 0 1 auto; min-width: 0;
+  display: flex; align-items: flex-end; align-self: stretch;
+}
 .tabs-scroll {
   display: flex; align-items: flex-end; gap: 2px;
   overflow-x: auto; overflow-y: visible;
   scrollbar-width: none; /* Firefox */
-  align-self: stretch;
+  align-self: stretch; flex: 1 1 auto; min-width: 0;
 }
 .tabs-scroll::-webkit-scrollbar { display: none; /* Chrome/Safari */ }
+/* 标签栏左右「还能滚」提示：复用发送区的 .send-scroll-arrow（绝对定位、不吃
+   布局、pointer-events:none），只换宽度与渐变底色 —— 标签栏底色是 --bg2。 */
+.tabs-scroll-arrow { width: 26px; font-size: 18px; }
+.tabs-scroll-arrow--left  { left: 0;  background: linear-gradient(to right, var(--bg2) 45%, transparent); }
+.tabs-scroll-arrow--right { right: 0; background: linear-gradient(to left,  var(--bg2) 45%, transparent); }
 .tab-btn {
   display: flex; align-items: center; gap: 4px;
   background: var(--input-bg); border: 1px solid var(--border);
@@ -321,13 +380,16 @@ button:disabled:active { transform: none; box-shadow: none; }
 .c-port-btn { flex-shrink: 0; height: 30px; line-height: 30px; padding: 0 8px; font-size: 13px; }
 .c-settings-btn { width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0; }
 
-/* Status bar daemon toggle — combined dot + text, no rounding */
+/* Status bar daemon toggle — 与状态栏同底同高，并贴住左边缘 */
 .c-status-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--border); border-radius: 0; background: var(--input-bg); color: var(--fg);
-  font-size: 13px; cursor: pointer; padding: 0 8px; height: 22px;
+  border: 1px solid transparent; border-radius: 0;
+  background: var(--bg2); color: var(--fg);
+  font-size: 13px; cursor: pointer; padding: 0 8px; height: 24px;
 }
 .c-status-btn:hover { background: var(--hover); border-color: var(--accent); }
+/* 抵消状态栏自身的左内边距，让「运行中」贴住最左边 */
+.statusbar-left > .c-status-btn:first-child { margin-left: -8px; }
 
 /* Scroll lock — 24px for send-controls / forward row */
 .c-scroll-btn {
@@ -342,7 +404,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* Clear display float button */
 .c-clear-btn {
   /* calc 结果即 --reserve-top，两者必须一致，否则会压住第一条数据行 */
-  position: absolute; top: calc(var(--reserve-top) - 28px); right: 8px; z-index: 1;
+  position: absolute; top: calc(var(--reserve-top) - 28px); right: 20px; z-index: 1;
   padding: 0 12px; font-size: 13px; height: 28px; line-height: 28px;
   background: var(--bg2); border: 1px solid var(--border);
   transition: background 0.15s; border-radius: 6px;
@@ -351,7 +413,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 
 /* Send button */
 .c-send-btn {
-  position: absolute; right: 8px; bottom: 6px;
+  position: absolute; right: 20px; bottom: 6px;
   padding: 5px 12px; font-size: 13px; z-index: 1; white-space: nowrap;
   display: inline-flex; align-items: center; gap: 4px;
 }
@@ -580,19 +642,40 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* ---- 14. Components: Display + Send ---- */
 .display-area { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; overflow: hidden; padding-top: 0; }
 .display-content {
-  flex: 1; overflow-y: auto; padding: var(--reserve-top) 12px 8px 12px;
+  flex: 1; overflow-y: auto; padding: var(--reserve-top) 16px 8px 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   font-size: 15px; line-height: 1.6; background: var(--input-bg); min-height: 0;
   /* 我们自己做滚动锚定（插入上方内容时手动补偿 scrollTop）。
      浏览器的 overflow-anchor 会与手动补偿叠加成抖动，必须关掉。 */
   overflow-anchor: none;
+  /* 原生滚动条隐藏：位置由 .hist-scrollbar 自绘（只反映真实内容） */
+  scrollbar-width: none;
 }
-/* 未读占位块：用户往回翻时，视口下方的数据用它撑开高度，
-   视图不动但滚动条继续变化，DOM 仍是 O(窗口)。 */
-.hist-spacer {
-  display: flex; align-items: center; justify-content: center;
-  width: 100%; pointer-events: none; opacity: 0.7;
+.display-content::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 自绘滚动条：轨道 + 滑块，固定叠在显示区右侧 */
+.hist-scrollbar {
+  position: absolute; top: 6px; right: 3px; bottom: 6px; width: 8px;
+  z-index: 6; border-radius: 4px; background: transparent;
 }
+.hist-scrollbar:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.hist-scrollbar-thumb {
+  position: absolute; left: 0; top: 0; width: 100%;
+  background: var(--scrollbar-thumb); border-radius: 4px;
+  transition: background .12s;
+}
+.hist-scrollbar-thumb:hover { background: var(--accent); }
+.hist-scrollbar-thumb.is-frozen { background: var(--accent); opacity: .55; }
+
+/* 未读提示：冻结时右下角的小胶囊，点一下回到最新一条 */
+.hist-unread {
+  position: absolute; right: 18px; bottom: 10px; z-index: 7;
+  padding: 4px 10px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--bg2); color: var(--fg);
+  font-size: 12px; line-height: 1.2; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.hist-unread:hover { border-color: var(--accent); color: var(--accent); }
 .display-content .placeholder { color: var(--placeholder); font-style: italic; padding: 8px 0; }
 .data-row { margin-bottom: 2px; }
 .ts-line { line-height: 1.4; }
@@ -661,7 +744,9 @@ button:disabled:active { transform: none; box-shadow: none; }
   height: 5px; flex-shrink: 0; cursor: ns-resize;
   margin-bottom: -3px; margin-right: -3px;
   background: linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
-  transition: background 0.15s; position: relative; z-index: 3;
+  /* z-index 要高于状态栏（4）：拖到最底时它会有 3px 压在状态栏上沿，
+     低于状态栏就抓不到，用户就「拖回不来了」。 */
+  transition: background 0.15s; position: relative; z-index: 10;
 }
 .o-divider::before { content: ""; position: absolute; top: -5px; left: 0; right: 0; bottom: -5px; }
 .o-divider:hover, .o-divider.is-active { background: var(--accent); }
@@ -788,7 +873,9 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* Send mirror hex coloring */
 .send-input-mirror .send-hex-ok { color: var(--dc-hexTx, var(--fg)); }
 .send-input-mirror .send-hex-bad { color: var(--dc-hexInv, var(--red)); text-decoration: underline; text-decoration-color: var(--dc-hexInv, var(--red)); text-underline-offset: 2px; text-decoration-style: wavy; }
-.send-input-mirror .send-hex-prefix { color: var(--dc-hexTx, var(--fg)); }
+/* 0x 前缀用弱化色：原来和 .send-hex-ok 同一个 --dc-hexTx，等于没有区分作用
+   （TODO #47）。前缀只是分隔符，压暗一档既不再抢字节的视觉，也仍然看得见。 */
+.send-input-mirror .send-hex-prefix { color: var(--placeholder); }
 #sendInput {
   position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
   background: transparent; color: transparent; border: none; border-radius: 0;
@@ -799,8 +886,17 @@ button:disabled:active { transform: none; box-shadow: none; }
   white-space: pre-wrap; word-break: break-all; overflow-wrap: break-word;
 }
 #sendInput::placeholder { color: transparent; }
-#sendInput:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+/* 发送框不画焦点框：光标本身已经能说明焦点在哪，1px 描边只是噪音。
+   必须显式写 none —— 不写的话浏览器会补一个默认的焦点环。 */
+#sendInput:focus { outline: none; }
+
+/* 发送框滚动条：与显示区共用同一套自绘外观（`.hist-scrollbar`），所以原生条
+   一律藏掉。这样两者宽度/颜色/圆角完全一致，且轨道上沿由 JS 设成 40px
+   （工具栏底边），不会钻到工具栏底下。 */
+#sendInput { scrollbar-width: none; }
 #sendInput::-webkit-scrollbar { width: 0; height: 0; }
+.send-input-mirror { padding-right: 12px; scrollbar-width: none; }
+.send-input-mirror::-webkit-scrollbar { width: 0; height: 0; }
 #sendInfo { font-size: 12px; color: var(--placeholder); white-space: nowrap; min-width: 80px; flex-shrink: 0; text-align: right; }
 [dir="rtl"] #sendInfo { text-align: left; }
 
@@ -812,13 +908,30 @@ button:disabled:active { transform: none; box-shadow: none; }
   position: absolute; bottom: 0; left: 0; right: 0; z-index: 3;
   display: flex; gap: 6px; padding: 8px 8px 4px 8px;
 }
-.c-fwd-display .c-fwd-float-btns::before {
+/* 浮动按钮条的垫底：模糊优先，模糊不可用时退回渐变遮罩。
+   以前只写了 backdrop-filter，且只在 .c-fwd-display 下生效 —— 一旦模糊层没
+   渲染（软件合成/层叠上下文变化），按钮就直接压在数据行上，文字全透出来。 */
+.c-fwd-float-btns::before {
   content: ''; position: absolute; inset: 0; z-index: -1;
   backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  background: linear-gradient(to top,
+    color-mix(in srgb, var(--input-bg) 88%, transparent) 0%,
+    color-mix(in srgb, var(--input-bg) 55%, transparent) 55%,
+    transparent 100%);
   mask-image: linear-gradient(to top, black 75%, transparent 100%);
   -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
 }
 .c-fwd-float-btns button { font-size: 13px; padding: 0 10px; height: 28px; line-height: 28px; border-radius: 6px; width: max-content; }
+
+/* 选中数据文本时撤掉垫底：模糊会把选择高亮一起糊掉，看不出选中了哪几行 */
+.display-area.is-selecting .c-fwd-float-btns::before { display: none; }
+
+/* 显示区被压到配置栏高度时（拖到底）：里面的按钮、数据流、滚动条全部收起，
+   否则它们会从浮动配置栏的模糊层后面透出来 */
+.display-area.is-collapsed .c-fwd-float-btns { display: none; }
+.display-area.is-collapsed .display-content { visibility: hidden; }
+.display-area.is-collapsed .hist-scrollbar { display: none; }
+.display-area.is-collapsed .hist-unread { display: none; }
 
 /* Display toggle buttons — use timestamp colors, same pattern as fwd-btn */
 .disp-btn-rx { color: var(--dc-tsRx); border-color: var(--dc-tsRx); }
@@ -1125,6 +1238,8 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   padding: 0 8px; background: var(--bg2); border-top: 1px solid var(--border);
   flex-shrink: 0; height: 24px; user-select: none; position: relative; z-index: 4;
 }
+/* 分隔条收到底、与状态栏上沿重合时，隐掉状态栏这条边框，避免出现"双线" */
+.statusbar.is-flush-bottom { border-top-color: transparent; }
 .statusbar-left { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .statusbar-right { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 #statusbar-stats { display: inline-flex; gap: 14px; margin-left: 10px; }

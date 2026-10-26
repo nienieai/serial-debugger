@@ -22,13 +22,6 @@ function TabPage(tabIndex, tabData) {
 	configBar.id = 'configBar';
 	configBar.className = 'config-bar';
 
-	const btnMode = document.createElement('button');
-	btnMode.id = 'btnModeToggle';
-	btnMode.className = 'toggle-btn c-mode-btn';
-	btnMode.textContent = '⇄ 单端口';
-	btnMode.addEventListener('click', toggleMode);
-	configBar.appendChild(btnMode);
-
 	const singleRow = document.createElement('div');
 	singleRow.id = 'singlePortRow';
 	singleRow.className = 'port-row';
@@ -295,7 +288,6 @@ function TabPage(tabIndex, tabData) {
 	self.baudSelectA = baudFwdA;
 	self.portSelectB = selFwdB;
 	self.baudSelectB = baudFwdB;
-	self.btnModeToggle = btnMode;
 	self.btnOpen = btnOpen;
 	self.btnSettings = btnSettings;
 	self.singlePortRow = singleRow;
@@ -486,7 +478,7 @@ function createWelcomePage() {
 	btn.className = 'o-empty__btn';
 	btn.setAttribute('data-i18n', 'menu.new_session');
 	btn.textContent = '+ ' + t('menu.new_session', '新建会话');
-	btn.addEventListener('click', function() { if (typeof addTab === 'function') addTab(); });
+	btn.addEventListener('click', function() { if (typeof openNewSessionTab === 'function') openNewSessionTab(); });
 
 	page.appendChild(msg);
 	page.appendChild(hint);
@@ -498,6 +490,102 @@ function createWelcomePage() {
 		hide: function() { page.style.display = 'none'; },
 		destroy: function() { page.remove(); },
 		isWelcome: true
+	};
+}
+
+// ---- 新建会话的选择页 ----
+//
+// 一张"调色盘"：两张卡片（单端口 / 端口转发）。点选之后才在守护进程里建空闲
+// 进程，随后由 app.js 的 chooseNewSessionMode() 把这个标签页**原地**换成会话页
+// ——所以直接关掉选择页不会留下任何孤儿进程。
+function createModeChooserPage() {
+	var page = document.createElement('div');
+	page.className = 'tab-page o-chooser';
+	page.style.display = 'none';
+
+	var inner = document.createElement('div');
+	inner.className = 'o-chooser__inner';
+
+	var title = document.createElement('div');
+	title.className = 'o-chooser__title';
+	title.setAttribute('data-i18n', 'newtab.title');
+	title.textContent = t('newtab.title', '新建会话');
+
+	var hint = document.createElement('div');
+	hint.className = 'o-chooser__hint';
+	hint.setAttribute('data-i18n', 'newtab.hint');
+	hint.textContent = t('newtab.hint', '选择一种模式开始');
+
+	var grid = document.createElement('div');
+	grid.className = 'o-chooser__grid';
+
+	function makeCard(mode, iconHtml, titleKey, titleDef, descKey, descDef) {
+		var card = document.createElement('button');
+		card.type = 'button';
+		card.className = 'c-mode-card c-mode-card--' + mode;
+		card.setAttribute('data-mode', mode);
+
+		var head = document.createElement('div');
+		head.className = 'c-mode-card__head';
+
+		var badge = document.createElement('span');
+		badge.className = 'c-mode-card__icon';
+		badge.innerHTML = iconHtml;
+		head.appendChild(badge);
+
+		var name = document.createElement('span');
+		name.className = 'c-mode-card__name';
+		name.setAttribute('data-i18n', titleKey);
+		name.textContent = t(titleKey, titleDef);
+		head.appendChild(name);
+
+		var desc = document.createElement('div');
+		desc.className = 'c-mode-card__desc';
+		desc.setAttribute('data-i18n', descKey);
+		desc.textContent = t(descKey, descDef);
+
+		// 调色盘式的连接示意：单端口一个端点；转发两个端点 + 双向箭头。
+		var preview = document.createElement('div');
+		preview.className = 'c-mode-card__preview';
+		var dotA = document.createElement('span');
+		dotA.className = 'c-mode-card__dot';
+		preview.appendChild(dotA);
+		var wire = document.createElement('span');
+		wire.className = 'c-mode-card__wire';
+		if (mode === 'forward') wire.textContent = '↔';
+		preview.appendChild(wire);
+		if (mode === 'forward') {
+			var dotB = document.createElement('span');
+			dotB.className = 'c-mode-card__dot';
+			preview.appendChild(dotB);
+		}
+
+		card.appendChild(head);
+		card.appendChild(desc);
+		card.appendChild(preview);
+		card.addEventListener('click', function() {
+			if (typeof chooseNewSessionMode === 'function') chooseNewSessionMode(mode);
+		});
+		grid.appendChild(card);
+		return card;
+	}
+
+	makeCard('single', icon('terminal', 16, 16), 'btn.single', '单端口',
+		'newtab.single_desc', '连接一个串口，收发调试');
+	makeCard('forward', '↔', 'btn.forward', '端口转发',
+		'newtab.forward_desc', '把两个串口对接，数据互相转发');
+
+	inner.appendChild(title);
+	inner.appendChild(hint);
+	inner.appendChild(grid);
+	page.appendChild(inner);
+
+	return {
+		root: page,
+		isChooser: true,
+		show: function() { page.style.display = ''; },
+		hide: function() { page.style.display = 'none'; },
+		destroy: function() { page.remove(); }
 	};
 }
 

@@ -40,7 +40,7 @@ var _renderStart = -1; // DOM 窗口起点（cache 索引）
 var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
 var _atBottom = true;  // 用户是否贴着底部
 var _frozen = false;   // 冻结：锁定滚动，或用户往回翻离开了底部
-var _spacer = null;    // 未读区占位块
+var _healing = false;  // 未读提示自愈重绘时的递归挡板
 var _appendQueue = []; // 待渲染队列
 var _flushScheduled = false;
 var _flushTimer = null;
@@ -82,7 +82,7 @@ function _histDebug() {
     atBottom: _atBottom,
     scrollLocked: !!state.scrollLocked,
     domRows: display ? display.querySelectorAll('.data-row').length : 0,
-    spacer: !!(display && display.querySelector('.hist-spacer')),
+    spacer: !!(display && display.querySelector('.hist-unread')),
     lastFlushMs: +_lastFlushMs.toFixed(2),
     lastFlushCount: _lastFlushCount,
     // 有界缓存 / 分页（夹具用）
@@ -100,7 +100,6 @@ function _histReset() {
   _appendQueue = [];
   _flushScheduled = false;
   if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null; }
-  _spacer = null;
   _renderStart = -1;
   _renderEnd = -1;
   _atBottom = true;
@@ -317,14 +316,14 @@ function _flushAppends() {
   var q = _appendQueue;
   _appendQueue = [];
   if (!display) return;
-  if (q.length === 0) { _syncSpacer(display); return; }
+  if (q.length === 0) { _updateUnreadChrome(display); return; }
 
   var t0 = performance.now();
 
   if (display.querySelector('.placeholder')) display.innerHTML = '';
 
   // 冻结：视图不动，未读交给占位块撑高度（滚动条继续变化，但 DOM 不增长）
-  if (_frozen) { _syncSpacer(display); return; }
+  if (_frozen) { _updateUnreadChrome(display); return; }
 
   var win = historyWindowSize();
   // 一批可能远超窗口：只渲染窗口装得下的最新那部分，多建的本来也会被裁掉
@@ -345,7 +344,7 @@ function _flushAppends() {
   _renderEnd = entries ? entries.length : _renderEnd;
   _trimToWindow(display, win);
   _stickToBottom(display);
-  _syncSpacer(display);
+  _updateUnreadChrome(display);
 
   _lastFlushMs = performance.now() - t0;
   _lastFlushCount = q.length;
@@ -359,9 +358,24 @@ function _stickToBottom(display) {
 }
 
 // 只裁剪数据行，不碰提示行与占位块；始终执行（无论是否锁定/冻结）
-function _trimToWindow(display, win) {
+//
+// fromBottom：往上翻加载更早时，新行插在**顶部**，超出的部分要从**底部**裁。
+// 此前一律从顶部裁，于是刚插进去的那批又被自己删掉（_renderStart 反而被加回
+// 原值），表现为「滚到顶加载更早，画面纹丝不动」。
+function _trimToWindow(display, win, fromBottom) {
   var rows = display.querySelectorAll('.data-row');
   var excess = rows.length - win;
+  if (excess <= 0) return;
+  if (fromBottom) {
+    for (var b = 0; b < excess; b++) {
+      var tail = rows[rows.length - 1 - b];
+      if (!tail || !tail.parentNode) continue;
+      tail.parentNode.removeChild(tail);
+    }
+    var kept = rows.length - excess;
+    _renderEnd = Math.max(_renderStart + kept, _renderStart);
+    return;
+  }
   for (var i = 0; i < excess; i++) {
     var el = rows[i];
     if (!el || !el.parentNode) continue;
@@ -370,43 +384,197 @@ function _trimToWindow(display, win) {
   }
 }
 
-// ---- 未读区占位块 ----
+// ---- 未读提示 + 自绘滚动条 ----
+//
+// 以前冻结时往滚动区里塞一块「占位块」撑高度，想让滚动条跟着未读数变长。代价
+// 太大：那块空白可以被滚进去（整屏空白），并且把「是否到底」的判据污染掉。
+// 现在两者分离：
+//   · 自绘滚动条只反映**真实内容**（拖到底就是真到底）
+//   · 未读数放在右下角一个小胶囊里，点它直接回到最新一条
 
-function _avgRowHeight(display) {
-  var rows = display.querySelectorAll('.data-row');
-  if (rows.length === 0) {
-    var fs = state.displayFontSize || 15;
-    return Math.max(8, fs * 1.6) * 2;
-  }
-  var n = Math.min(5, rows.length), sum = 0, cnt = 0;
-  for (var i = rows.length - n; i < rows.length; i++) {
-    var h = rows[i].offsetHeight;
-    if (h > 0) { sum += h; cnt++; }
-  }
-  if (cnt === 0) return Math.max(8, (state.displayFontSize || 15) * 1.6) * 2;
-  return sum / cnt;
-}
-
-function _syncSpacer(display) {
+function _unreadCount() {
   var entries = _activeCache();
-  var hidden = (entries && _renderEnd >= 0) ? Math.max(0, entries.length - _renderEnd) : 0;
-  if (!_frozen || hidden <= 0) { _removeSpacer(); return; }
-
-  if (!_spacer || !_spacer.parentNode) {
-    _spacer = document.createElement('div');
-    _spacer.className = 'sys-msg hist-spacer';
-    display.appendChild(_spacer);
-  }
-  _spacer.setAttribute('data-sys-raw', '');
-  _spacer.textContent = '── ' + t('history.unseen', '↓ %s 条未显示').replace('%s', hidden) + ' ──';
-  // 高度按实测平均行高估算：视图不动，但滚动条的变化幅度与方向都对
-  var h = Math.round(hidden * _avgRowHeight(display));
-  _spacer.style.height = Math.min(h, 8000000) + 'px';
+  if (!entries || _renderEnd < 0) return 0;
+  return Math.max(0, entries.length - _renderEnd);
 }
 
-function _removeSpacer() {
-  if (_spacer && _spacer.parentNode) _spacer.parentNode.removeChild(_spacer);
-  _spacer = null;
+function _updateUnreadChrome(display) {
+  if (!display) display = pageEl('displayContent');
+  if (!display) return;
+  var host = display.parentNode;
+  if (!host) return;
+
+  // 防御：冻结时视图里必须还有内容（缓存裁剪 / 切页等异常路径会把行清空）。
+  // 用 _healing 挡住递归。
+  if (_frozen && _unreadCount() > 0 && !_healing &&
+      display.querySelectorAll('.data-row').length === 0) {
+    _healing = true;
+    var prevTop = display.scrollTop;
+    try {
+      renderHistoryLines(_activeCache(), true);
+      display.scrollTop = prevTop;
+    } finally {
+      _healing = false;
+    }
+    return;
+  }
+
+  var unread = _frozen ? _unreadCount() : 0;
+  var chip = host.querySelector('.hist-unread');
+  if (unread <= 0) {
+    if (chip && chip.parentNode) chip.parentNode.removeChild(chip);
+  } else {
+    if (!chip) {
+      chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'hist-unread';
+      chip.title = t('history.unseen_click', '回到最新一条');
+      chip.addEventListener('click', function() {
+        _frozen = false;
+        renderHistoryLines(_activeCache());
+      });
+      host.appendChild(chip);
+    }
+    chip.textContent = t('history.unseen', '↓ %s 条未显示').replace('%s', unread);
+  }
+  _syncCustomScrollbar(display);
+}
+
+// 自绘滚动条（显示区与发送框共用同一套外观）。
+// 原生条隐藏（CSS），轨道与滑块只按真实内容计算；opts:
+//   className  额外类名（发送框用 is-send）
+//   top        轨道上沿（像素）；不给就按配置栏高度算，避免钻到浮动栏底下
+//   onRelease  松手回调（显示区用它解冻）
+function _initOverlayScrollbar(box, opts) {
+  if (!box) return;
+  opts = opts || {};
+  var host = box.parentNode;
+  if (!host || host.querySelector('.hist-scrollbar')) return;
+
+  var track = document.createElement('div');
+  track.className = 'hist-scrollbar' + (opts.className ? ' ' + opts.className : '');
+  var thumb = document.createElement('div');
+  thumb.className = 'hist-scrollbar-thumb';
+  track.appendChild(thumb);
+  host.appendChild(track);
+
+  if (typeof opts.top === 'number') track.style.top = opts.top + 'px';
+
+  var drag = null;
+
+  function metrics() {
+    var sh = Math.max(1, box.scrollHeight);
+    var ch = box.clientHeight;
+    var trackH = Math.max(1, track.clientHeight);
+    var th = Math.min(trackH, Math.max(24, Math.round(trackH * (ch / sh))));
+    return { sh: sh, ch: ch, trackH: trackH, th: th };
+  }
+
+  function sync() {
+    var m = metrics();
+    if (m.sh <= m.ch + 1) { track.style.display = 'none'; return; }
+    track.style.display = '';
+    thumb.style.height = m.th + 'px';
+    var maxTop = m.trackH - m.th;
+    var top = (box.scrollTop / Math.max(1, m.sh - m.ch)) * maxTop;
+    thumb.style.transform = 'translateY(' + Math.max(0, Math.min(maxTop, top)) + 'px)';
+    if (opts.frozenClass) thumb.classList.toggle('is-frozen', !!_frozen);
+  }
+
+  box._syncScrollbar = sync;
+  box._scrollbarTrack = track;
+
+  if (typeof opts.top !== 'number') {
+    // 轨道的上沿不能进到浮动配置栏底下：配置栏是 absolute 叠在内容上的，
+    // 轨道默认 top:6px 会从配置栏底边钻出来。
+    box._syncScrollbarInset = function() {
+      var page = box.closest('.tab-page');
+      var cfg = page ? page.querySelector('.config-bar') : null;
+      var h = cfg ? Math.round(cfg.getBoundingClientRect().height) : 44;
+      track.style.top = (h + 6) + 'px';
+    };
+    box._syncScrollbarInset();
+  }
+
+  thumb.addEventListener('pointerdown', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    try { thumb.setPointerCapture(e.pointerId); } catch (err) {}
+    drag = { y: e.clientY, top: box.scrollTop };
+  });
+  thumb.addEventListener('pointermove', function(e) {
+    if (!drag) return;
+    var m = metrics();
+    var ratio = (m.sh - m.ch) / Math.max(1, m.trackH - m.th);
+    box.scrollTop = drag.top + (e.clientY - drag.y) * ratio;
+  });
+  function endDrag() {
+    drag = null;
+    if (typeof opts.onRelease === 'function') opts.onRelease();
+  }
+  thumb.addEventListener('pointerup', endDrag);
+  thumb.addEventListener('pointercancel', endDrag);
+
+  // 点轨道空白：翻一屏
+  track.addEventListener('pointerdown', function(e) {
+    if (e.target === thumb) return;
+    var before = thumb.getBoundingClientRect().top + thumb.offsetHeight / 2;
+    box.scrollTop += (e.clientY < before) ? -box.clientHeight * 0.9 : box.clientHeight * 0.9;
+  });
+
+  box.addEventListener('scroll', sync);
+  // 输入改变高度时不一定触发 scroll（比如光标在顶部），补一次
+  box.addEventListener('input', sync);
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(sync).observe(box); } catch (err) {}
+  }
+  sync();
+}
+
+function initDisplayScrollbar(display) {
+  if (!display) return;
+  _initSelectionBackdropToggle();
+  _initOverlayScrollbar(display, {
+    frozenClass: true,
+    onRelease: function() {
+      // 拖到底（或拖回底部附近）时立刻恢复跟随，不等下一次数据到达。
+      var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
+      if (atBottom && !state.scrollLocked && _frozen) {
+        _frozen = false;
+        renderHistoryLines(_activeCache());
+      }
+    },
+  });
+}
+
+// 发送框滚动条：与显示区同一套外观，上沿从工具栏底边（40px）开始。
+function initSendScrollbar(box) {
+  _initOverlayScrollbar(box, { className: 'is-send', top: 40 });
+}
+
+function _syncCustomScrollbar(display) {
+  if (display && typeof display._syncScrollbar === 'function') display._syncScrollbar();
+}
+
+// 选中文本时不显示浮动条垫底（模糊/渐变）：那层会压住选择高亮，选到靠下的
+// 数据行时看不到自己选中了哪一段。selectionchange 只在结束时收尾，很轻。
+function _initSelectionBackdropToggle() {
+  if (window.__selBackdropBound) return;
+  window.__selBackdropBound = true;
+  document.addEventListener('selectionchange', function() {
+    var page = (typeof getActivePage === 'function') ? getActivePage() : null;
+    if (!page || !page.displayArea) return;
+    var sel = window.getSelection();
+    var inDisplay = false;
+    if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+      try {
+        var r = sel.getRangeAt(0);
+        inDisplay = page.displayArea.contains(r.startContainer) ||
+                    page.displayArea.contains(r.endContainer);
+      } catch (e) { inDisplay = false; }
+    }
+    page.displayArea.classList.toggle('is-selecting', !!inDisplay);
+  });
 }
 
 // ---- 窗口重绘 ----
@@ -420,7 +588,7 @@ function renderHistoryLines(entries, keepScroll) {
   var display = pageEl('displayContent');
   if (!display) return;
 
-  _removeSpacer();
+  _updateUnreadChrome();
   display.innerHTML = '';
   if (entries.length === 0) {
     display.innerHTML = '<div class="placeholder">' + t('placeholder.no_process', '无串口进程') + '</div>';
@@ -475,14 +643,16 @@ function renderHistoryLines(entries, keepScroll) {
   }
   display.appendChild(fragment);
 
-  _frozen = !!state.scrollLocked;
+  // keepScroll 表示这是「在原有窗口上重绘」（切显示模式等）：此时不要把用户
+  // 往回翻出来的冻结状态清掉，否则一换模式就被拽回最新一条、未读提示也消失。
+  _frozen = !!state.scrollLocked || (!!keepScroll && _frozen);
   _atBottom = !_frozen;
   if (!keepScroll) {
     display.scrollTop = 1e9;
     _atBottom = true;
   }
   display.onscroll = _onDisplayScroll;
-  _syncSpacer(display);
+  _updateUnreadChrome(display);
 }
 
 function _moreAboveTip(entries) {
@@ -505,6 +675,7 @@ function _needsLoadOlderTip(entries) {
 function _onDisplayScroll() {
   var display = pageEl('displayContent');
   if (!display) return;
+  // 滚动条只反映真实内容（未读改用右下角胶囊提示），所以到底的判断就是原生语义。
   var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
   var wasFrozen = _frozen;
   _atBottom = atBottom;
@@ -513,13 +684,13 @@ function _onDisplayScroll() {
   if (wasFrozen && !shouldFreeze) {
     // 回到底部：解除冻结，把未读补上
     _frozen = false;
-    _removeSpacer();
+    _updateUnreadChrome();
     renderHistoryLines(_activeCache());
     return;
   }
   if (!wasFrozen && shouldFreeze) {
     _frozen = true;
-    _syncSpacer(display);
+    _updateUnreadChrome(display);
   }
   // 翻到顶：先看缓存里还有没有（expandHistory 自己处理），没有就去守护进程取。
   // 注意条件里**不能**再带 `_renderStart > 0`：缓存头正好是窗口起点时
@@ -551,11 +722,11 @@ function onScrollLockChanged() {
   if (state.scrollLocked) {
     _frozen = true;
     _atBottom = false;
-    _syncSpacer(display);
+    _updateUnreadChrome(display);
     return;
   }
   _frozen = false;
-  _removeSpacer();
+  _updateUnreadChrome();
   renderHistoryLines(_activeCache());
 }
 
@@ -597,9 +768,9 @@ function expandHistory(entries) {
 
   // 窗口有上界：往上加就要从下方裁（裁掉的行数由占位块记着，
   // 所以往下滚时它们仍在缓存里，且滚动条高度不撒谎）
-  _trimToWindow(display, win);
+  _trimToWindow(display, win, true);
   display.scrollTop = Math.max(0, display.scrollHeight - prevHeight);
-  _syncSpacer(display);
+  _updateUnreadChrome(display);
 }
 
 function _fetchOlder(entries, display, prevHeight) {
