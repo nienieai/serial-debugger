@@ -7,7 +7,7 @@
 **GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
 [![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
-[![Version](https://img.shields.io/badge/version-0.8.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.8.1-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
@@ -226,7 +226,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [需求文档](REQUIREMENTS.md) | 需求列表与实现状态 |
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
-| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.0 各版本的变更、根因与验收方法 |
+| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.1 各版本的变更、根因与验收方法 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
@@ -234,13 +234,13 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 📜 版本历史 / Changelog
 
-当前版本 **v0.8.0**（稳定基线）。最近三版：
+当前版本 **v0.8.1**。最近三版：
 
 | 版本 | 要点 |
 |------|------|
+| **0.8.1** | GUI 一轮集中修复：新建页先选模式、前端热重载、端口下拉同步与占用高亮、历史视图空白、自绘滚动条、状态栏统计残留、标签栏滚动提示、主题按钮图标 |
 | **0.8.0** | 把 0.7.5.1 ～ 0.7.5.10 的修复整体收口为稳定基线；不含功能改动（源码与 0.7.5.10 的差别只有版本号） |
 | **0.7.5.10** | 补 `serial-cli sendone [processId] [--raw]`，让「多字符串条目剥头」那条修复可黑盒验收 |
-| **0.7.5.9** | 修复「开串口时多建一个进程 / 多出一个标签页」的真因：自动建会话把自己的 `sessionId` 清掉 |
 
 完整历史（0.1.0 起，含每个版本的根因分析、实测数据与验收方法）见 [`CHANGELOG.md`](CHANGELOG.md)。
 

@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.0）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.1）的已完成记录；
 > 更早版本完成情况见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 待实现
@@ -118,7 +118,7 @@
 | 83 | 空闲的转发标签显示为绿色（看起来像正在转发） | 已修复 | **2026-10-26 修复**（用户截图：标签栏里「端口转发空闲」是绿色，而同样空闲的「单端口空闲」是灰色斜体）。`.tab-forward { color: var(--green) !important }` 只要 `mode === 'forward'` 就加，`!important` 连 `.tab-idle` 的灰色一起盖掉，于是「空闲」和「正在转发」看起来一样。改为只在 `mode === 'forward' && portOpen` 时加 `.tab-forward`，空闲时退回 `.tab-idle`（灰色斜体），真正转发时才绿 + 加粗。夹具 `_audit/tab_forward_color.py` 9 项（空闲活动/非活动、非活动与单端口页同色、斜体与字重、连上变绿加粗、断开退回）；变异验证：去掉 `portOpen` 判定后 4 项变红 |
 | 84 | 右上角主题按钮没有图标 | 已修复 | **2026-10-26 修复**（用户反馈「右上角主题按键没图标」）。两条叠加的原因：① index.html 的 data-icon="theme_palette" 这个键**两头都没有**——Go 内嵌的 config/icons/system/*.svg 里没有，icons.js 的静态兜底表里也没有，icon() 直接返回空串；② 就算键存在也看不见：.c-theme-btn 只有 width: 28px 而没有清 padding，全局 button 的 5px 14px 内边距把内容区压成 **0px**，里面的 <svg> 作为 flex 子项被 lex-shrink 挤成 0 宽（实测 getBoundingClientRect().width === 0）。修法：兜底表补 	heme_palette（同时补一份 SVG 到 config/icons/system/）；_initIcons() 由「整体替换」改为**与兜底表合并**（原来 Object.assign({}, data)，Go 少哪个键那个图标就会被清空，切标签时的 _populateIcons 还会再刷一遍）；.c-theme-btn 补 padding: 0，并给 .c-theme-btn > svg 钉住 18×18 + lex-shrink: 0（_populateIcons 塞的是裸 svg，原来那条规则只认 .theme-icon 类）。夹具 _audit/theme_icon.py 10 项（有 svg、属性 18×18、**渲染尺寸** 18×18、按钮内容区容得下图标、Go 只回少量图标时不丢、全文档 [data-icon] 都有图标）；变异验证：键名写错 / 改回整体替换 /padding 不清零，3 组各自变红 |
 
-## 未发布（feat/mode-picker 分支）已完成
+## v0.8.1 已完成
 
 | 需求 / 问题 | 说明 |
 |---|---|
