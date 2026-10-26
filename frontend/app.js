@@ -308,8 +308,11 @@ function _renderSendMirrorHex(text, container) {
     } else if (ch === ' ' || ch === ',') {
       if (cur) { tokens.push(cur); cur = ''; }
       tokens.push(ch);
-    } else if (ch === '0' && i + 2 < text.length && (text[i+1] === 'x' || text[i+1] === 'X')) {
+    } else if (ch === '0' && i + 1 < text.length && (text[i+1] === 'x' || text[i+1] === 'X')) {
       // 0x / 0X — push as display token preserving case
+      // 边界是 i+1（不是 i+2）：原写成 i+2 < length 时，紧贴末尾的「AA0x」里的
+      // 0x 不被当作前缀，整段并进 hex token → 含 x 判非法 → 整段标红（假红灯），
+      // 而 _normalizeHexInput 会把 0x 剥掉、实际能发出去（TODO #48）。
       if (cur) { tokens.push(cur); cur = ''; }
       tokens.push(text[i+1] === 'X' ? '0X' : '0x');
       i += 1; // skip the x/X
@@ -1126,33 +1129,47 @@ function _csPortalCleanup() {
   if (_csResizeObserver) { _csResizeObserver.disconnect(); _csResizeObserver = null; }
 }
 
+// 下拉内容签名：值 + 显示文字 + option 上的类（占用高亮）+ 当前选中项。
+// 只用来判断「要不要重建」，所以用拼接字符串即可，N 只有几个到几十个。
+function _csOptionsSig(sel) {
+  var parts = [String(sel.selectedIndex)];
+  for (var i = 0; i < sel.options.length; i++) {
+    var o = sel.options[i];
+    parts.push(o.value + '\u0001' + (o.textContent || o.text || '') + '\u0001' + o.className);
+  }
+  return parts.join('\u0002');
+}
+
+// 刷新自定义下拉。
+//
+// 原实现每次调用都重拼 dd.innerHTML 并给每个 .cs-option 重新绑 mousedown，
+// 而这个函数在每个 <select> 上挂着 MutationObserver（childList+subtree+attributes），
+// 于是「切标签 / 开完串口 / 端口列表刷新」这类路径会放大成 3×N 次整表重建
+// （TODO #79 ①）。现在：① 内容签名没变就直接返回（只更新触发器文字）；
+// ② 点击用事件委托，一次绑定，重建后不用再绑。
 function _csRefresh(wrap) {
   var sel = wrap.querySelector('select');
-  var dd = wrap.querySelector('.cs-dropdown');
-  // Dropdown may have been portalled to body — look there too
-  if (!dd) dd = document.querySelector('.cs-dropdown.is-portalled');
   var trigText = wrap.querySelector('.cs-text');
   if (!sel || !trigText) return;
-  var html = '';
-  for (var i = 0; i < sel.options.length; i++) {
-    var opt = sel.options[i];
-    var cls = 'cs-option';
-    if (i === sel.selectedIndex) cls += ' is-selected';
-    if (opt.className) cls += ' ' + opt.className;
-    html += '<div class="' + cls + '" data-val="' + escHtml(opt.value) + '">' + escHtml(opt.textContent || opt.text) + '</div>';
+  var dd = wrap.querySelector('.cs-dropdown');
+  // 下拉打开时会被 portal 到 body；只有它确实属于这个 wrap 才认
+  if (!dd && _csOpen === wrap) dd = document.querySelector('.cs-dropdown.is-portalled');
+  var sig = _csOptionsSig(sel);
+  if (dd && dd._csSig !== sig) {
+    var html = '';
+    for (var i = 0; i < sel.options.length; i++) {
+      var opt = sel.options[i];
+      var cls = 'cs-option';
+      if (i === sel.selectedIndex) cls += ' is-selected';
+      if (opt.className) cls += ' ' + opt.className;
+      html += '<div class="' + cls + '" data-val="' + escHtml(opt.value) + '">' + escHtml(opt.textContent || opt.text) + '</div>';
+    }
+    dd.innerHTML = html;
+    dd._csSig = sig;
   }
-  dd.innerHTML = html;
   if (sel.selectedIndex >= 0) {
     trigText.textContent = sel.options[sel.selectedIndex].textContent || sel.options[sel.selectedIndex].text;
   }
-  dd.querySelectorAll('.cs-option').forEach(function(optEl) {
-    optEl.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      sel.value = optEl.dataset.val;
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-      _csClose(wrap);
-    });
-  });
 }
 
 function _csOpenDropdown(wrap) {
@@ -1241,6 +1258,16 @@ function initCustomSelect(sel) {
   var dd = document.createElement('div');
   dd.className = 'cs-dropdown';
   wrap.appendChild(dd);
+  // 选中项走事件委托：下拉重建（dd.innerHTML=…）之后不用再逐项绑 mousedown，
+  // 监听器挂在 dd 上跟着元素走（portal 到 body 也照样生效）。
+  dd.addEventListener('mousedown', function(e) {
+    var optEl = e.target && e.target.closest ? e.target.closest('.cs-option') : null;
+    if (!optEl || !dd.contains(optEl)) return;
+    e.preventDefault();
+    sel.value = optEl.dataset.val;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    _csClose(wrap);
+  });
 
   var isBaud = sel.classList.contains('baud-sel');
 
@@ -1550,6 +1577,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   initStatusBar();
+  bindTabsScroll();
   // Fetch version once
   window.go.main.App.GetVersion().then(function(v) { window._appVersion = v || '0.6.1'; document.title = '串口调试工具 v' + window._appVersion; }).catch(function() { window._appVersion = '0.6.1'; });
   // Create global overlays (moved from static HTML to JS)
@@ -2266,17 +2294,16 @@ function startClientsRefresh() {
   }, 5000);
 }
 
-// Returns true when the active "tab" is a real session tab (not settings/welcome).
-function _hasSessionTab() {
-  return isSessionTab(getActiveTab());
-}
-
-// Show/hide status-bar stats: visible only when daemon is online and the
-// active tab is a real session tab (not settings, not welcome).
+// 状态栏统计只在「已连上端口的会话页」上可见（设置页 / 欢迎页 / 空闲会话都不显示）。
+// 判 portOpen 是必须的：空闲会话（进程起来了、端口没开）没有流量可言，把数字
+// 留着只会给出假信息 —— 实测关掉端口后底部一直挂着上一次会话的 P2:389/s (3%)。
 function _updateStatsVisible() {
-  const vis = state.daemonOnline && _hasSessionTab();
+  const tab = getActiveTab();
+  const vis = state.daemonOnline && isSessionTab(tab) && !!tab.portOpen;
   const el = document.getElementById('statusbar-stats');
   if (el) el.style.display = vis ? '' : 'none';
+  // 藏起来的同时清零：否则下一次显示会先闪一遍上次会话的残留数字
+  if (!vis && _statusBar) _statusBar.resetStats();
 }
 
 function updateDaemonUI() {
@@ -2388,16 +2415,14 @@ function updatePortList(ports) {
   }
   if (html !== state.lastPorts) {
     state.lastPorts = html;
-    _applyPortOptions('portSelect', html, t('status.select_port', '-- 选择端口 --'));
-    _applyPortOptions('portSelectA', html, t('status.port1', '-- 端口1 --'));
-    _applyPortOptions('portSelectB', html, t('status.port2', '-- 端口2 --'));
+    // 三个工具栏下拉不在这里填了：它们走 document.getElementById，多标签时只能
+    // 命中文档里**第一个**同名元素，于是除第一个标签页以外，其余页面的端口下拉
+    // 永远只剩占位符。统一交给下面的 _populateTabPortSelects 按页 root 填 ——
+    // 顺带省掉「第一页被填两遍」的那次多余重建（TODO #79 ①）。
+    // 设置弹窗里的两份是全文档唯一实例，仍用 id 定位。
     _applyPortOptions('portSelectASettings', html, t('status.port1', '-- 端口1 --'));
     _applyPortOptions('portSelectBSettings', html, t('status.port2', '-- 端口2 --'));
   }
-  // 上面那五个 _applyPortOptions 走的是 document.getElementById —— 多标签时
-  // 只能命中文档里**第一个**同名元素，于是除第一个标签页以外，其余页面的端口
-  // 下拉永远只剩占位符（截图里工具栏展开只有「-- 端口1 --」一项）。这里按每个
-  // 标签页自己的 root 再填一遍。
   state.tabs.forEach(function(tb) {
     if (tb && tb._page && tb._page.root) _populateTabPortSelects(tb._page.root);
   });
@@ -2887,6 +2912,9 @@ function renderTabs() {
     var bar = document.getElementById('tabsBar');
     if (bar) bar.appendChild(indicator);
   }
+  // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
+  // 变多而触发）—— 见 bindTabsScroll / TODO #26。
+  if (typeof _updateTabArrows === 'function') _updateTabArrows();
 }
 
 // ---- port open/close ----
@@ -2982,6 +3010,8 @@ async function openPort() {
     updatePortOccupied();
     renderTabs();
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0 };
+    refreshStatsDOM();
+    _updateStatsVisible();
     await mergeRingBuffer(tab.sessionId);
     appendSystemMsg(`串口已打开: ${cfg.port} @ ${cfg.baud}`);
     saveSettings();
@@ -3032,6 +3062,8 @@ async function openForwardPorts() {
     updatePortOccupied();
     renderTabs();
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
+    refreshStatsDOM();
+    _updateStatsVisible();
     await mergeRingBuffer(tab.sessionId);
     appendSystemMsg('端口转发已启动: ' + cfgA.port + ' ↔ ' + cfgB.port);
     saveSettings();
@@ -3048,16 +3080,19 @@ async function closePort() {
       await window.go.main.App.DisconnectSession(tab.sessionId);
     }
   } catch {}
-  refreshStatsDOM();
   await mergeRingBuffer(tab.sessionId);
   appendSystemMsg(t('sys.port_closed_label', '串口已关闭: %s').replace('%s', tab.label));
   tab.portOpen = false;
   tab.label = tab.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
   tab.syncedParams = null;
+  // 会话还在（空闲进程），但字节/速率是那次连接的，重连会从 0 重新计
+  delete state.statsBase[tab.sessionId];
   updateOpenBtn();
   updateSyncIndicator();
   updatePortOccupied();
   renderTabs();
+  // 关掉端口后统计区整体隐藏（此前只刷新字节，速率一直停在最后一次事件上）
+  _updateStatsVisible();
 }
 
 function swapForwardPorts() {
@@ -3372,6 +3407,30 @@ function bindSendScroll(scrollArea) {
   updateArrows();
 }
 
+var _updateTabArrows = null;
+
+// 标签栏「还能往两边滚」的提示（TODO #26）。
+// 滚轮映射与拖拽在 DOMContentLoaded 里另有绑定，这里只负责箭头显隐；箭头本身
+// 复用发送区的 .send-scroll-arrow（绝对定位 + pointer-events:none，不吃布局）。
+function bindTabsScroll() {
+  var bar = document.getElementById('tabsBar');
+  var scroll = document.getElementById('tabsScroll');
+  if (!bar || !scroll) return;
+  var left = bar.querySelector('.tabs-scroll-arrow--left');
+  var right = bar.querySelector('.tabs-scroll-arrow--right');
+  if (!left || !right) return;
+  function update() {
+    var max = scroll.scrollWidth - scroll.clientWidth;
+    left.classList.toggle('is-hidden', scroll.scrollLeft <= 1);
+    right.classList.toggle('is-hidden', scroll.scrollLeft >= max - 1);
+  }
+  scroll.addEventListener('scroll', update, { passive: true });
+  if (typeof ResizeObserver === 'function') new ResizeObserver(update).observe(scroll);
+  window.addEventListener('resize', update);
+  _updateTabArrows = update;
+  update();
+}
+
 function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
   _persistDisplayModes();
@@ -3505,6 +3564,12 @@ function onStatsCount(data) {
 function onStatsRate(data) {
   const tab = getActiveTab();
   if (!tab || !tab.sessionId || data.processId !== tab.sessionId) return;
+  const sid = tab.sessionId;
+  if (!state.statsBase[sid]) { state.statsBase[sid] = { tx: 0, rx: 0, p1: 0, p2: 0 }; }
+  const b = state.statsBase[sid];
+  // 速率也按会话缓存：此前只写进 DOM，切标签/重连后停在别人的最后一个速率上
+  b.txRate = data.writeRateBps || 0;
+  b.rxRate = data.readRateBps || 0;
   const isFwd = activeMode() === 'forward';
   if (_statusBar) {
     _statusBar.setStatsMode(isFwd);
@@ -3547,6 +3612,14 @@ function refreshStatsDOM() {
     const b = state.statsBase[tab.sessionId];
     if (b && _statusBar) {
       _statusBar.updateStatsBytes({tx: b.tx || 0, rx: b.rx || 0, p1: b.p1 || 0, p2: b.p2 || 0});
+      // 速率按会话缓存回放（没收到过就是 0）：否则切标签会留着上一个会话的速率
+      _statusBar.updateStatsRates({
+        txRate: b.txRate || 0,
+        rxRate: b.rxRate || 0,
+        p1Rate: b.txRate || 0,
+        p2Rate: b.rxRate || 0,
+        maxBps: (tab.syncedParams && tab.syncedParams.baud) ? tab.syncedParams.baud / 10 : 0
+      });
       _statusBar.setStatsMode(isFwd);
     }
   } else {

@@ -265,13 +265,24 @@ button:disabled:active { transform: none; box-shadow: none; }
   content: ''; position: absolute; bottom: 0; left: 0; right: 0;
   height: 1px; background: var(--border); z-index: 1; pointer-events: none;
 }
+/* 视口：包住滚动容器，给左右箭头（.tabs-scroll-arrow）提供定位上下文。
+   align-self: stretch 保证它撑满标签栏高度，箭头才能上下贴边。 */
+.tabs-viewport {
+  position: relative; flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: flex-end; align-self: stretch;
+}
 .tabs-scroll {
   display: flex; align-items: flex-end; gap: 2px;
   overflow-x: auto; overflow-y: visible;
   scrollbar-width: none; /* Firefox */
-  align-self: stretch;
+  align-self: stretch; flex: 1 1 auto; min-width: 0;
 }
 .tabs-scroll::-webkit-scrollbar { display: none; /* Chrome/Safari */ }
+/* 标签栏左右「还能滚」提示：复用发送区的 .send-scroll-arrow（绝对定位、不吃
+   布局、pointer-events:none），只换宽度与渐变底色 —— 标签栏底色是 --bg2。 */
+.tabs-scroll-arrow { width: 26px; font-size: 18px; }
+.tabs-scroll-arrow--left  { left: 0;  background: linear-gradient(to right, var(--bg2) 45%, transparent); }
+.tabs-scroll-arrow--right { right: 0; background: linear-gradient(to left,  var(--bg2) 45%, transparent); }
 .tab-btn {
   display: flex; align-items: center; gap: 4px;
   background: var(--input-bg); border: 1px solid var(--border);
@@ -852,7 +863,9 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* Send mirror hex coloring */
 .send-input-mirror .send-hex-ok { color: var(--dc-hexTx, var(--fg)); }
 .send-input-mirror .send-hex-bad { color: var(--dc-hexInv, var(--red)); text-decoration: underline; text-decoration-color: var(--dc-hexInv, var(--red)); text-underline-offset: 2px; text-decoration-style: wavy; }
-.send-input-mirror .send-hex-prefix { color: var(--dc-hexTx, var(--fg)); }
+/* 0x 前缀用弱化色：原来和 .send-hex-ok 同一个 --dc-hexTx，等于没有区分作用
+   （TODO #47）。前缀只是分隔符，压暗一档既不再抢字节的视觉，也仍然看得见。 */
+.send-input-mirror .send-hex-prefix { color: var(--placeholder); }
 #sendInput {
   position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
   background: transparent; color: transparent; border: none; border-radius: 0;

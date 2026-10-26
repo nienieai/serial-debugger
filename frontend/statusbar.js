@@ -232,10 +232,11 @@ function createStatusStats(container) {
 		reset() {
 			txItem.val.textContent = '0';
 			rxItem.val.textContent = '0';
-			txSpeedItem.val.textContent = '0 B/s(0%)';
-			txSpeedItem.val.className = 'stat-val';
-			rxSpeedItem.val.textContent = '0 B/s(0%)';
-			rxSpeedItem.val.className = 'stat-val';
+			// 走同一个格式化函数：此前这里硬编码 '0 B/s(0%)'，与正常路径
+			// 产出的 '0/s (0%)' 不一致（同一块区域两种写法）
+			var zero = fmtSpeed(0, 0);
+			applySpeed(txSpeedItem.val, zero);
+			applySpeed(rxSpeedItem.val, zero);
 		},
 		root: container,
 		_isFwdRef: function() { return _isFwd; },

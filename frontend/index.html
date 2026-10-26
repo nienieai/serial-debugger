@@ -104,7 +104,13 @@
   </div>
 
   <div class="tabs-bar" id="tabsBar">
-    <div class="tabs-scroll" id="tabsScroll"></div>
+    <!-- 视口包一层：箭头必须绝对定位在滚动容器**之外**，放进 .tabs-scroll 里会
+         随内容一起滚走；这样也不用在 JS 里算 + 按钮的宽度 -->
+    <div class="tabs-viewport">
+      <div class="tabs-scroll" id="tabsScroll"></div>
+      <span class="send-scroll-arrow tabs-scroll-arrow tabs-scroll-arrow--left is-hidden" aria-hidden="true">‹</span>
+      <span class="send-scroll-arrow tabs-scroll-arrow tabs-scroll-arrow--right is-hidden" aria-hidden="true">›</span>
+    </div>
     <button class="tab-btn tab-new" id="tabAddBtn" onclick="openNewSessionTab()" data-i18n-title="tooltip.new_tab" title="新建会话">+</button>
   </div>
 
