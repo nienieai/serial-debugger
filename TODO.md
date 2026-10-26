@@ -23,6 +23,7 @@
 | P2 | 文本/Hex 对照显示 | 分段解码已有 | 历史框分栏显示 Hex+偏移 与文本对照，选中联动 |
 | P2 | 输入框镜像渲染迁移至 Go | Go 端文本分段解析 | 将 send mirror 的逐字符遍历移至 Go 端 |
 | P2 | daemon 重启自动恢复磁盘历史 | `historyFile` 自动加载 | daemon 启动时扫描 `history/*.log`，匹配进程 ID 的文件自动加载到环形缓冲区 |
+| P2 | CLI 与守护进程的多色输出（彩色日志/彩色 CLI） | 无（Windows 需 VT 支持） | **现状**：全仓库**没有任何 ANSI 转义**，控制台与日志都是纯文本。守护进程的每一行由 `formatLogLine(ts, category, msg)`（`daemon/logfile.go:93`）单点产出，`logOp()`（`daemon/main.go:137`）把**同一行**既打印到控制台又写进 `logs/daemon.log`；CLI 各命令是裸 `fmt.Fprintf(os.Stdout/os.Stderr, …)`。**目标**：① 终端里按类别着色（启动=青、连接=绿、串口=蓝、IPC=灰、关闭=黄、错误=红，时间戳弱化）；② `serial-cli logs` **读**文件时按 `[类别]` 着色（文件本身仍纯文本）；③ CLI 输出：错误红、警告黄、`check` 的三层结果与 `probe` 的命中/未命中分区着色，表格列对齐。**硬约束**：① **写进文件的行绝不能带转义** —— 只在「面向控制台的 writer」上着色，日志文件保持纯文本，否则 `serial-cli logs` 与外部比对会看到乱码；② **非 TTY 自动无色**（管道、重定向、`--silent` 后台模式），另给 `--color=auto\|always\|never` 与 `NO_COLOR` 环境变量；③ **MCP 绝不能着色**（stdio JSON-RPC，任何转义都会破坏协议）；④ Windows 控制台要先开 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`（加在 `daemon/console_windows.go` 现有 `setConsoleOutputCP` 旁边，开失败就降级无色）——该文件的注释已经证明 `--silent` 时 `GetConsoleMode` 会失败，正好是「无 TTY」的天然判据；⑤ 现有断言 stdout 文本的测试要统一走 `--color=never` 或依赖非 TTY 自动无色。**顺带**：`serial-cli logs` 的类别列目前是 `[%-6s]` 定宽，着色时注意中文类别宽度。**工作量**：小（一个 `internal/color` 小包 + 三处调用点），风险低但触及所有命令输出，建议配一个输出快照夹具。可选扩展：深浅背景两套配色、`--theme` 选择 |
 | P3 | GUI 性能面板 | `session.stats` IPC 已就绪 | - |
 
 ## 已知问题
