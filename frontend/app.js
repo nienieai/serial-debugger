@@ -381,7 +381,7 @@ function _applyDisplayStyle() {
     el.id = 'display-font-style';
     document.head.appendChild(el);
   }
-  el.textContent = '.display-content,#sendInput,#sendMirror{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + state.tabSize + ';}';
+  el.textContent = '.display-content,#sendInput,#sendMirror,.c-color-preview{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + state.tabSize + ';}';
   if (_statusBar) _statusBar.updateTabSize({tabSize: state.tabSize});
 }
 

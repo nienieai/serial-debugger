@@ -1351,7 +1351,9 @@ settings.ini  →  AppSettings.DisplayColors (JSON string)
 
 ### 预览
 
-每分组一行示例（`.c-color-preview`），深浅各一并排。控制字符模拟 `::before` 叠层渲染（标记 + transparent 真字符）。改色后 `_refreshColorPreview(key)` 即时同步。
+每分组一行示例（`.c-color-preview`），深浅各一并排。**走的是主显示区同一条渲染路径**：`makeDataRow(..., { displayMode })` + `renderSegments()`，所以预览里的 `.data-row` / `.ts-line` / `.data-line` / `.ctrl-char[data-ws]` / `.hex-escape` / `.hex-data` 与真实显示框完全同构，字号字体也由 `#display-font-style` 一起管（`.display-content,#sendInput,#sendMirror,.c-color-preview`）。
+
+两栏的配色靠容器内联变量：`_applyDisplayColors()` 只把两套值写到 `:root[data-theme="dark"|"light"]`，而预览要在同一屏里同时显示深浅两套，所以 `_applyPreviewVars(box, mode)` 把该主题的 `--dc-*` 逐个 `setProperty` 到各自的 `.c-color-preview` 上。改色后 `_refreshColorPreview(key)` 立即重绘。
 
 ### 调色板集成
 

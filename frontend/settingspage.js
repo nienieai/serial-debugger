@@ -1202,99 +1202,59 @@ function _refreshColorPreview(key) {
 		}
 	}
 
-	function _renderColorPreview(items, container) {
+	// 预热变量：把某一主题的一整套 --dc-* 内联到预览容器上。
+// `_applyDisplayColors()` 只把两套配色写到 `:root[data-theme="dark"|"light"]`，
+// 而预览要在同一屏里并排显示深浅两栏，所以按主题把变量注入到各自容器。
+function _applyPreviewVars(box, mode) {
+	var colors = state.displayColors || {};
+	var dflt = _defaultDisplayColors();
+	for (var i = 0; i < _displayColorKeys.length; i++) {
+		var k = _displayColorKeys[i];
+		var v = colors[k] || {};
+		var d = dflt[k] || {};
+		var fg = v[mode] || d[mode] || '';
+		if (fg) box.style.setProperty('--dc-' + k, fg);
+		var bg = (mode === 'dark' ? v.bgDark : v.bgLight);
+		if (bg === undefined) bg = (mode === 'dark' ? d.bgDark : d.bgLight);
+		if (bg) box.style.setProperty('--dc-' + k + '-bg', bg);
+		var bold = (v.bold !== undefined) ? v.bold : d.bold;
+		if (bold) box.style.setProperty('--dc-' + k + '-bold', 'bold');
+		var italic = (v.italic !== undefined) ? v.italic : d.italic;
+		if (italic) box.style.setProperty('--dc-' + k + '-italic', 'italic');
+	}
+}
+
+// 数据高亮预览：走主显示区同一条渲染路径（`makeDataRow` + `renderSegments`），
+// 这样看到的就是真实显示框里的样子（时间戳行、字符统计、控制字符标记、转义字节、
+// 字号字体都跟 `state.displayFontSize` / `displayFontFamily` 一致）。
+// `opts.displayMode` 让同一栏里既能画文本行也能画 Hex 行，不必动全局 state。
+function _renderColorPreview(items, container) {
 	if (!container) return;
 	container.innerHTML = '';
-	var colors = state.displayColors || _defaultDisplayColors();
-	var darkLight = ['dark','light'];
-	var groupKey = items[0].key;
-	var isSingle = groupKey === 'tsTx';
-	var isFwd = groupKey === 'ts1';
+	var isFwd = items[0].key === 'ts1';
+	var samples = isFwd ? [
+		{ dir: '1', ts: '13:00:02.100', hex: 'E8AFB7E6B182020D0A',
+		  segs: [{ t: 'text', v: '请求' }, { t: 'hex', v: '02' }, { t: 'cr' }, { t: 'lf' }] },
+		{ dir: '2', ts: '13:00:02.200', hex: 'E7A1AEE8AEA4030D0A',
+		  segs: [{ t: 'text', v: '确认' }, { t: 'hex', v: '03' }, { t: 'cr' }, { t: 'lf' }] }
+	] : [
+		{ dir: 'rx', ts: '13:00:01.100', hex: '4869010D0A',
+		  segs: [{ t: 'text', v: 'Hi' }, { t: 'hex', v: '01' }, { t: 'cr' }, { t: 'lf' }] },
+		{ dir: 'tx', ts: '13:00:01.200', hex: '4F4BFF0D0A',
+		  segs: [{ t: 'text', v: 'OK' }, { t: 'hex', v: 'FF' }, { t: 'cr' }, { t: 'lf' }] }
+	];
+	var modes = ['dark', 'light'];
 	for (var m = 0; m < 2; m++) {
-		var ml = darkLight[m];
+		var mode = modes[m];
 		var box = document.createElement('div');
 		box.className = 'c-color-preview ' + (m === 0 ? 'c-preview-dark' : 'c-preview-light');
-		// Get color + bg + bold for a key
-		function _clr(k) {
-			var v = colors[k] || _defaultDisplayColors()[k] || {};
-			if (v[ml]) return v[ml];
-			var d = (_defaultDisplayColors()[k]) || {};
-			return d[ml] || '';
+		box.setAttribute('data-preview-theme', mode);
+		_applyPreviewVars(box, mode);
+		for (var s = 0; s < samples.length; s++) {
+			var sm = samples[s];
+			makeDataRow(box, sm.dir, sm.ts, sm.hex, sm.segs, { displayMode: 'text' });
+			makeDataRow(box, sm.dir, sm.ts, sm.hex, null, { displayMode: 'hex' });
 		}
-		function _cbg(k) {
-			var v = colors[k] || _defaultDisplayColors()[k] || {};
-			if (v.bgDark !== undefined && v.bgLight !== undefined) { return ml === 'dark' ? (v.bgDark || 'transparent') : (v.bgLight || 'transparent'); }
-			var d = (_defaultDisplayColors()[k]) || {};
-			var bv = ml === 'dark' ? d.bgDark : d.bgLight;
-			return bv || 'transparent';
-		}
-		function _cbold(k) {
-			var v = colors[k] || _defaultDisplayColors()[k] || {};
-			if (v.bold !== undefined) return v.bold;
-			var d = (_defaultDisplayColors()[k]) || {};
-			return !!d.bold;
-		}
-		function _span(k, t) {
-			var fw = _cbold(k) ? 'font-weight:bold;' : '';
-			var bg = _cbg(k);
-			return '<span style="color:' + _clr(k) + ';background:' + bg + ';' + fw + '">' + escHtml(t) + '</span>';
-		}
-		// Preview ctrl char — child-span structure matching decoder.js
-		// .ctrl-mark (visible, colored) + .ctrl-real (font-size:0, hidden)
-		var _ctrl = function(clbl, ws) {
-			var cfgKey = isSingle ? 'ctrlFg' : 'fctrlFg';
-			var cbgKey = isSingle ? 'ctrlBg' : 'fctrlBg';
-			var fw = _cbold(cfgKey) ? 'font-weight:bold;' : '';
-			return '<span style="background:' + _clr(cbgKey) + ';">'
-				+ '<span class="ctrl-mark" style="color:' + _clr(cfgKey) + ';' + fw + '">' + escHtml(clbl) + '</span>'
-				+ '<span class="ctrl-real">' + escHtml(ws) + '</span>'
-				+ '</span>';
-		};
-		var html = '';
-		if (isSingle) {
-			// Rx text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsRx', '[13:00:01.100] Rx ⇃ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('textRx', 'Hi') + _span('hexEsc', '/01') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// Rx hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsRx', '[13:00:01.100] Rx ⇃ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hexRx', '48 69 01 0D 0A') + '</div>';
-			// Tx text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsTx', '[13:00:01.200] Tx ↾ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('textTx', 'OK') + _span('hexEsc', '/FF') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// Tx hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsTx', '[13:00:01.200] Tx ↾ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hexTx', '4F 4B FF 0D 0A') + '</div>';
-		} else if (isFwd) {
-			// P1 text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts1', '[13:00:02.100] P1 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('text1', '请求') + _span('fhexEsc', '/02') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// P1 hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts1', '[13:00:02.100] P1 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hex1', 'E8 AF B7 E6 B1 82 02 0D 0A') + '</div>';
-			// P2 text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts2', '[13:00:02.200] P2 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('text2', '确认') + _span('fhexEsc', '/03') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// P2 hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts2', '[13:00:02.200] P2 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hex2', 'E7 A1 AE E8 AE A4 03 0D 0A') + '</div>';
-		}
-		box.innerHTML = html;
 		container.appendChild(box);
 	}
 }

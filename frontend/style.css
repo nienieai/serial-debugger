@@ -520,16 +520,18 @@ button:disabled:active { transform: none; box-shadow: none; }
 .c-color-sep::after {
   content: ''; flex: 1; height: 1px; background: var(--border); margin-left: 8px;
 }
-/* Preview bubbles — two side-by-side: dark | light */
+/* Preview bubbles — two side-by-side: dark | light.
+   里面是真实显示行（`.data-row`），字号/字体由 `#display-font-style` 统一覆盖。 */
 .c-color-preview-wrap {
   display: flex; gap: 6px; margin-bottom: 4px; flex-wrap: wrap;
 }
 .c-color-preview {
-  padding: 6px 8px; border-radius: 6px; flex: 1;
-  font-size: 10px; line-height: 1.4;
+  padding: 6px 8px; border-radius: 6px; flex: 1 1 0; min-width: 0;
+  font-size: 12px; line-height: 1.4;
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
-  min-width: 160px; max-width: 50%;
+  overflow-wrap: anywhere;
 }
+.c-color-preview .data-row:last-child { margin-bottom: 0; }
 .c-preview-dark  { color: #d4d4d4; background: #1e1e1e; border: 1px solid var(--border); }
 .c-preview-light { color: #1a1a1a; background: #f3f3f3; border: 1px solid var(--border); }
 
