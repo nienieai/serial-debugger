@@ -2067,34 +2067,66 @@ function syncAutoSendState(daemonSessions) {
   }
 }
 
-function _markOccupied(selId) {
-  const sel = document.getElementById(selId);
+// 标注「已被其它标签页占用」的端口选项。
+// sel 是本页的 <select> 元素（不能用 id 查：多标签时每个页面各有一份同 id），
+// owner 是这个下拉所属的标签页 —— 前向模式下「自己另一个端口」不能算被别人占用。
+function _markOccupied(sel, owner) {
   if (!sel) return;
-  const tab = getActiveTab();
-  const myPort = (tab && tab.portOpen && tab.syncedParams) ? tab.syncedParams.portName : '';
-  const myPortB = (tab && tab.portOpen && tab.mode === 'forward' && tab.syncedParams) ? tab.syncedParams.forwardPortB : '';
-  // Extract individual ports for the active forward tab
+  const tab = owner || getActiveTab();
+  // Extract individual ports for this page's forward tab
   const myPorts = tab && tab.mode === 'forward' && tab.portOpen ? _forwardPorts(tab) : null;
+  const selId = sel.id;
+  let changed = false;
   for (let i = 0; i < sel.options.length; i++) {
     const opt = sel.options[i];
     const portName = opt.value;
-    if (!portName) { opt.className = ''; continue; }
     let occupied = false;
-    for (let j = 0; j < state.tabs.length; j++) {
-      if (j === state.activeTab) continue;
-      const t = state.tabs[j];
-      if (!t.portOpen || !t.syncedParams) continue;
-      if (_tabHasPort(t, portName)) { occupied = true; break; }
-    }
-    // In forward mode, mark own other port as occupied to prevent self-duplicate
-    if (!occupied && tab && tab.portOpen && tab.mode === 'forward' && myPorts) {
-      if ((selId === 'portSelectA' && portName === myPorts[1]) ||
-          (selId === 'portSelectB' && portName === myPorts[0])) {
-        occupied = true;
+    if (portName) {
+      for (let j = 0; j < state.tabs.length; j++) {
+        const t = state.tabs[j];
+        if (t === tab) continue;
+        if (!t.portOpen || !t.syncedParams) continue;
+        if (_tabHasPort(t, portName)) { occupied = true; break; }
+      }
+      // In forward mode, mark own other port as occupied to prevent self-duplicate
+      if (!occupied && myPorts) {
+        if ((selId === 'portSelectA' && portName === myPorts[1]) ||
+            (selId === 'portSelectB' && portName === myPorts[0])) {
+          occupied = true;
+        }
       }
     }
-    opt.className = occupied ? 'port-occupied' : '';
+    const want = occupied ? 'port-occupied' : '';
+    // 只在真的变了时写：这个 select 上挂着 MutationObserver（attributes: true），
+    // 无条件写 className 每次都会把整份下拉重建一遍（TODO #79 ①）。
+    if (opt.className !== want) {
+      opt.className = want;
+      changed = true;
+    }
   }
+  // 已渲染的下拉是一份 <div class="cs-option"> 副本，标完要同步过去，
+  // 否则得重新打开下拉才看得见（旧 bug 的次要原因）。
+  if (changed) _syncOccupiedDropdown(sel);
+}
+
+// 把 select 上的占用类同步到已渲染的 .cs-option 副本（按 option 值对齐，不重建 DOM）。
+function _syncOccupiedDropdown(sel) {
+  const wrap = sel.closest ? sel.closest('.cs-wrap') : null;
+  if (!wrap) return;
+  let dd = wrap.querySelector('.cs-dropdown');
+  // 下拉打开时会被 portal 到 body 上
+  if (!dd && _csOpen === wrap) dd = document.querySelector('.cs-dropdown.is-portalled');
+  if (!dd) return;
+  dd.querySelectorAll('.cs-option').forEach(function(item) {
+    let opt = null;
+    for (let i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === item.dataset.val) { opt = sel.options[i]; break; }
+    }
+    const want = !!opt && opt.className.indexOf('port-occupied') >= 0;
+    if (item.classList.contains('port-occupied') !== want) {
+      item.classList.toggle('port-occupied', want);
+    }
+  });
 }
 
 // Check if a tab uses the given port (handles both single and forward mode).
@@ -2117,10 +2149,14 @@ function _forwardPorts(t) {
   return [parts[0] || '', parts[1] || t.syncedParams.forwardPortB || ''];
 }
 
+// 每个标签页都有自己的三份端口下拉（同 id），必须按页 root 逐份标注。
 function updatePortOccupied() {
-  _markOccupied('portSelect');
-  _markOccupied('portSelectA');
-  _markOccupied('portSelectB');
+  state.tabs.forEach(function(tb) {
+    if (!tb || !tb._page || !tb._page.root || !tb._page.root.querySelector) return;
+    ['#portSelect', '#portSelectA', '#portSelectB'].forEach(function(spec) {
+      _markOccupied(tb._page.root.querySelector(spec), tb);
+    });
+  });
 }
 
 function _syncPortSelectsFromTab() {
