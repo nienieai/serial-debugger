@@ -266,9 +266,12 @@ button:disabled:active { transform: none; box-shadow: none; }
   height: 1px; background: var(--border); z-index: 1; pointer-events: none;
 }
 /* 视口：包住滚动容器，给左右箭头（.tabs-scroll-arrow）提供定位上下文。
-   align-self: stretch 保证它撑满标签栏高度，箭头才能上下贴边。 */
+   align-self: stretch 保证它撑满标签栏高度，箭头才能上下贴边。
+   flex-grow 必须是 0：视口宽度跟着标签走，「+」按钮才会紧跟在最后一个标签后面
+   （grow 会把视口拉满整条，把「+」顶到最右边）；标签溢出时靠 flex-shrink 收窄
+   到可用宽度，右箭头正好贴在可见区域的右边缘。 */
 .tabs-viewport {
-  position: relative; flex: 1 1 auto; min-width: 0;
+  position: relative; flex: 0 1 auto; min-width: 0;
   display: flex; align-items: flex-end; align-self: stretch;
 }
 .tabs-scroll {

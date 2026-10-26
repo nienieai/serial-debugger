@@ -2294,12 +2294,13 @@ function startClientsRefresh() {
   }, 5000);
 }
 
-// 状态栏统计只在「已连上端口的会话页」上可见（设置页 / 欢迎页 / 空闲会话都不显示）。
-// 判 portOpen 是必须的：空闲会话（进程起来了、端口没开）没有流量可言，把数字
-// 留着只会给出假信息 —— 实测关掉端口后底部一直挂着上一次会话的 P2:389/s (3%)。
+// 状态栏统计在会话页上**始终显示**（空闲会话显示 0，不隐藏）；只有设置页 /
+// 欢迎页 / 守护进程离线时才整块隐藏。
+// 数字是否可信交给 refreshStatsDOM：端口没连上就拿 0 顶掉，避免把上一次连接的
+// 数字（以及最后一次 stats-rate 事件的速率）一直挂在下面。
 function _updateStatsVisible() {
   const tab = getActiveTab();
-  const vis = state.daemonOnline && isSessionTab(tab) && !!tab.portOpen;
+  const vis = state.daemonOnline && isSessionTab(tab);
   const el = document.getElementById('statusbar-stats');
   if (el) el.style.display = vis ? '' : 'none';
   // 藏起来的同时清零：否则下一次显示会先闪一遍上次会话的残留数字
@@ -3091,7 +3092,9 @@ async function closePort() {
   updateSyncIndicator();
   updatePortOccupied();
   renderTabs();
-  // 关掉端口后统计区整体隐藏（此前只刷新字节，速率一直停在最后一次事件上）
+  // 关掉端口后统计区不隐藏，但数字要归零（此前只刷新字节，速率一直停在
+  // 最后一次 stats-rate 事件上，见 TODO #82）
+  refreshStatsDOM();
   _updateStatsVisible();
 }
 
@@ -3556,8 +3559,10 @@ function onStatsCount(data) {
     b.rx = data.bytesRead || 0;
   }
   if (_statusBar) {
-    _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
+    // 先切模式再写值：updateStatsBytes 按当前模式挑 p1/p2 还是 tx/rx，
+    // 反过来写会拿单端口的数字去填 P1/P2（或反之），要等下一次事件才纠正
     _statusBar.setStatsMode(isFwd);
+    _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
   }
 }
 
@@ -3587,6 +3592,13 @@ function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
   if (tab && tab.sessionId) {
+    // 端口没连上：一律显示 0（会话统计是按连接计的）。
+    // 不去读缓存、也不去拉 daemon —— 空闲进程的计数没有意义，读出来只会让
+    // 上一次连接的数字继续挂着（用户实测的那条 P2:389/s）。
+    if (!tab.portOpen) {
+      if (_statusBar) _statusBar.resetStats();
+      return;
+    }
     if (!state.statsBase[tab.sessionId]) {
       // No local stats yet — fetch from daemon asynchronously
       state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
@@ -3602,8 +3614,8 @@ function refreshStatsDOM() {
           b.p2 = s.bytesPort2 || 0;
           if (getActiveTab() === tab) {
             if (_statusBar) {
-              _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
               _statusBar.setStatsMode(isFwd);
+              _statusBar.updateStatsBytes({tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2});
             }
           }
         }).catch(function() {});
@@ -3611,6 +3623,8 @@ function refreshStatsDOM() {
     }
     const b = state.statsBase[tab.sessionId];
     if (b && _statusBar) {
+      // 同 onStatsCount：先定模式再写值，否则 P1/P2 会先显示单端口的数字
+      _statusBar.setStatsMode(isFwd);
       _statusBar.updateStatsBytes({tx: b.tx || 0, rx: b.rx || 0, p1: b.p1 || 0, p2: b.p2 || 0});
       // 速率按会话缓存回放（没收到过就是 0）：否则切标签会留着上一个会话的速率
       _statusBar.updateStatsRates({
@@ -3620,7 +3634,6 @@ function refreshStatsDOM() {
         p2Rate: b.rxRate || 0,
         maxBps: (tab.syncedParams && tab.syncedParams.baud) ? tab.syncedParams.baud / 10 : 0
       });
-      _statusBar.setStatsMode(isFwd);
     }
   } else {
     if (_statusBar) _statusBar.resetStats();
