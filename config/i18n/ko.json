@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "밝은 시안 50 %",
   "colorpicker.c_half_gray": "회색 50 %",
   "settings.color_bg_short": "배경",
-  "settings.color_fg_short": "글자"
+  "settings.color_fg_short": "글자",
+  "settings.nav_colors": "데이터 강조",
+  "settings.look_hint": "새 탭, 페이지, 대화 상자 및 기타 메뉴에 적용됩니다.",
+  "settings.about_runtime": "실행 환경",
+  "settings.about_notes": "설명",
+  "settings.about_kv_proto": "프로토콜",
+  "settings.about_kv_dir": "프로그램 폴더",
+  "settings.about_kv_front": "프런트엔드",
+  "settings.about_kv_back": "백엔드",
+  "settings.about_kv_render": "렌더링",
+  "settings.about_kv_conf": "설정 파일"
 }

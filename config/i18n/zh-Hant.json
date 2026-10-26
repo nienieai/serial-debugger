@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "半透明淺青",
   "colorpicker.c_half_gray": "半透明灰",
   "settings.color_bg_short": "背景",
-  "settings.color_fg_short": "字型"
+  "settings.color_fg_short": "字型",
+  "settings.nav_colors": "資料高亮",
+  "settings.look_hint": "套用於新的索引標籤、頁面、對話方塊和其他功能表。",
+  "settings.about_runtime": "執行資訊",
+  "settings.about_notes": "說明",
+  "settings.about_kv_proto": "協定號",
+  "settings.about_kv_dir": "程式目錄",
+  "settings.about_kv_front": "前端",
+  "settings.about_kv_back": "後端",
+  "settings.about_kv_render": "渲染",
+  "settings.about_kv_conf": "設定檔"
 }

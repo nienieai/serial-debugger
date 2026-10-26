@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "Светло-голубой 50 %",
   "colorpicker.c_half_gray": "Серый 50 %",
   "settings.color_bg_short": "Фон",
-  "settings.color_fg_short": "Текст"
+  "settings.color_fg_short": "Текст",
+  "settings.nav_colors": "Подсветка данных",
+  "settings.look_hint": "Применяется к новым вкладкам, страницам, диалогам и меню.",
+  "settings.about_runtime": "Среда выполнения",
+  "settings.about_notes": "Примечания",
+  "settings.about_kv_proto": "Протокол",
+  "settings.about_kv_dir": "Папка программы",
+  "settings.about_kv_front": "Фронтенд",
+  "settings.about_kv_back": "Бэкенд",
+  "settings.about_kv_render": "Рендеринг",
+  "settings.about_kv_conf": "Файл настроек"
 }

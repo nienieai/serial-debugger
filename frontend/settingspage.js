@@ -131,6 +131,16 @@ function createSettingsOverlay() {
   return ov;
 }
 
+// 分类栏图标：用 icons.js 里已有的键，保证浅色/深色主题下都跟随 currentColor
+var SETTINGS_NAV_ICONS = {
+	display: 'terminal',
+	colors: 'theme_palette',
+	appearance: 'theme_light',
+	storage: 'devices',
+	language: 'globe',
+	about: 'info'
+};
+
 function buildSettingsPage() {
 
 	var wrapper = document.createElement('div');
@@ -206,6 +216,11 @@ function buildSettingsPage() {
 	var panelDisplay = document.createElement('div');
 	panelDisplay.className = 'settings-panel';
 	panelDisplay.setAttribute('data-panel', 'display');
+
+	// ── Panel: 数据高亮（从「编码与显示」拆出来，单独一页）──
+	var panelColors = document.createElement('div');
+	panelColors.className = 'settings-panel is-hidden';
+	panelColors.setAttribute('data-panel', 'colors');
 
 	var bInput = _bubble(t('settings.bubble_encoding','编码格式'));
 	bInput.appendChild(_row(t('settings.bubble_encoding','编码格式'), _buildEncodingSelect()));
@@ -372,33 +387,57 @@ function buildSettingsPage() {
 		// Render preview after DOM attached
 		setTimeout(function() { _renderColorPreview(grp.items, preview); }, 10);
 	});
-	panelDisplay.appendChild(bColor);
+	panelColors.appendChild(bColor);
 
 	// ── Panel: 外观 ──
 	var panelAppear = document.createElement('div');
 	panelAppear.className = 'settings-panel is-hidden';
 	panelAppear.setAttribute('data-panel', 'appearance');
 
-	var bLook = _bubble(t('settings.bubble_look','整体外观'));
-	var modeBar = document.createElement('div');
-	modeBar.className = 'settings-mode-bar';
+	// 整体外观：一行式（图标 + 标题说明 + 右侧分段控件）
+	var bLook = document.createElement('div');
+	bLook.className = 'settings-bubble settings-bubble--bare';
+	var modeLine = document.createElement('div');
+	modeLine.className = 'settings-modeline';
+	var mlMain = document.createElement('div');
+	mlMain.className = 'settings-modeline-main';
+	var mlIco = document.createElement('span');
+	mlIco.className = 'settings-modeline-icon';
+	mlIco.innerHTML = icon('theme_auto', 20, 20);
+	mlMain.appendChild(mlIco);
+	var mlText = document.createElement('div');
+	mlText.className = 'settings-modeline-text';
+	var mlTitle = document.createElement('div');
+	mlTitle.className = 'settings-modeline-title';
+	mlTitle.textContent = t('settings.bubble_look','整体外观');
+	var mlDesc = document.createElement('div');
+	mlDesc.className = 'settings-modeline-desc';
+	mlDesc.setAttribute('data-i18n', 'settings.look_hint');
+	mlDesc.textContent = t('settings.look_hint','适用于新的选项卡、页面、对话框和其他菜单。');
+	mlText.appendChild(mlTitle);
+	mlText.appendChild(mlDesc);
+	mlMain.appendChild(mlText);
+	modeLine.appendChild(mlMain);
+	var seg = document.createElement('div');
+	seg.className = 'settings-segctl';
 	[{ v: 'auto', k: 'theme.auto_label', fb: '跟随系统', ico: 'theme_auto' },
-	 { v: 'dark', k: 'theme.dark_label', fb: '深色',   ico: 'theme_dark' },
-	 { v: 'light', k: 'theme.light_label', fb: '浅色', ico: 'theme_light' }].forEach(function(m) {
+	 { v: 'light', k: 'theme.light_label', fb: '浅色', ico: 'theme_light' },
+	 { v: 'dark', k: 'theme.dark_label', fb: '深色', ico: 'theme_dark' }].forEach(function(m) {
 		var btn = document.createElement('button');
-		btn.className = 'settings-mode-btn';
-		btn.innerHTML = icon(m.ico, 16, 16) + ' <span>' + t(m.k, m.fb) + '</span>';
-		if (state.colorThemeMode === m.v) btn.classList.add('is-active');
+		btn.type = 'button';
+		btn.className = 'settings-segctl-btn' + (state.colorThemeMode === m.v ? ' is-active' : '');
+		btn.innerHTML = icon(m.ico, 16, 16) + '<span>' + t(m.k, m.fb) + '</span>';
 		btn.addEventListener('click', function() {
 			state.colorThemeMode = m.v;
-			modeBar.querySelectorAll('.settings-mode-btn').forEach(function(b) { b.classList.remove('is-active'); });
+			seg.querySelectorAll('.settings-segctl-btn').forEach(function(b) { b.classList.remove('is-active'); });
 			btn.classList.add('is-active');
 			applyColorTheme();
 			saveSettings();
 		});
-		modeBar.appendChild(btn);
+		seg.appendChild(btn);
 	});
-	bLook.appendChild(modeBar);
+	modeLine.appendChild(seg);
+	bLook.appendChild(modeLine);
 	panelAppear.appendChild(bLook);
 
 	var themeRefresh = document.createElement('button');
@@ -462,21 +501,84 @@ function buildSettingsPage() {
 	var panelAbout = document.createElement('div');
 	panelAbout.className = 'settings-panel is-hidden';
 	panelAbout.setAttribute('data-panel', 'about');
-	var bAbout = _bubble(t('settings.about_version','版本'));
-	var aboutInfo = document.createElement('div');
-	aboutInfo.style.cssText = 'font-size:13px;line-height:2;color:var(--fg);';
-	var aboutHTML = '<div style="font-size:18px;font-weight:700;margin-bottom:6px">' + escHtml(t('app.title','串口调试工具')) + ' v' + (window._appVersion || '0.6.1') + '</div>';
-	aboutHTML += '<div style="color:var(--placeholder);margin-bottom:14px">' + escHtml(t('settings.about_desc','Go + Wails 跨平台串口调试工具')) + '</div>';
-	aboutHTML += '<p style="margin-bottom:6px;line-height:1.8">' + escHtml(t('settings.about_p1','')) + '</p>';
-	aboutHTML += '<p style="margin-bottom:6px;line-height:1.8">' + escHtml(t('settings.about_p2','')) + '</p>';
-	aboutHTML += '<p style="line-height:1.8">' + escHtml(t('settings.about_p3','')) + '</p>';
-	aboutInfo.innerHTML = aboutHTML;
-	bAbout.appendChild(aboutInfo);
+
+	// 名片 + 两列（运行信息 / 说明）
+	var bAbout = document.createElement('div');
+	bAbout.className = 'settings-bubble settings-bubble--bare';
+	var aboutWrap = document.createElement('div');
+	aboutWrap.className = 'settings-about2';
+
+	var hero = document.createElement('div');
+	hero.className = 'settings-about-hero';
+	var heroHead = document.createElement('div');
+	heroHead.className = 'settings-about-hero-head';
+	var heroName = document.createElement('span');
+	heroName.className = 'settings-about-hero-name';
+	heroName.textContent = t('app.title', '串口调试工具');
+	heroHead.appendChild(heroName);
+	var heroVer = document.createElement('span');
+	heroVer.className = 'settings-about-hero-ver';
+	heroVer.textContent = 'v' + (window._appVersion || '0.8.2');
+	heroHead.appendChild(heroVer);
+	hero.appendChild(heroHead);
+	var heroDesc = document.createElement('p');
+	heroDesc.className = 'settings-about-hero-desc';
+	heroDesc.setAttribute('data-i18n', 'settings.about_desc');
+	heroDesc.textContent = t('settings.about_desc', 'Go + Wails 跨平台串口调试工具');
+	hero.appendChild(heroDesc);
+	aboutWrap.appendChild(hero);
+
+	var colA = document.createElement('div');
+	colA.className = 'settings-about-col';
+	var hA = document.createElement('div');
+	hA.className = 'settings-about-h';
+	hA.setAttribute('data-i18n', 'settings.about_runtime');
+	hA.textContent = t('settings.about_runtime', '运行信息');
+	colA.appendChild(hA);
+	var kv = document.createElement('div');
+	kv.className = 'settings-about-kv';
+	[['settings.about_kv_proto', '协议号', 'IPC 1'],
+	 ['settings.about_kv_dir', '程序目录', ''],
+	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
+	 ['settings.about_kv_back', '后端', 'Go / Wails v2'],
+	 ['settings.about_kv_render', '渲染', 'WebView2'],
+	 ['settings.about_kv_conf', '配置文件', 'settings.ini']].forEach(function(row) {
+		var k = document.createElement('span');
+		k.className = 'settings-about-k';
+		k.setAttribute('data-i18n', row[0]);
+		k.textContent = t(row[0], row[1]);
+		var v = document.createElement('span');
+		v.className = 'settings-about-v';
+		v.textContent = row[2];
+		kv.appendChild(k);
+		kv.appendChild(v);
+	});
+	colA.appendChild(kv);
+	aboutWrap.appendChild(colA);
+
+	var colB = document.createElement('div');
+	colB.className = 'settings-about-col';
+	var hB = document.createElement('div');
+	hB.className = 'settings-about-h';
+	hB.setAttribute('data-i18n', 'settings.about_notes');
+	hB.textContent = t('settings.about_notes', '说明');
+	colB.appendChild(hB);
+	['settings.about_p1', 'settings.about_p2', 'settings.about_p3'].forEach(function(key) {
+		var p = document.createElement('p');
+		p.className = 'settings-about-p';
+		p.setAttribute('data-i18n', key);
+		p.textContent = t(key, '');
+		colB.appendChild(p);
+	});
+	aboutWrap.appendChild(colB);
+
+	bAbout.appendChild(aboutWrap);
 	panelAbout.appendChild(bAbout);
 
 	// Nav items + panels
 	var sections = [
 		{ key: 'display',    i18n: 'settings.nav_display',    fb: '编码与显示', panel: panelDisplay },
+		{ key: 'colors',     i18n: 'settings.nav_colors',     fb: '数据高亮',   panel: panelColors },
 		{ key: 'appearance', i18n: 'settings.nav_appearance', fb: '外观',       panel: panelAppear },
 		{ key: 'storage',    i18n: 'settings.nav_storage',    fb: '存储与行为', panel: panelStorage },
 		{ key: 'language',   i18n: 'settings.nav_language',   fb: '语言',       panel: panelLang },
@@ -486,9 +588,16 @@ function buildSettingsPage() {
 	sections.forEach(function(sec, idx) {
 		var item = document.createElement('div');
 		item.className = 'settings-nav-item' + (idx === 0 ? ' is-active' : '');
-		item.setAttribute('data-i18n', sec.i18n);
-		item.textContent = t(sec.i18n, sec.fb);
 		item.setAttribute('data-nav', sec.key);
+		var navIco = document.createElement('span');
+		navIco.className = 'settings-nav-icon';
+		navIco.innerHTML = icon(SETTINGS_NAV_ICONS[sec.key] || 'settings', 18, 18);
+		item.appendChild(navIco);
+		var navLab = document.createElement('span');
+		navLab.className = 'settings-nav-label';
+		navLab.setAttribute('data-i18n', sec.i18n);
+		navLab.textContent = t(sec.i18n, sec.fb);
+		item.appendChild(navLab);
 		item.addEventListener('click', function() {
 			nav.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
 			item.classList.add('is-active');
@@ -499,6 +608,13 @@ function buildSettingsPage() {
 			}
 			if (sec.key === 'language') {
 				setTimeout(function() { refreshSettingsLangList(); }, 50);
+			}
+			if (sec.key === 'colors') {
+				setTimeout(function() {
+					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
+						if (el._colorItems) _renderColorPreview(el._colorItems, el);
+					});
+				}, 50);
 			}
 		});
 		nav.appendChild(item);
@@ -536,6 +652,14 @@ function buildSettingsPage() {
 			item.classList.toggle('is-hidden', q !== '' && text.indexOf(q) < 0);
 		});
 	});
+
+	// 两列卡的竖线起点：量一次卡片头高度写进 CSS 变量，避免竖线贯穿标题行
+	setTimeout(function() {
+		wrapper.querySelectorAll('.settings-panel > .settings-bubble').forEach(function(card) {
+			var head = card.querySelector(':scope > .settings-bubble-head');
+			if (head) card.style.setProperty('--bubble-head-h', head.offsetHeight + 'px');
+		});
+	}, 0);
 
 	return wrapper;
 }
@@ -864,11 +988,18 @@ async function refreshSettingsLangList() {
 			isFirstExt = false;
 		}
 		var row = document.createElement('div');
-		row.className = 'settings-lang-item' + (lang === item.code ? ' is-selected' : '');
-		row.textContent = item.name;
+		row.className = 'settings-lang-card' + (lang === item.code ? ' is-selected' : '');
+		var langName = document.createElement('span');
+		langName.className = 'settings-lang-name';
+		langName.textContent = item.name;
+		row.appendChild(langName);
+		var langCode = document.createElement('span');
+		langCode.className = 'settings-lang-code';
+		langCode.textContent = item.code;
+		row.appendChild(langCode);
 		(function(code, el) {
 			el.addEventListener('click', function() {
-				el.parentNode.querySelectorAll('.settings-lang-item').forEach(function(s) { s.classList.remove('is-selected'); });
+				el.parentNode.querySelectorAll('.settings-lang-card').forEach(function(s) { s.classList.remove('is-selected'); });
 				el.classList.add('is-selected');
 				if (typeof setLanguage === 'function') {
 					setLanguage(code).then(function() {

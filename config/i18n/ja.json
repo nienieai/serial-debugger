@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "薄いシアン 50 %",
   "colorpicker.c_half_gray": "グレー 50 %",
   "settings.color_bg_short": "背景",
-  "settings.color_fg_short": "文字"
+  "settings.color_fg_short": "文字",
+  "settings.nav_colors": "データ強調",
+  "settings.look_hint": "新しいタブ、ページ、ダイアログ、その他のメニューに適用されます。",
+  "settings.about_runtime": "実行環境",
+  "settings.about_notes": "説明",
+  "settings.about_kv_proto": "プロトコル",
+  "settings.about_kv_dir": "プログラムフォルダー",
+  "settings.about_kv_front": "フロントエンド",
+  "settings.about_kv_back": "バックエンド",
+  "settings.about_kv_render": "レンダリング",
+  "settings.about_kv_conf": "設定ファイル"
 }

@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "سماوي فاتح 50 %",
   "colorpicker.c_half_gray": "رمادي 50 %",
   "settings.color_bg_short": "الخلفية",
-  "settings.color_fg_short": "الخط"
+  "settings.color_fg_short": "الخط",
+  "settings.nav_colors": "تمييز البيانات",
+  "settings.look_hint": "ينطبق على علامات التبويب والصفحات ومربعات الحوار والقوائم الجديدة.",
+  "settings.about_runtime": "معلومات التشغيل",
+  "settings.about_notes": "ملاحظات",
+  "settings.about_kv_proto": "البروتوكول",
+  "settings.about_kv_dir": "مجلد البرنامج",
+  "settings.about_kv_front": "الواجهة",
+  "settings.about_kv_back": "الخلفية",
+  "settings.about_kv_render": "العرض",
+  "settings.about_kv_conf": "ملف الإعدادات"
 }

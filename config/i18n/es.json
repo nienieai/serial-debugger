@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "Cian claro 50 %",
   "colorpicker.c_half_gray": "Gris 50 %",
   "settings.color_bg_short": "Fondo",
-  "settings.color_fg_short": "Texto"
+  "settings.color_fg_short": "Texto",
+  "settings.nav_colors": "Resaltado de datos",
+  "settings.look_hint": "Se aplica a nuevas pestañas, páginas, diálogos y otros menús.",
+  "settings.about_runtime": "Entorno",
+  "settings.about_notes": "Notas",
+  "settings.about_kv_proto": "Protocolo",
+  "settings.about_kv_dir": "Carpeta del programa",
+  "settings.about_kv_front": "Frontend",
+  "settings.about_kv_back": "Backend",
+  "settings.about_kv_render": "Motor",
+  "settings.about_kv_conf": "Archivo de config"
 }

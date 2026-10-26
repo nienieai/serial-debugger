@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "Light cyan 50%",
   "colorpicker.c_half_gray": "Gray 50%",
   "settings.color_bg_short": "Background",
-  "settings.color_fg_short": "Font"
+  "settings.color_fg_short": "Font",
+  "settings.nav_colors": "Data Highlight",
+  "settings.look_hint": "Applies to new tabs, pages, dialogs and other menus.",
+  "settings.about_runtime": "Runtime",
+  "settings.about_notes": "Notes",
+  "settings.about_kv_proto": "Protocol",
+  "settings.about_kv_dir": "Program folder",
+  "settings.about_kv_front": "Frontend",
+  "settings.about_kv_back": "Backend",
+  "settings.about_kv_render": "Renderer",
+  "settings.about_kv_conf": "Config file"
 }

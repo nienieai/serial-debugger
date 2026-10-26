@@ -451,5 +451,15 @@
   "colorpicker.c_half_cyan_light": "半透明浅青",
   "colorpicker.c_half_gray": "半透明灰",
   "settings.color_bg_short": "背景",
-  "settings.color_fg_short": "字体"
+  "settings.color_fg_short": "字体",
+  "settings.nav_colors": "数据高亮",
+  "settings.look_hint": "适用于新的选项卡、页面、对话框和其他菜单。",
+  "settings.about_runtime": "运行信息",
+  "settings.about_notes": "说明",
+  "settings.about_kv_proto": "协议号",
+  "settings.about_kv_dir": "程序目录",
+  "settings.about_kv_front": "前端",
+  "settings.about_kv_back": "后端",
+  "settings.about_kv_render": "渲染",
+  "settings.about_kv_conf": "配置文件"
 }
