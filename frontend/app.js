@@ -4284,6 +4284,10 @@ function qpExport() {
 }
 // Rebuild a tab's label from its stored data (for i18n language switch).
 function _rebuildTabLabel(tab) {
+  // 非会话页也要跟随语言：这两类的 label 是建页时按当时语言写死的，
+  // 而下面的会话页分支对它们不适用（没有 syncedParams，会直接 return）。
+  if (tab.type === 'new') { tab.label = t('newtab.title', '新建会话'); return; }
+  if (tab.type === 'settings') { tab.label = t('settings.title', '设置'); return; }
   if (!tab.syncedParams) return;
   var sp = tab.syncedParams;
   var isConnected = tab.portOpen;
