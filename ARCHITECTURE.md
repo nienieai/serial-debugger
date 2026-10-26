@@ -1357,7 +1357,10 @@ settings.ini  →  AppSettings.DisplayColors (JSON string)
 
 `frontend/color-picker.{js,html}` 是独立项目 `调色板/调色板-0.2.4` 的**原样副本**（哈希一致，v0.8.2 由 0.2.3 升级）。Shadow DOM 完全隔离样式，模板由 `fetch` 异步加载（`document.currentScript.src` 定位，支持任意目录部署）。
 
-调用面只有三处（`settingspage.js` 的 `_openColorPicker`）：属性 `theme` / `transparency` / `color`，方法 `open(trigger)`，事件 `apply`。
+调用面（`settingspage.js` 的 `_openColorPicker`）：属性 `theme` / `transparency` / `color` / `title`，方法 `open(trigger)`，事件 `apply`。
+
+- 标题通过 `title` 属性下发，格式 `设置项名 · 深色/浅色`（`_COLOR_TITLE_SEP` 分隔）；两端都取当前语言的译文（`settings.color_*` 与 `theme.dark_label` / `light_label`），同一行的背景/字体两列共用项名。9 语言实测最窄余量日语 19px、俄语 36px，标题栏保持 44px 不换行；RTL 下标题在右、关闭按钮在左。不传 `title` 时组件仍用默认「选择颜色」。
+- 弹窗**内部**的文案（`颜色值` / `基础颜色` / `保存颜色` / `应用颜色` 等）仍是组件模板里写死的中文，0.2.4 没有对应接口 —— 见 TODO #86。
 
 - 取色按钮的胶头滴管图标是组件**内置** SVG（`slot[name="eyedropper-icon"]` 的兜底内容），不再依赖页面里的 Font Awesome。本项目没有 FA，0.2.3 会退化成一个 **emoji `💧`**（`<span class="eyedropper-icon">💧</span>`）：彩色、不跟主题、字形随系统字体变（实测该按钮内 `svg` 数 0）；0.2.4 是单色矢量滴管，`fill: currentColor` 跟随主题。
 - `:host` 自带 dark 兜底变量：即使调用方忘设 `theme`，弹窗背景也不会透明（0.2.3 实测 `rgba(0,0,0,0)`，整个弹窗看不见）。

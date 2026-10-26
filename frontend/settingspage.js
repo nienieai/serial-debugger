@@ -884,8 +884,13 @@ async function refreshSettingsLangList() {
 }
 
 // ---- color picker integration ----
-function _openColorPicker(trigger, defaultColor, onApply) {
+// 弹窗标题：`<color-picker>` 的 title 属性。调用方只传「设置项名」，深浅由
+// _makeSwatchPair 按色块列补上（同一行有背景/字体两列，标题不再区分列）。
+var _COLOR_TITLE_SEP = ' · ';
+
+function _openColorPicker(trigger, defaultColor, onApply, title) {
 	var picker = document.createElement('color-picker');
+	if (title) picker.setAttribute('title', title);
 	picker.setAttribute('theme', document.documentElement.getAttribute('data-theme') || 'dark');
 	picker.setAttribute('transparency', 'solid');
 	var cur = trigger.style.background;
@@ -989,7 +994,8 @@ function _buildColorRow(cfg) {
 	// Label
 	var lbl = document.createElement('span');
 	lbl.className = 'c-color-label';
-	lbl.textContent = t(cfg.i18n, cfg.fb);
+	var itemName = t(cfg.i18n, cfg.fb);
+	lbl.textContent = itemName;
 	row.appendChild(lbl);
 
 	// Bold checkbox
@@ -1013,7 +1019,7 @@ function _buildColorRow(cfg) {
 	row.appendChild(italicWrap);
 
 	// Helper: make a swatch pair (dark + light) inside a container
-	function _makeSwatchPair(swrap, curDark, curLight, defDark, defLight, onDark, onLight) {
+	function _makeSwatchPair(swrap, curDark, curLight, defDark, defLight, onDark, onLight, name) {
 		function _one(cls, fill, pickerDef, onClick) {
 			var outer = document.createElement('span');
 			outer.className = 'c-color-swatch ' + cls;
@@ -1021,9 +1027,12 @@ function _buildColorRow(cfg) {
 			inner.className = 'c-color-swatch-fill';
 			inner.style.background = fill;
 			outer.appendChild(inner);
-			outer.title = cls === 'sw-dark' ? t('settings.color_sw_dark','深色主题') : t('settings.color_sw_light','浅色主题');
+			var isDark = cls === 'sw-dark';
+			outer.title = isDark ? t('settings.color_sw_dark','深色主题') : t('settings.color_sw_light','浅色主题');
 			outer.addEventListener('click', function() {
-				_openColorPicker(outer, pickerDef, function(color) { onClick(color); });
+				var shade = isDark ? t('theme.dark_label','深色') : t('theme.light_label','浅色');
+				var title = name ? name + _COLOR_TITLE_SEP + shade : '';
+				_openColorPicker(outer, pickerDef, function(color) { onClick(color); }, title);
 			});
 			swrap.appendChild(outer);
 			return { outer: outer, fill: inner };
@@ -1043,7 +1052,8 @@ function _buildColorRow(cfg) {
 		function(c) {
 			if (cfg.bgKey) { bgV.light = c; } else { bgV.bgLight = c; }
 			bgLight = c; _updateSwatchFills(bgWrap, bgDark, bgLight); _persistColor(bgKey, bgV);
-		}
+		},
+		itemName
 	);
 	row.appendChild(bgWrap);
 
@@ -1052,7 +1062,8 @@ function _buildColorRow(cfg) {
 	fgWrap.className = 'c-color-swatches';
 	_makeSwatchPair(fgWrap, fgDark, fgLight, fgDflt.dark, fgDflt.light,
 		function(c) { fgV.dark = c; fgDark = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); },
-		function(c) { fgV.light = c; fgLight = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); }
+		function(c) { fgV.light = c; fgLight = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); },
+		itemName
 	);
 	row.appendChild(fgWrap);
 
