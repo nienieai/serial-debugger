@@ -1301,30 +1301,40 @@ function _refreshColorPreview(key) {
 
 // ---- refresh settings page ----
 function refreshSettingsPage() {
-	var page = document.querySelector('.settings-layout');
-	if (!page) return;
-	// Remember which panel is active before rebuilding
-	var activeNav = page.parentNode.querySelector('.settings-nav-item.is-active');
-	var activeKey = activeNav ? activeNav.getAttribute('data-nav') : 'display';
-	var parent = page.parentNode;
-	if (parent) {
-		var newPage = buildSettingsPage();
-		parent.replaceChild(newPage, page);
-		// Restore the active panel
-		var newNav = parent.querySelector('.settings-nav-item[data-nav="' + activeKey + '"]');
-		var newPanel = parent.querySelector('.settings-panel[data-panel="' + activeKey + '"]');
-		if (newNav) {
-			parent.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
-			newNav.classList.add('is-active');
-		}
-		if (newPanel) {
-			parent.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
-			newPanel.classList.remove('is-hidden');
-		}
-		renderSettingsThemeGrid();
-		renderSettingsIconGrid();
-		refreshSettingsLangList();
+	var layout = document.querySelector('.settings-layout');
+	if (!layout) return;
+	// 要替换的是**整个 wrapper**（`buildSettingsPage()` 返回的就是它），不是里面的
+	// `.settings-layout`。旧实现拿 layout 当替换目标，于是每次刷新都多套一层
+	// `.settings-wrapper`、多复制一个 `position:absolute` 的 `.settings-header` ——
+	// header 叠在同一坐标，标题「设置」就一层层压上去，看起来像越来越黑的重影
+	// （切一次语言 / 点一次颜色重置各加一层）。
+	var old = layout.closest('.settings-wrapper') || layout;
+	// 自愈：旧版本会一层套一层地留下 `.settings-wrapper`，向上找到最外层整体替换，
+	// 这样已经叠出好几层的窗口刷新一次就能回到 1 层，不必关掉设置页重开。
+	while (old.parentNode && old.parentNode.classList && old.parentNode.classList.contains('settings-wrapper')) {
+		old = old.parentNode;
 	}
+	var parent = old.parentNode;
+	if (!parent) return;
+	// Remember which panel is active before rebuilding
+	var activeNav = old.querySelector('.settings-nav-item.is-active');
+	var activeKey = activeNav ? activeNav.getAttribute('data-nav') : 'display';
+	var newPage = buildSettingsPage();
+	parent.replaceChild(newPage, old);
+	// Restore the active panel
+	var newNav = newPage.querySelector('.settings-nav-item[data-nav="' + activeKey + '"]');
+	var newPanel = newPage.querySelector('.settings-panel[data-panel="' + activeKey + '"]');
+	if (newNav) {
+		newPage.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
+		newNav.classList.add('is-active');
+	}
+	if (newPanel) {
+		newPage.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
+		newPanel.classList.remove('is-hidden');
+	}
+	renderSettingsThemeGrid();
+	renderSettingsIconGrid();
+	refreshSettingsLangList();
 }
 
 // ---- check if settings tab is active ----
