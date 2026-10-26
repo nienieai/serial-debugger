@@ -1,20 +1,44 @@
-# serial-debugger — 跨平台串口调试工具 v0.8.0
+<div align="center">
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+# serial-debugger
 
-👋 欢迎使用 serial-debugger！如果它帮到了您，欢迎 **Star**；遇到问题请提交 **Issue**，有改进想法欢迎 **Pull Request**，任何反馈都是对我们的支持。
+**一个工具覆盖串口调试全流程** — 扫描与连接 · 文本 / Hex 收发 · 定时自动发送 · 端口转发 · 设备探测 · 多标签 · 历史持久化
 
-基于 **Go + Wails v2** 的跨平台串口调试工具：串口扫描与连接、文本/Hex 双模收发、定时自动发送、端口转发、设备探测、多标签页与历史持久化，一个工具覆盖串口调试全流程。
+**GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
-**架构亮点**
+[![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
-- **3 管道 IPC + 共享内存**：daemon/resp/sub 命名管道承载控制与事件订阅；共享内存环形缓冲区承载数据（历史 5 MB/进程、发送队列 1 MB/进程），发送走共享内存、IPC 仅触发。
-- **守护进程 + 多客户端**：GUI / CLI / MCP 统一接入同一守护进程，ProcessManager 管理 idle/connected 状态与 single/forward 模式；心跳 5 s 一次，连续 3 次失败判定断连。
-- **解码引擎 Go 化**：Go 端 per-tab goroutine 逐字节容错解码，产出 `[]Segment` 分段结构；前端纯 DOM 渲染（零 `innerHTML`），解码与渲染彻底解耦。
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Wails](https://img.shields.io/badge/Wails-v2.12-DF0000)](https://wails.io)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6)
+![IPC](https://img.shields.io/badge/IPC_protocol-1-lightgrey)
 
-## 快速使用
+[![CLI](https://img.shields.io/badge/CLI-34_commands-blueviolet)](CLI-CHEATSHEET.md)
+[![MCP](https://img.shields.io/badge/MCP-28_tools-blueviolet)](ARCHITECTURE.md)
+[![i18n](https://img.shields.io/badge/i18n-9_languages-brightgreen)](config/i18n)
 
-> 📦 **下载**：最新构建产物见 [Releases](https://github.com/nienieai/serial-debugger/releases)（GitHub Actions 自动构建，解压即用；Windows 需已安装 WebView2 Runtime）。
+</div>
+
+---
+
+## ✨ 特性 / Features
+
+- 🧭 **一套引擎，三个入口** —— GUI（Wails 桌面端）、CLI（交互 REPL + 一次性命令）、MCP（JSON-RPC over stdio）连接同一个守护进程，串口只开一次，谁都能看能发。
+- 🔌 **串口全流程** —— 扫描/刷新、文本与 Hex 双模收发、流控（None / RTS-CTS / XON-XOFF）、连接中直接换端口、进程生命周期（idle ↔ connected）显式管理。
+- 🧵 **多标签独立会话** —— 每个标签页有自己的端口、缓冲、历史与滚动位置；设置页独立成页，不占会话。
+- 🗂️ **历史不丢也不卡** —— 共享内存环形缓冲 5 MB/进程 + 磁盘双写；读满不冻结（挤掉最旧的包）；`limit`/`beforeTsMs`/`sameTsSkip` 分页，界面按 5000 条回补，往回翻可回看约 4 万条。
+- ⏱️ **自动发送引擎** —— 单条定频 + 多条目队列两种模式，运行中可改进度；`delay` 支持 0（连发）到 60000 ms 逐条设定。
+- 🔁 **端口转发** —— 双串口双向透传，P1/P2 方向独立显示与统计，PC 端作为旁路监听。
+- 🔎 **设备探测** —— TOML 规则驱动，substring / regex / modbus_crc 三种匹配，按可能性排序扫波特率、带总预算、跳过已占用端口，`busy` 与用过哪几档波特率都显式返回。
+- 🎨 **可换肤** —— 颜色主题（dark/light 双模式、CSS 全变量化、`themes/colors/` 外部主题自动发现）+ 图标主题（`themes/icons/<名称>/`）+ 数据高亮自定义（单端口 10 项 / 转发 9 项，含 EyeDropper 取色）。
+- 🌏 **9 种语言** —— zh / zh-Hant / en / ja / ko / fr / es / ru / ar（含 RTL），支持外部 i18n 文件覆盖。
+
+## 🚀 快速开始 / Quick Start
+
+> 📦 **下载**：见 [Releases](https://github.com/nienieai/serial-debugger/releases)（推送 `v*` tag 或手动触发 Actions 即产出，解压即用；Windows 需已安装 WebView2 Runtime）。
 
 > ⚠️ **使用须知**
 > - **安全**：本工具当前无安全相关设计（无认证、加密、访问控制等），仅限在受信任的本地环境使用，请勿用于安全敏感场景——详见[安全说明](#安全说明)。
@@ -43,7 +67,7 @@ serial-cli shutdown             # 关闭守护进程
 
 `serial-mcp.exe` 作为 MCP 服务端通过 stdio 提供 JSON-RPC 2.0 接口，可接入支持 MCP 协议的客户端。
 
-## 组成
+## 🧩 组成 / Components
 
 | 可执行文件 | 说明 |
 | --- | --- |
@@ -52,7 +76,7 @@ serial-cli shutdown             # 关闭守护进程
 | `serial-cli.exe` | 命令行工具，交互 REPL + 一次性命令，34 条命令（含 help） |
 | `serial-mcp.exe` | MCP 协议工具，JSON-RPC 2.0 over stdio，28 个工具 |
 
-### 架构一览
+## ⚡ 架构 / Architecture
 
 ```mermaid
 graph LR
@@ -73,9 +97,15 @@ graph LR
     PM --> RB
 ```
 
+**架构亮点**
+
+- **3 管道 IPC + 共享内存**：daemon/resp/sub 命名管道承载控制与事件订阅；共享内存环形缓冲区承载数据（历史 5 MB/进程、发送队列 1 MB/进程），发送走共享内存、IPC 仅触发。
+- **守护进程 + 多客户端**：GUI / CLI / MCP 统一接入同一守护进程，ProcessManager 管理 idle/connected 状态与 single/forward 模式；心跳 5 s 一次，连续 3 次失败判定断连。
+- **解码引擎 Go 化**：Go 端 per-tab goroutine 逐字节容错解码，产出 `[]Segment` 分段结构；前端纯 DOM 渲染（零 `innerHTML`），解码与渲染彻底解耦。
+
 > 数据走共享内存（发送队列），IPC 承载控制与事件。历史上曾规划「客户端直接映射共享内存读取历史」，但该路径**从未接通**（`ringbuf.OpenSharedRing` 无调用点，且它只映射只读视图、返回对象上的读操作会写 tail，按原设计调用会崩），历史读取实际全部走 IPC 的 `session.history`。详见「已知限制」。
 
-## 功能特性
+## 🔧 功能细节 / Details
 
 ### 串口核心
 
@@ -122,7 +152,7 @@ graph LR
 - 9 种语言（zh / en / ja / zh-Hant / ko / ar / ru / fr / es），含阿拉伯语 RTL
 - 外部 i18n 文件覆盖内置翻译，`_font` 字段绑定语言首选字体
 
-> **翻译说明**：多语言翻译由 AI 辅助生成，可能存在不准确、遗漏或语境偏差，欢迎提交修正（内置文件见 `config/i18n/`，外部覆盖见上方「配置」表）。
+> **翻译说明**：多语言翻译由 AI 辅助生成，可能存在不准确、遗漏或语境偏差，欢迎提交修正（内置文件见 `config/i18n/`，外部覆盖见下方「配置」表）。
 
 ### 连接管理
 
@@ -130,7 +160,7 @@ graph LR
 - 状态栏三色气泡实时显示 GUI/CLI/MCP 连接数
 - JS 侧 `_connecting` 互斥防重连风暴，Go 侧锁区合并 + 身份校验
 
-## 安装与构建
+## 📦 安装与构建 / Build
 
 ### 下载
 
@@ -156,9 +186,9 @@ wails build -devtools  # GUI，产物在 build/bin/
 >
 > GUI（`serial-gui`）需 Wails 环境（`wails build`），完整构建矩阵见 [BUILD.md](BUILD.md)。
 
-版本号统一维护在 `version/version.go`，改一处全部可执行文件同步。仓库已配置 [GitHub Actions 自动构建](.github/workflows/release.yml)：推送 `v*` 标签或手动触发即可产出各平台二进制并发布 Release。
+版本号统一维护在 `version/version.go`，改一处全部可执行文件同步。仓库已配置 [GitHub Actions 自动构建](.github/workflows/release.yml)：推送 `v*` 标签或手动触发即可产出二进制并发布 Release。
 
-## CLI 命令（34 条，含 help）
+## 🖥️ CLI 命令 / CLI（34 条，含 help）
 
 | 类别 | 命令 |
 | --- | --- |
@@ -172,22 +202,23 @@ wails build -devtools  # GUI，产物在 build/bin/
 | 诊断 | `sessions` `monitor` `threads` `goroutines` |
 | 其他 | `help` |
 
-## MCP 工具（28 个）
+## 🤖 MCP 工具 / MCP（28 个）
 
 `serial_start_daemon` `serial_list_ports` `serial_refresh_ports` `serial_create` `serial_open` `serial_connect` `serial_disconnect` `serial_switch` `serial_forward_create` `serial_declare` `serial_set_mode` `serial_close` `serial_send` `serial_sessions` `serial_history` `serial_status` `serial_monitor` `serial_shutdown` `serial_stats` `serial_port_watch` `serial_autosend_start` `serial_autosend_stop` `serial_autosend_status` `serial_sendqueue` `serial_multistr_save` `serial_multistr_load` `serial_multistr_status` `serial_probe_ports`
 
-## 配置
+## ⚙️ 配置 / Config
 
 | 位置 | 说明 |
 | --- | --- |
 | `config/probe.toml` | 设备探测规则（substring / regex / modbus_crc） |
 | `config/themes/` | 颜色主题（`system.json` 内置，`_modes` 声明模式） |
+| `themes/colors/*.json` | 外部颜色主题（与 exe 同目录，启动/刷新时自动发现） |
 | `config/icons/system/` | 内置图标主题（20 个 SVG + `icons.json`） |
-| `config/i18n/` | 内置翻译（9 语言） |
 | `themes/icons/<名称>/` | 外部图标主题（文件夹 = 主题，`_fallback` 回退） |
+| `config/i18n/` | 内置翻译（9 语言） |
 | 外部 i18n 文件 | 覆盖内置翻译，`_font` 字段绑定语言首选字体 |
 
-## 文档
+## 📚 文档 / Docs
 
 | 文档 | 说明 |
 | --- | --- |
@@ -201,7 +232,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
 
-## 版本历史
+## 📜 版本历史 / Changelog
 
 当前版本 **v0.8.0**（稳定基线）。最近三版：
 
@@ -213,11 +244,14 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 完整历史（0.1.0 起，含每个版本的根因分析、实测数据与验收方法）见 [`CHANGELOG.md`](CHANGELOG.md)。
 
-## ⚠️ 安全说明
+<a id="安全说明"></a>
+
+## ⚠️ 安全说明 / Security
 
 > **本工具当前无安全相关设计**：不包含认证、授权、加密、访问控制或审计日志等安全机制；串口收发内容与历史记录以明文形式处理与存储。仅限在受信任的本地环境使用，请勿在不可信网络或安全敏感场景中部署。
 
-## 贡献与许可
+## 🤝 贡献与许可 / Contributing
 
 - 本项目基于 [MIT License](LICENSE) 开源，欢迎社区贡献——见 [贡献指南](CONTRIBUTING.md)。
+- 👋 如果它帮到了您，欢迎 **Star**；遇到问题请提交 **Issue**，有改进想法欢迎 **Pull Request**。
 - **AI 辅助声明**：本项目在开发与文档维护过程中使用了 AI Agent 工具辅助（代码生成与审计、文档润色、多语言翻译等）；文档与翻译内容由 AI 辅助产出，可能存在错误或不准确之处，欢迎指正与贡献修正。
