@@ -30,6 +30,81 @@
         'M14.25 5.17 13.42 5.99 13.42 6.10 17.77 10.48 17.84 10.51 17.94 10.48 18.68 9.77 18.80 9.65 ' +
         '18.83 9.51 14.49 5.17 14.27 5.15Z"/></svg>';
 
+    // ---------- i18n ----------
+
+    // 内置中文文案表。模板里不再写死任何文本，全部经由 key 取用。
+    // 注入优先级（高 → 低）：
+    //   1. 实例：i18n 属性 / el.i18n = {...} / el.setI18n({...})
+    //   2. 全局：window.COLOR_PICKER_I18N
+    //   3. 本表
+    // 外部只需提供要改的 key，未提供的自动回落到下层。
+    const DEFAULT_I18N = {
+        'header.title': '选择颜色',
+        'header.close': '关闭',
+        'hex.label': 'HEX 颜色值',
+        'eyedropper.title': '从屏幕取色（Esc 取消）',
+        'eyedropper.unsupported': '当前浏览器不支持取色',
+        'section.basic': '基础颜色',
+        'section.saved': '自定义颜色 (点击选中后保存)',
+        'action.save': '保存颜色',
+        'action.apply': '应用颜色',
+
+        'basicColor.pureRed': '纯红',
+        'basicColor.pureOrange': '纯橙',
+        'basicColor.pureYellow': '纯黄',
+        'basicColor.yellowGreen': '黄绿',
+        'basicColor.pureGreen': '纯绿',
+        'basicColor.springGreen': '青绿',
+        'basicColor.pureCyan': '纯青',
+        'basicColor.skyBlue': '天蓝',
+        'basicColor.pureBlue': '纯蓝',
+        'basicColor.blueViolet': '蓝紫',
+        'basicColor.magenta': '品红',
+        'basicColor.roseRed': '玫红',
+        'basicColor.pureWhite': '纯白',
+        'basicColor.grayLight': '浅灰',
+        'basicColor.grayMedium': '中灰',
+        'basicColor.grayDark': '深灰',
+        'basicColor.halfRed': '半透明红',
+        'basicColor.halfOrange': '半透明橙',
+        'basicColor.halfYellow': '半透明黄',
+        'basicColor.halfGreen': '半透明绿',
+        'basicColor.halfCyan': '半透明青',
+        'basicColor.halfBlue': '半透明蓝',
+        'basicColor.halfMagenta': '半透明品红',
+        'basicColor.halfWhite': '半透明白',
+        'basicColor.halfBlack': '半透明黑',
+        'basicColor.halfRedLight': '半透明浅红',
+        'basicColor.halfGreenLight': '半透明浅绿',
+        'basicColor.halfBlueLight': '半透明浅蓝',
+        'basicColor.halfYellowLight': '半透明浅黄',
+        'basicColor.halfPurpleLight': '半透明浅紫',
+        'basicColor.halfCyanLight': '半透明浅青',
+        'basicColor.halfGray': '半透明灰'
+    };
+
+    /**
+     * 读取全局注入表。每次现读，宿主页无需关心与脚本的加载先后。
+     */
+    function getGlobalI18n() {
+        const g = window.COLOR_PICKER_I18N;
+        return (g && typeof g === 'object') ? g : null;
+    }
+
+    /**
+     * 解析 i18n 属性里的 JSON。非法时告警并返回 null（不影响其余功能）。
+     */
+    function parseI18nAttr(raw) {
+        if (!raw) return null;
+        try {
+            const obj = JSON.parse(raw);
+            return (obj && typeof obj === 'object') ? obj : null;
+        } catch (e) {
+            console.warn('[color-picker] i18n 属性不是合法 JSON，已忽略:', e.message);
+            return null;
+        }
+    }
+
     /**
      * 解析 color-picker.html 的地址。
      * 优先用 document.currentScript；若为 null（例如脚本被动态插入、
@@ -81,7 +156,7 @@
 
     class ColorPicker extends HTMLElement {
         static get observedAttributes() {
-            return ['color', 'theme', 'transparency', 'title', 'swatch-bg'];
+            return ['color', 'theme', 'transparency', 'title', 'swatch-bg', 'i18n'];
         }
 
         constructor() {
@@ -94,42 +169,43 @@
             this._selectedSavedIndex = 0;
             this._outsideClickHandler = null;
             this._eyeDropperAbort = null;      // 取色中的 AbortController
+            this._messages = parseI18nAttr(this.getAttribute('i18n'));   // 实例级注入表（可为 null）
             this._transparency = this.getAttribute('transparency') || 'solid';
             this._currentColor = this._normalizeColor(this.getAttribute('color') || 'rgba(52,152,219,1)');
 
             this._basicColors = [
-                { color: '#ff0000', name: '纯红' },
-                { color: '#ff8000', name: '纯橙' },
-                { color: '#ffff00', name: '纯黄' },
-                { color: '#80ff00', name: '黄绿' },
-                { color: '#00ff00', name: '纯绿' },
-                { color: '#00ff80', name: '青绿' },
-                { color: '#00ffff', name: '纯青' },
-                { color: '#0080ff', name: '天蓝' },
-                { color: '#0000ff', name: '纯蓝' },
-                { color: '#8000ff', name: '蓝紫' },
-                { color: '#ff00ff', name: '品红' },
-                { color: '#ff0080', name: '玫红' },
-                { color: '#ffffff', name: '纯白' },
-                { color: '#cccccc', name: '浅灰' },
-                { color: '#999999', name: '中灰' },
-                { color: '#666666', name: '深灰' },
-                { color: 'rgba(255,0,0,0.5)', name: '半透明红' },
-                { color: 'rgba(255,128,0,0.5)', name: '半透明橙' },
-                { color: 'rgba(255,255,0,0.5)', name: '半透明黄' },
-                { color: 'rgba(0,255,0,0.5)', name: '半透明绿' },
-                { color: 'rgba(0,255,255,0.5)', name: '半透明青' },
-                { color: 'rgba(0,0,255,0.5)', name: '半透明蓝' },
-                { color: 'rgba(255,0,255,0.5)', name: '半透明品红' },
-                { color: 'rgba(255,255,255,0.5)', name: '半透明白' },
-                { color: 'rgba(0,0,0,0.5)', name: '半透明黑' },
-                { color: 'rgba(255,200,200,0.5)', name: '半透明浅红' },
-                { color: 'rgba(200,255,200,0.5)', name: '半透明浅绿' },
-                { color: 'rgba(200,200,255,0.5)', name: '半透明浅蓝' },
-                { color: 'rgba(255,255,200,0.5)', name: '半透明浅黄' },
-                { color: 'rgba(255,200,255,0.5)', name: '半透明浅紫' },
-                { color: 'rgba(200,255,255,0.5)', name: '半透明浅青' },
-                { color: 'rgba(128,128,128,0.5)', name: '半透明灰' }
+                { color: '#ff0000', key: 'basicColor.pureRed' },
+                { color: '#ff8000', key: 'basicColor.pureOrange' },
+                { color: '#ffff00', key: 'basicColor.pureYellow' },
+                { color: '#80ff00', key: 'basicColor.yellowGreen' },
+                { color: '#00ff00', key: 'basicColor.pureGreen' },
+                { color: '#00ff80', key: 'basicColor.springGreen' },
+                { color: '#00ffff', key: 'basicColor.pureCyan' },
+                { color: '#0080ff', key: 'basicColor.skyBlue' },
+                { color: '#0000ff', key: 'basicColor.pureBlue' },
+                { color: '#8000ff', key: 'basicColor.blueViolet' },
+                { color: '#ff00ff', key: 'basicColor.magenta' },
+                { color: '#ff0080', key: 'basicColor.roseRed' },
+                { color: '#ffffff', key: 'basicColor.pureWhite' },
+                { color: '#cccccc', key: 'basicColor.grayLight' },
+                { color: '#999999', key: 'basicColor.grayMedium' },
+                { color: '#666666', key: 'basicColor.grayDark' },
+                { color: 'rgba(255,0,0,0.5)', key: 'basicColor.halfRed' },
+                { color: 'rgba(255,128,0,0.5)', key: 'basicColor.halfOrange' },
+                { color: 'rgba(255,255,0,0.5)', key: 'basicColor.halfYellow' },
+                { color: 'rgba(0,255,0,0.5)', key: 'basicColor.halfGreen' },
+                { color: 'rgba(0,255,255,0.5)', key: 'basicColor.halfCyan' },
+                { color: 'rgba(0,0,255,0.5)', key: 'basicColor.halfBlue' },
+                { color: 'rgba(255,0,255,0.5)', key: 'basicColor.halfMagenta' },
+                { color: 'rgba(255,255,255,0.5)', key: 'basicColor.halfWhite' },
+                { color: 'rgba(0,0,0,0.5)', key: 'basicColor.halfBlack' },
+                { color: 'rgba(255,200,200,0.5)', key: 'basicColor.halfRedLight' },
+                { color: 'rgba(200,255,200,0.5)', key: 'basicColor.halfGreenLight' },
+                { color: 'rgba(200,200,255,0.5)', key: 'basicColor.halfBlueLight' },
+                { color: 'rgba(255,255,200,0.5)', key: 'basicColor.halfYellowLight' },
+                { color: 'rgba(255,200,255,0.5)', key: 'basicColor.halfPurpleLight' },
+                { color: 'rgba(200,255,255,0.5)', key: 'basicColor.halfCyanLight' },
+                { color: 'rgba(128,128,128,0.5)', key: 'basicColor.halfGray' }
             ];
 
             this.attachShadow({ mode: 'open' });
@@ -143,6 +219,7 @@
             if (this._templateBroken) return;
 
             this._loadSavedColors();
+            this._applyI18n();          // 文案先就位：_renderBasicColors 依赖 t() 取色名
             this._renderBasicColors();
             this._renderSavedColors();
             this._bindEvents();
@@ -157,12 +234,7 @@
             if (!window.EyeDropper && this._els.eyedropperBtn) {
                 this._els.eyedropperBtn.style.display = 'none';
             }
-
-            // 应用初始 title
-            const t = this.getAttribute('title');
-            if (t && this._els.popupTitle) {
-                this._els.popupTitle.textContent = t;
-            }
+            // 初始 title（含 <color-picker title="..."> 覆盖）已由 _applyI18n 统一处理
         }
 
         attributeChangedCallback(name, oldVal, newVal) {
@@ -170,8 +242,13 @@
             if (name === 'color' && newVal) {
                 this._currentColor = this._normalizeColor(newVal);
                 if (this._els && this._els.currentColorDisplay) this._updatePreview();
-            } else if (name === 'title' && this._els && this._els.popupTitle) {
-                this._els.popupTitle.textContent = newVal || '选择颜色';
+            } else if (name === 'title') {
+                if (this._els && this._els.popupTitle) {
+                    this._els.popupTitle.textContent = newVal || this.t('header.title');
+                }
+            } else if (name === 'i18n') {
+                this._messages = parseI18nAttr(newVal);
+                if (this._els) this._applyI18n();
             } else if (name === 'swatch-bg') {
                 this._applySwatchBg();
             }
@@ -193,6 +270,10 @@
                 this.style.top = top + 'px';
             }
             this.classList.add('active');
+
+            // 弹窗此时才可见，宽度有效 —— 按实际溢出收敛字号，并让高度随之确定，
+            // 后面的 offsetHeight 校正才能拿到缩放后的真实高度。
+            this._fitTexts();
 
             const actualH = this.offsetHeight;
             const actualW = this.offsetWidth;
@@ -254,6 +335,9 @@
                 applyColorBtn: root.getElementById('applyColorBtn'),
                 eyedropperBtn: root.getElementById('eyedropperBtn'),
                 closePopup: root.getElementById('closePopup'),
+                hexLabel: root.getElementById('hexLabel'),
+                basicSectionTitle: root.getElementById('basicSectionTitle'),
+                savedSectionTitle: root.getElementById('savedSectionTitle'),
             };
 
             // 模板与脚本版本不匹配时，给出明确提示（否则报错信息晦涩，
@@ -263,7 +347,7 @@
                 console.error(
                     '[color-picker] 模板缺少以下元素: ' + missing.join(', ') +
                     '\n  请确认 color-picker.html 与 color-picker.js 同目录且版本一致' +
-                    '（0.2.4 的模板应包含 id: basicColorsGrid / savedColorsGrid / eyedropperBtn 等）。' +
+                    '（0.2.6 的模板应包含 id: basicColorsGrid / savedColorsGrid / eyedropperBtn 等）。' +
                     '\n  当前模板地址: ' + getTemplateUrl() +
                     '\n  若浏览器缓存了旧模板，请强制刷新（Ctrl+F5）。'
                 );
@@ -470,7 +554,8 @@
                 const div = document.createElement('div');
                 div.className = 'basic-color';
                 div.style.backgroundColor = c;
-                div.title = entry.name || '';
+                div.title = this.t(entry.key);
+                div.dataset.nameKey = entry.key;
                 div.dataset.color = c;
                 div.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -561,7 +646,7 @@
          */
         async _openEyeDropper() {
             if (!window.EyeDropper) {
-                this._els.eyedropperBtn.title = '当前浏览器不支持取色';
+                this._els.eyedropperBtn.title = this.t('eyedropper.unsupported');
                 return;
             }
             this._eyeDropperAbort = new AbortController();
@@ -639,6 +724,137 @@
             const slot = this.shadowRoot.querySelector('slot[name="eyedropper-icon"]');
             if (!slot || slot.querySelector('.eyedropper-icon')) return;
             slot.insertAdjacentHTML('afterbegin', DEFAULT_ICON_SVG);
+        }
+
+        // ---------- i18n ----------
+
+        /**
+         * 按 key 取文案。
+         * 优先级：实例注入 > 全局注入 > 内置中文 > key 本身（永不返回 undefined）。
+         * @param {string} key 形如 'header.title'
+         * @returns {string}
+         */
+        t(key) {
+            if (!key) return '';
+            const own = this._messages;
+            if (own && typeof own[key] === 'string') return own[key];
+            const g = getGlobalI18n();
+            if (g && typeof g[key] === 'string') return g[key];
+            const d = DEFAULT_I18N[key];
+            return (typeof d === 'string') ? d : key;
+        }
+
+        /**
+         * 注入文案（默认增量合并，未传的 key 保持原状）。
+         * @param {Object} map key -> 文案
+         * @param {{replace?: boolean}} [opts] replace=true 时整体替换实例表而非合并
+         * @returns {this} 便于链式调用
+         */
+        setI18n(map, opts) {
+            if (!map || typeof map !== 'object') return this;
+            this._messages = (opts && opts.replace)
+                ? Object.assign({}, map)
+                : Object.assign({}, this._messages || {}, map);
+            if (this._els) this._applyI18n();
+            return this;
+        }
+
+        /** 实例级注入表（不含全局与内置）的副本。 */
+        get i18n() {
+            return Object.assign({}, this._messages || {});
+        }
+
+        set i18n(map) {
+            this._messages = (map && typeof map === 'object') ? Object.assign({}, map) : null;
+            if (this._els) this._applyI18n();
+        }
+
+        /**
+         * 把当前生效的文案刷到所有 UI 文本上。
+         * 构造时、注入后、改 title / i18n 属性时都会调用。
+         */
+        _applyI18n() {
+            const els = this._els;
+            if (!els) return;
+
+            // 弹窗标题：<color-picker title="..."> 的属性优先级最高（向后兼容旧用法）
+            const titleAttr = this.getAttribute('title');
+            if (els.popupTitle) els.popupTitle.textContent = titleAttr || this.t('header.title');
+            if (els.closePopup) els.closePopup.title = this.t('header.close');
+            if (els.hexLabel) els.hexLabel.textContent = this.t('hex.label');
+            if (els.eyedropperBtn) els.eyedropperBtn.title = this.t('eyedropper.title');
+            if (els.basicSectionTitle) els.basicSectionTitle.textContent = this.t('section.basic');
+            if (els.savedSectionTitle) els.savedSectionTitle.textContent = this.t('section.saved');
+            if (els.saveColorBtn) els.saveColorBtn.textContent = this.t('action.save');
+            if (els.applyColorBtn) els.applyColorBtn.textContent = this.t('action.apply');
+
+            // 已渲染的色块只更新 tooltip，不重建 DOM
+            if (els.basicColorsGrid) {
+                const nodes = els.basicColorsGrid.querySelectorAll('.basic-color');
+                for (let i = 0; i < nodes.length; i++) {
+                    const k = nodes[i].dataset.nameKey;
+                    if (k) nodes[i].title = this.t(k);
+                }
+            }
+
+            // 文案换了，字号要重新收敛（弹窗未打开时 _fitTexts 内部直接返回）
+            this._fitTexts();
+        }
+
+        // ---------- 字号自适应 ----------
+
+        /**
+         * 弹窗宽度固定 320px，德/俄等语言会把标题和按钮撑破。
+         * 这里在弹窗可见时按「实际溢出比例」一次性算出目标字号：
+         *   target = base * avail / need
+         * 并夹在 [max(minPx, base * ratio), base] 之间。
+         *
+         * 缩到下限仍放不下时交给 CSS 兜底：
+         *   .popup-title → text-overflow: ellipsis
+         *   .color-btn   → overflow-wrap: break-word（换行，按钮栏撑高）
+         *
+         * 可调参数（CSS 变量，不设则用下面的默认值）：
+         *   --cp-fit-min-size  字号下限，默认 11（px）
+         *   --cp-fit-ratio     下限占基准字号的比例，默认 0.68
+         */
+        _fitTexts() {
+            // display:none 时所有宽度都是 0，测量无意义
+            if (!this.classList.contains('active') || !this._els) return;
+
+            const hostStyle = getComputedStyle(this);
+            const minPx = parseFloat(hostStyle.getPropertyValue('--cp-fit-min-size')) || 11;
+            const ratio = parseFloat(hostStyle.getPropertyValue('--cp-fit-ratio')) || 0.68;
+
+            const targets = ['popupTitle', 'hexLabel', 'basicSectionTitle',
+                'savedSectionTitle', 'saveColorBtn', 'applyColorBtn'];
+            for (let i = 0; i < targets.length; i++) {
+                const el = this._els[targets[i]];
+                if (el) this._fitText(el, minPx, ratio);
+            }
+        }
+
+        /**
+         * 单个元素收敛字号。先复位再测（避免上次缩放累积）。
+         * 用 nowrap 量单行宽度，否则换行后 scrollWidth 永远不超，测不出溢出。
+         */
+        _fitText(el, minPx, ratio) {
+            el.style.fontSize = '';             // 复位到 CSS 基准
+            const cs = getComputedStyle(el);
+            const base = parseFloat(cs.fontSize) || 16;
+            const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+
+            const prevWhiteSpace = el.style.whiteSpace;
+            el.style.whiteSpace = 'nowrap';
+            const avail = el.clientWidth - padX;      // 减去左右内边距，只算文本可用宽
+            const need = el.scrollWidth - padX;       // 同理，scrollWidth 含内边距
+            el.style.whiteSpace = prevWhiteSpace;
+
+            if (avail > 0 && need > avail) {
+                const lower = Math.max(minPx, base * ratio);
+                const target = Math.max(lower, base * avail / need);
+                // 只缩小、不放大（--cp-fit-min-size 被设成比基准还大时不应撑大字号）
+                if (target < base) el.style.fontSize = target.toFixed(1) + 'px';
+            }
         }
 
         // ---------- 静态工具方法 ----------

@@ -1355,18 +1355,19 @@ settings.ini  →  AppSettings.DisplayColors (JSON string)
 
 ### 调色板集成
 
-`frontend/color-picker.{js,html}` 是独立项目 `调色板/调色板-0.2.4` 的**原样副本**（哈希一致，v0.8.2 由 0.2.3 升级）。Shadow DOM 完全隔离样式，模板由 `fetch` 异步加载（`document.currentScript.src` 定位，支持任意目录部署）。
+`frontend/color-picker.{js,html}` 是独立项目 `调色板/调色板-0.2.6` 的**原样副本**（哈希一致；v0.8.2 里 0.2.3 → 0.2.4 → 0.2.6 连升两版）。Shadow DOM 完全隔离样式，模板由 `fetch` 异步加载（`document.currentScript.src` 定位，支持任意目录部署）。
 
-调用面（`settingspage.js` 的 `_openColorPicker`）：属性 `theme` / `transparency` / `color` / `title`，方法 `open(trigger)`，事件 `apply`。
+调用面（`settingspage.js` 的 `_openColorPicker`）：属性 `theme` / `transparency` / `color` / `title` / `i18n`，方法 `open(trigger)`，事件 `apply`。
 
-- 标题通过 `title` 属性下发，格式 `设置项名 · 深色/浅色`（`_COLOR_TITLE_SEP` 分隔）；两端都取当前语言的译文（`settings.color_*` 与 `theme.dark_label` / `light_label`），同一行的背景/字体两列共用项名。9 语言实测最窄余量日语 19px、俄语 36px，标题栏保持 44px 不换行；RTL 下标题在右、关闭按钮在左。不传 `title` 时组件仍用默认「选择颜色」。
-- 弹窗**内部**的文案（`颜色值` / `基础颜色` / `保存颜色` / `应用颜色` 等）仍是组件模板里写死的中文，0.2.4 没有对应接口 —— 见 TODO #86。
-
-- 取色按钮的胶头滴管图标是组件**内置** SVG（`slot[name="eyedropper-icon"]` 的兜底内容），不再依赖页面里的 Font Awesome。本项目没有 FA，0.2.3 会退化成一个 **emoji `💧`**（`<span class="eyedropper-icon">💧</span>`）：彩色、不跟主题、字形随系统字体变（实测该按钮内 `svg` 数 0）；0.2.4 是单色矢量滴管，`fill: currentColor` 跟随主题。
-- `:host` 自带 dark 兜底变量：即使调用方忘设 `theme`，弹窗背景也不会透明（0.2.3 实测 `rgba(0,0,0,0)`，整个弹窗看不见）。
+- **标题**走 `title` 属性（优先级高于组件 i18n 的 `header.title`），格式 `设置项名 · 背景/字体 · 深色/浅色`（`_COLOR_TITLE_SEP` 分隔）。三段全部取当前语言译文：项名 `settings.color_*`、列名短词 `settings.color_bg_short` / `color_fg_short`、深浅 `theme.dark_label` / `light_label`。
+- **弹窗宽度**：组件 `:host` 写死 320px，三段式标题在 en/fr/ja/ru 下会被 0.2.6 的字号自适应压到 15~17px、或落到省略号兜底。`_openColorPicker` 用**内联样式**把宽度覆盖成 360px（`_COLOR_PICKER_WIDTH`，不改组件文件），实测 9 语言标题都能保持 19px 单行，最紧余量 5.9px（日语）。
+- **弹窗内文案**由 `_colorPickerI18n()` 注入：把组件 0.2.6 的 41 个 key（`header.title` / `hex.label` / `section.*` / `action.*` / 32 个 `basicColor.*`）映射到项目 i18n 的 `colorpicker.*`，再 `JSON.stringify` 写进 `i18n` 属性。9 语言在 `config/i18n/*.json` 里都有，缺键会自动回落组件内置中文。
+- 取色按钮的胶头滴管图标是组件**内置** SVG（`slot[name="eyedropper-icon"]` 的兜底内容），不依赖页面里的 Font Awesome。0.2.3 会退化成一个 **emoji `💧`**（彩色、不跟主题、字形随系统字体变，实测该按钮内 `svg` 数 0）；0.2.4 起是单色矢量滴管，`fill: currentColor` 跟随主题。
+- `:host` 自带 dark 兜底变量：即使调用方忘设 `theme`，弹窗背景也不会透明（0.2.3 实测 `rgba(0,0,0,0)`）。
 - 滑块 / RGBA 输入路径都会派发 `color-change`；`save` 事件的 `index` 是本次实际写入的槽位。
+- 0.2.6 的**长语言字号自适应**（`_fitTexts()`）：`open()` 时按实际溢出比例一次性收敛标题/标签/按钮的字号，下限 `--cp-fit-min-size`（默认 11px）/ `--cp-fit-ratio`（0.68）；缩到下限仍放不下才交给 CSS 兜底（标题省略号、按钮断词）。本项目把弹窗加宽到 360px 后，9 语言都不会触发缩小。
 
-回归夹具 `_audit/colorpicker_024.py`（22 项）：同一份 frontend 起两个静态根，一份放 0.2.4、一份放 0.2.3 作对照，逐项测量图标尺寸、弹窗背景不透明度、事件 detail、设置页点击 → 应用 → 色块变色。
+回归夹具：`_audit/colorpicker_component.py`（22 项，组件行为 + 0.2.3 实时对照）、`_audit/colorpicker_title.py`（75 项，三段式标题 + 9 语言 + 组件内文案 i18n）。
 
 ---
 

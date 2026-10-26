@@ -884,15 +884,82 @@ async function refreshSettingsLangList() {
 }
 
 // ---- color picker integration ----
-// 弹窗标题：`<color-picker>` 的 title 属性。调用方只传「设置项名」，深浅由
-// _makeSwatchPair 按色块列补上（同一行有背景/字体两列，标题不再区分列）。
+// 标题走 `title` 属性（优先级高于组件 i18n 的 header.title）：
+// 「设置项名 · 背景/字体 · 深色/浅色」。列名用短词（背景 / 字体），因为标题栏窄。
 var _COLOR_TITLE_SEP = ' · ';
+
+// 弹窗宽度：组件 `:host` 写死 320px。三段式标题在 en/fr/ja/ru 下 320px 会被组件
+// 的字号自适应压到 15~17px 或用省略号截断；360px 下 9 语言都能保持 19px 单行
+// （实测最紧 5.9px，日语）。用内联样式覆盖 :host 的 width，不改组件文件。
+var _COLOR_PICKER_WIDTH = 360;
+
+// `<color-picker>` 0.2.6 的内置文案 key → 项目 i18n key（九语言在 config/i18n 里）。
+// 组件未提供的 key 自动回落内置中文；这里给全，非中文界面才不会露中文。
+var _COLOR_PICKER_I18N_KEYS = {
+	'header.title': 'colorpicker.title',
+	'header.close': 'colorpicker.close',
+	'hex.label': 'colorpicker.hex_label',
+	'eyedropper.title': 'colorpicker.eyedropper',
+	'eyedropper.unsupported': 'colorpicker.eyedropper_unsupported',
+	'section.basic': 'colorpicker.basic',
+	'section.saved': 'colorpicker.saved',
+	'action.save': 'colorpicker.save',
+	'action.apply': 'colorpicker.apply',
+	'basicColor.pureRed': 'colorpicker.c_pure_red',
+	'basicColor.pureOrange': 'colorpicker.c_pure_orange',
+	'basicColor.pureYellow': 'colorpicker.c_pure_yellow',
+	'basicColor.yellowGreen': 'colorpicker.c_yellow_green',
+	'basicColor.pureGreen': 'colorpicker.c_pure_green',
+	'basicColor.springGreen': 'colorpicker.c_spring_green',
+	'basicColor.pureCyan': 'colorpicker.c_pure_cyan',
+	'basicColor.skyBlue': 'colorpicker.c_sky_blue',
+	'basicColor.pureBlue': 'colorpicker.c_pure_blue',
+	'basicColor.blueViolet': 'colorpicker.c_blue_violet',
+	'basicColor.magenta': 'colorpicker.c_magenta',
+	'basicColor.roseRed': 'colorpicker.c_rose_red',
+	'basicColor.pureWhite': 'colorpicker.c_pure_white',
+	'basicColor.grayLight': 'colorpicker.c_gray_light',
+	'basicColor.grayMedium': 'colorpicker.c_gray_medium',
+	'basicColor.grayDark': 'colorpicker.c_gray_dark',
+	'basicColor.halfRed': 'colorpicker.c_half_red',
+	'basicColor.halfOrange': 'colorpicker.c_half_orange',
+	'basicColor.halfYellow': 'colorpicker.c_half_yellow',
+	'basicColor.halfGreen': 'colorpicker.c_half_green',
+	'basicColor.halfCyan': 'colorpicker.c_half_cyan',
+	'basicColor.halfBlue': 'colorpicker.c_half_blue',
+	'basicColor.halfMagenta': 'colorpicker.c_half_magenta',
+	'basicColor.halfWhite': 'colorpicker.c_half_white',
+	'basicColor.halfBlack': 'colorpicker.c_half_black',
+	'basicColor.halfRedLight': 'colorpicker.c_half_red_light',
+	'basicColor.halfGreenLight': 'colorpicker.c_half_green_light',
+	'basicColor.halfBlueLight': 'colorpicker.c_half_blue_light',
+	'basicColor.halfYellowLight': 'colorpicker.c_half_yellow_light',
+	'basicColor.halfPurpleLight': 'colorpicker.c_half_purple_light',
+	'basicColor.halfCyanLight': 'colorpicker.c_half_cyan_light',
+	'basicColor.halfGray': 'colorpicker.c_half_gray'
+};
+
+// 取当前语言下的组件文案表；缺失的键不放进 map，交给组件回落内置中文。
+function _colorPickerI18n() {
+	var map = {};
+	for (var k in _COLOR_PICKER_I18N_KEYS) {
+		if (!Object.prototype.hasOwnProperty.call(_COLOR_PICKER_I18N_KEYS, k)) continue;
+		var v = t(_COLOR_PICKER_I18N_KEYS[k], '');
+		if (v) map[k] = v;
+	}
+	return map;
+}
 
 function _openColorPicker(trigger, defaultColor, onApply, title) {
 	var picker = document.createElement('color-picker');
 	if (title) picker.setAttribute('title', title);
 	picker.setAttribute('theme', document.documentElement.getAttribute('data-theme') || 'dark');
 	picker.setAttribute('transparency', 'solid');
+	picker.style.width = _COLOR_PICKER_WIDTH + 'px';
+	var i18nMap = _colorPickerI18n();
+	if (Object.keys(i18nMap).length) {
+		try { picker.setAttribute('i18n', JSON.stringify(i18nMap)); } catch (e) { /* 忽略：回落内置中文 */ }
+	}
 	var cur = trigger.style.background;
 	// Pass current color to picker if it differs from default; fall back to default.
 	if (cur && !/^\s*$/.test(cur) && cur !== defaultColor) picker.setAttribute('color', cur);
@@ -1019,7 +1086,7 @@ function _buildColorRow(cfg) {
 	row.appendChild(italicWrap);
 
 	// Helper: make a swatch pair (dark + light) inside a container
-	function _makeSwatchPair(swrap, curDark, curLight, defDark, defLight, onDark, onLight, name) {
+	function _makeSwatchPair(swrap, curDark, curLight, defDark, defLight, onDark, onLight, name, kindKey) {
 		function _one(cls, fill, pickerDef, onClick) {
 			var outer = document.createElement('span');
 			outer.className = 'c-color-swatch ' + cls;
@@ -1031,7 +1098,10 @@ function _buildColorRow(cfg) {
 			outer.title = isDark ? t('settings.color_sw_dark','深色主题') : t('settings.color_sw_light','浅色主题');
 			outer.addEventListener('click', function() {
 				var shade = isDark ? t('theme.dark_label','深色') : t('theme.light_label','浅色');
-				var title = name ? name + _COLOR_TITLE_SEP + shade : '';
+				var kind = kindKey ? t(kindKey, '') : '';
+				var title = name
+					? name + _COLOR_TITLE_SEP + (kind ? kind + _COLOR_TITLE_SEP : '') + shade
+					: '';
 				_openColorPicker(outer, pickerDef, function(color) { onClick(color); }, title);
 			});
 			swrap.appendChild(outer);
@@ -1053,7 +1123,7 @@ function _buildColorRow(cfg) {
 			if (cfg.bgKey) { bgV.light = c; } else { bgV.bgLight = c; }
 			bgLight = c; _updateSwatchFills(bgWrap, bgDark, bgLight); _persistColor(bgKey, bgV);
 		},
-		itemName
+		itemName, 'settings.color_bg_short'
 	);
 	row.appendChild(bgWrap);
 
@@ -1063,7 +1133,7 @@ function _buildColorRow(cfg) {
 	_makeSwatchPair(fgWrap, fgDark, fgLight, fgDflt.dark, fgDflt.light,
 		function(c) { fgV.dark = c; fgDark = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); },
 		function(c) { fgV.light = c; fgLight = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); },
-		itemName
+		itemName, 'settings.color_fg_short'
 	);
 	row.appendChild(fgWrap);
 
