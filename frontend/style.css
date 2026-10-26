@@ -244,10 +244,17 @@ button:disabled:active { transform: none; box-shadow: none; }
   background: transparent; border: none; color: var(--fg) !important;
   cursor: pointer; width: 28px; height: 100%; min-width: 28px;
   display: flex; align-items: center; justify-content: center;
+  /* padding 必须清零：全局 button 的 5px 14px 内边距会把 28px 按钮的内容区压成
+     0px，里面的图标（flex 子项）于是被 flex-shrink 挤到 0 宽 —— 图标键存在也
+     看不见。 */
+  padding: 0;
   margin-left: auto; flex-shrink: 0;
 }
 .c-theme-btn:hover { background: var(--hover); }
 .c-theme-btn .theme-icon { width: 18px; height: 18px; flex-shrink: 0; pointer-events: none; }
+/* _populateIcons 塞进来的是裸 <svg>（没有 .theme-icon 类），同样要钉住尺寸并
+   禁止收缩，否则仍是 0 宽。 */
+.c-theme-btn > svg { width: 18px; height: 18px; flex-shrink: 0; pointer-events: none; }
 
 .cr-bubble {
   display: inline; color: var(--fg); background: var(--border);
