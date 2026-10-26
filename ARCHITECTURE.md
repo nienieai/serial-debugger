@@ -1355,7 +1355,15 @@ settings.ini  →  AppSettings.DisplayColors (JSON string)
 
 ### 调色板集成
 
-`<color-picker>` Web Component，同 v0.6.1。
+`frontend/color-picker.{js,html}` 是独立项目 `调色板/调色板-0.2.4` 的**原样副本**（哈希一致，v0.8.2 由 0.2.3 升级）。Shadow DOM 完全隔离样式，模板由 `fetch` 异步加载（`document.currentScript.src` 定位，支持任意目录部署）。
+
+调用面只有三处（`settingspage.js` 的 `_openColorPicker`）：属性 `theme` / `transparency` / `color`，方法 `open(trigger)`，事件 `apply`。
+
+- 取色按钮的胶头滴管图标是组件**内置** SVG（`slot[name="eyedropper-icon"]` 的兜底内容），不再依赖页面里的 Font Awesome。本项目没有 FA，0.2.3 会退化成一个 **emoji `💧`**（`<span class="eyedropper-icon">💧</span>`）：彩色、不跟主题、字形随系统字体变（实测该按钮内 `svg` 数 0）；0.2.4 是单色矢量滴管，`fill: currentColor` 跟随主题。
+- `:host` 自带 dark 兜底变量：即使调用方忘设 `theme`，弹窗背景也不会透明（0.2.3 实测 `rgba(0,0,0,0)`，整个弹窗看不见）。
+- 滑块 / RGBA 输入路径都会派发 `color-change`；`save` 事件的 `index` 是本次实际写入的槽位。
+
+回归夹具 `_audit/colorpicker_024.py`（22 项）：同一份 frontend 起两个静态根，一份放 0.2.4、一份放 0.2.3 作对照，逐项测量图标尺寸、弹窗背景不透明度、事件 detail、设置页点击 → 应用 → 色块变色。
 
 ---
 

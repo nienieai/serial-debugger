@@ -8,6 +8,35 @@
             box-sizing: border-box;
         }
 
+        /* 兜底变量：未指定 theme/transparency 时生效
+           （[theme]/[transparency] 规则特异性更高，会正常覆盖）。
+           修复：此前缺 theme 会让 --picker-bg 等全部未定义 -> 背景全透明。 */
+        :host {
+            --input-bg: rgba(0, 0, 0, 0.5);
+            --input-border: rgb(160, 160, 160);
+            --input-text: rgb(240, 240, 240);
+            --input-hover-border: rgb(255, 255, 255);
+            --input-hover-shadow:
+                0 0 15px 3px rgba(255, 255, 255, 0.4),
+                0 0 5px 1px rgba(255, 255, 255, 0.6),
+                inset 0 1px 2px rgba(255, 255, 255, 0.2);
+            --input-focus-border: #3498db;
+            --input-focus-shadow:
+                0 0 20px 6px rgba(52, 152, 219, 0.3),
+                0 0 8px 2px rgba(52, 152, 219, 0.7),
+                inset 0 1px 3px rgba(255, 255, 255, 0.3);
+            --header-border: rgba(255, 255, 255, 0.2);
+            --title-color: #f5f5f5;
+            --section-title-color: #d8d8d8;
+            --action-border: rgba(255, 255, 255, 0.15);
+            --slider-track-bg: rgba(255, 255, 255, 0.15);
+            --swatch-bg-color: #000;
+            --picker-bg: #1c1c1c;
+            --picker-border: rgba(255, 255, 255, 0.1);
+            --header-bg: #252525;
+            --picker-backdrop: none;
+        }
+
         :host {
             position: fixed;
             width: 320px;
@@ -284,6 +313,15 @@
             transition: all 0.2s ease;
             flex-shrink: 0;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+
+        /* 吸管图标：内置默认 SVG 与调用方注入的 slot SVG 统一尺寸与颜色 */
+        .eyedropper-btn .eyedropper-icon,
+        .eyedropper-btn ::slotted(svg) {
+            width: 24px;
+            height: 24px;
+            display: block;
+            color: inherit;
         }
 
         :host([theme="dark"]) .eyedropper-btn {
@@ -649,7 +687,11 @@
                 <label class="color-input-label" for="hexInput">HEX 颜色值</label>
                 <div class="hex-row">
                     <input type="text" id="hexInput" class="color-input" value="#3498db" maxlength="9">
-                    <button class="eyedropper-btn" id="eyedropperBtn" title="从屏幕取色"><span class="eyedropper-icon">💧</span></button>
+                    <button class="eyedropper-btn" id="eyedropperBtn" title="从屏幕取色（Esc 取消）">
+                        <!-- 默认图标由 JS 注入（见 _ensureDefaultIcon），以减小模板体积；
+                             调用方可用 <svg slot="eyedropper-icon"> 覆盖。 -->
+                        <slot name="eyedropper-icon"></slot>
+                    </button>
                 </div>
             </div>
         </div>
