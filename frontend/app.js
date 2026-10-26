@@ -2852,7 +2852,10 @@ function renderTabs() {
   state.tabs.forEach((t, i) => {
     if (t._page && t._page.isWelcome) return;  // skip welcome tab
     const btn = document.createElement('button');
-	    btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '') + (t.mode === 'forward' ? ' tab-forward' : '');
+    // 转发色只在**真的在转发**时加：`.tab-forward` 用 !important 压过 `.tab-idle`，
+    // 之前只要 mode=forward 就一直绿着，于是「端口转发空闲」看起来像在跑。
+    btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '')
+      + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
     if (!t.portOpen) btn.className += ' tab-idle';
     btn.draggable = true;
     btn.dataset.tabIdx = i;
@@ -3596,7 +3599,12 @@ function refreshStatsDOM() {
     // 不去读缓存、也不去拉 daemon —— 空闲进程的计数没有意义，读出来只会让
     // 上一次连接的数字继续挂着（用户实测的那条 P2:389/s）。
     if (!tab.portOpen) {
-      if (_statusBar) _statusBar.resetStats();
+      if (_statusBar) {
+        // 模式也得定：转发页空闲时箭头仍应是 P1/P2（此前提前返回，把它留在
+        // 上一个标签页的 TX/RX 上）
+        _statusBar.setStatsMode(activeMode() === 'forward');
+        _statusBar.resetStats();
+      }
       return;
     }
     if (!state.statsBase[tab.sessionId]) {
