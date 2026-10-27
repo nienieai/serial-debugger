@@ -1521,8 +1521,15 @@ function _tabDragMove(e) {
     _tabDragStart(st);
   }
   if (e.cancelable) e.preventDefault();
-  st.ghost.style.left = (e.clientX - st.offX) + 'px';
-  st.ghost.style.top = (e.clientY - st.offY) + 'px';
+  // 只跟水平方向：压暗的那个标签留在标签栏这一行里左右滑，不跟着鼠标上下跑，
+  // 也不在光标下面变成一块浮起来的方块。左右夹在标签栏范围内，滑不出窗口。
+  var gx = e.clientX - st.offX;
+  var bar = document.getElementById('tabsBar');
+  if (bar) {
+    var br = bar.getBoundingClientRect();
+    gx = Math.max(br.left + 4, Math.min(gx, br.right - st.w - 4));
+  }
+  st.ghost.style.left = gx + 'px';
   _tabDragPlace(st, e.clientX);
 }
 
