@@ -4326,8 +4326,13 @@ function qpDragDown(e, idx) {
 function _qpDragBegin(st) {
   st.started = true;
   var rowsEl = st.row.parentNode;            // .qp-rows（display:contents，行是祖父网格的 item）
-  var host = rowsEl.parentElement;           // 真正的 grid 容器，克隆要借它的列宽
-  var cols = host ? getComputedStyle(host).gridTemplateColumns : '';
+  var host = rowsEl.parentElement;           // .qp-scroll
+  var table = host ? host.parentElement : null;  // .qp-table
+  var cols = table ? getComputedStyle(table).gridTemplateColumns : '';
+  st.host = host;
+  st.table = table;
+  st.addRow = table ? table.querySelector('.qp-add-row') : null;
+  st.addPush = 0;
 
   st.row.classList.add('qp-src');
   st.row.style.left = st.left + 'px';
@@ -4426,13 +4431,25 @@ function _qpDragMove(e) {
   var rowsEl = st.row.parentNode;
   var top = e.clientY - st.offY;
   // .qp-rows 是 display:contents，自己的 getBoundingClientRect() 是空矩形，
-  // 夹边界要用它的父容器（真正的网格/滚动容器）。
-  var host = rowsEl ? rowsEl.parentElement : null;
-  if (host) {
-    var rr = host.getBoundingClientRect();
-    top = Math.max(rr.top, Math.min(top, rr.bottom - st.h));
+  // 夹边界要用外层真正的容器。下限放到 .qp-table 底：这样被拖的行可以压到
+  // 「+ 添加」那一行上，把添加行顶下去。
+  var bounds = st.table ? st.table.getBoundingClientRect() : null;
+  if (bounds) {
+    top = Math.max(bounds.top, Math.min(top, bounds.bottom - st.h));
   }
   st.row.style.top = top + 'px';
+
+  // 推挤「+ 添加」：行底部越过滚动区底边多少，就把它往下顶多少，最多顶到表格底。
+  if (st.addRow && st.host) {
+    var sr = st.host.getBoundingClientRect();
+    var overflow = Math.max(0, (top + st.h) - sr.bottom);
+    var ar = st.addRow.getBoundingClientRect();
+    var baseBottom = ar.bottom - (st.addPush || 0);
+    var space = Math.max(0, (bounds ? bounds.bottom : sr.bottom) - baseBottom);
+    var push = Math.min(overflow, space);
+    st.addPush = push;
+    st.addRow.style.transform = push > 0.5 ? 'translateY(' + push + 'px)' : '';
+  }
   _qpDragPlace(st, e.clientY);
 }
 
@@ -4450,6 +4467,7 @@ function _qpDragFinish(commit) {
   if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
   if (rowsEl) rowsEl.classList.remove('is-dragging');
   document.body.classList.remove('is-qp-dragging');
+  if (st.addRow) st.addRow.style.transform = '';
   st.row.classList.remove('qp-src');
   st.row.style.left = '';
   st.row.style.top = '';

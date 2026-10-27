@@ -1256,6 +1256,8 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   border: 0;
 }
 body.is-qp-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+/* 拖动时「+ 添加」压在压暗行之上：行从它下面滑过去，不该把添加按钮盖住。 */
+body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 
 /* ── row children: explicit grid-column placement ── */
 .qp-drag  { grid-column: 1; grid-row: 1 / 3; }
