@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// 主题 = 一个文件夹：resources/themes/<id>/theme.json，自带素材（背景图等）放在同一目录。
+// 主题 = 一个文件夹：resources/themes/<id>/theme.json，自带素材（背景图、缩略图等）放在同一目录。
 // 磁盘上的 <exe>/resources/themes/<id>/ 覆盖嵌入的同名目录。
 //
-//go:embed resources/themes/*/theme.json
+//go:embed resources/themes/*/*
 var themesFS embed.FS
 
 const themesEmbedRoot = "resources/themes"
@@ -67,34 +67,52 @@ func themeIDs() []string {
 	return ids
 }
 
-// readThemeJSON 读主题定义：磁盘优先，返回时带上主题目录（内联图片要用）。
-func readThemeJSON(id string) (map[string]any, string, bool) {
-	if dir := resourcePath("themes", id); dir != "" {
-		if data, err := os.ReadFile(filepath.Join(dir, "theme.json")); err == nil {
+// readThemeJSON 读主题定义：磁盘优先。
+func readThemeJSON(id string) (map[string]any, bool) {
+	if p := resourcePath("themes", id, "theme.json"); fileExists(p) {
+		if data, err := os.ReadFile(p); err == nil {
 			var m map[string]any
 			if json.Unmarshal(data, &m) == nil {
-				return m, dir, true
+				return m, true
 			}
 		}
 	}
 	data, err := themesFS.ReadFile(themesEmbedRoot + "/" + id + "/theme.json")
 	if err != nil {
-		return nil, "", false
+		return nil, false
 	}
 	var m map[string]any
 	if json.Unmarshal(data, &m) != nil {
-		return nil, "", false
+		return nil, false
 	}
-	return m, "", true
+	return m, true
 }
 
-// LoadTheme 读一个主题，并把主题目录里的图片内联成 data URI 后再返回。
+// readThemeAsset 读主题文件夹里的素材（缩略图、背景图）：磁盘优先，其次嵌入。
+func readThemeAsset(id, name string) ([]byte, string, bool) {
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+		return nil, "", false
+	}
+	if p := resourcePath("themes", id, clean); fileExists(p) {
+		if data, err := os.ReadFile(p); err == nil {
+			return data, p, true
+		}
+	}
+	data, err := themesFS.ReadFile(themesEmbedRoot + "/" + id + "/" + filepath.ToSlash(clean))
+	if err != nil {
+		return nil, "", false
+	}
+	return data, clean, true
+}
+
+// LoadTheme 读一个主题，并把主题文件夹里的图片内联成 data URI 后再返回。
 func LoadTheme(id string) map[string]any {
-	m, dir, ok := readThemeJSON(id)
+	m, ok := readThemeJSON(id)
 	if !ok {
 		return nil
 	}
-	return inlineThemeImages(m, dir)
+	return inlineThemeImages(m, id)
 }
 
 func ListThemeIDs() []string {
@@ -104,7 +122,7 @@ func ListThemeIDs() []string {
 func ListThemeInfos() []ThemeInfo {
 	var infos []ThemeInfo
 	for _, id := range themeIDs() {
-		m, _, ok := readThemeJSON(id)
+		m, ok := readThemeJSON(id)
 		if !ok {
 			continue
 		}
@@ -149,9 +167,10 @@ func stringSlice(v any) []string {
 //
 // 为什么要这么做：前端由 Wails 的 asset server 提供，只挂载 frontend 目录，
 // CSS 里写 `url(../themes/...)` 出不去这个根，直接 404；所以图片只能由 Go 读文件、
-// 转成 data URI 塞进变量。路径相对主题自己的文件夹，写 `url(bg.jpg)` 即可。
-func inlineThemeImages(m map[string]any, baseDir string) map[string]any {
-	if m == nil || baseDir == "" {
+// 转成 data URI 塞进变量。路径相对主题自己的文件夹，写 `url(bg.jpg)` 即可，
+// 内置主题的素材也在同一目录（随 //go:embed 一起进 exe）。
+func inlineThemeImages(m map[string]any, id string) map[string]any {
+	if m == nil || id == "" {
 		return m
 	}
 	for _, name := range []string{"common", "dark", "light"} {
@@ -164,7 +183,7 @@ func inlineThemeImages(m map[string]any, baseDir string) map[string]any {
 			if !ok {
 				continue
 			}
-			if out, ok2 := inlineCSSURL(s, baseDir); ok2 {
+			if out, ok2 := inlineCSSURL(s, id); ok2 {
 				sec[k] = out
 			}
 		}
@@ -172,7 +191,7 @@ func inlineThemeImages(m map[string]any, baseDir string) map[string]any {
 	return m
 }
 
-func inlineCSSURL(s, baseDir string) (string, bool) {
+func inlineCSSURL(s, id string) (string, bool) {
 	val := strings.TrimSpace(s)
 	if !strings.HasPrefix(val, "url(") || !strings.HasSuffix(val, ")") {
 		return s, false
@@ -182,7 +201,16 @@ func inlineCSSURL(s, baseDir string) (string, bool) {
 		strings.HasPrefix(inner, "data:") || strings.HasPrefix(inner, "/") {
 		return s, false
 	}
-	for _, cand := range themeImageCandidates(inner, baseDir) {
+	// 1) 主题文件夹里的素材（磁盘或嵌入）
+	if data, p, ok := readThemeAsset(id, inner); ok && len(data) > 0 && len(data) <= 8<<20 {
+		return "url(data:" + themeImageMime(p) + ";base64," + base64.StdEncoding.EncodeToString(data) + ")", true
+	}
+	// 2) 兼容：按文件名去主题目录找、按 exe 根目录解析
+	cands := []string{filepath.Join(resourcePath("themes", id), filepath.Base(inner))}
+	if exe, err := os.Executable(); err == nil {
+		cands = append(cands, filepath.Join(filepath.Dir(exe), filepath.FromSlash(inner)))
+	}
+	for _, cand := range cands {
 		data, err := os.ReadFile(cand)
 		if err != nil || len(data) == 0 || len(data) > 8<<20 {
 			continue
@@ -190,18 +218,6 @@ func inlineCSSURL(s, baseDir string) (string, bool) {
 		return "url(data:" + themeImageMime(cand) + ";base64," + base64.StdEncoding.EncodeToString(data) + ")", true
 	}
 	return s, false
-}
-
-// themeImageCandidates 依次尝试：主题目录内的相对路径、同名文件（兼容老写法
-// `url(themes/colors/x.jpg)`）、exe 根目录下的相对路径。
-func themeImageCandidates(inner, baseDir string) []string {
-	p := filepath.FromSlash(inner)
-	out := []string{filepath.Join(baseDir, p)}
-	out = append(out, filepath.Join(baseDir, filepath.Base(p)))
-	if exe, err := os.Executable(); err == nil {
-		out = append(out, filepath.Join(filepath.Dir(exe), p))
-	}
-	return out
 }
 
 func themeImageMime(path string) string {
