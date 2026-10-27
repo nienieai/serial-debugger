@@ -3261,11 +3261,24 @@ function _bindSettingsPortSync() {
   });
 }
 
+// 进设置页时静默重读一次语言包：改 i18n/*.json 后不用重启 exe。
+// 只有内容真的变了才重建设置页，避免面板 / 滚动位置被无谓重置。
+function _refreshSettingsI18n() {
+  if (typeof loadI18n !== 'function') return;
+  var before = (typeof _i18nSig === 'string') ? _i18nSig : '';
+  loadI18n(state.language || 'zh').then(function() {
+    if (typeof _i18nSig !== 'string' || _i18nSig === before) return;
+    applyI18n();
+    if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
+  }).catch(function() {});
+}
+
 function openSettingsPage() {
   // Check if settings tab already exists
   var existingIdx = state.tabs.findIndex(function(t) { return t.type === 'settings'; });
   if (existingIdx >= 0) {
     switchTab(existingIdx);
+    _refreshSettingsI18n();
     return;
   }
   // Create settings tab page
@@ -3310,6 +3323,7 @@ function openSettingsPage() {
   updateSyncIndicator();
   _updateStatsVisible();
   updateDaemonUI();
+  _refreshSettingsI18n();
 }
 function showAbout() {
   openSettingsPage();

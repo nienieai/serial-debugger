@@ -45,6 +45,13 @@ function applyFont() {
 }
 
 var _i18nLoaded = false;   // 语言包是否已经装好（启动早期为 false）
+var _i18nSig = '';         // 当前语言包的签名（键数 + 文本总长），用来判断重读后有没有变
+
+function _i18nSignature() {
+  var n = 0, len = 0;
+  for (var k in i18n) { n++; len += k.length + String(i18n[k]).length; }
+  return n + ':' + len;
+}
 
 async function loadI18n(lang) {
   // 1. Load built-in first (always available)
@@ -72,13 +79,15 @@ async function loadI18n(lang) {
     for (var k2 in ext) { merged[k2] = ext[k2]; }
     i18n = merged;
     _i18nLoaded = true;
+    _i18nSig = _i18nSignature();
     return;
   }
   // 3. No external file: use built-in directly
   window._i18nFallback = null;
-  if (Object.keys(builtin).length > 0) { i18n = builtin; _i18nLoaded = true; return; }
+  if (Object.keys(builtin).length > 0) { i18n = builtin; _i18nLoaded = true; _i18nSig = _i18nSignature(); return; }
   i18n = {};
   _i18nLoaded = true;
+  _i18nSig = _i18nSignature();
 }
 
 function i18nDir() {
