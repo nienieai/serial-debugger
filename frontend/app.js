@@ -1472,6 +1472,53 @@ function _tabDragStart(st) {
     st.addLeft = ar.left;
     st.addW = ar.width;
   }
+
+  st.lastX = st.startX;
+  _tabDragStartAutoScroll();
+}
+
+// 拖到标签栏左右边缘时自动滚动：标签多到一屏放不下时，靠这个才能把它拖到
+// 看得见区域以外的位置。越靠边滚得越快，松手/取消就停。
+var _tabDragRaf = null;
+
+function _tabDragStartAutoScroll() {
+  if (_tabDragRaf) return;
+  _tabDragRaf = requestAnimationFrame(_tabDragAutoScrollStep);
+}
+
+function _tabDragStopAutoScroll() {
+  if (_tabDragRaf) {
+    cancelAnimationFrame(_tabDragRaf);
+    _tabDragRaf = null;
+  }
+}
+
+function _tabDragAutoScrollStep() {
+  _tabDragRaf = null;
+  var st = _tabDrag;
+  if (!st || !st.started) return;
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+
+  var r = scroll.getBoundingClientRect();
+  var EDGE = 44;      // 进入边缘这个距离内开始滚
+  var MAX = 16;       // 每帧最多滚这么多像素
+  var x = st.lastX;
+  var delta = 0;
+  if (x > r.right - EDGE) {
+    delta = Math.ceil(Math.min(MAX, 2 + (x - (r.right - EDGE)) / EDGE * MAX));
+  } else if (x < r.left + EDGE) {
+    delta = -Math.ceil(Math.min(MAX, 2 + ((r.left + EDGE) - x) / EDGE * MAX));
+  }
+  if (delta) {
+    var before = scroll.scrollLeft;
+    scroll.scrollLeft = before + delta;
+    if (scroll.scrollLeft !== before) {
+      _tabDragPlace(st, x);           // 滚动后可见标签变了，落点跟着重算
+      if (typeof _updateTabArrows === 'function') _updateTabArrows();
+    }
+  }
+  _tabDragRaf = requestAnimationFrame(_tabDragAutoScrollStep);
 }
 
 // 落点 = 第一个「鼠标还在它左半区」的标签之前；都没有就排到最后
@@ -1527,6 +1574,7 @@ function _tabDragMove(e) {
     _tabDragStart(st);
   }
   if (e.cancelable) e.preventDefault();
+  st.lastX = e.clientX;
   // 只跟水平方向：压暗的那个标签留在标签栏这一行里左右滑，不跟着鼠标上下跑，
   // 也不在光标下面变成一块浮起来的方块。右边界要给「+」留出位置 —— 推到最右时
   // 是「标签 + 加号」一起顶到窗口边，不能让标签把加号压在身下。
@@ -1555,6 +1603,7 @@ function _tabDragFinish(commit) {
   var st = _tabDrag;
   if (!st) return;
   _tabDrag = null;
+  _tabDragStopAutoScroll();
   try { st.btn.releasePointerCapture(st.pid); } catch (_) {}
   document.body.classList.remove('is-tab-dragging');
   if (!st.started) return;
