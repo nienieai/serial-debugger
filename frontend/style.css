@@ -211,6 +211,13 @@ button:disabled:active { transform: none; box-shadow: none; }
   display: flex; justify-content: space-between; align-items: center;
   padding: 0 4px; background: var(--bg2); border-bottom: 1px solid var(--border);
   flex-shrink: 0; user-select: none; height: 26px;
+  /* 菜单下拉必须压在标签栏和页面之上。header 自身没有定位时，下拉的 z-index:100
+     只在 .menu-bar 内部排序，而 .menu-bar 被 7b 那条 `.header > *` 规则定成
+     z-index:1 —— 和 .tabs-viewport、.tab-page 同级，DOM 又排在前面，于是整块
+     下拉被标签栏盖掉上半截。让 header 自成层叠上下文（6 > 状态栏 4 > 页面 1），
+     下拉就永远在最上层；顺带把 .header::before 的定位上下文从 #app 收回到
+     菜单栏自己这 26px。 */
+  position: relative; z-index: 6;
 }
 .menu-bar { display: flex; align-items: center; height: 100%; }
 .menu-item { position: relative; height: 100%; display: flex; align-items: center; }
