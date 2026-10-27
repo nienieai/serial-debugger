@@ -1396,6 +1396,10 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 .settings-body {
   flex: 1; min-height: 0; overflow-y: auto;
   padding: 60px 16px 12px 16px;
+  /* 背景光斑：毛玻璃卡片后面得有东西可透，否则看不出玻璃感 */
+  background:
+    radial-gradient(1100px 520px at 8% -8%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 68%),
+    radial-gradient(900px 460px at 100% 2%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 66%);
 }
 
 /* ---- Panels: single-column card stream, max 1200px ---- */
@@ -1409,11 +1413,17 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 }
 .settings-panel.is-hidden { display: none; }
 
+/* 毛玻璃卡片：半透明底 + 背景模糊 + 顶部高光，深/浅主题都靠 color-mix 自适应 */
 .settings-bubble {
   position: relative;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 14px;
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 58%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+  box-shadow:
+    0 6px 22px rgba(0, 0, 0, .14),
+    inset 0 1px 0 rgba(255, 255, 255, .06);
   padding: 13px 18px;
   margin: 0;
 }
@@ -1535,7 +1545,9 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   border-radius: 10px;
   cursor: pointer;
   color: var(--fg);
-  background: var(--input-bg);
+  background: color-mix(in srgb, var(--bg2) 42%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
   transition: border-color .15s;
   min-width: 0;
 }
@@ -1572,7 +1584,9 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--input-bg);
+  background: color-mix(in srgb, var(--bg2) 42%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
   color: var(--fg);
   font-size: 14px;
   cursor: pointer;
