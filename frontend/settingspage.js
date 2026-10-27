@@ -821,19 +821,41 @@ function _themeColorsForMode(data, mode) {
 	return { bg: bg || (mode === 'dark' ? '#1e1e1e' : '#f5f5f5'), fg: fg || (mode === 'dark' ? '#e0e0e0' : '#333') };
 }
 
-function _makeSwatch(mode, bg, fg, label) {
-	var sw = document.createElement('span');
-	sw.className = 'settings-theme-swatch';
-	sw.title = label;
-	sw.style.background = bg;
-	sw.style.color = fg;
+function _themeAccent(data, mode) {
+	var block = data || {};
+	var pick = function (b) { return b && b['--accent'] ? b['--accent'] : ''; };
+	return pick(block[mode]) || pick(block.common) || '';
+}
+
+function _makeSwatch(mode, bg, fg, label, accent) {
+	var box = document.createElement('span');
+	box.className = 'settings-theme-preview';
+	box.style.background = bg;
+	box.title = label;
+	// 侧栏
+	var side = document.createElement('span');
+	side.className = 'settings-theme-preview-side';
+	side.style.background = fg;
+	box.appendChild(side);
+	// 两行内容条 + 一个强调点
+	var body = document.createElement('span');
+	body.className = 'settings-theme-preview-body';
+	var l1 = document.createElement('span');
+	l1.className = 'settings-theme-preview-line';
+	l1.style.background = fg;
+	l1.style.width = '58%';
+	var l2 = document.createElement('span');
+	l2.className = 'settings-theme-preview-line is-dim';
+	l2.style.background = fg;
+	l2.style.width = '36%';
 	var dot = document.createElement('span');
-	dot.className = 'settings-theme-swatch-dot';
-	dot.style.background = fg;
-	sw.appendChild(dot);
-	var lbl = document.createTextNode(label);
-	sw.appendChild(lbl);
-	return sw;
+	dot.className = 'settings-theme-preview-dot';
+	dot.style.background = accent || fg;
+	body.appendChild(l1);
+	body.appendChild(l2);
+	body.appendChild(dot);
+	box.appendChild(body);
+	return box;
 }
 
 async function _fetchThemeColors(th) {
@@ -879,11 +901,11 @@ async function renderSettingsThemeGrid() {
 		swatches.className = 'settings-theme-swatches';
 		if (modes.indexOf('dark') >= 0) {
 			var dc = _themeColorsForMode(data, 'dark');
-			swatches.appendChild(_makeSwatch('dark', dc.bg, dc.fg, t('theme.dark_label','深色')));
+			swatches.appendChild(_makeSwatch('dark', dc.bg, dc.fg, t('theme.dark_label','深色'), _themeAccent(data, 'dark')));
 		}
 		if (modes.indexOf('light') >= 0) {
 			var lc = _themeColorsForMode(data, 'light');
-			swatches.appendChild(_makeSwatch('light', lc.bg, lc.fg, t('theme.light_label','浅色')));
+			swatches.appendChild(_makeSwatch('light', lc.bg, lc.fg, t('theme.light_label','浅色'), _themeAccent(data, 'light')));
 		}
 		card.appendChild(swatches);
 		var name = document.createElement('span');
