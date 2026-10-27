@@ -1417,70 +1417,81 @@ document.addEventListener('copy', function(e) {
   }
 });
 
-// ---- Tab drag (stable handlers, bound once) ----
-var _tabDragSide = 'left';
+// ---- Tab drag：拖动时实时补位 ----
+//
+// 走 HTML5 拖放（拖影由浏览器画），拖动期间做三件事：
+//   1. 被拖的标签改成 position:absolute，真正脱离文档流（opacity:0，只剩拖影）
+//   2. 原位插一个等宽的 .tab-placeholder 占位块
+//   3. dragover 时按鼠标位置把占位块移到落点，其余标签跟着让位
+// 松手后按占位块在 DOM 里的位置结算 state.tabs，再 renderTabs() 重排。
+// 所以是「拖到哪、标签让到哪」，不再是一条竖线指示器。
+var _tabDrag = null;   // { btn, from, ph }
 
-function _tabHideIndicator() {
-  var ind = document.getElementById('tabDropIndicator');
-  if (ind) ind.classList.remove('show');
-  _tabDragSide = 'left';
+function _tabDragBegin(e, btn, idx) {
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(idx));
+  var r = btn.getBoundingClientRect();
+  var ph = document.createElement('div');
+  ph.className = 'tab-placeholder';
+  ph.style.width = r.width + 'px';   // 不取整：和原标签同宽，避免整条栏被挪动 1px
+  btn.parentNode.insertBefore(ph, btn);
+  btn.classList.add('tab-dragging');
+  btn.style.width = r.width + 'px';
+  _tabDrag = { btn: btn, from: idx, ph: ph };
+}
+
+// 结束拖动（松手、取消、拖出窗口都走这里）：清占位块、还原标签，不碰 state.tabs
+function _tabDragCleanup() {
+  var st = _tabDrag;
+  if (!st) return;
+  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+  st.btn.classList.remove('tab-dragging');
+  st.btn.style.width = '';
+  _tabDrag = null;
 }
 
 function _tabDragOver(e) {
-  e.preventDefault();
-  var bar = document.getElementById('tabsBar');
+  var st = _tabDrag;
   var scroll = document.getElementById('tabsScroll');
-  if (!bar || !scroll) return;
-  var tabs = scroll.querySelectorAll('.tab-btn:not(.tab-new)');
-  if (tabs.length === 0) return;
-  var gap = tabs.length;
-  for (var j = 0; j < tabs.length; j++) {
-    var r = tabs[j].getBoundingClientRect();
-    if (e.clientX <= r.left) { gap = j; break; }
-    if (e.clientX >= r.right) continue;
-    var pct = (e.clientX - r.left) / r.width;
-    if (pct < 0.4) { gap = j; _tabDragSide = 'left'; break; }
-    if (pct > 0.6) { gap = j + 1; _tabDragSide = 'right'; break; }
-    gap = _tabDragSide === 'right' ? j + 1 : j;
-    break;
-  }
-  var ind = document.getElementById('tabDropIndicator');
-  if (!ind) return;
-  ind.dataset.gap = gap;
-  var barRect = bar.getBoundingClientRect();
-  var left;
-  if (gap === 0) {
-    left = tabs[0].getBoundingClientRect().left - barRect.left - 2;
-  } else if (gap >= tabs.length) {
-    left = tabs[tabs.length - 1].getBoundingClientRect().right - barRect.left + 2;
-  } else {
-    var prevR = tabs[gap - 1].getBoundingClientRect().right;
-    var nextL = tabs[gap].getBoundingClientRect().left;
-    left = (prevR + nextL) / 2 - barRect.left;
-  }
-  ind.style.left = left + 'px';
-  ind.classList.add('show');
-}
+  if (!st || !scroll) return;
+  e.preventDefault();   // 不 preventDefault 浏览器不会触发 drop
 
-function _tabDragLeave(e) {
-  var bar = document.getElementById('tabsBar');
-  if (bar && !bar.contains(e.relatedTarget)) _tabHideIndicator();
+  // 落点 = 第一个「鼠标还在它左半区」的标签之前；找不到就排到最后
+  var before = null;
+  var tabs = scroll.querySelectorAll('.tab-btn:not(.tab-new)');
+  for (var j = 0; j < tabs.length; j++) {
+    var t = tabs[j];
+    if (t === st.btn) continue;
+    var r = t.getBoundingClientRect();
+    if (e.clientX < r.left + r.width / 2) { before = t; break; }
+  }
+
+  var kids = Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; });
+  var target = before ? kids.indexOf(before) : kids.length;
+  if (kids.indexOf(st.ph) === target) return;
+  var ref = target < kids.length ? kids[target] : null;
+  if (ref) scroll.insertBefore(st.ph, ref); else scroll.appendChild(st.ph);
 }
 
 function _tabDrop(e) {
+  var st = _tabDrag;
+  if (!st) return;
   e.preventDefault();
-  var ind = document.getElementById('tabDropIndicator');
-  var gap = ind ? parseInt(ind.dataset.gap) : state.tabs.length;
-  if (isNaN(gap)) gap = state.tabs.length;
-  _tabHideIndicator();
-  var from = parseInt(e.dataTransfer.getData('text/plain'));
-  if (isNaN(from) || from === gap || from + 1 === gap) return;
+  var scroll = document.getElementById('tabsScroll');
+  var kids = Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; });
+  var target = kids.indexOf(st.ph);
+  _tabDragCleanup();
+  if (target < 0) { renderTabs(); return; }
+
+  // kids 里已经排除被拖的标签，含占位块；占位块在 kids 中的下标就是「拖拽元素
+  // 最终该落在 state.tabs 的第几位」（占位块自己占了被腾出来的那个位置）。
+  var from = st.from;
+  if (target === from) { renderTabs(); return; }
   var moved = state.tabs.splice(from, 1)[0];
-  var insertAt = (from < gap) ? gap - 1 : gap;
-  state.tabs.splice(insertAt, 0, moved);
-  if (state.activeTab === from) state.activeTab = insertAt;
-  else if (from < state.activeTab && insertAt >= state.activeTab) state.activeTab--;
-  else if (from > state.activeTab && insertAt <= state.activeTab) state.activeTab++;
+  state.tabs.splice(target, 0, moved);
+  if (state.activeTab === from) state.activeTab = target;
+  else if (from < state.activeTab && target >= state.activeTab) state.activeTab--;
+  else if (from > state.activeTab && target <= state.activeTab) state.activeTab++;
   renderTabs();
 }
 
@@ -1602,7 +1613,6 @@ window.addEventListener('DOMContentLoaded', () => {
   var bar = document.getElementById('tabsBar');
   if (bar) {
     bar.addEventListener('dragover', _tabDragOver);
-    bar.addEventListener('dragleave', _tabDragLeave);
     bar.addEventListener('drop', _tabDrop);
     // Mouse wheel horizontal scroll for tab bar
     bar.addEventListener('wheel', function(e) {
@@ -2923,9 +2933,9 @@ function renderTabs() {
     btn.draggable = true;
     btn.dataset.tabIdx = i;
     btn.onclick = () => switchTab(i);
-    // drag handlers
-    btn.ondragstart = (e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); btn.classList.add('tab-dragging'); };
-    btn.ondragend = () => { btn.classList.remove('tab-dragging'); _tabHideIndicator(); };
+    // drag handlers（拖动时实时补位，见 _tabDragBegin）
+    btn.ondragstart = (e) => _tabDragBegin(e, btn, i);
+    btn.ondragend = () => _tabDragCleanup();
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
@@ -2971,14 +2981,6 @@ function renderTabs() {
   var addBtn = document.getElementById('tabAddBtn');
   if (addBtn) { addBtn.title = (typeof t === 'function') ? t('tooltip.new_tab', '新建会话') : '新建会话'; }
 
-  // Ensure drag indicator exists in bar (not scroll, to avoid overflow clipping)
-  if (!document.getElementById('tabDropIndicator')) {
-    var indicator = document.createElement('div');
-    indicator.id = 'tabDropIndicator';
-    indicator.className = 'tab-drop-indicator';
-    var bar = document.getElementById('tabsBar');
-    if (bar) bar.appendChild(indicator);
-  }
   // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
   // 变多而触发）—— 见 bindTabsScroll / TODO #26。
   if (typeof _updateTabArrows === 'function') _updateTabArrows();

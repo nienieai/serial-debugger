@@ -396,12 +396,19 @@ button:disabled:active { transform: none; box-shadow: none; }
 .tab-btn .close-tab:hover { background: var(--red); color: #fff; }
 .tab-idle { font-style: italic; color: var(--placeholder); }
 .tab-forward { color: var(--green) !important; font-weight: 600; }
-.tab-dragging { opacity: 0.35; }
-.tab-drop-indicator {
-  position: absolute; top: 4px; bottom: 4px; width: 3px; background: var(--accent);
-  border-radius: 2px; pointer-events: none; opacity: 0; z-index: 10;
+/* 拖动中的标签：脱离文档流（手上那个由浏览器拖影表示），原位交给 .tab-placeholder。
+   必须真的不占位，否则下面的标签不会让位、看不出「补位」效果。 */
+.tab-btn.tab-dragging {
+  position: absolute; top: 0; left: 0;
+  opacity: 0; pointer-events: none;
 }
-.tab-drop-indicator.show { opacity: 1; }
+/* 拖动落点占位块：与标签等高、同圆角，虚线 + 淡底，表示「这个位置空出来了」 */
+.tab-placeholder {
+  flex: 0 0 auto; align-self: center;
+  height: 30px; border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .tab-new {
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 16px; border-radius: 8px; align-self: center;
