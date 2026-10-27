@@ -79,7 +79,17 @@ func loadIconPack(pack string) map[string]string {
 	return out
 }
 
+// isBuiltinIconPack 判断图标包属于内置层（resources-system 目录，或编译进 exe 的那份）。
+func isBuiltinIconPack(pack string) bool {
+	if d := builtinResourceDir(); d != "" && fileExists(filepath.Join(d, "icons", pack, "icons.json")) {
+		return true
+	}
+	_, err := iconsFS.ReadFile(iconsEmbedRoot + "/" + pack + "/icons.json")
+	return err == nil
+}
+
 // ListBuiltinIconPacks 列出图标包（各资源层 icons/ 下的子目录，含 icons.json 的才算）。
+// 显示顺序：内置层强制在前，组内按 id 字母序。
 func ListBuiltinIconPacks() []string {
 	seen := map[string]bool{}
 	var packs []string
@@ -115,7 +125,13 @@ func ListBuiltinIconPacks() []string {
 			packs = append(packs, e.Name())
 		}
 	}
-	sort.Strings(packs)
+	sort.SliceStable(packs, func(i, j int) bool {
+		bi, bj := isBuiltinIconPack(packs[i]), isBuiltinIconPack(packs[j])
+		if bi != bj {
+			return bi
+		}
+		return packs[i] < packs[j]
+	})
 	return packs
 }
 

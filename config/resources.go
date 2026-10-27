@@ -24,9 +24,25 @@ import (
 // 回退是逐个文件/逐个主题做的，不是整层切换：内置层里只放了一个主题，其余主题
 // 照样能落到外置层和嵌入层。
 
+const (
+	builtinLayerName  = "resources-system" // 内置层目录名（动态版才有）
+	externalLayerName = "resources"        // 外置层目录名（成品版也认）
+)
+
 func exeDir() string {
 	if exe, err := os.Executable(); err == nil {
 		return filepath.Dir(exe)
+	}
+	return ""
+}
+
+// builtinResourceDir 返回内置资源层目录（<exe>\resources-system），没有则空串。
+// 「内置资源排在前面」这类显示顺序靠它判断来源。
+func builtinResourceDir() string {
+	for _, d := range resourceDirs() {
+		if filepath.Base(d) == builtinLayerName {
+			return d
+		}
 	}
 	return ""
 }
@@ -41,12 +57,12 @@ func resourceDirs() []string {
 		}
 	}
 	if base := exeDir(); base != "" {
-		push(&sysDirs, filepath.Join(base, "resources-system"))
-		push(&userDirs, filepath.Join(base, "resources"))
+		push(&sysDirs, filepath.Join(base, builtinLayerName))
+		push(&userDirs, filepath.Join(base, externalLayerName))
 	}
 	if wd, err := os.Getwd(); err == nil {
-		push(&sysDirs, filepath.Join(wd, "resources-system"))
-		push(&userDirs, filepath.Join(wd, "resources"))
+		push(&sysDirs, filepath.Join(wd, builtinLayerName))
+		push(&userDirs, filepath.Join(wd, externalLayerName))
 	}
 
 	seen := make(map[string]bool, len(sysDirs)+len(userDirs))

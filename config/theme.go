@@ -124,6 +124,15 @@ func ListThemeIDs() []string {
 	return themeIDs()
 }
 
+// isBuiltinTheme 判断主题属于内置层（resources-system 目录，或编译进 exe 的那份）。
+func isBuiltinTheme(id string) bool {
+	if d := builtinResourceDir(); d != "" && fileExists(filepath.Join(d, "themes", id, "theme.json")) {
+		return true
+	}
+	_, err := themesFS.ReadFile(themesEmbedRoot + "/" + id + "/theme.json")
+	return err == nil
+}
+
 func ListThemeInfos() []ThemeInfo {
 	var infos []ThemeInfo
 	for _, id := range themeIDs() {
@@ -136,7 +145,12 @@ func ListThemeInfos() []ThemeInfo {
 		info.Modes = stringSlice(m["_modes"])
 		infos = append(infos, info)
 	}
+	// 显示顺序：内置层强制在前（system 再固定排第一），组内按 id 字母序。
 	sort.SliceStable(infos, func(i, j int) bool {
+		bi, bj := isBuiltinTheme(infos[i].ID), isBuiltinTheme(infos[j].ID)
+		if bi != bj {
+			return bi
+		}
 		if (infos[i].ID == "system") != (infos[j].ID == "system") {
 			return infos[i].ID == "system"
 		}
