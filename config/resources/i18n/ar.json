@@ -354,7 +354,7 @@
   "settings.hex_prefix": "بادئة 0x",
   "settings.hex_sep": "فاصل Hex",
   "settings.hint_colors": "المزيد من السمات؟ أنشئ resources\\themes\\ واستورد، أو انقر للمثال",
-  "settings.hint_i18n": "المزيد من اللغات؟ أنشئ \\i18n\\ واستورد، أو انقر للمثال",
+  "settings.hint_i18n": "المزيد من اللغات؟ أنشئ resources\\i18n\\ واستورد، أو انقر للمثال",
   "settings.hint_icons": "المزيد من الأيقونات؟ أنشئ resources\\icons\\ واستورد، أو انقر للمثال",
   "settings.history_window": "صفوف نافذة السجل",
   "settings.history_window_auto": "تلقائي (حسب النافذة)",

@@ -477,7 +477,7 @@ function buildSettingsPage() {
 	langList.className = 'settings-lang-list';
 	langList.id = 'settingsLangList';
 	bLang.appendChild(langList);
-	bLang.appendChild(_bubbleFooter('i18n', t('settings.hint_i18n','想使用其他语言？在软件目录中新建 \\i18n\\ 导入语言文件，或单击此按键创建示例文件夹')));
+	bLang.appendChild(_bubbleFooter('i18n', t('settings.hint_i18n','想使用其他语言？在软件目录中新建 resources\\i18n\\ 导入语言文件，或单击此按键创建示例语言文件')));
 	panelLang.appendChild(bLang);
 
 	// ── Panel: 关于 ──

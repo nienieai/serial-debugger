@@ -354,7 +354,7 @@
   "settings.hex_prefix": "Préfixe 0x",
   "settings.hex_sep": "Séparateur Hex",
   "settings.hint_colors": "Autres thèmes ? Créez resources\\themes\\ et importez des thèmes, ou cliquez pour un exemple",
-  "settings.hint_i18n": "Autres langues ? Créez \\i18n\\ et importez, ou cliquez pour un exemple",
+  "settings.hint_i18n": "Autres langues ? Créez resources\\i18n\\ et importez, ou cliquez pour un exemple",
   "settings.hint_icons": "Autres icônes ? Créez resources\\icons\\ et importez, ou cliquez pour un exemple",
   "settings.history_window": "Lignes de l'historique",
   "settings.history_window_auto": "Auto (selon la fenêtre)",

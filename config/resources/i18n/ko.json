@@ -354,7 +354,7 @@
   "settings.hex_prefix": "0x 접두사",
   "settings.hex_sep": "Hex 구분자",
   "settings.hint_colors": "다른 테마가 필요하세요? resources\\themes\\ 폴더를 만들고 가져오거나 클릭하여 예제 생성",
-  "settings.hint_i18n": "다른 언어가 필요하세요? \\i18n\\ 폴더를 만들고 가져오거나 클릭하여 예제 생성",
+  "settings.hint_i18n": "다른 언어가 필요하세요? resources\\i18n\\ 폴더를 만들고 가져오거나 클릭하여 예제 생성",
   "settings.hint_icons": "다른 아이콘이 필요하세요? resources\\icons\\ 폴더를 만들고 가져오거나 클릭하여 예제 생성",
   "settings.history_window": "기록 창 행 수",
   "settings.history_window_auto": "자동(화면 크기 기준)",
