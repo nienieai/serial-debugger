@@ -920,7 +920,7 @@ function _systemThemeComputedFallback() {
 
 // ---- 深浅模式：三张迷你窗口预览卡 ----
 var LOOK_MODES = [
-	{ v: 'auto',  k: 'theme.auto_label',  fb: '跟随系统', ico: 'theme_auto' },
+	{ v: 'auto',  k: 'theme.auto_label',  fb: '跟随系统', ico: 'computer' },
 	{ v: 'light', k: 'theme.light_label', fb: '浅色',     ico: 'theme_light' },
 	{ v: 'dark',  k: 'theme.dark_label',  fb: '深色',     ico: 'theme_dark' }
 ];
