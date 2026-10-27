@@ -790,52 +790,38 @@ function _themeAccent(data, mode) {
 	return pick(block[mode]) || pick(block.common) || '';
 }
 
-// 颜色主题卡里展示哪个模式：跟随当前深浅设置；主题不支持该模式就用它自己的第一个
-function _themeSampleMode(th) {
-	var mode = state.colorThemeMode;
-	if (mode === 'auto') mode = _colorSchemeQuery && _colorSchemeQuery.matches ? 'dark' : 'light';
-	var modes = th.modes || ['dark'];
-	if (modes.indexOf(mode) < 0) mode = modes[0] || 'dark';
-	return mode;
-}
-
-// 该主题支持哪些深浅：用小月亮 / 小太阳标出来，跟「深浅模式」那三张卡同一套图标语言。
-// 只画支持的那个（仅深色就只月亮），两个都在就是深浅都能切。
-function _themeModeIcons(th) {
-	var modes = th.modes || ['dark'];
-	var box = document.createElement('span');
-	box.className = 'settings-theme-mode-icons';
-	function add(key, label) {
-		var el = document.createElement('span');
-		el.className = 'settings-theme-mode-ico';
-		el.title = label;
-		el.innerHTML = icon(key, 13, 13);
-		box.appendChild(el);
-	}
-	if (modes.indexOf('dark') >= 0) add('theme_dark', t('theme.dark_label', '深色'));
-	if (modes.indexOf('light') >= 0) add('theme_light', t('theme.light_label', '浅色'));
-	return box;
-}
-
-// 色样：底色 + 字体样本「Aa」+ 强调色胶囊。
-// 不用窗口预览，免得和「深浅模式」那三张卡重复。
-function _makeThemeSample(data, mode) {
+// 色样的一半：底色 + 字体样本「Aa」+ 强调色胶囊（“按键示例”）
+function _makeThemeHalf(data, mode) {
 	var c = _themeColorsForMode(data, mode);
 	var accent = _themeAccent(data, mode);
 	if (!accent) accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || c.fg;
-	var box = document.createElement('span');
-	box.className = 'settings-theme-sample';
-	box.style.background = c.bg;
-	box.title = (mode === 'dark' ? t('theme.dark_label','深色') : t('theme.light_label','浅色'));
+	var half = document.createElement('span');
+	half.className = 'settings-theme-half';
+	half.style.background = c.bg;
+	half.title = (mode === 'dark' ? t('theme.dark_label','深色') : t('theme.light_label','浅色'));
 	var fg = document.createElement('span');
 	fg.className = 'settings-theme-sample-fg';
 	fg.textContent = 'Aa';
 	fg.style.color = c.fg;
-	box.appendChild(fg);
+	half.appendChild(fg);
 	var acc = document.createElement('i');
 	acc.className = 'settings-theme-sample-accent';
 	acc.style.background = accent;
-	box.appendChild(acc);
+	half.appendChild(acc);
+	return half;
+}
+
+// 色样：支持深浅两种模式就左右各画一半（左浅右深），只支持一种就整条。
+// 不用窗口预览，免得和「深浅模式」那三张卡重复。
+function _makeThemeSample(th, data) {
+	var modes = th.modes || ['dark'];
+	var order = [];
+	if (modes.indexOf('light') >= 0) order.push('light');
+	if (modes.indexOf('dark') >= 0) order.push('dark');
+	if (!order.length) order.push('dark');
+	var box = document.createElement('span');
+	box.className = 'settings-theme-sample' + (order.length > 1 ? ' is-pair' : '');
+	order.forEach(function(mode) { box.appendChild(_makeThemeHalf(data, mode)); });
 	return box;
 }
 
@@ -877,15 +863,11 @@ async function renderSettingsThemeGrid() {
 		if (th.id === 'system') data = _systemThemeComputedFallback();
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.colorThemeId === th.id ? ' is-selected' : '');
-		card.appendChild(_makeThemeSample(data, _themeSampleMode(th)));
-		var foot = document.createElement('span');
-		foot.className = 'settings-theme-card-foot';
+		card.appendChild(_makeThemeSample(th, data));
 		var name = document.createElement('span');
 		name.className = 'settings-theme-card-name';
 		name.textContent = th.name || th.id;
-		foot.appendChild(name);
-		foot.appendChild(_themeModeIcons(th));
-		card.appendChild(foot);
+		card.appendChild(name);
 		var chk = document.createElement('span');
 		chk.className = 'settings-pick-check';
 		chk.innerHTML = icon('check', 11, 11);
