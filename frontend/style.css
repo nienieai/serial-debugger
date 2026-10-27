@@ -1399,13 +1399,11 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   /* 背景：主题给的图片（--settings-bg-image）打底，上面盖一层半透明底色保证可读，
      再叠两团 accent 光斑；主题没配图时 var() 落到 none，只剩光斑 */
   background-image:
-    radial-gradient(1100px 520px at 8% -8%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 68%),
-    radial-gradient(900px 460px at 100% 2%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 66%),
     linear-gradient(color-mix(in srgb, var(--bg) 72%, transparent), color-mix(in srgb, var(--bg) 72%, transparent)),
     var(--settings-bg-image, none);
-  background-size: auto, auto, cover, cover;
-  background-position: center, center, center, center;
-  background-repeat: no-repeat, no-repeat, repeat, no-repeat;
+  background-size: cover, cover;
+  background-position: center, center;
+  background-repeat: repeat, no-repeat;
 }
 
 /* ---- Panels: single-column card stream, max 1200px ---- */
