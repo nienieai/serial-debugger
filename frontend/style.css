@@ -1761,8 +1761,24 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .c-color-swatches { width: 62px; gap: 6px; }
 .c-color-preview-wrap { margin-bottom: 6px; }
 
+/* 数据高亮：两列之间同样一条竖线（避开标题行） */
+.settings-panel[data-panel="colors"] > .settings-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: calc(13px + var(--bubble-head-h, 40px));
+  bottom: 13px;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+/* 主题卡：色块区固定高度，名称在下，各卡等高 */
+.settings-theme-swatches { min-height: 34px; align-items: center; }
 @media (max-width: 1100px) {
   .settings-panel[data-panel="colors"] > .settings-bubble { display: block; }
+}
+@media (max-width: 1100px) {
+  .settings-panel[data-panel="colors"] > .settings-bubble::after { display: none; }
 }
 /* ---- 窄屏：卡内字段退回单列，去掉竖线 ---- */
 @media (max-width: 1249px) {

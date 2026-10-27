@@ -867,10 +867,6 @@ async function renderSettingsThemeGrid() {
 		if (th.id === 'system') data = _systemThemeComputedFallback();
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.colorThemeId === th.id ? ' is-selected' : '');
-		var name = document.createElement('span');
-		name.className = 'settings-theme-card-name';
-		name.textContent = th.name || th.id;
-		card.appendChild(name);
 		var modes = th.modes || ['dark'];
 		var swatches = document.createElement('span');
 		swatches.className = 'settings-theme-swatches';
@@ -883,6 +879,10 @@ async function renderSettingsThemeGrid() {
 			swatches.appendChild(_makeSwatch('light', lc.bg, lc.fg, t('theme.light_label','浅色')));
 		}
 		card.appendChild(swatches);
+		var name = document.createElement('span');
+		name.className = 'settings-theme-card-name';
+		name.textContent = th.name || th.id;
+		card.appendChild(name);
 		card.addEventListener('click', function() {
 			if (th.external) {
 				window.go.main.App.GetExternalColorTheme(th.id).then(function(data2) {
@@ -937,9 +937,12 @@ function renderSettingsIconGrid() {
 	themes.forEach(function(th) {
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.iconThemeId === th.id ? ' is-selected' : '');
-		if (th._i18nKey) { card.textContent = t(th._i18nKey, '内置默认'); }
-		else if (th.name && typeof th.name === 'object') { card.textContent = _themeName(th.name); }
-		else { card.textContent = th.name || th.id; }
+		var iconName = document.createElement('span');
+		iconName.className = 'settings-theme-card-name';
+		if (th._i18nKey) { iconName.textContent = t(th._i18nKey, '内置默认'); }
+		else if (th.name && typeof th.name === 'object') { iconName.textContent = _themeName(th.name); }
+		else { iconName.textContent = th.name || th.id; }
+		card.appendChild(iconName);
 		card.addEventListener('click', function() {
 			state.iconThemeId = th.id;
 			saveSettings();
