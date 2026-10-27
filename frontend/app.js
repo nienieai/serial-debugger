@@ -481,7 +481,8 @@ _colorSchemeQuery.addEventListener('change', function() {
 function clearThemeVars() {
   var root = document.documentElement;
   var known = ['--accent','--green','--red','--yellow','--fg','--bg','--bg2','--bg3','--border','--input-bg','--hover','--placeholder','--scrollbar-thumb',
-    '--fwd-p1','--fwd-p2','--fwd-p1-hover','--fwd-p2-hover','--hex-escape','--badge-cli','--status-offline','--tab-close'];
+    '--fwd-p1','--fwd-p2','--fwd-p1-hover','--fwd-p2-hover','--hex-escape','--badge-cli','--status-offline','--tab-close',
+    '--settings-bg-image','--settings-bg-overlay'];
   for (var i = 0; i < known.length; i++) root.style.removeProperty(known[i]);
 }
 
