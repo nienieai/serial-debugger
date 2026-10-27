@@ -1,4 +1,4 @@
-# 贡献指南
+﻿# 贡献指南
 
 感谢您对 serial-debugger 的关注！欢迎通过以下方式参与贡献。
 
@@ -31,9 +31,9 @@ wails build -devtools   # GUI
 
 ## 翻译贡献
 
-多语言翻译（`config/i18n/`，9 种语言）由 AI 辅助生成，可能存在不准确之处。
-- 修正翻译：直接修改 `config/i18n/{lang}.json` 并提交 PR
-- 新增语言：参考 `config/i18n/zh.json` 创建新文件，并在 `config/i18n.go` 中登记
+多语言翻译（`config/resources/i18n/`，9 种语言）由 AI 辅助生成，可能存在不准确之处。
+- 修正翻译：直接修改 `config/resources/i18n/{lang}.json` 并提交 PR
+- 新增语言：参考 `config/resources/i18n/zh.json` 创建新文件，并在 `config/i18n.go` 中登记
 
 ## 行为准则
 

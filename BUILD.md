@@ -1,4 +1,4 @@
-# 构建说明
+﻿# 构建说明
 
 ## 环境要求
 
@@ -235,7 +235,7 @@ wails dev                             # GUI 热重载
 
 ## 图标
 
-内置图标位于 `config/icons/system/`（20 个 24×24 SVG + icons.json），编译时 `//go:embed` 嵌入。外部图标主题放在 `themes/icons/<主题名>/`（文件夹 = 主题，内含 icons.json + 平铺 SVG）。
+内置图标位于 `config/resources/icons/system/`（20 个 24×24 SVG + icons.json），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，内含 icons.json + 平铺 SVG）。
 
 Windows 可执行文件图标（ICO）：`daemon/`、`cmd/serial-cli/`、`cmd/serial-mcp/` 三个目录各有 `winres/`，统一用 go-winres 生成：
 
@@ -267,7 +267,7 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 - 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（发布包布局）→ `exe/../../config/`（开发布局：exe 在 `build/bin`，配置在仓库根）→ 工作目录 `probe.toml` / `config/probe.toml`，候选去重。全部未命中时回退**内置规则**（`config/probe.toml` 经 `//go:embed` 嵌入二进制），因此发布包即使不含 `config/` 目录，`probe` 也可直接使用
 - GUI 设置文件 `settings.ini`（INI 格式），与 `serial-gui.exe` 同目录
 - 外部 i18n 目录 `build/bin/i18n/` 与 `serial-gui.exe` 同目录，文件名格式 `{lang}.json`，详见 README
-- 外部主题目录 `build/bin/themes/colors/`（颜色主题 .json）和 `build/bin/themes/icons/<名称>/`（图标主题文件夹，含 icons.json + .svg）
+- 外部主题目录 `build/bin/themes/colors/`（颜色主题 .json）和 `build/bin/resources/icons/<包名>/`（图标主题文件夹，含 icons.json + .svg）
 - 图标主题文件夹中 `.svg` 文件名 = 内置图标键名，覆盖对应内置图标
 - i18n 文件 `_font` 字段指定首选字体（如 `"SimSun", "宋体", serif`），系统无此字体时回退默认
 - 内置语言字体：zh=微软雅黑, zh-Hant=微軟正黑體, ja=Yu Gothic UI, ko=Malgun Gothic, ar=Noto Naskh Arabic, 其余=Segoe UI

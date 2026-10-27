@@ -445,22 +445,10 @@ type ExternalI18nInfo struct {
 	Dir      string `json:"dir"`
 }
 
+// i18nDir 返回磁盘上的语言包目录：<exe>/resources/i18n（或工作目录下的）。
+// 和嵌入的 resources/i18n 是同一个布局，磁盘上的同名文件覆盖内置。
 func i18nDir() string {
-	// Try exe directory first (production)
-	if exe, err := os.Executable(); err == nil {
-		d := filepath.Join(filepath.Dir(exe), "i18n")
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			return d
-		}
-	}
-	// Fall back to working directory (development / wails dev)
-	if wd, err := os.Getwd(); err == nil {
-		d := filepath.Join(wd, "i18n")
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			return d
-		}
-	}
-	return ""
+	return config.I18nDir()
 }
 
 // ListExternalI18n scans the i18n/ directory next to the exe and returns

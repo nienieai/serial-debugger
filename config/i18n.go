@@ -10,8 +10,12 @@ import (
 	"sync"
 )
 
-//go:embed i18n/*.json
+// 语言包：resources/i18n/<lang>.json，随二进制嵌入；磁盘上的同名文件覆盖。
+//
+//go:embed resources/i18n/*.json
 var i18nFS embed.FS
+
+const i18nEmbedRoot = "resources/i18n"
 
 var (
 	i18nData = make(map[string]map[string]string) // lang -> key -> text
@@ -19,7 +23,7 @@ var (
 )
 
 func init() {
-	entries, err := i18nFS.ReadDir("i18n")
+	entries, err := i18nFS.ReadDir(i18nEmbedRoot)
 	if err != nil {
 		panic("i18n: cannot read embedded translations: " + err.Error())
 	}
@@ -33,7 +37,7 @@ func init() {
 			continue
 		}
 		lang := name[:len(name)-5]
-		data, err := i18nFS.ReadFile("i18n/" + name)
+		data, err := i18nFS.ReadFile(i18nEmbedRoot + "/" + name)
 		if err != nil {
 			continue
 		}
@@ -43,15 +47,16 @@ func init() {
 		}
 		i18nData[lang] = m
 	}
-	// 磁盘 builtin/i18n/*.json 覆盖同名语言，方便直接改文案
-	if bd := builtinDir(); bd != "" {
-		if entries, err := os.ReadDir(filepath.Join(bd, "i18n")); err == nil {
+	// 磁盘 resources/i18n/*.json 覆盖同名语言，方便直接改文案（改完重启 exe 生效；
+	// 前端切语言时读的是同一个目录，所以界面文案不用重启）
+	if dir := resourcePath("i18n"); dir != "" {
+		if entries, err := os.ReadDir(dir); err == nil {
 			for _, e := range entries {
 				name := e.Name()
 				if e.IsDir() || len(name) < 6 || name[len(name)-5:] != ".json" {
 					continue
 				}
-				data, err := os.ReadFile(filepath.Join(bd, "i18n", name))
+				data, err := os.ReadFile(filepath.Join(dir, name))
 				if err != nil {
 					continue
 				}

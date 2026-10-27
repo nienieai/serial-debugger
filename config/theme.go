@@ -4,13 +4,20 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-//go:embed themes/*.json
+// 主题 = 一个文件夹：resources/themes/<id>/theme.json，自带素材（背景图等）放在同一目录。
+// 磁盘上的 <exe>/resources/themes/<id>/ 覆盖嵌入的同名目录。
+//
+//go:embed resources/themes/*/theme.json
 var themesFS embed.FS
+
+const themesEmbedRoot = "resources/themes"
 
 type ThemeInfo struct {
 	ID    string   `json:"id"`
@@ -18,6 +25,7 @@ type ThemeInfo struct {
 	Modes []string `json:"_modes"`
 }
 
+// ExternalThemeInfo 保留给旧的绑定用；统一布局后没有「外置主题」这层概念了。
 type ExternalThemeInfo struct {
 	ID       string   `json:"id"`
 	Name     any      `json:"name"`
@@ -25,156 +33,125 @@ type ExternalThemeInfo struct {
 	Fallback string   `json:"fallback"`
 }
 
-func themeDir() string {
-	if exe, err := os.Executable(); err == nil {
-		d := filepath.Join(filepath.Dir(exe), "themes")
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			return d
-		}
-	}
-	if wd, err := os.Getwd(); err == nil {
-		d := filepath.Join(wd, "themes")
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			return d
-		}
-	}
-	return ""
-}
-
-// builtinDir 返回 exe 同级的 builtin/ 目录（也可用工作目录下的）。
-// 里面按 themes/、icons/、i18n/ 分子目录，放着就从磁盘读，覆盖编译进二进制的版本。
-func builtinDir() string {
-	if exe, err := os.Executable(); err == nil {
-		d := filepath.Join(filepath.Dir(exe), "builtin")
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			return d
-		}
-	}
-	if wd, err := os.Getwd(); err == nil {
-		d := filepath.Join(wd, "builtin")
-		if info, err := os.Stat(d); err == nil && info.IsDir() {
-			return d
-		}
-	}
-	return ""
-}
-
-func LoadTheme(id string) map[string]any {
-	// 磁盘上的 builtin/themes/<id>.json 优先，方便调试和替换
-	if bd := builtinDir(); bd != "" {
-		if data, err := os.ReadFile(filepath.Join(bd, "themes", id+".json")); err == nil {
-			var m map[string]any
-			if json.Unmarshal(data, &m) == nil {
-				return m
-			}
-		}
-	}
-	data, err := themesFS.ReadFile("themes/" + id + ".json")
-	if err != nil {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil
-	}
-	return m
-}
-
-func ListThemeIDs() []string {
+// themeIDs 列出所有主题 id（= 文件夹名）：磁盘上的在前，嵌入的补上缺的。
+func themeIDs() []string {
 	seen := map[string]bool{}
 	var ids []string
-	// 磁盘 builtin/themes/ 里的先来，再补 embed 里没有的
-	if bd := builtinDir(); bd != "" {
-		if entries, err := os.ReadDir(filepath.Join(bd, "themes")); err == nil {
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+
+	if dir := resourcePath("themes"); dir != "" {
+		if entries, err := os.ReadDir(dir); err == nil {
 			for _, e := range entries {
-				name := e.Name()
-				if e.IsDir() || !strings.HasSuffix(name, ".json") {
-					continue
-				}
-				id := strings.TrimSuffix(name, ".json")
-				if !seen[id] {
-					seen[id] = true
-					ids = append(ids, id)
+				if e.IsDir() && fileExists(filepath.Join(dir, e.Name(), "theme.json")) {
+					add(e.Name())
 				}
 			}
 		}
 	}
-	entries, err := themesFS.ReadDir("themes")
-	if err != nil {
-		return ids
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if len(name) > 5 && name[len(name)-5:] == ".json" {
-			id := name[:len(name)-5]
-			if !seen[id] {
-				seen[id] = true
-				ids = append(ids, id)
+	if entries, err := fs.ReadDir(themesFS, themesEmbedRoot); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if _, err := themesFS.ReadFile(themesEmbedRoot + "/" + e.Name() + "/theme.json"); err == nil {
+				add(e.Name())
 			}
 		}
 	}
 	return ids
 }
 
-func ListThemeInfos() []ThemeInfo {
-	entries, err := themesFS.ReadDir("themes")
+// readThemeJSON 读主题定义：磁盘优先，返回时带上主题目录（内联图片要用）。
+func readThemeJSON(id string) (map[string]any, string, bool) {
+	if dir := resourcePath("themes", id); dir != "" {
+		if data, err := os.ReadFile(filepath.Join(dir, "theme.json")); err == nil {
+			var m map[string]any
+			if json.Unmarshal(data, &m) == nil {
+				return m, dir, true
+			}
+		}
+	}
+	data, err := themesFS.ReadFile(themesEmbedRoot + "/" + id + "/theme.json")
 	if err != nil {
+		return nil, "", false
+	}
+	var m map[string]any
+	if json.Unmarshal(data, &m) != nil {
+		return nil, "", false
+	}
+	return m, "", true
+}
+
+// LoadTheme 读一个主题，并把主题目录里的图片内联成 data URI 后再返回。
+func LoadTheme(id string) map[string]any {
+	m, dir, ok := readThemeJSON(id)
+	if !ok {
 		return nil
 	}
+	return inlineThemeImages(m, dir)
+}
+
+func ListThemeIDs() []string {
+	return themeIDs()
+}
+
+func ListThemeInfos() []ThemeInfo {
 	var infos []ThemeInfo
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if len(name) <= 5 || name[len(name)-5:] != ".json" {
-			continue
-		}
-		id := name[:len(name)-5]
-		data, err := themesFS.ReadFile("themes/" + name)
-		if err != nil {
-			continue
-		}
-		var m map[string]any
-		if err := json.Unmarshal(data, &m); err != nil {
+	for _, id := range themeIDs() {
+		m, _, ok := readThemeJSON(id)
+		if !ok {
 			continue
 		}
 		info := ThemeInfo{ID: id}
-		if v, ok := m["_id"].(string); ok && v != "" {
-			info.ID = v
-		}
 		info.Name = m["_name"]
-		if v, ok := m["_modes"].([]any); ok {
-			for _, mv := range v {
-				if s, ok2 := mv.(string); ok2 {
-					info.Modes = append(info.Modes, s)
-				}
-			}
-		}
+		info.Modes = stringSlice(m["_modes"])
 		infos = append(infos, info)
 	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		if (infos[i].ID == "system") != (infos[j].ID == "system") {
+			return infos[i].ID == "system"
+		}
+		return infos[i].ID < infos[j].ID
+	})
 	return infos
 }
 
-func ListExternalColorThemes() []ExternalThemeInfo {
-	return listExternalThemes(filepath.Join(themeDir(), "colors"))
-}
+// ListExternalColorThemes / LoadExternalColorTheme：统一布局后所有主题都从
+// resources/themes 读，这两个绑定保持存在只是为了不重新生成前端绑定代码。
+func ListExternalColorThemes() []ExternalThemeInfo { return nil }
+func LoadExternalColorTheme(string) map[string]any { return nil }
 
-func LoadExternalColorTheme(id string) map[string]any {
-	dir := filepath.Join(themeDir(), "colors")
-	return inlineThemeImages(loadExternalThemeJSON(filepath.Join(dir, id+".json")), dir)
+// ListExternalIconThemes / LoadExternalIconTheme 同理：图标包也全部在 resources/icons 下。
+func ListExternalIconThemes() []ExternalThemeInfo { return nil }
+func LoadExternalIconTheme(string) map[string]any { return nil }
+
+func stringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, it := range arr {
+		if s, ok2 := it.(string); ok2 {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // inlineThemeImages 把主题里 url(...) 引用的图片读出来内联成 data URI。
 //
-// 为什么要这么做：前端（dev 热重载和打包后一样）由 Wails 的 asset server 提供，
-// 只挂载 frontend 目录，CSS 里写 `url(../themes/colors/x.jpg)` 出不去这个根，直接 404；
-// 所以背景图只能由 Go 读文件、转成 data URI 塞进变量里。
+// 为什么要这么做：前端由 Wails 的 asset server 提供，只挂载 frontend 目录，
+// CSS 里写 `url(../themes/...)` 出不去这个根，直接 404；所以图片只能由 Go 读文件、
+// 转成 data URI 塞进变量。路径相对主题自己的文件夹，写 `url(bg.jpg)` 即可。
 func inlineThemeImages(m map[string]any, baseDir string) map[string]any {
-	if m == nil {
+	if m == nil || baseDir == "" {
 		return m
 	}
 	for _, name := range []string{"common", "dark", "light"} {
@@ -215,15 +192,11 @@ func inlineCSSURL(s, baseDir string) (string, bool) {
 	return s, false
 }
 
-// themeImageCandidates 依次尝试：按主题目录解析、按老写法里的 themes/colors/ 之后的部分、
-// 同目录同名文件、按 exe 根目录解析。
+// themeImageCandidates 依次尝试：主题目录内的相对路径、同名文件（兼容老写法
+// `url(themes/colors/x.jpg)`）、exe 根目录下的相对路径。
 func themeImageCandidates(inner, baseDir string) []string {
 	p := filepath.FromSlash(inner)
 	out := []string{filepath.Join(baseDir, p)}
-	marker := filepath.Join("themes", "colors") + string(filepath.Separator)
-	if i := strings.LastIndex(p, marker); i >= 0 {
-		out = append(out, filepath.Join(baseDir, p[i+len(marker):]))
-	}
 	out = append(out, filepath.Join(baseDir, filepath.Base(p)))
 	if exe, err := os.Executable(); err == nil {
 		out = append(out, filepath.Join(filepath.Dir(exe), p))
@@ -245,139 +218,4 @@ func themeImageMime(path string) string {
 		return "image/svg+xml"
 	}
 	return "application/octet-stream"
-}
-
-func ListExternalIconThemes() []ExternalThemeInfo {
-	dir := filepath.Join(themeDir(), "icons")
-	if dir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var result []ExternalThemeInfo
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		themePath := filepath.Join(dir, e.Name(), "icons.json")
-		data, err := os.ReadFile(themePath)
-		if err != nil {
-			continue
-		}
-		var m map[string]any
-		if err := json.Unmarshal(data, &m); err != nil {
-			continue
-		}
-		info := ExternalThemeInfo{
-			ID:   e.Name(),
-			Name: m["_name"],
-		}
-		if v, ok := m["_modes"].([]any); ok {
-			for _, mv := range v {
-				if s, ok2 := mv.(string); ok2 {
-					info.Modes = append(info.Modes, s)
-				}
-			}
-		}
-		if v, ok := m["_fallback"].(string); ok {
-			info.Fallback = v
-		}
-		result = append(result, info)
-	}
-	return result
-}
-
-func LoadExternalIconTheme(id string) map[string]any {
-	dir := filepath.Join(themeDir(), "icons", id)
-	if dir == "" {
-		return nil
-	}
-	// Read icons.json for metadata
-	meta, err := os.ReadFile(filepath.Join(dir, "icons.json"))
-	if err != nil {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(meta, &m); err != nil {
-		return nil
-	}
-	// Read SVG files alongside icons.json
-	icons := make(map[string]any)
-	svgEntries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, se := range svgEntries {
-			if se.IsDir() || !strings.HasSuffix(se.Name(), ".svg") {
-				continue
-			}
-			svgData, err := os.ReadFile(filepath.Join(dir, se.Name()))
-			if err != nil {
-				continue
-			}
-			key := strings.TrimSuffix(se.Name(), ".svg")
-			icons[key] = string(svgData)
-		}
-	}
-	m["icons"] = icons
-	return m
-}
-
-func listExternalThemes(dir string) []ExternalThemeInfo {
-	if dir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var result []ExternalThemeInfo
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var m map[string]any
-		if err := json.Unmarshal(data, &m); err != nil {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".json")
-		if v, ok := m["_id"].(string); ok && v != "" {
-			id = v
-		}
-		info := ExternalThemeInfo{
-			ID:   id,
-			Name: m["_name"],
-		}
-		if v, ok := m["_modes"].([]any); ok {
-			for _, mv := range v {
-				if s, ok2 := mv.(string); ok2 {
-					info.Modes = append(info.Modes, s)
-				}
-			}
-		}
-		if v, ok := m["_fallback"].(string); ok {
-			info.Fallback = v
-		}
-		result = append(result, info)
-	}
-	return result
-}
-
-func loadExternalThemeJSON(path string) map[string]any {
-	if path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil
-	}
-	return m
 }
