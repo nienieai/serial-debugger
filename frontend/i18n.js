@@ -81,8 +81,11 @@ function i18nDir() {
   return i18n._dir || 'ltr';
 }
 
+// 缺键一律给空串：既不回显 key 名，也不借用别的语言或硬编码中文兜底。
+// 语言包（含 builtin/i18n 与 i18n/ 外置包）里没有的键，界面就留空。
 function t(key, fallback) {
-  return i18n[key] || fallback || key;
+  var v = i18n[key];
+  return (v === undefined || v === null) ? '' : v;
 }
 
 // Translate a system message stored as i18n key|arg1|arg2|...
@@ -92,10 +95,11 @@ function formatSysMsg(raw) {
   if (!raw || !raw.startsWith('sys.')) return raw || '';
   var parts = raw.split('|');
   var key = parts[0];
-  var tmpl = t(key, key);
+  var tmpl = t(key);
+  if (!tmpl) return '';
   for (var i = 1; i < parts.length; i++) {
     var arg = parts[i];
-    var val = t(arg, arg); // translate if arg is an i18n key
+    var val = t(arg); // translate if arg is an i18n key
     tmpl = tmpl.replace(/%[sd]/, val);
   }
   return tmpl;

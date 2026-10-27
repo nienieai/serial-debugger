@@ -478,17 +478,25 @@ _colorSchemeQuery.addEventListener('change', function() {
   if (state.colorThemeMode === 'auto') applyColorTheme();
 });
 
+// 主题变量只写行内 style，缺的键保持不写 —— 于是自动落回 CSS 里的默认值。
+// 这里记录"实际写过哪些键"，切换主题时按记录清，不再维护一份硬编码白名单
+// （新增变量忘了加进白名单就会残留到下一个主题）。
+var _themeAppliedKeys = [];
+
 function clearThemeVars() {
   var root = document.documentElement;
-  var known = ['--accent','--green','--red','--yellow','--fg','--bg','--bg2','--bg3','--border','--input-bg','--hover','--placeholder','--scrollbar-thumb',
-    '--fwd-p1','--fwd-p2','--fwd-p1-hover','--fwd-p2-hover','--hex-escape','--badge-cli','--status-offline','--tab-close',
-    '--settings-bg-image','--settings-bg-overlay'];
-  for (var i = 0; i < known.length; i++) root.style.removeProperty(known[i]);
+  for (var i = 0; i < _themeAppliedKeys.length; i++) root.style.removeProperty(_themeAppliedKeys[i]);
+  _themeAppliedKeys = [];
 }
 
 function applyThemeVars(vars) {
   var root = document.documentElement;
-  for (var k in vars) root.style.setProperty(k, vars[k]);
+  for (var k in vars) {
+    var v = vars[k];
+    if (v === null || v === undefined || v === '') continue;
+    root.style.setProperty(k, String(v));
+    if (_themeAppliedKeys.indexOf(k) < 0) _themeAppliedKeys.push(k);
+  }
 }
 
 // Extract display name from raw _name (string or {zh:"",en:"",_:""})
@@ -619,6 +627,9 @@ var _iconThemesAll = [];
 
 async function initIconThemes() {
   try {
+    // 内置图标集合由 icons.js 启动时异步拉取；先等它，否则首次 applyIconTheme
+    // 叠上去的底是空的，内置图标会整批消失。
+    try { await _iconsReady; } catch (e) {}
     var external = await window.go.main.App.ListExternalIconThemes();
     var all = [];
     // 内置图标包：config/icons/<pack>/ 随二进制嵌入，system 包对外仍叫「内置默认」
