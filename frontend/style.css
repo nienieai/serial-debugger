@@ -1398,8 +1398,10 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   padding: 60px 16px 12px 16px;
   /* 背景：主题给的图片（--settings-bg-image）打底，上面盖一层半透明底色保证可读，
      再叠两团 accent 光斑；主题没配图时 var() 落到 none，只剩光斑 */
+  /* 两层都由主题给：--settings-bg-image 是图片，--settings-bg-overlay 是可选的压暗层
+     （一个 linear-gradient；不写就没有遮罩，图片原样透出来） */
   background-image:
-    linear-gradient(color-mix(in srgb, var(--bg) 72%, transparent), color-mix(in srgb, var(--bg) 72%, transparent)),
+    var(--settings-bg-overlay, none),
     var(--settings-bg-image, none);
   background-size: cover, cover;
   background-position: center, center;
