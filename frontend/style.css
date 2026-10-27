@@ -509,8 +509,8 @@ button:disabled:active { transform: none; box-shadow: none; }
   flex-shrink: 0; width: 68px;
 }
 .c-color-head__row1 { font-weight: 600; font-size: 11px; margin-bottom: 2px; }
-.c-color-head__row2 { display: flex; gap: 8px; justify-content: center; }
-.c-color-head__row2 span { width: 28px; text-align: center; font-size: 10px; }
+.c-color-head__row2 { display: flex; gap: 6px; justify-content: center; }
+.c-color-head__row2 span { flex: 0 0 28px; width: 28px; text-align: center; font-size: 10px; }
 /* Group separator with label */
 .c-color-sep {
   display: flex; align-items: center; margin: 10px 0 4px;
@@ -1454,6 +1454,13 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 .settings-panel[data-panel="display"] > .settings-bubble > .settings-bubble-head,
 .settings-panel[data-panel="storage"] > .settings-bubble > .settings-bubble-head {
   grid-column: 1 / -1;
+}
+/* 两列卡的第一行（head 之后那两个格子）不要上分割线，否则右列会比左列多一条 */
+.settings-panel[data-panel="display"] > .settings-bubble > .settings-row:nth-child(2),
+.settings-panel[data-panel="display"] > .settings-bubble > .settings-row:nth-child(3),
+.settings-panel[data-panel="storage"] > .settings-bubble > .settings-row:nth-child(2),
+.settings-panel[data-panel="storage"] > .settings-bubble > .settings-row:nth-child(3) {
+  border-top: none;
 }
 .settings-panel[data-panel="display"] > .settings-bubble::after,
 .settings-panel[data-panel="storage"] > .settings-bubble::after {
