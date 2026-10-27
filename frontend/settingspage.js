@@ -407,28 +407,14 @@ function buildSettingsPage() {
 	panelAppear.className = 'settings-panel is-hidden';
 	panelAppear.setAttribute('data-panel', 'appearance');
 
-	// 整体外观：三张卡片（跟随系统 / 浅色 / 深色）
+	// 整体外观：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色）
 	var bLook = _bubble(t('settings.bubble_look','整体外观'));
-	var modeBar = document.createElement('div');
-	modeBar.className = 'settings-mode-bar';
-	[{ v: 'auto', k: 'theme.auto_label', fb: '跟随系统', ico: 'theme_auto' },
-	 { v: 'light', k: 'theme.light_label', fb: '浅色', ico: 'theme_light' },
-	 { v: 'dark', k: 'theme.dark_label', fb: '深色', ico: 'theme_dark' }].forEach(function(m) {
-		var btn = document.createElement('button');
-		btn.className = 'settings-mode-btn';
-		btn.innerHTML = icon(m.ico, 18, 18) + '<span>' + t(m.k, m.fb) + '</span>';
-		if (state.colorThemeMode === m.v) btn.classList.add('is-active');
-		btn.addEventListener('click', function() {
-			state.colorThemeMode = m.v;
-			modeBar.querySelectorAll('.settings-mode-btn').forEach(function(b) { b.classList.remove('is-active'); });
-			btn.classList.add('is-active');
-			applyColorTheme();
-			saveSettings();
-		});
-		modeBar.appendChild(btn);
-	});
-	bLook.appendChild(modeBar);
+	var lookGrid = document.createElement('div');
+	lookGrid.className = 'settings-look';
+	lookGrid.id = 'settingsLookGrid';
+	bLook.appendChild(lookGrid);
 	panelAppear.appendChild(bLook);
+	renderSettingsLookGrid();
 
 	var themeRefresh = document.createElement('button');
 	themeRefresh.className = 'c-icon-btn';
@@ -914,6 +900,8 @@ async function renderSettingsThemeGrid() {
 		});
 		grid.appendChild(card);
 	});
+	// 换了颜色主题：上面那三张迷你窗口要跟着换配色
+	renderSettingsLookGrid();
 }
 
 function _systemThemeComputedFallback() {
@@ -931,6 +919,104 @@ function _systemThemeComputedFallback() {
 			'--fg': '#1d1d20'
 		}
 	};
+}
+
+// ---- 整体外观：三张迷你窗口预览卡 ----
+var LOOK_MODES = [
+	{ v: 'auto',  k: 'theme.auto_label',  fb: '跟随系统', ico: 'theme_auto' },
+	{ v: 'light', k: 'theme.light_label', fb: '浅色',     ico: 'theme_light' },
+	{ v: 'dark',  k: 'theme.dark_label',  fb: '深色',     ico: 'theme_dark' }
+];
+
+// 预览窗口用当前颜色主题自己的深浅两套配色；主题数据还没取到时退回内置默认值
+function _lookPalette(mode) {
+	var id = state.colorThemeId || 'system';
+	var data = _themeColorCache[id];
+	if (!data || !Object.keys(data).length) {
+		data = (id === 'system') ? _systemThemeComputedFallback() : {};
+	}
+	var c = _themeColorsForMode(data, mode);
+	var accent = _themeAccent(data, mode);
+	if (!accent) {
+		var cur = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+		accent = cur || (mode === 'dark' ? '#4cc2ff' : '#2563eb');
+	}
+	return { bg: c.bg, fg: c.fg, accent: accent };
+}
+
+function _lookNode(tag, cls) {
+	var n = document.createElement(tag);
+	if (cls) n.className = cls;
+	return n;
+}
+
+// 一个迷你窗口：标题条 + 侧栏 + 四行内容 + 强调胶囊
+function _lookWindow(mode) {
+	var pal = _lookPalette(mode);
+	var win = _lookNode('span', 'settings-look-win');
+	win.style.setProperty('--p-bg', pal.bg);
+	win.style.setProperty('--p-fg', pal.fg);
+	win.style.setProperty('--p-accent', pal.accent);
+
+	var bar = _lookNode('span', 'settings-look-win-bar');
+	for (var i = 0; i < 3; i++) bar.appendChild(_lookNode('i', 'settings-look-win-dot'));
+	win.appendChild(bar);
+
+	var body = _lookNode('span', 'settings-look-win-body');
+	body.appendChild(_lookNode('span', 'settings-look-win-side'));
+	var main = _lookNode('span', 'settings-look-win-main');
+	['56%', '86%', '68%', '44%'].forEach(function(w, j) {
+		var ln = _lookNode('i', 'settings-look-win-line' + (j === 0 ? ' is-head' : ''));
+		ln.style.width = w;
+		main.appendChild(ln);
+	});
+	main.appendChild(_lookNode('i', 'settings-look-win-pill'));
+	body.appendChild(main);
+	win.appendChild(body);
+	return win;
+}
+
+function renderSettingsLookGrid() {
+	var grid = document.getElementById('settingsLookGrid');
+	if (!grid) return;
+	grid.innerHTML = '';
+	LOOK_MODES.forEach(function(m) {
+		var card = _lookNode('button', 'settings-look-card' + (state.colorThemeMode === m.v ? ' is-active' : ''));
+		card.type = 'button';
+		card.setAttribute('data-look', m.v);
+
+		var pv = _lookNode('span', 'settings-look-pv');
+		if (m.v === 'auto') {
+			// 跟随系统：左浅右深，中间一条缝
+			var pair = _lookNode('span', 'settings-look-pv-pair');
+			pair.appendChild(_lookWindow('light'));
+			pair.appendChild(_lookWindow('dark'));
+			pv.appendChild(pair);
+		} else {
+			pv.appendChild(_lookWindow(m.v));
+		}
+		card.appendChild(pv);
+
+		var meta = _lookNode('span', 'settings-look-meta');
+		meta.innerHTML = icon(m.ico, 15, 15);
+		var name = _lookNode('span', 'settings-look-name');
+		name.textContent = t(m.k, m.fb);
+		meta.appendChild(name);
+		card.appendChild(meta);
+
+		var chk = _lookNode('span', 'settings-look-check');
+		chk.innerHTML = icon('check', 11, 11);
+		card.appendChild(chk);
+
+		card.addEventListener('click', function() {
+			state.colorThemeMode = m.v;
+			grid.querySelectorAll('.settings-look-card').forEach(function(c) { c.classList.remove('is-active'); });
+			card.classList.add('is-active');
+			applyColorTheme();
+			saveSettings();
+		});
+		grid.appendChild(card);
+	});
 }
 
 function renderSettingsIconGrid() {

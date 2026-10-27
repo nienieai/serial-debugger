@@ -1546,33 +1546,73 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
 
-/* ---- 整体外观：三张卡片 ---- */
-.settings-mode-bar { display: flex; gap: 8px; }
-.settings-mode-btn {
-  flex: 1 1 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px 0;
-  font-size: 14px;
-  border-radius: 10px;
+/* ---- 整体外观：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色） ---- */
+.settings-look { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.settings-look-card {
+  position: relative; display: flex; flex-direction: column; gap: 8px;
+  padding: 8px; border-radius: 12px; cursor: pointer; text-align: left;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg2) 42%, transparent);
   -webkit-backdrop-filter: blur(12px) saturate(1.2);
   backdrop-filter: blur(12px) saturate(1.2);
   color: var(--fg);
-  cursor: pointer;
-  transition: border-color .15s, background .15s, transform .15s;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
 }
-.settings-mode-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
-.settings-mode-btn.is-active {
-  background: var(--accent);
+.settings-look-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.settings-look-card.is-active {
   border-color: var(--accent);
-  color: #fff;
-  font-weight: 600;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
-.settings-mode-btn svg { flex: 0 0 auto; }
+
+/* 迷你窗口：标题条 + 侧栏 + 内容条 + 强调胶囊。颜色由 JS 写进 --p-*，取当前主题的深浅两套 */
+.settings-look-pv { display: block; height: 88px; }
+.settings-look-pv-pair {
+  display: flex; height: 100%; border-radius: 8px; overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+}
+.settings-look-win {
+  display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  background: var(--p-bg);
+  box-shadow: 0 1px 7px rgba(0, 0, 0, .13);
+}
+.settings-look-pv-pair .settings-look-win { border: none; border-radius: 0; box-shadow: none; }
+.settings-look-win-bar {
+  display: flex; align-items: center; gap: 3px; flex: 0 0 auto;
+  height: 13px; padding: 0 6px;
+  background: color-mix(in srgb, var(--p-fg) 10%, var(--p-bg));
+}
+.settings-look-win-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--p-fg); opacity: .22; }
+.settings-look-win-dot:first-child { opacity: .42; }
+.settings-look-win-body { flex: 1 1 auto; display: flex; min-height: 0; }
+.settings-look-win-side { flex: 0 0 26%; background: color-mix(in srgb, var(--p-fg) 7%, var(--p-bg)); }
+.settings-look-win-main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px 8px 0; }
+.settings-look-win-line { display: block; height: 4px; border-radius: 2px; background: var(--p-fg); opacity: .17; }
+.settings-look-win-line.is-head { height: 6px; opacity: .34; }
+.settings-look-win-pill { display: block; width: 34px; height: 9px; margin-top: auto; margin-bottom: 8px; border-radius: 3px; background: var(--p-accent); }
+.settings-look-pv-pair .settings-look-win-main { gap: 3px; padding: 6px 5px 0; }
+.settings-look-pv-pair .settings-look-win-pill { width: 20px; height: 7px; margin-bottom: 6px; }
+
+/* 卡内标签 */
+.settings-look-meta { display: flex; align-items: center; justify-content: center; gap: 6px; padding-bottom: 2px; }
+.settings-look-meta svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--placeholder); }
+.settings-look-name { font-size: 13px; color: var(--fg); opacity: .78; }
+.settings-look-card.is-active .settings-look-meta svg { color: var(--accent); opacity: 1; }
+.settings-look-card.is-active .settings-look-name { opacity: 1; font-weight: 600; }
+
+/* 选中对勾 */
+.settings-look-check {
+  position: absolute; top: 14px; right: 14px;
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .35);
+  opacity: 0; transform: scale(.62);
+  transition: opacity .15s, transform .15s;
+}
+.settings-look-card.is-active .settings-look-check { opacity: 1; transform: scale(1); }
+.settings-look-check svg { width: 11px; height: 11px; }
 
 /* ---- 主题 / 图标：等宽卡片网格（auto-fill + minmax，同类卡片同宽） ---- */
 .settings-theme-grid {
