@@ -1463,6 +1463,15 @@ function _tabDragStart(st) {
   st.btn.style.left = r.left + 'px';
   st.btn.style.top = r.top + 'px';
   document.body.classList.add('is-tab-dragging');
+
+  // 「+」的基础位置记下来：拖动时它会被标签顶着往右让，最多让到窗口边界
+  var addBtn = document.getElementById('tabAddBtn');
+  if (addBtn) {
+    var ar = addBtn.getBoundingClientRect();
+    st.addBtn = addBtn;
+    st.addLeft = ar.left;
+    st.addW = ar.width;
+  }
 }
 
 // 落点 = 第一个「鼠标还在它左半区」的标签之前；都没有就排到最后
@@ -1519,21 +1528,25 @@ function _tabDragMove(e) {
   }
   if (e.cancelable) e.preventDefault();
   // 只跟水平方向：压暗的那个标签留在标签栏这一行里左右滑，不跟着鼠标上下跑，
-  // 也不在光标下面变成一块浮起来的方块。右边界停在「+」左边 —— 拖到最右时标签
-  // 顶住「+」而不是压上去，看起来就是把它往后挤。
+  // 也不在光标下面变成一块浮起来的方块。右边界要给「+」留出位置 —— 推到最右时
+  // 是「标签 + 加号」一起顶到窗口边，不能让标签把加号压在身下。
   var gx = e.clientX - st.offX;
   var bar = document.getElementById('tabsBar');
   if (bar) {
     var br = bar.getBoundingClientRect();
-    var limit = br.right - st.w - 4;
-    var addBtn = document.getElementById('tabAddBtn');
-    if (addBtn) {
-      var ar = addBtn.getBoundingClientRect();
-      limit = Math.min(limit, ar.left - st.w - 2);
-    }
-    gx = Math.max(br.left + 4, Math.min(gx, limit));
+    var maxGx = br.right - st.w - 4;
+    if (st.addBtn) maxGx = Math.min(maxGx, br.right - st.w - st.addW - 14);
+    gx = Math.max(br.left + 4, Math.min(gx, maxGx));
   }
   st.btn.style.left = gx + 'px';
+
+  // 把「+」往右顶：被拖标签的右缘贴上去就推着它走，最多推到窗口边界为止。
+  if (st.addBtn) {
+    var want = gx + st.w + 6 - st.addLeft;
+    var maxPush = Math.max(0, window.innerWidth - 4 - (st.addLeft + st.addW));
+    var push = Math.max(0, Math.min(want, maxPush));
+    st.addBtn.style.transform = push > 0.5 ? 'translateX(' + push + 'px)' : '';
+  }
   _tabDragPlace(st, e.clientX);
 }
 
@@ -1551,6 +1564,7 @@ function _tabDragFinish(commit) {
   st.btn.style.top = '';
   st.btn.style.width = '';
   st.btn.style.height = '';
+  if (st.addBtn) st.addBtn.style.transform = '';
 
   var scroll = document.getElementById('tabsScroll');
   var kids = scroll ? Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; }) : [];
