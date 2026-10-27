@@ -25,6 +25,12 @@
 | P2 | daemon 重启自动恢复磁盘历史 | `historyFile` 自动加载 | daemon 启动时扫描 `history/*.log`，匹配进程 ID 的文件自动加载到环形缓冲区 |
 | P2 | CLI 与守护进程的多色输出（彩色日志/彩色 CLI） | 无（Windows 需 VT 支持） | **现状**：全仓库**没有任何 ANSI 转义**，控制台与日志都是纯文本。守护进程的每一行由 `formatLogLine(ts, category, msg)`（`daemon/logfile.go:93`）单点产出，`logOp()`（`daemon/main.go:137`）把**同一行**既打印到控制台又写进 `logs/daemon.log`；CLI 各命令是裸 `fmt.Fprintf(os.Stdout/os.Stderr, …)`。**目标**：① 终端里按类别着色（启动=青、连接=绿、串口=蓝、IPC=灰、关闭=黄、错误=红，时间戳弱化）；② `serial-cli logs` **读**文件时按 `[类别]` 着色（文件本身仍纯文本）；③ CLI 输出：错误红、警告黄、`check` 的三层结果与 `probe` 的命中/未命中分区着色，表格列对齐。**硬约束**：① **写进文件的行绝不能带转义** —— 只在「面向控制台的 writer」上着色，日志文件保持纯文本，否则 `serial-cli logs` 与外部比对会看到乱码；② **非 TTY 自动无色**（管道、重定向、`--silent` 后台模式），另给 `--color=auto\|always\|never` 与 `NO_COLOR` 环境变量；③ **MCP 绝不能着色**（stdio JSON-RPC，任何转义都会破坏协议）；④ Windows 控制台要先开 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`（加在 `daemon/console_windows.go` 现有 `setConsoleOutputCP` 旁边，开失败就降级无色）——该文件的注释已经证明 `--silent` 时 `GetConsoleMode` 会失败，正好是「无 TTY」的天然判据；⑤ 现有断言 stdout 文本的测试要统一走 `--color=never` 或依赖非 TTY 自动无色。**顺带**：`serial-cli logs` 的类别列目前是 `[%-6s]` 定宽，着色时注意中文类别宽度。**工作量**：小（一个 `internal/color` 小包 + 三处调用点），风险低但触及所有命令输出，建议配一个输出快照夹具。可选扩展：深浅背景两套配色、`--theme` 选择 |
 | P3 | GUI 性能面板 | `session.stats` IPC 已就绪 | - |
+| P2 | Linux 版本 | 跨平台构建脚本 | 产出 `serial-{gui,daemon,cli,mcp}` 的 Linux 版本；GUI 走 Wails 的 Linux 后端（WebKitGTK），daemon/CLI/MCP 是纯 Go 可直接交叉编译。**已有 Linux 虚拟机，可在其上构建与实机验证**（需要时授权使用） |
+| P2 | 标签高级信息浮窗 | `session.stats` / `GetClients` | 现在悬停标签只有原生 `title`（会话号 / 数据位 / 空闲进程）。改成**自绘浮窗**：连接状态（端口、波特率、是否转发、客户端数）+ 当前速率（B/s）+ 累计数据量（Tx/Rx 字节数与帧数），样式跟主题变量走，不依赖原生 tooltip |
+| P2 | 标签存储设置分离 | 历史/配置按 tag 存 | 「保存历史」从全局设置下沉到**每个标签页独立开关**：同一窗口里可以有标签落盘、有的不落盘；标签级配置要随会话持久化（现在只有全局 `autoSaveHistory`） |
+| P2 | 新建标签默认保存历史 | 依赖上一条 | 取代全局「自动保存历史」开关的语义：新建会话标签默认开启保存历史，用户可在该标签里单独关掉 |
+| P3 | 每个标签一个图标 | 图标包 `resources\icons\` | 标签左侧按类型给图标（单端口 / 端口转发 / 设置 / 新建之外，再支持自定义图标），且随图标主题切换；当前只有状态圆点与设置/新建两个特例 |
+| P3 | all-in-one 融合可执行 | 现有四个入口 | 一个 exe 同时包含 GUI / CLI / MCP / daemon，按第一个参数或调用方式切换（双击 / `--cli` / `--mcp` / `--daemon`）。难点在 Windows 子系统：GUI 需要 `-H windowsgui`，而它会让 CLI 的 stdout 无处可去，需要 `AttachConsole`/`AllocConsole` 一类的处理，或分成两个构建标签 |
 
 ## 已知问题
 
