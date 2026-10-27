@@ -944,18 +944,53 @@ function renderSettingsIconGrid() {
 	themes.forEach(function(th) {
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.iconThemeId === th.id ? ' is-selected' : '');
+
+		// 示例图标：内置默认用当前已加载的图标集，外置图标包逐个读它自己的 svg
+		var preview = document.createElement('div');
+		preview.className = 'settings-icon-preview';
+		card.appendChild(preview);
+
 		var iconName = document.createElement('span');
 		iconName.className = 'settings-theme-card-name';
 		if (th._i18nKey) { iconName.textContent = t(th._i18nKey, '内置默认'); }
 		else if (th.name && typeof th.name === 'object') { iconName.textContent = _themeName(th.name); }
 		else { iconName.textContent = th.name || th.id; }
 		card.appendChild(iconName);
+
 		card.addEventListener('click', function() {
 			state.iconThemeId = th.id;
 			saveSettings();
 			renderSettingsIconGrid();
 		});
 		grid.appendChild(card);
+
+		_fillIconPreview(preview, th);
+	});
+}
+
+/* 往预览格里塞最多 6 个示例图标 */
+async function _fillIconPreview(box, th) {
+	var icons = null;
+	if (th.builtin) {
+		icons = (typeof activeIcons !== 'undefined' && activeIcons) ? activeIcons : null;
+	} else {
+		try {
+			var ext = await window.go.main.App.GetExternalIconTheme(th.id);
+			if (ext && ext.icons) icons = ext.icons;
+		} catch (e) {}
+	}
+	if (!icons) return;
+	// 优先拿常用图标当门面，不够再按字母序补
+	var prefer = ['settings', 'terminal', 'send', 'reset', 'search', 'menu', 'history', 'swap', 'close', 'plus'];
+	var keys = Object.keys(icons).filter(function(k) { return k.charAt(0) !== '_'; });
+	keys.sort();
+	var picked = prefer.filter(function(k) { return !!icons[k]; });
+	keys.forEach(function(k) { if (picked.length < 6 && picked.indexOf(k) < 0) picked.push(k); });
+	picked.slice(0, 6).forEach(function(k) {
+		var span = document.createElement('span');
+		span.className = 'settings-icon-preview-item';
+		span.innerHTML = icons[k];
+		box.appendChild(span);
 	});
 }
 

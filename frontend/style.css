@@ -1802,6 +1802,19 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   background: var(--border);
   pointer-events: none;
 }
+/* 图标包预览：最多 6 个示例图标 */
+.settings-icon-preview {
+  display: flex;
+  gap: 10px;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  opacity: 0.9;
+}
+.settings-icon-preview-item { display: flex; width: 18px; height: 18px; flex: 0 0 18px; }
+.settings-icon-preview-item svg { width: 18px; height: 18px; }
+
 /* 主题卡：色块区固定高度，名称在下，各卡等高 */
 .settings-theme-swatches { min-height: 34px; align-items: center; }
 @media (max-width: 1100px) {
