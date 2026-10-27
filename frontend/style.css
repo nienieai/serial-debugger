@@ -480,16 +480,16 @@ button:disabled:active { transform: none; box-shadow: none; }
 .c-color-swatch-fill {
   display: block; position: absolute; inset: 4px; border-radius: 4px;
 }
-/* Color setting row: label | bg-swatches | fg-swatches */
+/* Color setting row: label | bg-swatches | fg-swatches
+   标签吃满剩余宽度，所以 加粗/斜体/两组色块 整体贴右（之前是 150px 定宽，右边空一截） */
 .c-color-row {
-  display: flex; align-items: center; gap: 8px; padding: 5px 6px;
-  border-left: 3px solid transparent; border-radius: 4px;
-  transition: background 0.12s, border-color 0.12s;
+  display: flex; align-items: center; gap: 6px; padding: 7px 0;
 }
-.c-color-row:hover { background: var(--bg3); border-left-color: var(--accent); }
-.c-color-row:hover .c-color-label { color: var(--fg); }
+.c-color-row + .c-color-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+}
 .c-color-label {
-  flex: 1; font-size: 13px; color: var(--fg); min-width: 100px;
+  flex: 1 1 auto; font-size: 13px; color: var(--fg); min-width: 100px;
 }
 .c-color-chk {
   display: flex; align-items: center; justify-content: center;
@@ -498,19 +498,19 @@ button:disabled:active { transform: none; box-shadow: none; }
 .c-color-chk input { accent-color: var(--accent); margin: 0; }
 /* Column header row for color settings — two-layer structure */
 .c-color-head {
-  display: flex; align-items: flex-end; gap: 8px; padding: 6px 0 2px;
-  font-size: 11px; color: var(--placeholder); border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-end; gap: 8px; padding: 6px 0;
+  font-size: 12.5px; color: var(--placeholder); border-bottom: 1px solid var(--border);
   margin-bottom: 2px;
 }
 .c-color-head__name { flex: 1; min-width: 100px; align-self: flex-end; }
-.c-color-head__chk { flex-shrink: 0; width: 32px; text-align: center; font-size: 11px; }
+.c-color-head__chk { flex-shrink: 0; width: 32px; text-align: center; font-size: 12.5px; }
 .c-color-head__grp {
   display: flex; flex-direction: column; align-items: center;
   flex-shrink: 0; width: 68px;
 }
-.c-color-head__row1 { font-weight: 600; font-size: 11px; margin-bottom: 2px; }
+.c-color-head__row1 { font-weight: 600; font-size: 12.5px; margin-bottom: 3px; }
 .c-color-head__row2 { display: flex; gap: 6px; justify-content: center; }
-.c-color-head__row2 span { flex: 0 0 28px; width: 28px; text-align: center; font-size: 10px; }
+.c-color-head__row2 span { flex: 0 0 28px; width: 28px; text-align: center; font-size: 11px; }
 /* Group separator with label */
 .c-color-sep {
   display: flex; align-items: center; margin: 10px 0 4px;
@@ -1857,15 +1857,12 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .settings-panel[data-panel="colors"] > .settings-bubble {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 32px;
+  column-gap: 44px;
   align-items: start;
 }
 .settings-panel[data-panel="colors"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
 .c-color-group { min-width: 0; }
-.c-color-row { justify-content: flex-start; gap: 6px; }
-.c-color-label { flex: 0 0 150px; }
 .c-color-head { gap: 6px; }
-.c-color-head__name { flex: 0 0 150px; }
 .c-color-head__chk { width: 26px; }
 .c-color-head__grp { width: 62px; }
 .c-color-chk { width: 26px; }
