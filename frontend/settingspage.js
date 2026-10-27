@@ -347,18 +347,21 @@ function buildSettingsPage() {
 		]}
 	];
 	colorGroups.forEach(function(grp) {
+		// 每组包一层，两个分组在宽屏下并排（窄屏自动落成单列）
+		var group = document.createElement('div');
+		group.className = 'c-color-group';
 		var sep = document.createElement('div');
 		sep.className = 'c-color-sep';
 		var sepLbl = document.createElement('span');
 		sepLbl.textContent = grp.title;
 		sep.appendChild(sepLbl);
-		bColor.appendChild(sep);
+		group.appendChild(sep);
 		// Preview section
 		var preview = document.createElement('div');
 		preview.className = 'c-color-preview-wrap';
 		preview.id = 'colorPreview_' + grp.items[0].key;
 		preview._colorItems = grp.items;
-		bColor.appendChild(preview);
+		group.appendChild(preview);
 		// Two-layer column header: 设置项 | 加粗 | 背景颜色 | 字体颜色
 		var hdr = document.createElement('div');
 		hdr.className = 'c-color-head';
@@ -382,8 +385,9 @@ function buildSettingsPage() {
 		hdrFg.className = 'c-color-head__grp';
 		hdrFg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_fg','字体颜色') + '</div><div class="c-color-head__row2"><span>' + t('theme.dark_label','深色') + '</span><span>' + t('theme.light_label','浅色') + '</span></div>';
 		hdr.appendChild(hdrFg);
-		bColor.appendChild(hdr);
-		grp.items.forEach(function(cfg) { bColor.appendChild(_buildColorRow(cfg)); });
+		group.appendChild(hdr);
+		grp.items.forEach(function(cfg) { group.appendChild(_buildColorRow(cfg)); });
+		bColor.appendChild(group);
 		// Render preview after DOM attached
 		setTimeout(function() { _renderColorPreview(grp.items, preview); }, 10);
 	});

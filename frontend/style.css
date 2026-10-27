@@ -1742,6 +1742,28 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   .settings-nav-backdrop { display: none !important; }
 }
 
+/* ---- 数据高亮：单端口 / 端口转发 两组并排，组内表格紧凑 ---- */
+.settings-panel[data-panel="colors"] > .settings-bubble {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 32px;
+  align-items: start;
+}
+.settings-panel[data-panel="colors"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
+.c-color-group { min-width: 0; }
+.c-color-row { justify-content: flex-start; gap: 6px; }
+.c-color-label { flex: 0 0 150px; }
+.c-color-head { gap: 6px; }
+.c-color-head__name { flex: 0 0 150px; }
+.c-color-head__chk { width: 26px; }
+.c-color-head__grp { width: 62px; }
+.c-color-chk { width: 26px; }
+.c-color-swatches { width: 62px; gap: 6px; }
+.c-color-preview-wrap { margin-bottom: 6px; }
+
+@media (max-width: 1100px) {
+  .settings-panel[data-panel="colors"] > .settings-bubble { display: block; }
+}
 /* ---- 窄屏：卡内字段退回单列，去掉竖线 ---- */
 @media (max-width: 1249px) {
   .settings-panel[data-panel="display"] > .settings-bubble,
