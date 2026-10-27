@@ -405,12 +405,15 @@ button:disabled:active { transform: none; box-shadow: none; }
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 body.is-tab-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
-/* 落点占位块：与标签等高、同圆角，虚线 + 淡底，表示「这个位置空出来了」 */
+/* 落点占位块：和标签同样的方块（同高、同圆角、同边框），只是底色比标签深/浅一档、
+   没有内容 —— 看起来像标签自己把位置空了出来，而不是一个虚线框。
+   底色用 --bg3 而不是 --input-bg：浅色主题下 input-bg 是纯白，半透明白在浅灰栏上
+   几乎看不见；bg3 在深浅两种主题里都和标签底色差一档。 */
 .tab-placeholder {
   flex: 0 0 auto; align-self: center;
   height: 30px; border-radius: 8px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--border);
+  background-color: var(--bg3);
 }
 .tab-new {
   display: inline-flex; align-items: center; justify-content: center;
