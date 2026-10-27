@@ -530,20 +530,22 @@ func (a *App) GetExternalIconTheme(id string) map[string]any {
 
 // CreateExampleFiles creates example theme/i18n directories and sample files.
 // kind: "colors", "icons", or "i18n".
+//
+// 一律写到外置资源层 <exe>\resources\（结构见 config/resources.go），不碰内置层
+// resources-system；写完后设置页的「刷新」会重新扫描，能立刻看到示例。
 func (a *App) CreateExampleFiles(kind string) map[string]any {
-	exe, err := os.Executable()
-	if err != nil {
-		return map[string]any{"ok": false, "error": err.Error()}
+	base := config.UserResourcesDir()
+	if base == "" {
+		return map[string]any{"ok": false, "error": "resource dir not found"}
 	}
-	base := filepath.Dir(exe)
 
 	switch kind {
 	case "colors":
-		dir := filepath.Join(base, "themes", "colors")
+		dir := filepath.Join(base, "themes", "example-sunset")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		}
-		sample := filepath.Join(dir, "sunset-warm.json")
+		sample := filepath.Join(dir, "theme.json")
 		content := `{
   "_name": {"zh":"日落暖色","en":"Sunset Warm","_":"Sunset Warm"},
   "_modes": ["dark", "light"],
@@ -598,7 +600,7 @@ func (a *App) CreateExampleFiles(kind string) map[string]any {
 		return map[string]any{"ok": true, "path": dir}
 
 	case "icons":
-		dir := filepath.Join(base, "themes", "icons", "example-outline")
+		dir := filepath.Join(base, "icons", "example-outline")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		}
@@ -642,17 +644,16 @@ func (a *App) CreateExampleFiles(kind string) map[string]any {
 }
 
 func (a *App) ShowFolderInExplorer(kind string) map[string]any {
-	exe, err := os.Executable()
-	if err != nil {
-		return map[string]any{"ok": false, "error": err.Error()}
+	base := config.UserResourcesDir()
+	if base == "" {
+		return map[string]any{"ok": false, "error": "resource dir not found"}
 	}
-	base := filepath.Dir(exe)
 	var dir string
 	switch kind {
 	case "colors":
-		dir = filepath.Join(base, "themes", "colors")
+		dir = filepath.Join(base, "themes")
 	case "icons":
-		dir = filepath.Join(base, "themes", "icons")
+		dir = filepath.Join(base, "icons")
 	case "i18n":
 		dir = filepath.Join(base, "i18n")
 	default:

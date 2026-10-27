@@ -88,6 +88,18 @@ func ResourceDir() string {
 // ResourcesDir 暴露给 app 层用。
 func ResourcesDir() string { return ResourceDir() }
 
+// UserResourcesDir 返回外置资源目录 <exe>\resources（不保证已存在）。
+// 「创建示例文件 / 在资源管理器里打开」这类**写操作**都落在这里，不碰内置层。
+func UserResourcesDir() string {
+	if base := exeDir(); base != "" {
+		return filepath.Join(base, "resources")
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return filepath.Join(wd, "resources")
+	}
+	return ""
+}
+
 // I18nDir 磁盘上的语言包目录（优先级最高的那一层）；没有则空串。
 func I18nDir() string { return findResource("i18n") }
 

@@ -435,7 +435,7 @@ function buildSettingsPage() {
 	themeGrid.className = 'settings-theme-grid';
 	themeGrid.id = 'settingsThemeGrid';
 	bTheme.appendChild(themeGrid);
-	bTheme.appendChild(_bubbleFooter('colors', t('settings.hint_colors','想使用其他主题？在软件目录中新建 \\themes\\colors\\ 导入主题文件，或单击此按键创建示例文件夹')));
+	bTheme.appendChild(_bubbleFooter('colors', t('settings.hint_colors','想使用其他主题？在软件目录中新建 resources\\themes\\ 下的主题文件夹导入，或单击此按键创建示例主题')));
 	panelAppear.appendChild(bTheme);
 
 	var iconRefresh = document.createElement('button');
@@ -450,7 +450,7 @@ function buildSettingsPage() {
 	iconGrid.className = 'settings-theme-grid';
 	iconGrid.id = 'settingsIconGrid';
 	bIcons.appendChild(iconGrid);
-	bIcons.appendChild(_bubbleFooter('icons', t('settings.hint_icons','想使用其他图标主题？在软件目录中新建 \\themes\\icons\\ 导入图标文件，或单击此按键创建示例文件夹')));
+	bIcons.appendChild(_bubbleFooter('icons', t('settings.hint_icons','想使用其他图标主题？在软件目录中新建 resources\\icons\\ 下的图标包导入，或单击此按键创建示例图标包')));
 	panelAppear.appendChild(bIcons);
 
 	// ── Panel: 存储与行为 ──
