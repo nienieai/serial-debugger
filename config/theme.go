@@ -40,7 +40,34 @@ func themeDir() string {
 	return ""
 }
 
+// builtinDir 返回 exe 同级的 builtin/ 目录（也可用工作目录下的）。
+// 里面按 themes/、icons/、i18n/ 分子目录，放着就从磁盘读，覆盖编译进二进制的版本。
+func builtinDir() string {
+	if exe, err := os.Executable(); err == nil {
+		d := filepath.Join(filepath.Dir(exe), "builtin")
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			return d
+		}
+	}
+	if wd, err := os.Getwd(); err == nil {
+		d := filepath.Join(wd, "builtin")
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			return d
+		}
+	}
+	return ""
+}
+
 func LoadTheme(id string) map[string]any {
+	// 磁盘上的 builtin/themes/<id>.json 优先，方便调试和替换
+	if bd := builtinDir(); bd != "" {
+		if data, err := os.ReadFile(filepath.Join(bd, "themes", id+".json")); err == nil {
+			var m map[string]any
+			if json.Unmarshal(data, &m) == nil {
+				return m
+			}
+		}
+	}
 	data, err := themesFS.ReadFile("themes/" + id + ".json")
 	if err != nil {
 		return nil
@@ -53,18 +80,39 @@ func LoadTheme(id string) map[string]any {
 }
 
 func ListThemeIDs() []string {
+	seen := map[string]bool{}
+	var ids []string
+	// 磁盘 builtin/themes/ 里的先来，再补 embed 里没有的
+	if bd := builtinDir(); bd != "" {
+		if entries, err := os.ReadDir(filepath.Join(bd, "themes")); err == nil {
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() || !strings.HasSuffix(name, ".json") {
+					continue
+				}
+				id := strings.TrimSuffix(name, ".json")
+				if !seen[id] {
+					seen[id] = true
+					ids = append(ids, id)
+				}
+			}
+		}
+	}
 	entries, err := themesFS.ReadDir("themes")
 	if err != nil {
-		return nil
+		return ids
 	}
-	var ids []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
 		if len(name) > 5 && name[len(name)-5:] == ".json" {
-			ids = append(ids, name[:len(name)-5])
+			id := name[:len(name)-5]
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	return ids

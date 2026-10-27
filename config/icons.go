@@ -4,6 +4,8 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -21,8 +23,38 @@ func init() {
 	builtinIcons = loadIconPack("system")
 }
 
-// loadIconPack 读一个内置图标包，返回 key -> svg
+// loadIconDir 从一个真实目录读 key -> svg（目录不存在返回 nil）
+func loadIconDir(dir string) map[string]string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) <= 4 || !strings.HasSuffix(name, ".svg") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		out[strings.TrimSuffix(name, ".svg")] = string(data)
+	}
+	return out
+}
+
+// loadIconPack 读一个内置图标包，返回 key -> svg。
+// 磁盘 builtin/icons/<pack>/ 优先，方便查看和替换；没有再退回嵌入的那份。
 func loadIconPack(pack string) map[string]string {
+	if bd := builtinDir(); bd != "" {
+		if out := loadIconDir(filepath.Join(bd, "icons", pack)); len(out) > 0 {
+			return out
+		}
+	}
 	dir := "icons/" + pack
 	entries, err := fs.ReadDir(iconsFS, dir)
 	if err != nil {
@@ -48,19 +80,37 @@ func loadIconPack(pack string) map[string]string {
 
 // ListBuiltinIconPacks 列出内置图标包（icons/ 下的子目录，含 icons.json 的才算）。
 func ListBuiltinIconPacks() []string {
-	entries, err := fs.ReadDir(iconsFS, "icons")
-	if err != nil {
-		return nil
-	}
+	seen := map[string]bool{}
 	var packs []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+	// 磁盘 builtin/icons/ 里的包优先
+	if bd := builtinDir(); bd != "" {
+		if entries, err := os.ReadDir(filepath.Join(bd, "icons")); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				if _, err := os.Stat(filepath.Join(bd, "icons", e.Name(), "icons.json")); err != nil {
+					continue
+				}
+				if !seen[e.Name()] {
+					seen[e.Name()] = true
+					packs = append(packs, e.Name())
+				}
+			}
 		}
-		if _, err := iconsFS.ReadFile("icons/" + e.Name() + "/icons.json"); err != nil {
-			continue
+	}
+	entries, err := fs.ReadDir(iconsFS, "icons")
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || seen[e.Name()] {
+				continue
+			}
+			if _, err := iconsFS.ReadFile("icons/" + e.Name() + "/icons.json"); err != nil {
+				continue
+			}
+			seen[e.Name()] = true
+			packs = append(packs, e.Name())
 		}
-		packs = append(packs, e.Name())
 	}
 	sort.Strings(packs)
 	return packs
@@ -73,7 +123,7 @@ func ListBuiltinIconThemes() []ExternalThemeInfo {
 	result := make([]ExternalThemeInfo, 0, len(packs))
 	for _, id := range packs {
 		info := ExternalThemeInfo{ID: id}
-		if data, err := iconsFS.ReadFile("icons/" + id + "/icons.json"); err == nil {
+		if data, err := _readBuiltinIconMeta(id); err == nil {
 			var m map[string]any
 			if json.Unmarshal(data, &m) == nil {
 				info.Name = m["_name"]
@@ -94,15 +144,31 @@ func ListBuiltinIconThemes() []ExternalThemeInfo {
 	return result
 }
 
+func _readBuiltinIconMeta(id string) ([]byte, error) {
+	if bd := builtinDir(); bd != "" {
+		if data, err := os.ReadFile(filepath.Join(bd, "icons", id, "icons.json")); err == nil {
+			return data, nil
+		}
+	}
+	return iconsFS.ReadFile("icons/" + id + "/icons.json")
+}
+
 // GetBuiltinIconTheme 返回某个内置图标包（结构同 LoadExternalIconTheme）：
 // icons.json 的元数据 + { "icons": { key: svg } }。
 func GetBuiltinIconTheme(id string) map[string]any {
 	if id == "" {
 		id = "system"
 	}
-	data, err := iconsFS.ReadFile("icons/" + id + "/icons.json")
-	if err != nil {
-		return nil
+	var data []byte
+	var err error
+	if bd := builtinDir(); bd != "" {
+		data, err = os.ReadFile(filepath.Join(bd, "icons", id, "icons.json"))
+	}
+	if len(data) == 0 || err != nil {
+		data, err = iconsFS.ReadFile("icons/" + id + "/icons.json")
+		if err != nil {
+			return nil
+		}
 	}
 	var m map[string]any
 	if json.Unmarshal(data, &m) != nil {

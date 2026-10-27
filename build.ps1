@@ -9,7 +9,6 @@ param(
     [switch]$Release
 )
 
-$ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 $ver = (Get-Content wails.json -Raw -Encoding UTF8 | ConvertFrom-Json).info.productVersion
@@ -24,8 +23,12 @@ if ($Release) {
     $wailsArgs = @('build', '-devtools', '-tags', 'hotreload', '-ldflags', $ldflags)
 }
 
+$ErrorActionPreference = 'Continue'
 & wails @wailsArgs
-if ($LASTEXITCODE -ne 0) { throw "wails build failed (exit $LASTEXITCODE)" }
+$code = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($code -ne 0) { throw "wails build failed (exit $code)" }
+
 
 $out = Join-Path $PSScriptRoot 'build\bin\serial-gui.exe'
 if (-not (Test-Path $out)) { throw "artifact missing: $out" }

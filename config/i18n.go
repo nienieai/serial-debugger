@@ -4,6 +4,8 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -40,6 +42,26 @@ func init() {
 			continue
 		}
 		i18nData[lang] = m
+	}
+	// 磁盘 builtin/i18n/*.json 覆盖同名语言，方便直接改文案
+	if bd := builtinDir(); bd != "" {
+		if entries, err := os.ReadDir(filepath.Join(bd, "i18n")); err == nil {
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() || len(name) < 6 || name[len(name)-5:] != ".json" {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(bd, "i18n", name))
+				if err != nil {
+					continue
+				}
+				m := map[string]string{}
+				if json.Unmarshal(data, &m) != nil {
+					continue
+				}
+				i18nData[strings.TrimSuffix(name, ".json")] = m
+			}
+		}
 	}
 }
 
