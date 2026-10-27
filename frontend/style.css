@@ -399,10 +399,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* 拖动排序中：原标签隐藏（不占位），克隆体 .tab-ghost 跟着鼠标，原位由
    .tab-placeholder 占着 —— 其余标签因此会实时让位。 */
 .tab-btn.tab-src-hidden { display: none; }
+/* 拖动中跟着鼠标的克隆体：位置由 JS 给，这里负责「按下去」的观感 ——
+   压暗一档 + 投影，和原位那些亮着的标签区分开。 */
 .tab-btn.tab-ghost {
   position: fixed; z-index: 9999; margin: 0;
-  pointer-events: none; opacity: 0.92;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: none; opacity: 0.9;
+  filter: brightness(0.72) saturate(0.85);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
 }
 body.is-tab-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
 /* 落点占位块：和标签同样的方块（同高、同圆角、同边框），只是底色比标签深/浅一档、

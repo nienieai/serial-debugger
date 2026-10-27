@@ -1483,8 +1483,34 @@ function _tabDragPlace(st, clientX) {
   var kids = Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; });
   var target = before ? kids.indexOf(before) : kids.length;
   if (kids.indexOf(st.ph) === target) return;
+
+  // FLIP：先记下每个格子的旧位置，挪完再按差值反向位移、过渡回 0，
+  // 这样「让位」是滑过去的，不是瞬间跳一格。
+  var prev = [];
+  for (var i = 0; i < kids.length; i++) prev.push(kids[i].getBoundingClientRect().left);
+
   var ref = target < kids.length ? kids[target] : null;
   if (ref) scroll.insertBefore(st.ph, ref); else scroll.appendChild(st.ph);
+
+  for (var k = 0; k < kids.length; k++) {
+    var dx = prev[k] - kids[k].getBoundingClientRect().left;
+    if (dx) _tabShift(kids[k], dx);
+  }
+}
+
+// 反向位移 → 下一帧过渡回 0；动画结束后清掉内联样式，别影响下次布局
+function _tabShift(el, dx) {
+  el.style.transition = 'none';
+  el.style.transform = 'translateX(' + dx + 'px)';
+  void el.offsetWidth;   // 强制回流，让上面的反向位移先落地
+  el.style.transition = 'transform .16s cubic-bezier(.2, .8, .3, 1)';
+  el.style.transform = '';
+  if (el._tabShiftTimer) clearTimeout(el._tabShiftTimer);
+  el._tabShiftTimer = setTimeout(function() {
+    el.style.transition = '';
+    el.style.transform = '';
+    el._tabShiftTimer = null;
+  }, 220);
 }
 
 function _tabDragMove(e) {
