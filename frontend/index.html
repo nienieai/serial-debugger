@@ -114,7 +114,11 @@
     <button class="tab-btn tab-new" id="tabAddBtn" onclick="openNewSessionTab()" data-i18n-title="tooltip.new_tab" title="新建会话">+</button>
   </div>
 
-  <div class="main-content" id="mainContent"></div>
+  <div class="main-content" id="mainContent">
+    <!-- 全页背景层：标签页下沿到状态栏上沿这一整块，主题里配了 --app-bg-image 就铺图，
+         没配就是 --bg 纯色。放在所有页面之下，页面本身不再各画各的背景。 -->
+    <div class="o-app-bg" id="appBg" aria-hidden="true"></div>
+  </div>
 
   <div class="statusbar" id="statusbar"></div>
 </div>
