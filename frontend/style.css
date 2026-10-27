@@ -1467,7 +1467,7 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   content: '';
   position: absolute;
   left: 50%;
-  top: calc(13px + var(--bubble-head-h, 40px));
+  top: calc(13px + var(--bubble-head-h, 40px) + 10px);
   bottom: 13px;
   width: 1px;
   background: var(--border);
@@ -1787,7 +1787,7 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   content: '';
   position: absolute;
   left: 50%;
-  top: calc(13px + var(--bubble-head-h, 40px));
+  top: calc(13px + var(--bubble-head-h, 40px) + 10px);
   bottom: 13px;
   width: 1px;
   background: var(--border);
