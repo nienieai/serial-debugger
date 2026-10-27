@@ -396,27 +396,22 @@ button:disabled:active { transform: none; box-shadow: none; }
 .tab-btn .close-tab:hover { background: var(--red); color: #fff; }
 .tab-idle { font-style: italic; color: var(--placeholder); }
 .tab-forward { color: var(--green) !important; font-weight: 600; }
-/* 拖动排序中：原标签隐藏（不占位），克隆体 .tab-ghost 跟着鼠标，原位由
-   .tab-placeholder 占着 —— 其余标签因此会实时让位。 */
-.tab-btn.tab-src-hidden { display: none; }
-/* 拖动中跟着鼠标左右滑的克隆体：形状和原标签一模一样，只是压暗一档。
-   不用投影/浮起效果 —— 它要看起来就是「原来的那个标签被按暗了，在标签栏里滑」，
-   而不是浮在光标下面的一个方块。 */
-.tab-btn.tab-ghost {
+/* 拖动排序中：原标签自己改成固定定位、压暗，在标签栏这一行里左右滑；
+   原位由 .tab-placeholder 占着 —— 其余标签因此会实时让位。
+   不用投影/浮起效果：它要看起来就是「原来那个标签被按暗了正在挪」。 */
+.tab-btn.tab-dragging {
   position: fixed; z-index: 9999; margin: 0;
   pointer-events: none; opacity: 0.9;
   filter: brightness(0.72) saturate(0.85);
 }
 body.is-tab-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
-/* 落点占位块：和标签同样的方块（同高、同圆角、同边框），只是底色比标签深/浅一档、
-   没有内容 —— 看起来像标签自己把位置空了出来，而不是一个虚线框。
-   底色用 --bg3 而不是 --input-bg：浅色主题下 input-bg 是纯白，半透明白在浅灰栏上
-   几乎看不见；bg3 在深浅两种主题里都和标签底色差一档。 */
+/* 落点占位块：只占位置、不画出来（透明）。落点靠其余标签让位来提示，
+   它也负责把「+」按钮一起推着走，所以宽高必须照旧占着。 */
 .tab-placeholder {
   flex: 0 0 auto; align-self: center;
-  height: 30px; border-radius: 8px;
-  border: 1px solid var(--border);
-  background-color: var(--bg3);
+  height: 30px;
+  background: transparent;
+  border: 0;
 }
 .tab-new {
   display: inline-flex; align-items: center; justify-content: center;

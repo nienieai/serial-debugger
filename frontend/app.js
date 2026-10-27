@@ -1421,13 +1421,15 @@ document.addEventListener('copy', function(e) {
 //
 // 为什么不用 HTML5 拖放：dragstart 里把源元素改成 position:absolute / display:none，
 // 浏览器会判定「拖动源消失」直接把这次拖动取消掉 —— 表现就是按住标签拖不动。
-// 改成 pointer 事件后全程可控：
+// pointer 事件全程可控：
 //   1. 按住标签、移动超过 4px 才算拖动，否则照常点击切换
-//   2. 拖动开始：原标签隐藏，原位插等宽占位块；再克隆一个 .tab-ghost 跟着鼠标
-//      （外观和原来一模一样，只是加了投影），所以「手上那个」看起来没变
-//   3. 移动时按鼠标位置把占位块挪到落点，其余标签即时让位
+//   2. 拖动开始：**原标签自己**改成 position:fixed + 压暗，在标签栏这一行里左右滑。
+//      不克隆、不多出一个方块，样子天然就是原样；原位插一个等宽占位块，占位块只
+//      占空间不画出来，靠其余标签让位来提示落点（也会把「+」一起推着走）。
+//   3. setPointerCapture 咬住这个指针：拖到标签栏外甚至窗口外，move/up 仍会派发
+//      回来，不会卡在「拖出去就松不开」的状态
 //   4. 松手按占位块在 DOM 里的位置结算 state.tabs，再 renderTabs()；Esc 取消
-var _tabDrag = null;   // { btn, idx, started, ph, ghost, ... }
+var _tabDrag = null;   // { btn, idx, started, ph, pid, ... }
 
 function _tabDragDown(e) {
   if (e.button !== 0) return;
@@ -1437,34 +1439,29 @@ function _tabDragDown(e) {
   if (isNaN(idx)) return;
   var r = btn.getBoundingClientRect();
   _tabDrag = {
-    btn: btn, idx: idx, started: false,
+    btn: btn, idx: idx, started: false, pid: e.pointerId,
     startX: e.clientX, startY: e.clientY,
-    offX: e.clientX - r.left, offY: e.clientY - r.top,
-    w: r.width, h: r.height,
-    ph: null, ghost: null,
+    offX: e.clientX - r.left,
+    w: r.width, h: r.height, ph: null,
   };
+  try { btn.setPointerCapture(e.pointerId); } catch (_) {}
 }
 
 function _tabDragStart(st) {
   st.started = true;
   var r = st.btn.getBoundingClientRect();
-  var ghost = st.btn.cloneNode(true);
-  ghost.classList.add('tab-ghost');
-  ghost.classList.remove('is-active');   // 激活态有更高更圆的样式，克隆体统一成普通标签
-  ghost.style.width = st.w + 'px';
-  ghost.style.height = st.h + 'px';
-  ghost.style.left = r.left + 'px';
-  ghost.style.top = r.top + 'px';
-  document.body.appendChild(ghost);
-  st.ghost = ghost;
-
   var ph = document.createElement('div');
   ph.className = 'tab-placeholder';
   ph.style.width = st.w + 'px';
   st.btn.parentNode.insertBefore(ph, st.btn);
   st.ph = ph;
 
-  st.btn.classList.add('tab-src-hidden');
+  // 原标签自己变成「在标签栏这一行里左右滑的压暗标签」
+  st.btn.classList.add('tab-dragging');
+  st.btn.style.width = st.w + 'px';
+  st.btn.style.height = st.h + 'px';
+  st.btn.style.left = r.left + 'px';
+  st.btn.style.top = r.top + 'px';
   document.body.classList.add('is-tab-dragging');
 }
 
@@ -1529,7 +1526,7 @@ function _tabDragMove(e) {
     var br = bar.getBoundingClientRect();
     gx = Math.max(br.left + 4, Math.min(gx, br.right - st.w - 4));
   }
-  st.ghost.style.left = gx + 'px';
+  st.btn.style.left = gx + 'px';
   _tabDragPlace(st, e.clientX);
 }
 
@@ -1538,11 +1535,15 @@ function _tabDragFinish(commit) {
   var st = _tabDrag;
   if (!st) return;
   _tabDrag = null;
-
-  if (st.ghost && st.ghost.parentNode) st.ghost.parentNode.removeChild(st.ghost);
+  try { st.btn.releasePointerCapture(st.pid); } catch (_) {}
   document.body.classList.remove('is-tab-dragging');
   if (!st.started) return;
-  st.btn.classList.remove('tab-src-hidden');
+
+  st.btn.classList.remove('tab-dragging');
+  st.btn.style.left = '';
+  st.btn.style.top = '';
+  st.btn.style.width = '';
+  st.btn.style.height = '';
 
   var scroll = document.getElementById('tabsScroll');
   var kids = scroll ? Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; }) : [];
@@ -1683,11 +1684,17 @@ window.addEventListener('DOMContentLoaded', () => {
   // Bind stable tab drag handlers to bar
   var bar = document.getElementById('tabsBar');
   if (bar) {
-    // 标签拖动：pointer 事件（拖动时实时补位）
+    // 标签/多字符串拖动：pointer 事件 + setPointerCapture（拖到窗口外也收得到 up）
     document.addEventListener('pointermove', _tabDragMove);
     document.addEventListener('pointermove', _qpDragMove);
     document.addEventListener('pointerup', function() { _tabDragFinishAll(true); _qpDragFinishAll(true); });
     document.addEventListener('pointercancel', function() { _tabDragFinishAll(false); _qpDragFinishAll(false); });
+    // 兜底：切走窗口 / 页面隐藏时指针事件可能收不全，直接按取消收拾干净，
+    // 免得标签停在「压暗固定」或行停在固定定位的状态里下不来。
+    window.addEventListener('blur', function() { _tabDragFinishAll(false); _qpDragFinishAll(false); });
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) { _tabDragFinishAll(false); _qpDragFinishAll(false); }
+    });
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') { _tabDragFinishAll(false); _qpDragFinishAll(false); }
     });
@@ -4236,11 +4243,13 @@ function qpDragDown(e, idx) {
   if (!row) return;
   var r = row.getBoundingClientRect();
   _qpDrag = {
-    row: row, idx: idx, started: false,
+    row: row, idx: idx, started: false, pid: e.pointerId,
     startY: e.clientY, offY: e.clientY - r.top,
     h: r.height, w: r.width, left: r.left, top: r.top,
     ph: null,
   };
+  // 咬住指针：拖到面板外/窗口外时 up 也还会回来，不会卡住
+  try { row.setPointerCapture(e.pointerId); } catch (_) {}
   if (e.cancelable) e.preventDefault();
 }
 
@@ -4317,6 +4326,7 @@ function _qpDragFinish(commit) {
   var st = _qpDrag;
   if (!st) return;
   _qpDrag = null;
+  try { st.row.releasePointerCapture(st.pid); } catch (_) {}
   if (!st.started) return;
 
   var rowsEl = st.row.parentNode;
