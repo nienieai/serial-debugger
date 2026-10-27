@@ -2,6 +2,7 @@ package config
 
 import (
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -163,7 +164,87 @@ func ListExternalColorThemes() []ExternalThemeInfo {
 }
 
 func LoadExternalColorTheme(id string) map[string]any {
-	return loadExternalThemeJSON(filepath.Join(themeDir(), "colors", id+".json"))
+	dir := filepath.Join(themeDir(), "colors")
+	return inlineThemeImages(loadExternalThemeJSON(filepath.Join(dir, id+".json")), dir)
+}
+
+// inlineThemeImages 把主题里 url(...) 引用的图片读出来内联成 data URI。
+//
+// 为什么要这么做：前端（dev 热重载和打包后一样）由 Wails 的 asset server 提供，
+// 只挂载 frontend 目录，CSS 里写 `url(../themes/colors/x.jpg)` 出不去这个根，直接 404；
+// 所以背景图只能由 Go 读文件、转成 data URI 塞进变量里。
+func inlineThemeImages(m map[string]any, baseDir string) map[string]any {
+	if m == nil {
+		return m
+	}
+	for _, name := range []string{"common", "dark", "light"} {
+		sec, ok := m[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		for k, v := range sec {
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			if out, ok2 := inlineCSSURL(s, baseDir); ok2 {
+				sec[k] = out
+			}
+		}
+	}
+	return m
+}
+
+func inlineCSSURL(s, baseDir string) (string, bool) {
+	val := strings.TrimSpace(s)
+	if !strings.HasPrefix(val, "url(") || !strings.HasSuffix(val, ")") {
+		return s, false
+	}
+	inner := strings.Trim(strings.TrimSpace(val[4:len(val)-1]), `'"`)
+	if inner == "" || strings.Contains(inner, "://") ||
+		strings.HasPrefix(inner, "data:") || strings.HasPrefix(inner, "/") {
+		return s, false
+	}
+	for _, cand := range themeImageCandidates(inner, baseDir) {
+		data, err := os.ReadFile(cand)
+		if err != nil || len(data) == 0 || len(data) > 8<<20 {
+			continue
+		}
+		return "url(data:" + themeImageMime(cand) + ";base64," + base64.StdEncoding.EncodeToString(data) + ")", true
+	}
+	return s, false
+}
+
+// themeImageCandidates 依次尝试：按主题目录解析、按老写法里的 themes/colors/ 之后的部分、
+// 同目录同名文件、按 exe 根目录解析。
+func themeImageCandidates(inner, baseDir string) []string {
+	p := filepath.FromSlash(inner)
+	out := []string{filepath.Join(baseDir, p)}
+	marker := filepath.Join("themes", "colors") + string(filepath.Separator)
+	if i := strings.LastIndex(p, marker); i >= 0 {
+		out = append(out, filepath.Join(baseDir, p[i+len(marker):]))
+	}
+	out = append(out, filepath.Join(baseDir, filepath.Base(p)))
+	if exe, err := os.Executable(); err == nil {
+		out = append(out, filepath.Join(filepath.Dir(exe), p))
+	}
+	return out
+}
+
+func themeImageMime(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	}
+	return "application/octet-stream"
 }
 
 func ListExternalIconThemes() []ExternalThemeInfo {
