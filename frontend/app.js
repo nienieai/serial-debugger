@@ -977,6 +977,7 @@ function applyI18n() {
   // Port selects placeholder
   _refreshPortPlaceholders();
   // Tabs
+  _relabelIdleTabs();
   renderTabs();
   // Stats
   refreshStatsDOM();
@@ -2884,10 +2885,21 @@ function closeTab(idx) {
 
 function closeCurrentTab() { closeTab(state.activeTab); }
 
+// 空闲标签页的标题是 `t('tab.idle_*')` 生成的，切语言后要重新算一遍，
+// 否则标签栏会一直停在上一种语言（实测俄语界面里标签还是中文）。
+function _relabelIdleTabs() {
+  var list = state.tabs || [];
+  for (var i = 0; i < list.length; i++) {
+    var tb = list[i];
+    if (!tb || tb.portOpen || tb.type === 'settings' || tb.type === 'new') continue;
+    if (tb.syncedParams && tb.syncedParams.portName) continue;  // 已声明端口，标题里带着端口名
+    tb.label = tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
+  }
+}
+
 // 标签页标题：tab.label 在标签页创建时就算好了，如果那一刻语言包还没装好，
 // 算出来就是空串，之后再渲染也补不回来。这里按标签页自身状态兜一个。
-function _tabLabelText(tb) {
-  if (tb.label) return tb.label;
+function _tabLabelText(tb) {  if (tb.label) return tb.label;
   var sp = tb.syncedParams;
   if (sp && sp.portName) {
     if (tb.mode === 'forward') return sp.portName;

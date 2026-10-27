@@ -372,6 +372,11 @@ function buildSettingsPage() {
 		preview._colorItems = grp.items;
 		group.appendChild(preview);
 		// Two-layer column header: 设置项 | 加粗 | 背景颜色 | 字体颜色
+		// 加粗/斜体用 B / I 符号，深浅用月亮/太阳图标：这两列只有 26/28px 宽，
+		// 换成俄语这类长词会互相压字（实测 "ЖирныйКурсивФон…" 叠在一起）。
+		var modeIcons =
+			'<span title="' + t('theme.dark_label','深色') + '">' + icon('theme_dark', 12, 12) + '</span>' +
+			'<span title="' + t('theme.light_label','浅色') + '">' + icon('theme_light', 12, 12) + '</span>';
 		var hdr = document.createElement('div');
 		hdr.className = 'c-color-head';
 		var hdrName = document.createElement('span');
@@ -380,19 +385,21 @@ function buildSettingsPage() {
 		hdr.appendChild(hdrName);
 		var hdrBold = document.createElement('span');
 		hdrBold.className = 'c-color-head__chk';
-		hdrBold.textContent = t('settings.color_head_bold','加粗');
+		hdrBold.innerHTML = '<b>B</b>';
+		hdrBold.title = t('settings.color_head_bold','加粗');
 		hdr.appendChild(hdrBold);
 		var hdrItalic = document.createElement('span');
 		hdrItalic.className = 'c-color-head__chk';
-		hdrItalic.textContent = t('settings.color_head_italic','斜体');
+		hdrItalic.innerHTML = '<i>I</i>';
+		hdrItalic.title = t('settings.color_head_italic','斜体');
 		hdr.appendChild(hdrItalic);
 		var hdrBg = document.createElement('span');
 		hdrBg.className = 'c-color-head__grp';
-		hdrBg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_bg','背景颜色') + '</div><div class="c-color-head__row2"><span>' + t('theme.dark_label','深色') + '</span><span>' + t('theme.light_label','浅色') + '</span></div>';
+		hdrBg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_bg','背景颜色') + '</div><div class="c-color-head__row2">' + modeIcons + '</div>';
 		hdr.appendChild(hdrBg);
 		var hdrFg = document.createElement('span');
 		hdrFg.className = 'c-color-head__grp';
-		hdrFg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_fg','字体颜色') + '</div><div class="c-color-head__row2"><span>' + t('theme.dark_label','深色') + '</span><span>' + t('theme.light_label','浅色') + '</span></div>';
+		hdrFg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_fg','字体颜色') + '</div><div class="c-color-head__row2">' + modeIcons + '</div>';
 		hdr.appendChild(hdrFg);
 		group.appendChild(hdr);
 		grp.items.forEach(function(cfg) { group.appendChild(_buildColorRow(cfg)); });

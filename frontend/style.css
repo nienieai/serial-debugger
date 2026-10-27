@@ -504,13 +504,23 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .c-color-head__name { flex: 1; min-width: 100px; align-self: flex-end; }
 .c-color-head__chk { flex-shrink: 0; width: 32px; text-align: center; font-size: 12.5px; }
+.c-color-head__chk b { font-weight: 700; }
+.c-color-head__chk i { font-style: italic; font-family: Georgia, "Times New Roman", serif; }
 .c-color-head__grp {
   display: flex; flex-direction: column; align-items: center;
   flex-shrink: 0; width: 68px;
 }
-.c-color-head__row1 { font-weight: 600; font-size: 12.5px; margin-bottom: 3px; }
+.c-color-head__row1 {
+  font-weight: 600; font-size: 12.5px; margin-bottom: 3px;
+  line-height: 1.15; text-align: center; max-width: 100%; word-break: break-word;
+}
 .c-color-head__row2 { display: flex; gap: 6px; justify-content: center; }
-.c-color-head__row2 span { flex: 0 0 28px; width: 28px; text-align: center; font-size: 11px; }
+.c-color-head__row2 span {
+  flex: 0 0 28px; width: 28px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--placeholder);
+}
+.c-color-head__row2 svg { width: 12px; height: 12px; }
 /* Group separator with label */
 .c-color-sep {
   display: flex; align-items: center; margin: 10px 0 4px;
@@ -1894,10 +1904,9 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .settings-icon-preview-item svg { width: 18px; height: 18px; }
 
 /* 主题卡 / 图标卡：名称在下，各卡等高（色样高度见 .settings-theme-sample） */
-@media (max-width: 1100px) {
+/* 两组并排需要每列至少 ~460px：窗口再窄就落成单列，否则表头/色块会挤在一起 */
+@media (max-width: 1300px) {
   .settings-panel[data-panel="colors"] > .settings-bubble { display: block; }
-}
-@media (max-width: 1100px) {
   .settings-panel[data-panel="colors"] > .settings-bubble::after { display: none; }
 }
 /* ---- 窄屏：卡内字段退回单列，去掉竖线 ---- */
