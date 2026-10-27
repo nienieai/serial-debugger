@@ -4344,6 +4344,49 @@ function _qpDragBegin(st) {
 
   rowsEl.classList.add('is-dragging');
   document.body.classList.add('is-qp-dragging');
+
+  st.lastY = st.top;
+  _qpDragStartAutoScroll();
+}
+
+// 拖到列表上下边缘时自动滚动（和标签栏同一套思路，这里是纵向）
+var _qpDragRaf = null;
+
+function _qpDragStartAutoScroll() {
+  if (_qpDragRaf) return;
+  _qpDragRaf = requestAnimationFrame(_qpDragAutoScrollStep);
+}
+
+function _qpDragStopAutoScroll() {
+  if (_qpDragRaf) {
+    cancelAnimationFrame(_qpDragRaf);
+    _qpDragRaf = null;
+  }
+}
+
+function _qpDragAutoScrollStep() {
+  _qpDragRaf = null;
+  var st = _qpDrag;
+  if (!st || !st.started) return;
+  var rowsEl = st.row.parentNode;
+  var scroll = rowsEl ? rowsEl.parentElement : null;   // .qp-scroll
+  if (!scroll) return;
+  var r = scroll.getBoundingClientRect();
+  var EDGE = 40;
+  var MAX = 12;
+  var y = st.lastY;
+  var delta = 0;
+  if (y > r.bottom - EDGE) {
+    delta = Math.ceil(Math.min(MAX, 2 + (y - (r.bottom - EDGE)) / EDGE * MAX));
+  } else if (y < r.top + EDGE) {
+    delta = -Math.ceil(Math.min(MAX, 2 + ((r.top + EDGE) - y) / EDGE * MAX));
+  }
+  if (delta) {
+    var before = scroll.scrollTop;
+    scroll.scrollTop = before + delta;
+    if (scroll.scrollTop !== before) _qpDragPlace(st, y);
+  }
+  _qpDragRaf = requestAnimationFrame(_qpDragAutoScrollStep);
 }
 
 function _qpDragPlace(st, clientY) {
@@ -4379,6 +4422,7 @@ function _qpDragMove(e) {
     _qpDragBegin(st);
   }
   if (e.cancelable) e.preventDefault();
+  st.lastY = e.clientY;
   var rowsEl = st.row.parentNode;
   var top = e.clientY - st.offY;
   // .qp-rows 是 display:contents，自己的 getBoundingClientRect() 是空矩形，
@@ -4396,6 +4440,7 @@ function _qpDragFinish(commit) {
   var st = _qpDrag;
   if (!st) return;
   _qpDrag = null;
+  _qpDragStopAutoScroll();
   try { st.row.releasePointerCapture(st.pid); } catch (_) {}
   if (!st.started) return;
 

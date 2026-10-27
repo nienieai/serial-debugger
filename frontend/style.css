@@ -1249,11 +1249,11 @@ button.qp-icon-btn:active { background: var(--border) !important; }
   border-radius: 4px;
 }
 .qp-rows.is-dragging .qp-divider { display: none; }
+/* 落点占位块：只占位置、不画出来（和标签栏一致）。落点靠其余行让位提示。 */
 .qp-placeholder {
   grid-column: 1 / -1;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg3);
+  background: transparent;
+  border: 0;
 }
 body.is-qp-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
 
