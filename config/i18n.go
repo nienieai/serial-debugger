@@ -4,12 +4,19 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
 
-//go:embed i18n/*.json
+// 语言包：<资源层>/i18n/<lang>.json，随二进制嵌入；磁盘上的同名文件覆盖嵌入
+//（内置 resources-system 优先于外置 resources，见 resources.go）。
+//
+//go:embed resources/i18n/*.json
 var i18nFS embed.FS
+
+const i18nEmbedRoot = "resources/i18n"
 
 var (
 	i18nData = make(map[string]map[string]string) // lang -> key -> text
@@ -17,7 +24,7 @@ var (
 )
 
 func init() {
-	entries, err := i18nFS.ReadDir("i18n")
+	entries, err := i18nFS.ReadDir(i18nEmbedRoot)
 	if err != nil {
 		panic("i18n: cannot read embedded translations: " + err.Error())
 	}
@@ -31,7 +38,7 @@ func init() {
 			continue
 		}
 		lang := name[:len(name)-5]
-		data, err := i18nFS.ReadFile("i18n/" + name)
+		data, err := i18nFS.ReadFile(i18nEmbedRoot + "/" + name)
 		if err != nil {
 			continue
 		}
@@ -40,6 +47,32 @@ func init() {
 			continue
 		}
 		i18nData[lang] = m
+	}
+	// 磁盘语言包按资源层优先级覆盖同名语言：外置先、内置后（内置优先），最后回退嵌入。
+	// 方便直接改文案（改完重启 exe 生效；前端切语言时读的是同一批目录，所以界面
+	// 文案不用重启）。
+	dirs := resourceDirs() // 高优先级在前
+	for i := len(dirs) - 1; i >= 0; i-- {
+		dir := filepath.Join(dirs[i], "i18n")
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || len(name) < 6 || name[len(name)-5:] != ".json" {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				continue
+			}
+			m := map[string]string{}
+			if json.Unmarshal(data, &m) != nil {
+				continue
+			}
+			i18nData[strings.TrimSuffix(name, ".json")] = m
+		}
 	}
 }
 

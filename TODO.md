@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.1）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.2）的已完成记录；
 > 更早版本完成情况见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 待实现
@@ -117,7 +117,34 @@
 | 81 | 端口下拉里「已占用」的黄色高亮没了 | 已修复 | **2026-10-26 修复**：`_markOccupied(sel, owner)` 改为收**元素**，`updatePortOccupied()` 按 `state.tabs` 逐页 `root.querySelector('#portSelect' / '#portSelectA' / '#portSelectB')` 标注——不再用 `document.getElementById`（多标签时只命中文档里第一份，除第一页外其余页面的 `<option>` 永远拿不到 `port-occupied`，样式在 `style.css:338`，自定义下拉的 `.cs-option.port-occupied` 在 `:521`）。`owner` 传入该页所属标签页，「前向模式下自己另一端算占用」按本页判定（旧实现用 `getActiveTab()` 并跳过 `state.activeTab`，只有活动页恰好是第一页时才碰巧对）。新增 `_syncOccupiedDropdown(sel)` 把占用类按 option 值对齐同步到已渲染的 `.cs-option` 副本（含 portal 到 body 的打开态），不必重开下拉才看得见；且只在 `className` 真变化时才写，顺带解决 #79 ① 的「无条件写」那一半。夹具 `_audit/port_occupied_pages.py` 19 项断言（多页标注 / 自排除 / 跨页占用 / 前向 A·B 各自另一端 / 副本同步 / 空闲端口不变色 / 二次调用 0 次写）；变异验证：`app.js` 退回旧实现后 9 项立即变红。**保留语义**：判定仍依赖 `t.portOpen && t.syncedParams`，未打开的「已声明」端口不标黄 |
 | 82 | 没开串口的页面上，右下角仍挂着上一次会话的统计与速率 | 已修复 | **2026-10-26 修复**（用户截图：转发页「端口转发空闲」却显示 `P1:0 P2:0 P1:0/s (0%) P2:389/s (3%)`）。两条独立原因：① `_updateStatsVisible()` 只判「守护进程在线 + 是会话页」，不看 `portOpen`，空闲会话也照显示；② 速率只写进 DOM、**从不按会话缓存也从不清理**，`closePort()` 里还先 `refreshStatsDOM()` 再置 `portOpen=false`，于是数字停在断开那一刻、速率停在最后一次 `stats-rate` 事件上（切标签更是直接沿用上一个会话的速率）。修法：**统计区不隐藏**（用户确认：没开串口也要显示），改为 `refreshStatsDOM()` 在 `!tab.portOpen` 时直接 `resetStats()` 显示 0（不读缓存、也不去拉 daemon）；`reset()` 改走同一个 `fmtSpeed(0,0)`（原来硬编码 `'0 B/s(0%)'`，与正常路径的 `'0/s (0%)'` 两种写法）；速率按会话存进 `state.statsBase[sid].txRate/rxRate`，`refreshStatsDOM()` 连字节带速率一起按会话回放（没收到过就是 0）；`closePort()` 删掉该会话缓存、改完状态后再 `refreshStatsDOM()`；**先 `setStatsMode()` 再写值**（原来反着来，切到转发页时 `P1/P2` 会先显示单端口的数字，要等下一次事件才纠正）；开串口后主动刷新。夹具 `_audit/statusbar_stats_reset.py` 13 项（空闲仍显示但为 0、写进去的残留值会被刷掉、连上可见、字节/速率按会话、切标签不串台、切回恢复、closePort 后仍显示且归零、缓存已删）；变异验证：不回放速率 / 先写值再切模式 各自变红。**另**：`refreshStatsDOM` 在 `!portOpen` 的提前返回里也要先 `setStatsMode()`，否则空闲转发页的统计箭头会停在上一个标签页的 TX/RX 上（同一处修复，夹具里加了一条断言） |
 | 83 | 空闲的转发标签显示为绿色（看起来像正在转发） | 已修复 | **2026-10-26 修复**（用户截图：标签栏里「端口转发空闲」是绿色，而同样空闲的「单端口空闲」是灰色斜体）。`.tab-forward { color: var(--green) !important }` 只要 `mode === 'forward'` 就加，`!important` 连 `.tab-idle` 的灰色一起盖掉，于是「空闲」和「正在转发」看起来一样。改为只在 `mode === 'forward' && portOpen` 时加 `.tab-forward`，空闲时退回 `.tab-idle`（灰色斜体），真正转发时才绿 + 加粗。夹具 `_audit/tab_forward_color.py` 9 项（空闲活动/非活动、非活动与单端口页同色、斜体与字重、连上变绿加粗、断开退回）；变异验证：去掉 `portOpen` 判定后 4 项变红 |
-| 84 | 右上角主题按钮没有图标 | 已修复 | **2026-10-26 修复**（用户反馈「右上角主题按键没图标」）。两条叠加的原因：① index.html 的 data-icon="theme_palette" 这个键**两头都没有**——Go 内嵌的 config/icons/system/*.svg 里没有，icons.js 的静态兜底表里也没有，icon() 直接返回空串；② 就算键存在也看不见：.c-theme-btn 只有 width: 28px 而没有清 padding，全局 button 的 5px 14px 内边距把内容区压成 **0px**，里面的 <svg> 作为 flex 子项被 lex-shrink 挤成 0 宽（实测 getBoundingClientRect().width === 0）。修法：兜底表补 	heme_palette（同时补一份 SVG 到 config/icons/system/）；_initIcons() 由「整体替换」改为**与兜底表合并**（原来 Object.assign({}, data)，Go 少哪个键那个图标就会被清空，切标签时的 _populateIcons 还会再刷一遍）；.c-theme-btn 补 padding: 0，并给 .c-theme-btn > svg 钉住 18×18 + lex-shrink: 0（_populateIcons 塞的是裸 svg，原来那条规则只认 .theme-icon 类）。夹具 _audit/theme_icon.py 10 项（有 svg、属性 18×18、**渲染尺寸** 18×18、按钮内容区容得下图标、Go 只回少量图标时不丢、全文档 [data-icon] 都有图标）；变异验证：键名写错 / 改回整体替换 /padding 不清零，3 组各自变红 |
+| 84 | 右上角主题按钮没有图标 | 已修复 | **2026-10-26 修复**（用户反馈「右上角主题按键没图标」）。两条叠加的原因：① `index.html` 的 `data-icon="theme_palette"` 这个键**两头都没有** —— Go 内嵌的 `config/icons/system/*.svg` 里没有，`icons.js` 的静态兜底表里也没有，`icon()` 直接返回空串；② 就算键存在也看不见：`.c-theme-btn` 只有 `width: 28px` 而没有清 `padding`，全局 button 的 `5px 14px` 内边距把内容区压成 **0px**，里面的 `<svg>` 作为 flex 子项被 `flex-shrink` 挤成 0 宽（实测 `getBoundingClientRect().width === 0`）。修法：兜底表补 `theme_palette`（同时补一份 SVG 到 `config/icons/system/`）；`_initIcons()` 由「整体替换」改为**与兜底表合并**（原来 `Object.assign({}, data)`，Go 少哪个键那个图标就会被清空，切标签时的 `_populateIcons` 还会再刷一遍）；`.c-theme-btn` 补 `padding: 0`，并给 `.c-theme-btn > svg` 钉住 18×18 + `flex-shrink: 0`（`_populateIcons` 塞的是裸 svg，原来那条规则只认 `.theme-icon` 类）。夹具 `_audit/theme_icon.py` 10 项（有 svg、属性 18×18、**渲染尺寸** 18×18、按钮内容区容得下图标、Go 只回少量图标时不丢、全文档 `[data-icon]` 都有图标）；变异验证：键名写错 / 改回整体替换 / padding 不清零，3 组各自变红 |
+| 85 | 新建会话页「很小气」，且多语言键不完整 | 已修复 | **2026-10-26 重做**（用户反馈「新建会话窗口重新设计，当前感觉很小气，然后还有多语言 key 不完整」）。**版式**：原来是 208×约 120 的小方块（标题 18px、正文 12px、只有一行说明 + 一条示意线）。现在卡片 380×315：44px 图标块、18px 名称、一句话说明、**三条特性**、连接示意（两端点 + 断开式中线的 ↔）、底部「开始 →」；外层 26px 标题 + 14px 副标题 + 30px 间距，网格 `repeat(auto-fit, minmax(280px, 1fr))`（窄窗自动单列，不新增断点）。新增 `swap` 图标（`icons.js` 兜底 + `config/icons/system/swap.svg`）。**多语言**：① `_rebuildTabLabel(tab)` 首行是 `if (!tab.syncedParams) return;` —— 选择页/设置页没有 `syncedParams`，标签文字因此停在建页时的语言（切 English 后标签仍是「新建会话」），现在按 `type` 处理 `new` / `settings`；② 前端 `t()` 引用了但 **9 个语言文件里都不存在**的 11 个键，一直靠中文默认值兜底：`settings.tab_size`/`eol_sequence`/`bubble_font`/`font_family`/`font_size`/`color_head_italic`/`color_bold_tip`/`color_italic_tip`、`status.daemon_offline`/`daemon_offline_hint`/`cursor_fmt`；连同新增的 7 个 `newtab.*` 键一起补齐，9 语言 **392 → 410** 键，parity 全等。RTL 下「开始 →」箭头镜像（`scaleX(-1)`）。夹具 `_audit/chooser_redesign_i18n.py` 35 项（版式、图标、三条特性、尺寸、9 语言逐项无回落、标签页标题跟随、`dir=rtl`、箭头镜像、11 个旧缺键有英文译文）；`mode_picker_smoke.py` 的旧版式断言同步更新；变异验证：卡片名称不挂 i18n / 标签不跟随语言 / 卡片退回旧尺寸，3 组各自变红 |
+| 86 | 调色板弹窗内部文案写死中文，8 种非中文语言下仍是中文 | 已修复 | **2026-10-26 修复**（起因：用户截图指出「调色板标题没有背景俩字」）。独立项目 `调色板` 先出 0.2.5（41 个 key 的 i18n 注入：`i18n` 属性 / `el.i18n` / `setI18n()` / 全局表，`title` 属性仍最优先），再出 0.2.6（长语言字号自适应 `_fitTexts()`，`--cp-fit-min-size` / `--cp-fit-ratio` 可调，标题缩到下限后走省略号兜底）。本项目：① 组件连升 0.2.3 → 0.2.4 → 0.2.6（均为原样副本、哈希一致）；② `_colorPickerI18n()` 把 41 个 key 映射到 `colorpicker.*` 并写进 `i18n` 属性，9 语言各补 41 条，键数 410 → 453、parity 全等；③ 标题改三段式「设置项名 · 背景/字体 · 深色/浅色」，为此补 2 个列名短词键 `settings.color_bg_short` / `color_fg_short`；④ 弹窗宽度用内联样式覆盖成 360px（组件 `:host` 写死 320，三段式在 en/fr/ja/ru 下会被压到 15~17px 或用省略号截断；360px 下 9 语言都保持 19px 单行，最紧 5.9px 日语）。夹具 `_audit/colorpicker_title.py` 75 项（9 语言标题 + 组件内 8 处文案 + 字号/截断/宽度）、`_audit/colorpicker_component.py` 22 项（组件行为 + 0.2.3 实时对照） |
+| 87 | 设置页标题「设置」越用越黑，像叠了重影 | 已修复 | **2026-10-26 修复**（用户截图：设置页左上角「设置」二字带明显黑色重影，「改一次字体阴影就黑一次」）。根因不在样式（`computed textShadow === 'none'`，全仓库也没有 `text-shadow`）：`refreshSettingsPage()` 找的是 `.settings-layout`，却拿 `buildSettingsPage()`（返回整个 `.settings-wrapper`）去 `replaceChild`，于是每刷新一次就**多套一层 wrapper、多复制一个 `position:absolute` 的 `.settings-header`**；header 叠在同一坐标 (16,62)，标题文字一层层压上去就成了"黑重影"。触发点两处：切语言（`i18n.js:28`）、颜色区「重置」按钮（`settingspage.js:1023`）—— 改字体/字号本身不重建，只是用户往往在改完设置后切语言看效果。实测：切 3 次语言后 wrapper/header/title 各 4 个，标题区域平均灰度 **211.64 → 174.40**（暗像素占比 18.68% → 30.77%）；人为克隆 3 份 header 得到同样的 174.40，确认是叠层而非阴影。修法：替换目标改成 `layout.closest('.settings-wrapper')`，并向上找到**最外层** wrapper（已叠出多层的窗口刷新一次即自愈回 1 层），nav/panel 的查找改在新 wrapper 内做。夹具 `_audit/settings_refresh_no_dup.py` 12 项（改字体/改字号/切 3 次语言/颜色重置/激活面板保留/自愈）；变异：替换目标退回 layout → 5 项红、wrapper 一路涨到 7 |
+| 88 | 设置页「数据高亮」的预览不像显示框 | 已修复 | **2026-10-27 改**（用户请求：「能让设置中高亮的预览窗口用类似显示框的渲染方式吗」）。旧预览是 `innerHTML` 拼串：字号写死 10px/11px、颜色逐 span 内联、控制字符自己拼 `.ctrl-mark/.ctrl-real`、转义字节用带内联色的裸 span，跟主显示区两套实现 —— 所以预览里的行距、字重、`←↵` 标记、`/FF`、Hex 行都跟真实显示框对不上。改法：① `makeDataRow()` 增加可选第 6 参数 `{ displayMode }`（默认行为不变），让预览能在同一栏里同时画「文本」和「Hex」两种渲染而不去动全局 `state.displayMode`；② `_renderColorPreview()` 改为每栏调 4 次 `makeDataRow`（Rx 文本 / Rx Hex / Tx 文本 / Tx Hex，转发用 P1/P2），segments 手工构造，转义/控制字符全部走 `renderSegments()` 的真实路径；③ 深浅两栏各用 `_applyPreviewVars(box, mode)` 把该主题的 `--dc-*` 内联到容器（`_applyDisplayColors` 只写 `:root[data-theme=…]`，两套配色要同屏并排只能这样）；④ `_applyDisplayStyle()` 的规则选择器加上 `.c-color-preview`，预览字号/字体/tab 宽度跟 `state.displayFontSize` / `displayFontFamily`。**顺带发现**：旧预览硬编码的「~10B」是错的，转发示例实际是 9 字节，真实渲染算出来是 `~9B`。夹具 `_audit/settings_color_preview.py` 21 项；变异：把 `.c-color-preview` 从字号规则里去掉 → 3 项红，`makeDataRow` 忽略 `opts` → 2 项红 |
+
+## v0.8.2 已完成
+
+| 需求 / 问题 | 说明 |
+|---|---|
+| 新建会话页重设计（#85） | 卡片从 208px 小方块改成 380×315：图标 + 名称 + 说明 + 三条特性 + 连接示意 + 「开始 →」；标题/副标题分层，窄窗自动单列 |
+| 多语言补键（#85） | 新增 7 个 `newtab.*` 键并补齐 11 个「前端引用了但语言文件里没有」的键；9 语言 392 → 410，parity 全等；选择页与设置页的标签文字跟随语言 |
+| 图标库 | 新增 `swap` 图标（Go 内嵌 + JS 兜底），供端口转发卡片使用 |
+| 调色板升级 0.2.3 → 0.2.6 | 同步独立项目（原样副本，哈希一致），两版连着上：**0.2.4** 修「取色按钮是个 emoji `💧`」（0.2.3 有 Font Awesome 就用 FA 图标，没有就退化成彩色 emoji，本项目没有 FA）、「未设 `theme` 时弹窗背景全透明 `rgba(0,0,0,0)`」、滑块/输入不派发 `color-change`、`save` 的 `index` 错位、触摸屏拖不动；**0.2.6** 带来 41 个 key 的 i18n 与长语言字号自适应。调用面仍是 `theme`/`transparency`/`color` + `open()` + `apply` |
+| 调色板标题 + 内部文案 i18n（#86） | 标题「设置项名 · 背景/字体 · 深色/浅色」，列名用短词，弹窗内联加宽 360px；组件 41 个 key 全部接上 9 语言（键数 410 → 453）。夹具 `colorpicker_title.py` 75 项 + `colorpicker_component.py` 22 项 |
+| 设置页标题叠影（#87） | `refreshSettingsPage()` 改成替换整个 `.settings-wrapper`（原来只换内层 `.settings-layout`，导致每刷新一次多套一层 wrapper + 一个绝对定位 header 叠在同一坐标）；另加"向上找最外层 wrapper"的自愈，已叠出多层的窗口刷新一次即恢复。夹具 `settings_refresh_no_dup.py` 12 项 |
+| 数据高亮预览改用显示框渲染（#88） | 预览不再 `innerHTML` 拼串，改调 `makeDataRow(..., {displayMode})` + `renderSegments()`，结构/样式/字号字体与主显示区同源；深浅两栏各自内联 `--dc-*`。顺带修正旧预览硬编码的 `~10B`（实际 9 字节）。夹具 `settings_color_preview.py` 21 项 |
+| 资源统一到 `resources/` | 主题改成「一个主题一个文件夹」（`theme.json` + 自带素材），图标包与语言包同根；旧 `builtin/`、`themes/colors/`、`themes/icons/` 不再读取 |
+| 资源分内置 / 外置两层 | `resources-system\`（内置，动态版）与 `resources\`（外置，成品版也认），查找顺序 内置 → 外置 → 内嵌，逐个文件回退；成品版顺序自动退化成 外置 → 内嵌。列表里内置资源强制在前 |
+| 主题支持图片 | 全页背景 `--app-bg-image`、四条栏背景与遮罩、主题卡缩略图 `--thumb-image`；外置素材由 Go 读盘内联成 data URI（asset server 出不了 frontend 目录）。条栏用 `background-attachment: fixed` 与全页背景拼成同一张照片 |
+| 设置页外观卡 | 「整体外观」改名「深浅模式」，三张迷你窗口预览卡；颜色主题卡改色样样式（底色 + `Aa` + 强调色胶囊），支持深浅的左右各画一半 |
+| 数据高亮调整 | 控件右对齐、去掉行选中高亮、行距与组间距加大、行间淡分割线；双列门槛 1100→1300，表头改 `B`/`I` 与月亮/太阳图标，长语言不再压字 |
+| 新建会话页（第二版） | #85 的 380×315 大卡改成紧凑网格卡（绿点特性 + 整宽「开始」），卡片 315→208px，`auto-fit` 加模式自动换行；深色下 CTA 文字色取 `--input-bg` 保证对比 |
+| 标签栏拖动重做 | 竖线指示器换成实时补位：原标签压暗在栏内滑动、占位块不可见只占位、FLIP 让位动画；pointer 事件替代 HTML5 拖放（后者隐藏源元素会被取消拖动），`setPointerCapture` 保证拖出窗口也能松手；「+」可被推到窗口边界；拖到左右边缘自动滚动 |
+| 多字符串拖动重做 | 与标签栏同一套：压暗行、不可见占位块、FLIP、上下边缘自动滚动、推挤「+ 添加」 |
+| 菜单下拉层级 | 下拉被标签栏盖掉上半截 —— `.header` 自成层叠上下文（z-index 6） |
+| 文言文语言包 | 补齐到 461 键（旧包 344），放外置层 `resources\i18n\lzh.json` |
+| 旧路径文案 | 「创建示例 / 打开文件夹」与 9 语言提示从 `themes\colors\`、`\i18n\` 改到 `resources\{themes,icons,i18n}` |
 
 ## v0.8.1 已完成
 
@@ -141,7 +168,7 @@
 | 标签栏滚动提示（#26） | 标签栏左右浮动箭头（复用发送区 `.send-scroll-arrow`，点击穿透、不占布局），溢出与滚动位置变化时各自显隐 |
 | 状态栏统计（#82） | 始终显示；端口没连上时显示 0（不显示上一次会话的数字）；速率按会话缓存并随标签切换回放；先定模式再写值，避免 P1/P2 先闪一次单端口数字 |
 | 转发标签着色（#83） | `.tab-forward` 只在真的在转发时加：空闲转发页和单端口空闲页一样是灰色斜体，连上才变绿加粗 |
-| 主题按钮图标（#84） | 补 	heme_palette 图标；图标表改为「兜底 + Go 合并」；按钮清 padding、> svg 钉死 18px 且禁止收缩 |
+| 主题按钮图标（#84） | 补 `theme_palette` 图标；图标表改为「兜底 + Go 合并」；按钮清 `padding`、`> svg` 钉死 18px 且禁止收缩 |
 
 ## v0.8.0 已完成
 

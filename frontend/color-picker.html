@@ -8,6 +8,35 @@
             box-sizing: border-box;
         }
 
+        /* 兜底变量：未指定 theme/transparency 时生效
+           （[theme]/[transparency] 规则特异性更高，会正常覆盖）。
+           修复：此前缺 theme 会让 --picker-bg 等全部未定义 -> 背景全透明。 */
+        :host {
+            --input-bg: rgba(0, 0, 0, 0.5);
+            --input-border: rgb(160, 160, 160);
+            --input-text: rgb(240, 240, 240);
+            --input-hover-border: rgb(255, 255, 255);
+            --input-hover-shadow:
+                0 0 15px 3px rgba(255, 255, 255, 0.4),
+                0 0 5px 1px rgba(255, 255, 255, 0.6),
+                inset 0 1px 2px rgba(255, 255, 255, 0.2);
+            --input-focus-border: #3498db;
+            --input-focus-shadow:
+                0 0 20px 6px rgba(52, 152, 219, 0.3),
+                0 0 8px 2px rgba(52, 152, 219, 0.7),
+                inset 0 1px 3px rgba(255, 255, 255, 0.3);
+            --header-border: rgba(255, 255, 255, 0.2);
+            --title-color: #f5f5f5;
+            --section-title-color: #d8d8d8;
+            --action-border: rgba(255, 255, 255, 0.15);
+            --slider-track-bg: rgba(255, 255, 255, 0.15);
+            --swatch-bg-color: #000;
+            --picker-bg: #1c1c1c;
+            --picker-border: rgba(255, 255, 255, 0.1);
+            --header-bg: #252525;
+            --picker-backdrop: none;
+        }
+
         :host {
             position: fixed;
             width: 320px;
@@ -23,7 +52,6 @@
             display: block;
         }
 
-        /* ========== dark 主题 ========== */
         :host([theme="dark"]) {
             --input-bg: rgba(0, 0, 0, 0.5);
             --input-border: rgb(160, 160, 160);
@@ -46,7 +74,6 @@
             --swatch-bg-color: #000;
         }
 
-        /* ========== light 主题 ========== */
         :host([theme="light"]) {
             --input-bg: rgba(255, 255, 255, 0.5);
             --input-border: rgb(160, 160, 160);
@@ -69,7 +96,6 @@
             --swatch-bg-color: #fff;
         }
 
-        /* ========== 透明度模式 — 对齐蜘蛛手风格 ========== */
         :host([transparency="solid"][theme="dark"]) {
             --picker-bg: #1c1c1c;
             --picker-border: rgba(255, 255, 255, 0.1);
@@ -120,7 +146,6 @@
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
         }
 
-        /* ========== 标题栏 ========== */
         .popup-header {
             display: flex;
             justify-content: space-between;
@@ -139,6 +164,10 @@
             font-size: 19px;
             color: var(--title-color);
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .close-btn {
@@ -175,7 +204,6 @@
             opacity: 1;
         }
 
-        /* ========== 当前颜色预览 ========== */
         .current-color-section {
             display: flex;
             align-items: center;
@@ -232,7 +260,6 @@
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
         }
 
-        /* ========== 输入框（统一风格仿照 0.2.0-2）========== */
         .color-input,
         .rgba-input {
             background: var(--input-bg);
@@ -254,7 +281,6 @@
             box-shadow: var(--input-focus-shadow);
         }
 
-        /* ========== HEX 输入 ========== */
         .hex-row {
             display: flex;
             gap: 6px;
@@ -284,6 +310,15 @@
             transition: all 0.2s ease;
             flex-shrink: 0;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+
+        /* 吸管图标：内置默认 SVG 与调用方注入的 slot SVG 统一尺寸与颜色 */
+        .eyedropper-btn .eyedropper-icon,
+        .eyedropper-btn ::slotted(svg) {
+            width: 24px;
+            height: 24px;
+            display: block;
+            color: inherit;
         }
 
         :host([theme="dark"]) .eyedropper-btn {
@@ -319,7 +354,6 @@
             transition: background 0.05s, box-shadow 0.05s, transform 0.05s;
         }
 
-        /* ========== RGBA 滑块 + 进度条 ========== */
         .rgba-sliders {
             margin: 0 12px 8px;
         }
@@ -479,7 +513,6 @@
             margin: 0;
         }
 
-        /* ========== 颜色网格 ========== */
         .basic-colors-section,
         .saved-colors-section {
             margin: 0 12px 8px;
@@ -572,7 +605,6 @@
             box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3), 0 4px 12px rgba(0, 0, 0, 0.3);
         }
 
-        /* ========== 操作按钮 ========== */
         .action-buttons {
             padding: 10px 12px 12px;
             display: flex;
@@ -583,15 +615,19 @@
 
         .color-btn {
             flex: 1;
+            min-width: 0;
             padding: 10px;
             border: none;
             border-radius: 10px;
             font-size: 18px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s ease;
+            /* 不含 font-size：字号自适应需要瞬时生效，否则会读到过渡中间值 */
+            transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
             color: white;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+            overflow-wrap: break-word;
+            line-height: 1.2;
         }
 
         .btn-save {
@@ -630,8 +666,8 @@
     </style>
 
     <div class="popup-header" id="popupHeader">
-        <div class="popup-title" id="popupTitle">选择颜色</div>
-        <button class="close-btn" id="closePopup" title="关闭">
+        <div class="popup-title" id="popupTitle"></div>
+        <button class="close-btn" id="closePopup">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                 stroke-linecap="round" stroke-linejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -646,10 +682,14 @@
         </div>
         <div class="color-values">
             <div class="color-input-group">
-                <label class="color-input-label" for="hexInput">HEX 颜色值</label>
+                <label class="color-input-label" id="hexLabel" for="hexInput"></label>
                 <div class="hex-row">
                     <input type="text" id="hexInput" class="color-input" value="#3498db" maxlength="9">
-                    <button class="eyedropper-btn" id="eyedropperBtn" title="从屏幕取色"><span class="eyedropper-icon">💧</span></button>
+                    <button class="eyedropper-btn" id="eyedropperBtn">
+                        <!-- 默认图标由 JS 注入（见 _ensureDefaultIcon），以减小模板体积；
+                             调用方可用 <svg slot="eyedropper-icon"> 覆盖。 -->
+                        <slot name="eyedropper-icon"></slot>
+                    </button>
                 </div>
             </div>
         </div>
@@ -695,17 +735,17 @@
     </div>
 
     <div class="basic-colors-section">
-        <div class="section-title">基础颜色</div>
+        <div class="section-title" id="basicSectionTitle"></div>
         <div class="basic-colors-grid" id="basicColorsGrid"></div>
     </div>
 
     <div class="saved-colors-section">
-        <div class="section-title">自定义颜色 (点击选中后保存)</div>
+        <div class="section-title" id="savedSectionTitle"></div>
         <div class="saved-colors-grid" id="savedColorsGrid"></div>
     </div>
 
     <div class="action-buttons">
-        <button id="saveColorBtn" class="color-btn btn-save">保存颜色</button>
-        <button id="applyColorBtn" class="color-btn btn-apply">应用颜色</button>
+        <button id="saveColorBtn" class="color-btn btn-save"></button>
+        <button id="applyColorBtn" class="color-btn btn-apply"></button>
     </div>
 </template>

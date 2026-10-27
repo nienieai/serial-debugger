@@ -381,7 +381,7 @@ function _applyDisplayStyle() {
     el.id = 'display-font-style';
     document.head.appendChild(el);
   }
-  el.textContent = '.display-content,#sendInput,#sendMirror{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + state.tabSize + ';}';
+  el.textContent = '.display-content,#sendInput,#sendMirror,.c-color-preview{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + state.tabSize + ';}';
   if (_statusBar) _statusBar.updateTabSize({tabSize: state.tabSize});
 }
 
@@ -478,16 +478,25 @@ _colorSchemeQuery.addEventListener('change', function() {
   if (state.colorThemeMode === 'auto') applyColorTheme();
 });
 
+// 主题变量只写行内 style，缺的键保持不写 —— 于是自动落回 CSS 里的默认值。
+// 这里记录"实际写过哪些键"，切换主题时按记录清，不再维护一份硬编码白名单
+// （新增变量忘了加进白名单就会残留到下一个主题）。
+var _themeAppliedKeys = [];
+
 function clearThemeVars() {
   var root = document.documentElement;
-  var known = ['--accent','--green','--red','--yellow','--fg','--bg','--bg2','--bg3','--border','--input-bg','--hover','--placeholder','--scrollbar-thumb',
-    '--fwd-p1','--fwd-p2','--fwd-p1-hover','--fwd-p2-hover','--hex-escape','--badge-cli','--status-offline','--tab-close'];
-  for (var i = 0; i < known.length; i++) root.style.removeProperty(known[i]);
+  for (var i = 0; i < _themeAppliedKeys.length; i++) root.style.removeProperty(_themeAppliedKeys[i]);
+  _themeAppliedKeys = [];
 }
 
 function applyThemeVars(vars) {
   var root = document.documentElement;
-  for (var k in vars) root.style.setProperty(k, vars[k]);
+  for (var k in vars) {
+    var v = vars[k];
+    if (v === null || v === undefined || v === '') continue;
+    root.style.setProperty(k, String(v));
+    if (_themeAppliedKeys.indexOf(k) < 0) _themeAppliedKeys.push(k);
+  }
 }
 
 // Extract display name from raw _name (string or {zh:"",en:"",_:""})
@@ -618,10 +627,25 @@ var _iconThemesAll = [];
 
 async function initIconThemes() {
   try {
+    // 内置图标集合由 icons.js 启动时异步拉取；先等它，否则首次 applyIconTheme
+    // 叠上去的底是空的，内置图标会整批消失。
+    try { await _iconsReady; } catch (e) {}
     var external = await window.go.main.App.ListExternalIconThemes();
     var all = [];
-    // built-in default is always available — i18n key for dynamic translation
-    all.push({ id: '', name: '', _i18nKey: 'theme.icons_default', builtin: true });
+    // 内置图标包：config/icons/<pack>/ 随二进制嵌入，system 包对外仍叫「内置默认」
+    var builtinPacks = [];
+    try { builtinPacks = await window.go.main.App.ListBuiltinIconThemes() || []; } catch (e) { builtinPacks = []; }
+    if (builtinPacks.length) {
+      for (var b = 0; b < builtinPacks.length; b++) {
+        if (builtinPacks[b].id === 'system') {
+          all.push({ id: '', pack: 'system', name: builtinPacks[b].name, _i18nKey: 'theme.icons_default', builtin: true });
+        } else {
+          all.push({ id: builtinPacks[b].id, pack: builtinPacks[b].id, name: builtinPacks[b].name, builtin: true });
+        }
+      }
+    } else {
+      all.push({ id: '', name: '', _i18nKey: 'theme.icons_default', builtin: true });
+    }
     if (external) {
       for (var j = 0; j < external.length; j++) {
         all.push({ id: external[j].id, name: external[j].name, builtin: false });
@@ -631,7 +655,11 @@ async function initIconThemes() {
     state.iconThemes = all;
     var saved = state.iconThemeId;
     if (saved) {
-      var ext = await window.go.main.App.GetExternalIconTheme(saved);
+      var _isBuiltin = false;
+      for (var bi = 0; bi < all.length; bi++) { if (all[bi].id === saved && all[bi].builtin) { _isBuiltin = true; break; } }
+      var ext = _isBuiltin
+        ? await window.go.main.App.GetBuiltinIconTheme(saved)
+        : await window.go.main.App.GetExternalIconTheme(saved);
       if (ext && ext.icons) {
         applyIconTheme(ext);
         state.iconThemeId = saved;
@@ -652,7 +680,13 @@ function setIconTheme(id) {
     _populateIcons();
     return;
   }
-  window.go.main.App.GetExternalIconTheme(id).then(function(ext) {
+  var isBuiltin = false;
+  var list = state.iconThemes || [];
+  for (var i = 0; i < list.length; i++) { if (list[i].id === id && list[i].builtin) { isBuiltin = true; break; } }
+  var req = isBuiltin
+    ? window.go.main.App.GetBuiltinIconTheme(id)
+    : window.go.main.App.GetExternalIconTheme(id);
+  req.then(function(ext) {
     if (ext && ext.icons) {
       applyIconTheme(ext);
       state.iconThemeId = id;
@@ -943,6 +977,7 @@ function applyI18n() {
   // Port selects placeholder
   _refreshPortPlaceholders();
   // Tabs
+  _relabelIdleTabs();
   renderTabs();
   // Stats
   refreshStatsDOM();
@@ -1382,71 +1417,224 @@ document.addEventListener('copy', function(e) {
   }
 });
 
-// ---- Tab drag (stable handlers, bound once) ----
-var _tabDragSide = 'left';
+// ---- Tab drag：pointer 事件自实现（拖动时实时补位）----
+//
+// 为什么不用 HTML5 拖放：dragstart 里把源元素改成 position:absolute / display:none，
+// 浏览器会判定「拖动源消失」直接把这次拖动取消掉 —— 表现就是按住标签拖不动。
+// pointer 事件全程可控：
+//   1. 按住标签、移动超过 4px 才算拖动，否则照常点击切换
+//   2. 拖动开始：**原标签自己**改成 position:fixed + 压暗，在标签栏这一行里左右滑。
+//      不克隆、不多出一个方块，样子天然就是原样；原位插一个等宽占位块，占位块只
+//      占空间不画出来，靠其余标签让位来提示落点（也会把「+」一起推着走）。
+//   3. setPointerCapture 咬住这个指针：拖到标签栏外甚至窗口外，move/up 仍会派发
+//      回来，不会卡在「拖出去就松不开」的状态
+//   4. 松手按占位块在 DOM 里的位置结算 state.tabs，再 renderTabs()；Esc 取消
+var _tabDrag = null;   // { btn, idx, started, ph, pid, ... }
 
-function _tabHideIndicator() {
-  var ind = document.getElementById('tabDropIndicator');
-  if (ind) ind.classList.remove('show');
-  _tabDragSide = 'left';
+function _tabDragDown(e) {
+  if (e.button !== 0) return;
+  var btn = e.currentTarget;
+  if (e.target && e.target.closest && e.target.closest('.close-tab')) return;
+  var idx = parseInt(btn.dataset.tabIdx, 10);
+  if (isNaN(idx)) return;
+  var r = btn.getBoundingClientRect();
+  _tabDrag = {
+    btn: btn, idx: idx, started: false, pid: e.pointerId,
+    startX: e.clientX, startY: e.clientY,
+    offX: e.clientX - r.left,
+    w: r.width, h: r.height, ph: null,
+  };
+  try { btn.setPointerCapture(e.pointerId); } catch (_) {}
 }
 
-function _tabDragOver(e) {
-  e.preventDefault();
-  var bar = document.getElementById('tabsBar');
+function _tabDragStart(st) {
+  st.started = true;
+  var r = st.btn.getBoundingClientRect();
+  var ph = document.createElement('div');
+  ph.className = 'tab-placeholder';
+  ph.style.width = st.w + 'px';
+  st.btn.parentNode.insertBefore(ph, st.btn);
+  st.ph = ph;
+
+  // 原标签自己变成「在标签栏这一行里左右滑的压暗标签」
+  st.btn.classList.add('tab-dragging');
+  st.btn.style.width = st.w + 'px';
+  st.btn.style.height = st.h + 'px';
+  st.btn.style.left = r.left + 'px';
+  st.btn.style.top = r.top + 'px';
+  document.body.classList.add('is-tab-dragging');
+
+  // 「+」的基础位置记下来：拖动时它会被标签顶着往右让，最多让到窗口边界
+  var addBtn = document.getElementById('tabAddBtn');
+  if (addBtn) {
+    var ar = addBtn.getBoundingClientRect();
+    st.addBtn = addBtn;
+    st.addLeft = ar.left;
+    st.addW = ar.width;
+  }
+
+  st.lastX = st.startX;
+  _tabDragStartAutoScroll();
+}
+
+// 拖到标签栏左右边缘时自动滚动：标签多到一屏放不下时，靠这个才能把它拖到
+// 看得见区域以外的位置。越靠边滚得越快，松手/取消就停。
+var _tabDragRaf = null;
+
+function _tabDragStartAutoScroll() {
+  if (_tabDragRaf) return;
+  _tabDragRaf = requestAnimationFrame(_tabDragAutoScrollStep);
+}
+
+function _tabDragStopAutoScroll() {
+  if (_tabDragRaf) {
+    cancelAnimationFrame(_tabDragRaf);
+    _tabDragRaf = null;
+  }
+}
+
+function _tabDragAutoScrollStep() {
+  _tabDragRaf = null;
+  var st = _tabDrag;
+  if (!st || !st.started) return;
   var scroll = document.getElementById('tabsScroll');
-  if (!bar || !scroll) return;
+  if (!scroll) return;
+
+  var r = scroll.getBoundingClientRect();
+  var EDGE = 44;      // 进入边缘这个距离内开始滚
+  var MAX = 16;       // 每帧最多滚这么多像素
+  var x = st.lastX;
+  var delta = 0;
+  if (x > r.right - EDGE) {
+    delta = Math.ceil(Math.min(MAX, 2 + (x - (r.right - EDGE)) / EDGE * MAX));
+  } else if (x < r.left + EDGE) {
+    delta = -Math.ceil(Math.min(MAX, 2 + ((r.left + EDGE) - x) / EDGE * MAX));
+  }
+  if (delta) {
+    var before = scroll.scrollLeft;
+    scroll.scrollLeft = before + delta;
+    if (scroll.scrollLeft !== before) {
+      _tabDragPlace(st, x);           // 滚动后可见标签变了，落点跟着重算
+      if (typeof _updateTabArrows === 'function') _updateTabArrows();
+    }
+  }
+  _tabDragRaf = requestAnimationFrame(_tabDragAutoScrollStep);
+}
+
+// 落点 = 第一个「鼠标还在它左半区」的标签之前；都没有就排到最后
+function _tabDragPlace(st, clientX) {
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll || !st.ph) return;
+  var before = null;
   var tabs = scroll.querySelectorAll('.tab-btn:not(.tab-new)');
-  if (tabs.length === 0) return;
-  var gap = tabs.length;
   for (var j = 0; j < tabs.length; j++) {
-    var r = tabs[j].getBoundingClientRect();
-    if (e.clientX <= r.left) { gap = j; break; }
-    if (e.clientX >= r.right) continue;
-    var pct = (e.clientX - r.left) / r.width;
-    if (pct < 0.4) { gap = j; _tabDragSide = 'left'; break; }
-    if (pct > 0.6) { gap = j + 1; _tabDragSide = 'right'; break; }
-    gap = _tabDragSide === 'right' ? j + 1 : j;
-    break;
+    var t = tabs[j];
+    if (t === st.btn) continue;
+    var r = t.getBoundingClientRect();
+    if (clientX < r.left + r.width / 2) { before = t; break; }
   }
-  var ind = document.getElementById('tabDropIndicator');
-  if (!ind) return;
-  ind.dataset.gap = gap;
-  var barRect = bar.getBoundingClientRect();
-  var left;
-  if (gap === 0) {
-    left = tabs[0].getBoundingClientRect().left - barRect.left - 2;
-  } else if (gap >= tabs.length) {
-    left = tabs[tabs.length - 1].getBoundingClientRect().right - barRect.left + 2;
-  } else {
-    var prevR = tabs[gap - 1].getBoundingClientRect().right;
-    var nextL = tabs[gap].getBoundingClientRect().left;
-    left = (prevR + nextL) / 2 - barRect.left;
+  var kids = Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; });
+  var target = before ? kids.indexOf(before) : kids.length;
+  if (kids.indexOf(st.ph) === target) return;
+
+  // FLIP：先记下每个格子的旧位置，挪完再按差值反向位移、过渡回 0，
+  // 这样「让位」是滑过去的，不是瞬间跳一格。
+  var prev = [];
+  for (var i = 0; i < kids.length; i++) prev.push(kids[i].getBoundingClientRect().left);
+
+  var ref = target < kids.length ? kids[target] : null;
+  if (ref) scroll.insertBefore(st.ph, ref); else scroll.appendChild(st.ph);
+
+  for (var k = 0; k < kids.length; k++) {
+    var dx = prev[k] - kids[k].getBoundingClientRect().left;
+    if (dx) _flipShift(kids[k], dx, 0);
   }
-  ind.style.left = left + 'px';
-  ind.classList.add('show');
 }
 
-function _tabDragLeave(e) {
+// FLIP 通用件：反向位移 → 下一帧过渡回 0；动画结束后清掉内联样式，别影响下次布局
+function _flipShift(el, dx, dy) {
+  el.style.transition = 'none';
+  el.style.transform = 'translate(' + (dx || 0) + 'px, ' + (dy || 0) + 'px)';
+  void el.offsetWidth;   // 强制回流，让上面的反向位移先落地
+  el.style.transition = 'transform .16s cubic-bezier(.2, .8, .3, 1)';
+  el.style.transform = '';
+  if (el._flipTimer) clearTimeout(el._flipTimer);
+  el._flipTimer = setTimeout(function() {
+    el.style.transition = '';
+    el.style.transform = '';
+    el._flipTimer = null;
+  }, 220);
+}
+
+function _tabDragMove(e) {
+  var st = _tabDrag;
+  if (!st) return;
+  if (!st.started) {
+    if (Math.abs(e.clientX - st.startX) < 4 && Math.abs(e.clientY - st.startY) < 4) return;
+    _tabDragStart(st);
+  }
+  if (e.cancelable) e.preventDefault();
+  st.lastX = e.clientX;
+  // 只跟水平方向：压暗的那个标签留在标签栏这一行里左右滑，不跟着鼠标上下跑，
+  // 也不在光标下面变成一块浮起来的方块。右边界要给「+」留出位置 —— 推到最右时
+  // 是「标签 + 加号」一起顶到窗口边，不能让标签把加号压在身下。
+  var gx = e.clientX - st.offX;
   var bar = document.getElementById('tabsBar');
-  if (bar && !bar.contains(e.relatedTarget)) _tabHideIndicator();
+  if (bar) {
+    var br = bar.getBoundingClientRect();
+    var maxGx = br.right - st.w - 4;
+    if (st.addBtn) maxGx = Math.min(maxGx, br.right - st.w - st.addW - 14);
+    gx = Math.max(br.left + 4, Math.min(gx, maxGx));
+  }
+  st.btn.style.left = gx + 'px';
+
+  // 把「+」往右顶：被拖标签的右缘贴上去就推着它走，最多推到窗口边界为止。
+  if (st.addBtn) {
+    var want = gx + st.w + 6 - st.addLeft;
+    var maxPush = Math.max(0, window.innerWidth - 4 - (st.addLeft + st.addW));
+    var push = Math.max(0, Math.min(want, maxPush));
+    st.addBtn.style.transform = push > 0.5 ? 'translateX(' + push + 'px)' : '';
+  }
+  _tabDragPlace(st, e.clientX);
 }
 
-function _tabDrop(e) {
-  e.preventDefault();
-  var ind = document.getElementById('tabDropIndicator');
-  var gap = ind ? parseInt(ind.dataset.gap) : state.tabs.length;
-  if (isNaN(gap)) gap = state.tabs.length;
-  _tabHideIndicator();
-  var from = parseInt(e.dataTransfer.getData('text/plain'));
-  if (isNaN(from) || from === gap || from + 1 === gap) return;
-  var moved = state.tabs.splice(from, 1)[0];
-  var insertAt = (from < gap) ? gap - 1 : gap;
-  state.tabs.splice(insertAt, 0, moved);
-  if (state.activeTab === from) state.activeTab = insertAt;
-  else if (from < state.activeTab && insertAt >= state.activeTab) state.activeTab--;
-  else if (from > state.activeTab && insertAt <= state.activeTab) state.activeTab++;
+// commit=false 表示取消（Esc / pointercancel）：只清理，不改顺序
+function _tabDragFinish(commit) {
+  var st = _tabDrag;
+  if (!st) return;
+  _tabDrag = null;
+  _tabDragStopAutoScroll();
+  try { st.btn.releasePointerCapture(st.pid); } catch (_) {}
+  document.body.classList.remove('is-tab-dragging');
+  if (!st.started) return;
+
+  st.btn.classList.remove('tab-dragging');
+  st.btn.style.left = '';
+  st.btn.style.top = '';
+  st.btn.style.width = '';
+  st.btn.style.height = '';
+  if (st.addBtn) st.addBtn.style.transform = '';
+
+  var scroll = document.getElementById('tabsScroll');
+  var kids = scroll ? Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; }) : [];
+  var target = st.ph ? kids.indexOf(st.ph) : -1;
+  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+
+  if (commit && target >= 0 && target !== st.idx) {
+    var moved = state.tabs.splice(st.idx, 1)[0];
+    state.tabs.splice(target, 0, moved);
+    if (state.activeTab === st.idx) state.activeTab = target;
+    else if (st.idx < state.activeTab && target >= state.activeTab) state.activeTab--;
+    else if (st.idx > state.activeTab && target <= state.activeTab) state.activeTab++;
+    // 拖动结束后浏览器还会补一个 click，别让它把标签又切回去
+    window._tabClickSuppress = true;
+    setTimeout(function() { window._tabClickSuppress = false; }, 0);
+  }
   renderTabs();
+}
+
+function _tabDragFinishAll(commit) {
+  if (_tabDrag) _tabDragFinish(commit);
 }
 
 
@@ -1566,9 +1754,20 @@ window.addEventListener('DOMContentLoaded', () => {
   // Bind stable tab drag handlers to bar
   var bar = document.getElementById('tabsBar');
   if (bar) {
-    bar.addEventListener('dragover', _tabDragOver);
-    bar.addEventListener('dragleave', _tabDragLeave);
-    bar.addEventListener('drop', _tabDrop);
+    // 标签/多字符串拖动：pointer 事件 + setPointerCapture（拖到窗口外也收得到 up）
+    document.addEventListener('pointermove', _tabDragMove);
+    document.addEventListener('pointermove', _qpDragMove);
+    document.addEventListener('pointerup', function() { _tabDragFinishAll(true); _qpDragFinishAll(true); });
+    document.addEventListener('pointercancel', function() { _tabDragFinishAll(false); _qpDragFinishAll(false); });
+    // 兜底：切走窗口 / 页面隐藏时指针事件可能收不全，直接按取消收拾干净，
+    // 免得标签停在「压暗固定」或行停在固定定位的状态里下不来。
+    window.addEventListener('blur', function() { _tabDragFinishAll(false); _qpDragFinishAll(false); });
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) { _tabDragFinishAll(false); _qpDragFinishAll(false); }
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { _tabDragFinishAll(false); _qpDragFinishAll(false); }
+    });
     // Mouse wheel horizontal scroll for tab bar
     bar.addEventListener('wheel', function(e) {
       var scroll = document.getElementById('tabsScroll');
@@ -1829,6 +2028,11 @@ async function syncDaemonSessions(procData) {
   if (syncPending) return;
   syncPending = true;
   try {
+  // 守护进程事件可能比语言包先到：这时建出来的标签页/快捷面板会拿到空文案
+  // （t() 缺键给空串），而且之后没有任何补译路径。先把语言包装好再建 UI。
+  if (!_i18nLoaded) {
+    try { await loadI18n(state.language || 'zh'); } catch (e) {}
+  }
   if (!state.daemonOnline) return;
 
   let daemonSessions;
@@ -2845,6 +3049,29 @@ function closeTab(idx) {
 
 function closeCurrentTab() { closeTab(state.activeTab); }
 
+// 空闲标签页的标题是 `t('tab.idle_*')` 生成的，切语言后要重新算一遍，
+// 否则标签栏会一直停在上一种语言（实测俄语界面里标签还是中文）。
+function _relabelIdleTabs() {
+  var list = state.tabs || [];
+  for (var i = 0; i < list.length; i++) {
+    var tb = list[i];
+    if (!tb || tb.portOpen || tb.type === 'settings' || tb.type === 'new') continue;
+    if (tb.syncedParams && tb.syncedParams.portName) continue;  // 已声明端口，标题里带着端口名
+    tb.label = tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
+  }
+}
+
+// 标签页标题：tab.label 在标签页创建时就算好了，如果那一刻语言包还没装好，
+// 算出来就是空串，之后再渲染也补不回来。这里按标签页自身状态兜一个。
+function _tabLabelText(tb) {  if (tb.label) return tb.label;
+  var sp = tb.syncedParams;
+  if (sp && sp.portName) {
+    if (tb.mode === 'forward') return sp.portName;
+    return sp.baud ? (sp.portName + ' @ ' + sp.baud) : sp.portName;
+  }
+  return tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
+}
+
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
@@ -2857,12 +3084,11 @@ function renderTabs() {
     btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '')
       + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
     if (!t.portOpen) btn.className += ' tab-idle';
-    btn.draggable = true;
     btn.dataset.tabIdx = i;
-    btn.onclick = () => switchTab(i);
-    // drag handlers
-    btn.ondragstart = (e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); btn.classList.add('tab-dragging'); };
-    btn.ondragend = () => { btn.classList.remove('tab-dragging'); _tabHideIndicator(); };
+    btn.onclick = () => { if (window._tabClickSuppress) return; switchTab(i); };
+    // 拖动排序走 pointer 事件（见 _tabDragDown）：HTML5 拖放在隐藏源元素时会被
+    // 浏览器取消，拖不动。
+    btn.onpointerdown = _tabDragDown;
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
@@ -2878,7 +3104,7 @@ function renderTabs() {
     btn.appendChild(dot);
     // Label text
     const labelSpan = document.createElement('span');
-    labelSpan.textContent = t.label + tag;
+    labelSpan.textContent = _tabLabelText(t) + tag;
     btn.appendChild(labelSpan);
     const v2 = t.viewers || {gui:0, cli:0, mcp:0};
     [['gui','#4a9eff'],['cli','#4caf50'],['mcp','#ff9800']].forEach(function(s) {
@@ -2908,14 +3134,6 @@ function renderTabs() {
   var addBtn = document.getElementById('tabAddBtn');
   if (addBtn) { addBtn.title = (typeof t === 'function') ? t('tooltip.new_tab', '新建会话') : '新建会话'; }
 
-  // Ensure drag indicator exists in bar (not scroll, to avoid overflow clipping)
-  if (!document.getElementById('tabDropIndicator')) {
-    var indicator = document.createElement('div');
-    indicator.id = 'tabDropIndicator';
-    indicator.className = 'tab-drop-indicator';
-    var bar = document.getElementById('tabsBar');
-    if (bar) bar.appendChild(indicator);
-  }
   // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
   // 变多而触发）—— 见 bindTabsScroll / TODO #26。
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
@@ -3210,11 +3428,24 @@ function _bindSettingsPortSync() {
   });
 }
 
+// 进设置页时静默重读一次语言包：改 i18n/*.json 后不用重启 exe。
+// 只有内容真的变了才重建设置页，避免面板 / 滚动位置被无谓重置。
+function _refreshSettingsI18n() {
+  if (typeof loadI18n !== 'function') return;
+  var before = (typeof _i18nSig === 'string') ? _i18nSig : '';
+  loadI18n(state.language || 'zh').then(function() {
+    if (typeof _i18nSig !== 'string' || _i18nSig === before) return;
+    applyI18n();
+    if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
+  }).catch(function() {});
+}
+
 function openSettingsPage() {
   // Check if settings tab already exists
   var existingIdx = state.tabs.findIndex(function(t) { return t.type === 'settings'; });
   if (existingIdx >= 0) {
     switchTab(existingIdx);
+    _refreshSettingsI18n();
     return;
   }
   // Create settings tab page
@@ -3259,6 +3490,7 @@ function openSettingsPage() {
   updateSyncIndicator();
   _updateStatsVisible();
   updateDaemonUI();
+  _refreshSettingsI18n();
 }
 function showAbout() {
   openSettingsPage();
@@ -4068,56 +4300,191 @@ function quickPanelClearAll() {
     saveSettings();
   }, 'confirm.ok_clear', 'confirm.cancel_clear');
 }
-var _qpDragSide = 'above';
+// ---- 多字符串（快速面板）拖动：pointer 事件 + 实时补位 ----
+//
+// 和标签栏那套同一观感：按住左侧 ⋮⋮ 上下拖，被拖的那行原样压暗、贴着列表上下滑；
+// 原位由等高的占位块让开，其余行用 FLIP 平滑让位；松手按占位块位置结算顺序。
+// 不用 HTML5 拖放，原因同标签栏（dragstart 里隐藏源元素会被浏览器取消拖动）。
+var _qpDrag = null;   // { row, idx, started, ph, ... }
 
-function qpDragStart(e, idx) {
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', String(idx));
+function qpDragDown(e, idx) {
+  if (e.button !== 0) return;
+  var row = e.currentTarget.closest('.qp-row');
+  if (!row) return;
+  var r = row.getBoundingClientRect();
+  _qpDrag = {
+    row: row, idx: idx, started: false, pid: e.pointerId,
+    startY: e.clientY, offY: e.clientY - r.top,
+    h: r.height, w: r.width, left: r.left, top: r.top,
+    ph: null,
+  };
+  // 咬住指针：拖到面板外/窗口外时 up 也还会回来，不会卡住
+  try { row.setPointerCapture(e.pointerId); } catch (_) {}
+  if (e.cancelable) e.preventDefault();
 }
 
-function qpDragEnd(e) {
-  var page = getActivePage();
-  var rows = page && page.quickPanel ? page.quickPanel.querySelector('.qp-rows') : null;
-  if (!rows) return;
-  rows.querySelectorAll('.qp-gap-before,.qp-gap-after').forEach(function(el) { el.classList.remove('qp-gap-before','qp-gap-after'); });
+function _qpDragBegin(st) {
+  st.started = true;
+  var rowsEl = st.row.parentNode;            // .qp-rows（display:contents，行是祖父网格的 item）
+  var host = rowsEl.parentElement;           // .qp-scroll
+  var table = host ? host.parentElement : null;  // .qp-table
+  var cols = table ? getComputedStyle(table).gridTemplateColumns : '';
+  st.host = host;
+  st.table = table;
+  st.addRow = table ? table.querySelector('.qp-add-row') : null;
+  st.addPush = 0;
+
+  st.row.classList.add('qp-src');
+  st.row.style.left = st.left + 'px';
+  st.row.style.top = st.top + 'px';
+  st.row.style.width = st.w + 'px';
+  st.row.style.height = st.h + 'px';
+  if (cols) st.row.style.gridTemplateColumns = cols;
+
+  var ph = document.createElement('div');
+  ph.className = 'qp-placeholder';
+  ph.style.height = st.h + 'px';
+  rowsEl.insertBefore(ph, st.row);
+  st.ph = ph;
+
+  rowsEl.classList.add('is-dragging');
+  document.body.classList.add('is-qp-dragging');
+
+  st.lastY = st.top;
+  _qpDragStartAutoScroll();
 }
 
-function qpDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  var row = e.currentTarget;
-  var rect = row.getBoundingClientRect();
-  var pct = (e.clientY - rect.top) / rect.height;
-  // Remove old gap classes first
-  var rows = (getActivePage()&&getActivePage().quickPanel?getActivePage().quickPanel.querySelector('.qp-rows'):null);
-  if (rows) rows.querySelectorAll('.qp-gap-before,.qp-gap-after').forEach(function(el) { el.classList.remove('qp-gap-before','qp-gap-after'); });
-  if (pct < 0.5) {
-    row.classList.add('qp-gap-before');
-    _qpDragSide = 'above';
-  } else {
-    row.classList.add('qp-gap-after');
-    _qpDragSide = 'below';
+// 拖到列表上下边缘时自动滚动（和标签栏同一套思路，这里是纵向）
+var _qpDragRaf = null;
+
+function _qpDragStartAutoScroll() {
+  if (_qpDragRaf) return;
+  _qpDragRaf = requestAnimationFrame(_qpDragAutoScrollStep);
+}
+
+function _qpDragStopAutoScroll() {
+  if (_qpDragRaf) {
+    cancelAnimationFrame(_qpDragRaf);
+    _qpDragRaf = null;
   }
 }
 
-function qpDragLeave(e) {
-  e.currentTarget.classList.remove('qp-gap-before','qp-gap-after');
+function _qpDragAutoScrollStep() {
+  _qpDragRaf = null;
+  var st = _qpDrag;
+  if (!st || !st.started) return;
+  var rowsEl = st.row.parentNode;
+  var scroll = rowsEl ? rowsEl.parentElement : null;   // .qp-scroll
+  if (!scroll) return;
+  var r = scroll.getBoundingClientRect();
+  var EDGE = 40;
+  var MAX = 12;
+  var y = st.lastY;
+  var delta = 0;
+  if (y > r.bottom - EDGE) {
+    delta = Math.ceil(Math.min(MAX, 2 + (y - (r.bottom - EDGE)) / EDGE * MAX));
+  } else if (y < r.top + EDGE) {
+    delta = -Math.ceil(Math.min(MAX, 2 + ((r.top + EDGE) - y) / EDGE * MAX));
+  }
+  if (delta) {
+    var before = scroll.scrollTop;
+    scroll.scrollTop = before + delta;
+    if (scroll.scrollTop !== before) _qpDragPlace(st, y);
+  }
+  _qpDragRaf = requestAnimationFrame(_qpDragAutoScrollStep);
 }
 
-function qpDrop(e, toIdx) {
-  e.preventDefault();
-  e.currentTarget.classList.remove('qp-gap-before','qp-gap-after');
-  var fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
-  if (isNaN(fromIdx)) return;
-  var rect = e.currentTarget.getBoundingClientRect();
-  var pct = (e.clientY - rect.top) / rect.height;
-  var gap = (pct >= 0.5) ? toIdx + 1 : toIdx;
-  if (fromIdx === gap || fromIdx + 1 === gap) return;
-  var moved = state.quickPresets.splice(fromIdx, 1)[0];
-  var insertAt = (fromIdx < gap) ? gap - 1 : gap;
-  state.quickPresets.splice(insertAt, 0, moved);
+function _qpDragPlace(st, clientY) {
+  var rowsEl = st.row.parentNode;
+  if (!rowsEl || !st.ph) return;
+  var rows = rowsEl.querySelectorAll('.qp-row');
+  var before = null;
+  for (var j = 0; j < rows.length; j++) {
+    var r0 = rows[j];
+    if (r0 === st.row) continue;
+    var rc = r0.getBoundingClientRect();
+    if (clientY < rc.top + rc.height / 2) { before = r0; break; }
+  }
+  var kids = Array.prototype.filter.call(rowsEl.children, function(el) { return el !== st.row; });
+  var target = before ? kids.indexOf(before) : kids.length;
+  if (kids.indexOf(st.ph) === target) return;
+
+  var prev = [];
+  for (var i = 0; i < kids.length; i++) prev.push(kids[i].getBoundingClientRect().top);
+  var ref = target < kids.length ? kids[target] : null;
+  if (ref) rowsEl.insertBefore(st.ph, ref); else rowsEl.appendChild(st.ph);
+  for (var k = 0; k < kids.length; k++) {
+    var dy = prev[k] - kids[k].getBoundingClientRect().top;
+    if (dy) _flipShift(kids[k], 0, dy);
+  }
+}
+
+function _qpDragMove(e) {
+  var st = _qpDrag;
+  if (!st) return;
+  if (!st.started) {
+    if (Math.abs(e.clientY - st.startY) < 4) return;
+    _qpDragBegin(st);
+  }
+  if (e.cancelable) e.preventDefault();
+  st.lastY = e.clientY;
+  var rowsEl = st.row.parentNode;
+  var top = e.clientY - st.offY;
+  // .qp-rows 是 display:contents，自己的 getBoundingClientRect() 是空矩形，
+  // 夹边界要用外层真正的容器。下限放到 .qp-table 底：这样被拖的行可以压到
+  // 「+ 添加」那一行上，把添加行顶下去。
+  var bounds = st.table ? st.table.getBoundingClientRect() : null;
+  if (bounds) {
+    top = Math.max(bounds.top, Math.min(top, bounds.bottom - st.h));
+  }
+  st.row.style.top = top + 'px';
+
+  // 推挤「+ 添加」：行底部越过滚动区底边多少，就把它往下顶多少，最多顶到表格底。
+  if (st.addRow && st.host) {
+    var sr = st.host.getBoundingClientRect();
+    var overflow = Math.max(0, (top + st.h) - sr.bottom);
+    var ar = st.addRow.getBoundingClientRect();
+    var baseBottom = ar.bottom - (st.addPush || 0);
+    var space = Math.max(0, (bounds ? bounds.bottom : sr.bottom) - baseBottom);
+    var push = Math.min(overflow, space);
+    st.addPush = push;
+    st.addRow.style.transform = push > 0.5 ? 'translateY(' + push + 'px)' : '';
+  }
+  _qpDragPlace(st, e.clientY);
+}
+
+function _qpDragFinish(commit) {
+  var st = _qpDrag;
+  if (!st) return;
+  _qpDrag = null;
+  _qpDragStopAutoScroll();
+  try { st.row.releasePointerCapture(st.pid); } catch (_) {}
+  if (!st.started) return;
+
+  var rowsEl = st.row.parentNode;
+  var kids = rowsEl ? Array.prototype.filter.call(rowsEl.children, function(el) { return el !== st.row; }) : [];
+  var target = st.ph ? kids.indexOf(st.ph) : -1;
+  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+  if (rowsEl) rowsEl.classList.remove('is-dragging');
+  document.body.classList.remove('is-qp-dragging');
+  if (st.addRow) st.addRow.style.transform = '';
+  st.row.classList.remove('qp-src');
+  st.row.style.left = '';
+  st.row.style.top = '';
+  st.row.style.width = '';
+  st.row.style.height = '';
+  st.row.style.gridTemplateColumns = '';
+
+  if (commit && target >= 0 && target !== st.idx) {
+    var moved = state.quickPresets.splice(st.idx, 1)[0];
+    state.quickPresets.splice(target, 0, moved);
+    saveSettings();
+  }
   quickPanelRender();
-  saveSettings();
+}
+
+function _qpDragFinishAll(commit) {
+  if (_qpDrag) _qpDragFinish(commit);
 }
 function quickPanelSend(idx) {
   var preset = state.quickPresets[idx];
@@ -4176,13 +4543,9 @@ function quickPanelRender() {
     var note = escHtml(p.note || '');
     var dly = (p.delay != null) ? p.delay : 1000;
     var noteCls = p.note ? ' qp-note has-content' : ' qp-note';
-    h += '<div class="qp-row" data-idx="' + i + '"' +
-      ' ondragover="qpDragOver(event)"' +
-      ' ondragleave="qpDragLeave(event)"' +
-      ' ondrop="qpDrop(event,' + i + ')">' +
-      '<span class="qp-drag" draggable="true" title="' + t('quick_panel.drag', '拖动排序') + '"' +
-      ' ondragstart="qpDragStart(event,' + i + ')"' +
-      ' ondragend="qpDragEnd(event)">⋮⋮</span>' +
+    h += '<div class="qp-row" data-idx="' + i + '">' +
+      '<span class="qp-drag" title="' + t('quick_panel.drag', '拖动排序') + '"' +
+      ' onpointerdown="qpDragDown(event,' + i + ')">⋮⋮</span>' +
       '<input type="checkbox" id="qp-enable-' + i + '" name="qp-enable-' + i + '"' + en + ' onchange="quickPanelUpdate(' + i + ',&quot;enabled&quot;,this.checked)">' +
       '<input type="checkbox" id="qp-hex-' + i + '" name="qp-hex-' + i + '"' + hexChk + ' onchange="quickPanelUpdate(' + i + ',&quot;hex&quot;,this.checked)">' +
       '<input type="text" id="qp-content-' + i + '" name="qp-content-' + i + '" value="' + cnt + '" onchange="quickPanelUpdate(' + i + ',&quot;content&quot;,this.value)" placeholder="' + t('quick_panel.content_placeholder', '请输入内容') + '">' +
@@ -4284,6 +4647,10 @@ function qpExport() {
 }
 // Rebuild a tab's label from its stored data (for i18n language switch).
 function _rebuildTabLabel(tab) {
+  // 非会话页也要跟随语言：这两类的 label 是建页时按当时语言写死的，
+  // 而下面的会话页分支对它们不适用（没有 syncedParams，会直接 return）。
+  if (tab.type === 'new') { tab.label = t('newtab.title', '新建会话'); return; }
+  if (tab.type === 'settings') { tab.label = t('settings.title', '设置'); return; }
   if (!tab.syncedParams) return;
   var sp = tab.syncedParams;
   var isConnected = tab.portOpen;

@@ -183,7 +183,9 @@ function _dropDomRows(n) {
 
 // ---- 单行构造（不再有滚动副作用，贴底统一由批次处理） ----
 
-function makeDataRow(container, dir, timestamp, hex, segments) {
+// opts（可选）：{ displayMode } —— 只给设置页的颜色预览用，让它能在一屏里同时
+// 画「文本」和「Hex」两种渲染，而不必去改全局 state.displayMode。
+function makeDataRow(container, dir, timestamp, hex, segments, opts) {
   const row = document.createElement('div');
   row.className = 'data-row';
 
@@ -202,12 +204,17 @@ function makeDataRow(container, dir, timestamp, hex, segments) {
   const dataLine = document.createElement('div');
   dataLine.className = 'data-line';
 
-  let dm = state.displayMode;
-  if (activeMode() === 'forward') {
-    if (dir === '1') dm = state.p1DisplayMode;
-    else if (dir === '2') dm = state.p2DisplayMode;
-  } else if (dir === 'tx') {
-    dm = state.txDisplayMode;
+  let dm;
+  if (opts && opts.displayMode) {
+    dm = opts.displayMode;
+  } else {
+    dm = state.displayMode;
+    if (activeMode() === 'forward') {
+      if (dir === '1') dm = state.p1DisplayMode;
+      else if (dir === '2') dm = state.p2DisplayMode;
+    } else if (dir === 'tx') {
+      dm = state.txDisplayMode;
+    }
   }
   if (dm === 'hex') {
     const hexSpan = document.createElement('span');

@@ -495,23 +495,31 @@ function createWelcomePage() {
 
 // ---- 新建会话的选择页 ----
 //
-// 一张"调色盘"：两张卡片（单端口 / 端口转发）。点选之后才在守护进程里建空闲
-// 进程，随后由 app.js 的 chooseNewSessionMode() 把这个标签页**原地**换成会话页
-// ——所以直接关掉选择页不会留下任何孤儿进程。
+// 两张卡片（单端口 / 端口转发）。点选之后才在守护进程里建空闲进程，随后由
+// app.js 的 chooseNewSessionMode() 把这个标签页**原地**换成会话页 —— 所以直接
+// 关掉选择页不会留下任何孤儿进程。
+//
+// 结构：标题 / 副标题 / 卡片网格。每张卡片 = 图标 + 名称&说明 + 三条特性 +
+// 底部整宽「开始 →」。网格是 auto-fit，以后多一种模式就多一张卡（自动换行、
+// 等高），不用改布局。卡片是 <button>（保留 _setChooserBusy 里的 disabled
+// 语义），所以内部只用 span 这类行内元素。
 function createModeChooserPage() {
 	var page = document.createElement('div');
-	page.className = 'tab-page o-chooser';
+	page.className = 'tab-page o-chooser t-chooser-bg';
 	page.style.display = 'none';
 
 	var inner = document.createElement('div');
 	inner.className = 'o-chooser__inner';
 
-	var title = document.createElement('div');
+	var head = document.createElement('div');
+	head.className = 'o-chooser__head';
+
+	var title = document.createElement('h1');
 	title.className = 'o-chooser__title';
 	title.setAttribute('data-i18n', 'newtab.title');
 	title.textContent = t('newtab.title', '新建会话');
 
-	var hint = document.createElement('div');
+	var hint = document.createElement('p');
 	hint.className = 'o-chooser__hint';
 	hint.setAttribute('data-i18n', 'newtab.hint');
 	hint.textContent = t('newtab.hint', '选择一种模式开始');
@@ -519,50 +527,44 @@ function createModeChooserPage() {
 	var grid = document.createElement('div');
 	grid.className = 'o-chooser__grid';
 
-	function makeCard(mode, iconHtml, titleKey, titleDef, descKey, descDef) {
+	function span(cls, text, i18nKey) {
+		var el = document.createElement('span');
+		el.className = cls;
+		if (i18nKey) el.setAttribute('data-i18n', i18nKey);
+		if (text != null) el.textContent = text;
+		return el;
+	}
+
+	function makeCard(mode, iconHtml, titleKey, titleDef, descKey, descDef, featureKeys) {
 		var card = document.createElement('button');
 		card.type = 'button';
 		card.className = 'c-mode-card c-mode-card--' + mode;
 		card.setAttribute('data-mode', mode);
 
-		var head = document.createElement('div');
-		head.className = 'c-mode-card__head';
-
-		var badge = document.createElement('span');
-		badge.className = 'c-mode-card__icon';
+		// 图标 + 名称 + 一句话说明（名称与说明同列，图标占左侧）
+		var head2 = span('c-mode-card__head');
+		var badge = span('c-mode-card__icon');
 		badge.innerHTML = iconHtml;
-		head.appendChild(badge);
+		var names = span('c-mode-card__names');
+		names.appendChild(span('c-mode-card__name', t(titleKey, titleDef), titleKey));
+		names.appendChild(span('c-mode-card__desc', t(descKey, descDef), descKey));
+		head2.appendChild(badge);
+		head2.appendChild(names);
+		card.appendChild(head2);
 
-		var name = document.createElement('span');
-		name.className = 'c-mode-card__name';
-		name.setAttribute('data-i18n', titleKey);
-		name.textContent = t(titleKey, titleDef);
-		head.appendChild(name);
+		// 三条特性：绿点 + 文案
+		var tips = span('c-mode-card__tips');
+		featureKeys.forEach(function(f) {
+			tips.appendChild(span('c-mode-card__tip', t(f[0], f[1]), f[0]));
+		});
+		card.appendChild(tips);
 
-		var desc = document.createElement('div');
-		desc.className = 'c-mode-card__desc';
-		desc.setAttribute('data-i18n', descKey);
-		desc.textContent = t(descKey, descDef);
+		// 底部整宽「开始 →」：视觉上是按钮，点击由整张卡片接管
+		var foot = span('c-mode-card__cta');
+		foot.appendChild(span('c-mode-card__cta-text', t('newtab.start', '开始'), 'newtab.start'));
+		foot.appendChild(span('c-mode-card__cta-arrow', '→'));
+		card.appendChild(foot);
 
-		// 调色盘式的连接示意：单端口一个端点；转发两个端点 + 双向箭头。
-		var preview = document.createElement('div');
-		preview.className = 'c-mode-card__preview';
-		var dotA = document.createElement('span');
-		dotA.className = 'c-mode-card__dot';
-		preview.appendChild(dotA);
-		var wire = document.createElement('span');
-		wire.className = 'c-mode-card__wire';
-		if (mode === 'forward') wire.textContent = '↔';
-		preview.appendChild(wire);
-		if (mode === 'forward') {
-			var dotB = document.createElement('span');
-			dotB.className = 'c-mode-card__dot';
-			preview.appendChild(dotB);
-		}
-
-		card.appendChild(head);
-		card.appendChild(desc);
-		card.appendChild(preview);
 		card.addEventListener('click', function() {
 			if (typeof chooseNewSessionMode === 'function') chooseNewSessionMode(mode);
 		});
@@ -570,13 +572,22 @@ function createModeChooserPage() {
 		return card;
 	}
 
-	makeCard('single', icon('terminal', 16, 16), 'btn.single', '单端口',
-		'newtab.single_desc', '连接一个串口，收发调试');
-	makeCard('forward', '↔', 'btn.forward', '端口转发',
-		'newtab.forward_desc', '把两个串口对接，数据互相转发');
+	makeCard('single', icon('terminal', 20, 20), 'btn.single', '单端口',
+		'newtab.single_desc', '连接一个串口，收发调试', [
+			['newtab.single_f1', '打开一个串口，收发都在这一页'],
+			['newtab.single_f2', '文本 / Hex 双视图，随时切换'],
+			['newtab.single_f3', '历史记录、自动发送、多字符串预设']
+		]);
+	makeCard('forward', icon('swap', 20, 20), 'btn.forward', '端口转发',
+		'newtab.forward_desc', '把两个串口对接，数据互相转发', [
+			['newtab.forward_f1', '两个串口对接，数据双向转发'],
+			['newtab.forward_f2', '两端各自独立的波特率与串口参数'],
+			['newtab.forward_f3', '适合联调、透传与协议抓包']
+		]);
 
-	inner.appendChild(title);
-	inner.appendChild(hint);
+	head.appendChild(title);
+	head.appendChild(hint);
+	inner.appendChild(head);
 	inner.appendChild(grid);
 	page.appendChild(inner);
 

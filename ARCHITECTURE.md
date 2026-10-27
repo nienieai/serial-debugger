@@ -1,4 +1,4 @@
-# 串口调试工具 v0.7.4 框架文档
+﻿# 串口调试工具 v0.7.4 框架文档
 
 ## 一、整体框架
 
@@ -1299,7 +1299,7 @@ Go 后端 `CreateExampleFiles(kind)` 根据 kind 创建：
 
 ## 九、图标系统
 
-内置图标位于 `config/icons/system/`（20 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `themes/icons/<主题名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
+内置图标位于 `config/resources/icons/system/`（20 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
 
 `GetBuiltinIcons()` Wails 绑定返回全部内置图标，前端 `_initIcons()` 启动时加载。`applyIconTheme()` 支持 `_fallback` 回退机制。
 
@@ -1351,11 +1351,25 @@ settings.ini  →  AppSettings.DisplayColors (JSON string)
 
 ### 预览
 
-每分组一行示例（`.c-color-preview`），深浅各一并排。控制字符模拟 `::before` 叠层渲染（标记 + transparent 真字符）。改色后 `_refreshColorPreview(key)` 即时同步。
+每分组一行示例（`.c-color-preview`），深浅各一并排。**走的是主显示区同一条渲染路径**：`makeDataRow(..., { displayMode })` + `renderSegments()`，所以预览里的 `.data-row` / `.ts-line` / `.data-line` / `.ctrl-char[data-ws]` / `.hex-escape` / `.hex-data` 与真实显示框完全同构，字号字体也由 `#display-font-style` 一起管（`.display-content,#sendInput,#sendMirror,.c-color-preview`）。
+
+两栏的配色靠容器内联变量：`_applyDisplayColors()` 只把两套值写到 `:root[data-theme="dark"|"light"]`，而预览要在同一屏里同时显示深浅两套，所以 `_applyPreviewVars(box, mode)` 把该主题的 `--dc-*` 逐个 `setProperty` 到各自的 `.c-color-preview` 上。改色后 `_refreshColorPreview(key)` 立即重绘。
 
 ### 调色板集成
 
-`<color-picker>` Web Component，同 v0.6.1。
+`frontend/color-picker.{js,html}` 是独立项目 `调色板/调色板-0.2.6` 的**原样副本**（哈希一致；v0.8.2 里 0.2.3 → 0.2.4 → 0.2.6 连升两版）。Shadow DOM 完全隔离样式，模板由 `fetch` 异步加载（`document.currentScript.src` 定位，支持任意目录部署）。
+
+调用面（`settingspage.js` 的 `_openColorPicker`）：属性 `theme` / `transparency` / `color` / `title` / `i18n`，方法 `open(trigger)`，事件 `apply`。
+
+- **标题**走 `title` 属性（优先级高于组件 i18n 的 `header.title`），格式 `设置项名 · 背景/字体 · 深色/浅色`（`_COLOR_TITLE_SEP` 分隔）。三段全部取当前语言译文：项名 `settings.color_*`、列名短词 `settings.color_bg_short` / `color_fg_short`、深浅 `theme.dark_label` / `light_label`。
+- **弹窗宽度**：组件 `:host` 写死 320px，三段式标题在 en/fr/ja/ru 下会被 0.2.6 的字号自适应压到 15~17px、或落到省略号兜底。`_openColorPicker` 用**内联样式**把宽度覆盖成 360px（`_COLOR_PICKER_WIDTH`，不改组件文件），实测 9 语言标题都能保持 19px 单行，最紧余量 5.9px（日语）。
+- **弹窗内文案**由 `_colorPickerI18n()` 注入：把组件 0.2.6 的 41 个 key（`header.title` / `hex.label` / `section.*` / `action.*` / 32 个 `basicColor.*`）映射到项目 i18n 的 `colorpicker.*`，再 `JSON.stringify` 写进 `i18n` 属性。9 语言在 `config/resources/i18n/*.json` 里都有，缺键会自动回落组件内置中文。
+- 取色按钮的胶头滴管图标是组件**内置** SVG（`slot[name="eyedropper-icon"]` 的兜底内容），不依赖页面里的 Font Awesome。0.2.3 会退化成一个 **emoji `💧`**（彩色、不跟主题、字形随系统字体变，实测该按钮内 `svg` 数 0）；0.2.4 起是单色矢量滴管，`fill: currentColor` 跟随主题。
+- `:host` 自带 dark 兜底变量：即使调用方忘设 `theme`，弹窗背景也不会透明（0.2.3 实测 `rgba(0,0,0,0)`）。
+- 滑块 / RGBA 输入路径都会派发 `color-change`；`save` 事件的 `index` 是本次实际写入的槽位。
+- 0.2.6 的**长语言字号自适应**（`_fitTexts()`）：`open()` 时按实际溢出比例一次性收敛标题/标签/按钮的字号，下限 `--cp-fit-min-size`（默认 11px）/ `--cp-fit-ratio`（0.68）；缩到下限仍放不下才交给 CSS 兜底（标题省略号、按钮断词）。本项目把弹窗加宽到 360px 后，9 语言都不会触发缩小。
+
+回归夹具：`_audit/colorpicker_component.py`（22 项，组件行为 + 0.2.3 实时对照）、`_audit/colorpicker_title.py`（75 项，三段式标题 + 9 语言 + 组件内文案 i18n）。
 
 ---
 
@@ -1445,7 +1459,7 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.8.1"`），改一处全部同步。
+版本号统一在 `version/version.go`（`const Version = "0.8.2"`），改一处全部同步。
 
 Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
 

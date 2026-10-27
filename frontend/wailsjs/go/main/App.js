@@ -230,6 +230,10 @@ export function StartTabDecoder(arg1) {
   return window['go']['main']['App']['StartTabDecoder'](arg1);
 }
 
+export function Startup(arg1) {
+  return window['go']['main']['App']['Startup'](arg1);
+}
+
 export function StopAllTabDecoders() {
   return window['go']['main']['App']['StopAllTabDecoders']();
 }

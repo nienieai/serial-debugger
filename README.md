@@ -7,7 +7,7 @@
 **GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
 [![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
-[![Version](https://img.shields.io/badge/version-0.8.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.8.2-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
@@ -33,7 +33,7 @@
 - ⏱️ **自动发送引擎** —— 单条定频 + 多条目队列两种模式，运行中可改进度；`delay` 支持 0（连发）到 60000 ms 逐条设定。
 - 🔁 **端口转发** —— 双串口双向透传，P1/P2 方向独立显示与统计，PC 端作为旁路监听。
 - 🔎 **设备探测** —— TOML 规则驱动，substring / regex / modbus_crc 三种匹配，按可能性排序扫波特率、带总预算、跳过已占用端口，`busy` 与用过哪几档波特率都显式返回。
-- 🎨 **可换肤** —— 颜色主题（dark/light 双模式、CSS 全变量化、`themes/colors/` 外部主题自动发现）+ 图标主题（`themes/icons/<名称>/`）+ 数据高亮自定义（单端口 10 项 / 转发 9 项，含 EyeDropper 取色）。
+- 🎨 **可换肤** —— 颜色主题（dark/light 双模式、CSS 全变量化、`resources/themes/<id>/` 主题文件夹（素材随主题走））+ 图标主题（`resources/icons/<包名>/`）+ 数据高亮自定义（单端口 10 项 / 转发 9 项，含 EyeDropper 取色）。
 - 🌏 **9 种语言** —— zh / zh-Hant / en / ja / ko / fr / es / ru / ar（含 RTL），支持外部 i18n 文件覆盖。
 
 ## 🚀 快速开始 / Quick Start
@@ -133,7 +133,7 @@ graph LR
 ### 主题与外观
 
 - **颜色主题**：文件驱动 + `_modes` 声明（dark/light 双模式），三段式色值（common/dark/light），CSS 全变量化，外部主题自动发现
-- **图标主题**：内置 `config/icons/system/`（20 个 SVG），外部 `themes/icons/<名称>/` 文件夹格式，`_fallback` 回退
+- **图标主题**：内置 `config/resources/icons/system/`（20 个 SVG），外部 `resources/icons/<包名>/` 文件夹格式，`_fallback` 回退
 - **数据高亮自定义**：单端口 10 项 + 端口转发 9 项独立颜色设置，深浅色独立/统一，集成调色板（RGBA 滑块 + EyeDropper + 预设色板）
 - **响应式设置页**：800 px 断点，宽屏左右分栏，窄屏导航悬浮覆盖层；搜索框内嵌图标
 - **模糊渐变条**：config-bar / send-controls / settings-header / 转发按键栏统一透明 + 渐变模糊
@@ -152,7 +152,7 @@ graph LR
 - 9 种语言（zh / en / ja / zh-Hant / ko / ar / ru / fr / es），含阿拉伯语 RTL
 - 外部 i18n 文件覆盖内置翻译，`_font` 字段绑定语言首选字体
 
-> **翻译说明**：多语言翻译由 AI 辅助生成，可能存在不准确、遗漏或语境偏差，欢迎提交修正（内置文件见 `config/i18n/`，外部覆盖见下方「配置」表）。
+> **翻译说明**：多语言翻译由 AI 辅助生成，可能存在不准确、遗漏或语境偏差，欢迎提交修正（内置文件见 `config/resources/i18n/`，外部覆盖见下方「配置」表）。
 
 ### 连接管理
 
@@ -211,12 +211,12 @@ wails build -devtools  # GUI，产物在 build/bin/
 | 位置 | 说明 |
 | --- | --- |
 | `config/probe.toml` | 设备探测规则（substring / regex / modbus_crc） |
-| `config/themes/` | 颜色主题（`system.json` 内置，`_modes` 声明模式） |
-| `themes/colors/*.json` | 外部颜色主题（与 exe 同目录，启动/刷新时自动发现） |
-| `config/icons/system/` | 内置图标主题（20 个 SVG + `icons.json`） |
-| `themes/icons/<名称>/` | 外部图标主题（文件夹 = 主题，`_fallback` 回退） |
-| `config/i18n/` | 内置翻译（9 语言） |
-| 外部 i18n 文件 | 覆盖内置翻译，`_font` 字段绑定语言首选字体 |
+| `config/resources/themes/<id>/theme.json` | 内置颜色主题（一个主题一个文件夹，`_modes` 声明模式） |
+| `resources/themes/<id>/` | 外部颜色主题（与 exe 同目录，自带背景图等素材；刷新时自动发现） |
+| `config/resources/icons/system/` | 内置图标包（27 个 SVG + `icons.json`） |
+| `resources/icons/<包名>/` | 外部图标包（文件夹 = 包，缺的键回退 `system`） |
+| `config/resources/i18n/` | 内置翻译（9 语言） |
+| `resources/i18n/<lang>.json` | 覆盖内置翻译，`_font` 字段绑定语言首选字体 |
 
 ## 📚 文档 / Docs
 
@@ -226,7 +226,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [需求文档](REQUIREMENTS.md) | 需求列表与实现状态 |
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
-| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.1 各版本的变更、根因与验收方法 |
+| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.2 各版本的变更、根因与验收方法 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
@@ -234,10 +234,11 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 📜 版本历史 / Changelog
 
-当前版本 **v0.8.1**。最近三版：
+当前版本 **v0.8.2**。最近三版：
 
 | 版本 | 要点 |
 |------|------|
+| **0.8.2** | 资源统一到 `resources/` 并分「内置 / 外置」两层；主题支持图片（全页背景、四条栏、缩略图）；设置页外观卡与新建会话页重画；标签栏与多字符串面板拖动换成 pointer 实现（实时补位、FLIP 动画、边缘自动滚动、推挤「+」） |
 | **0.8.1** | GUI 一轮集中修复：新建页先选模式、前端热重载、端口下拉同步与占用高亮、历史视图空白、自绘滚动条、状态栏统计残留、标签栏滚动提示、主题按钮图标 |
 | **0.8.0** | 把 0.7.5.1 ～ 0.7.5.10 的修复整体收口为稳定基线；不含功能改动（源码与 0.7.5.10 的差别只有版本号） |
 | **0.7.5.10** | 补 `serial-cli sendone [processId] [--raw]`，让「多字符串条目剥头」那条修复可黑盒验收 |

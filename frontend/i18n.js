@@ -44,6 +44,15 @@ function applyFont() {
   document.body.style.fontFamily = _defaultFont;
 }
 
+var _i18nLoaded = false;   // 语言包是否已经装好（启动早期为 false）
+var _i18nSig = '';         // 当前语言包的签名（键数 + 文本总长），用来判断重读后有没有变
+
+function _i18nSignature() {
+  var n = 0, len = 0;
+  for (var k in i18n) { n++; len += k.length + String(i18n[k]).length; }
+  return n + ':' + len;
+}
+
 async function loadI18n(lang) {
   // 1. Load built-in first (always available)
   var builtin = {};
@@ -69,20 +78,34 @@ async function loadI18n(lang) {
     for (var k in fbData) { merged[k] = fbData[k]; }
     for (var k2 in ext) { merged[k2] = ext[k2]; }
     i18n = merged;
+    _i18nLoaded = true;
+    _i18nSig = _i18nSignature();
     return;
   }
   // 3. No external file: use built-in directly
   window._i18nFallback = null;
-  if (Object.keys(builtin).length > 0) { i18n = builtin; return; }
+  if (Object.keys(builtin).length > 0) { i18n = builtin; _i18nLoaded = true; _i18nSig = _i18nSignature(); return; }
   i18n = {};
+  _i18nLoaded = true;
+  _i18nSig = _i18nSignature();
 }
 
 function i18nDir() {
   return i18n._dir || 'ltr';
 }
 
+// 缺键一律给空串：既不回显 key 名，也不借用别的语言或硬编码中文兜底。
+// 语言包（含 builtin/i18n 与 i18n/ 外置包）里没有的键，界面就留空。
+//
+// 例外只有启动那一瞬间：语言包是异步加载的，而标签页/快捷面板可能比它先建出来
+// （守护进程事件一到就建）。那时候 i18n 还是空对象，若也返回空串，这些控件会
+// 永远空着——没人会再给它们补一次文案。所以 `_i18nLoaded` 为 false 时先用调用处
+// 传进来的兜底文案顶一下；语言包装好后仍然缺键，就按规则留空。
 function t(key, fallback) {
-  return i18n[key] || fallback || key;
+  var v = i18n[key];
+  if (v !== undefined && v !== null) return v;
+  if (!_i18nLoaded) return fallback || '';
+  return '';
 }
 
 // Translate a system message stored as i18n key|arg1|arg2|...
@@ -92,10 +115,11 @@ function formatSysMsg(raw) {
   if (!raw || !raw.startsWith('sys.')) return raw || '';
   var parts = raw.split('|');
   var key = parts[0];
-  var tmpl = t(key, key);
+  var tmpl = t(key);
+  if (!tmpl) return '';
   for (var i = 1; i < parts.length; i++) {
     var arg = parts[i];
-    var val = t(arg, arg); // translate if arg is an i18n key
+    var val = t(arg); // translate if arg is an i18n key
     tmpl = tmpl.replace(/%[sd]/, val);
   }
   return tmpl;

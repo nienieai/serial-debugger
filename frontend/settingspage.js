@@ -131,6 +131,25 @@ function createSettingsOverlay() {
   return ov;
 }
 
+// 分类栏图标：用 icons.js 里已有的键，保证浅色/深色主题下都跟随 currentColor
+var SETTINGS_NAV_ICONS = {
+	display: 'terminal',
+	colors: 'theme_palette',
+	appearance: 'theme_light',
+	storage: 'devices',
+	language: 'globe',
+	about: 'info'
+};
+
+/* 把每张卡的标题行高度写进 --bubble-head-h，供竖线定位用 */
+function _measureBubbleHeads(root) {
+	if (!root) return;
+	root.querySelectorAll('.settings-bubble').forEach(function(card) {
+		var head = card.querySelector(':scope > .settings-bubble-head');
+		if (head) card.style.setProperty('--bubble-head-h', head.offsetHeight + 'px');
+	});
+}
+
 function buildSettingsPage() {
 
 	var wrapper = document.createElement('div');
@@ -206,6 +225,11 @@ function buildSettingsPage() {
 	var panelDisplay = document.createElement('div');
 	panelDisplay.className = 'settings-panel';
 	panelDisplay.setAttribute('data-panel', 'display');
+
+	// ── Panel: 数据高亮（从「编码与显示」拆出来，单独一页）──
+	var panelColors = document.createElement('div');
+	panelColors.className = 'settings-panel is-hidden';
+	panelColors.setAttribute('data-panel', 'colors');
 
 	var bInput = _bubble(t('settings.bubble_encoding','编码格式'));
 	bInput.appendChild(_row(t('settings.bubble_encoding','编码格式'), _buildEncodingSelect()));
@@ -332,19 +356,27 @@ function buildSettingsPage() {
 		]}
 	];
 	colorGroups.forEach(function(grp) {
+		// 每组包一层，两个分组在宽屏下并排（窄屏自动落成单列）
+		var group = document.createElement('div');
+		group.className = 'c-color-group';
 		var sep = document.createElement('div');
 		sep.className = 'c-color-sep';
 		var sepLbl = document.createElement('span');
 		sepLbl.textContent = grp.title;
 		sep.appendChild(sepLbl);
-		bColor.appendChild(sep);
+		group.appendChild(sep);
 		// Preview section
 		var preview = document.createElement('div');
 		preview.className = 'c-color-preview-wrap';
 		preview.id = 'colorPreview_' + grp.items[0].key;
 		preview._colorItems = grp.items;
-		bColor.appendChild(preview);
+		group.appendChild(preview);
 		// Two-layer column header: 设置项 | 加粗 | 背景颜色 | 字体颜色
+		// 加粗/斜体用 B / I 符号，深浅用月亮/太阳图标：这两列只有 26/28px 宽，
+		// 换成俄语这类长词会互相压字（实测 "ЖирныйКурсивФон…" 叠在一起）。
+		var modeIcons =
+			'<span title="' + t('theme.dark_label','深色') + '">' + icon('theme_dark', 12, 12) + '</span>' +
+			'<span title="' + t('theme.light_label','浅色') + '">' + icon('theme_light', 12, 12) + '</span>';
 		var hdr = document.createElement('div');
 		hdr.className = 'c-color-head';
 		var hdrName = document.createElement('span');
@@ -353,53 +385,43 @@ function buildSettingsPage() {
 		hdr.appendChild(hdrName);
 		var hdrBold = document.createElement('span');
 		hdrBold.className = 'c-color-head__chk';
-		hdrBold.textContent = t('settings.color_head_bold','加粗');
+		hdrBold.innerHTML = '<b>B</b>';
+		hdrBold.title = t('settings.color_head_bold','加粗');
 		hdr.appendChild(hdrBold);
 		var hdrItalic = document.createElement('span');
 		hdrItalic.className = 'c-color-head__chk';
-		hdrItalic.textContent = t('settings.color_head_italic','斜体');
+		hdrItalic.innerHTML = '<i>I</i>';
+		hdrItalic.title = t('settings.color_head_italic','斜体');
 		hdr.appendChild(hdrItalic);
 		var hdrBg = document.createElement('span');
 		hdrBg.className = 'c-color-head__grp';
-		hdrBg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_bg','背景颜色') + '</div><div class="c-color-head__row2"><span>' + t('theme.dark_label','深色') + '</span><span>' + t('theme.light_label','浅色') + '</span></div>';
+		hdrBg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_bg','背景颜色') + '</div><div class="c-color-head__row2">' + modeIcons + '</div>';
 		hdr.appendChild(hdrBg);
 		var hdrFg = document.createElement('span');
 		hdrFg.className = 'c-color-head__grp';
-		hdrFg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_fg','字体颜色') + '</div><div class="c-color-head__row2"><span>' + t('theme.dark_label','深色') + '</span><span>' + t('theme.light_label','浅色') + '</span></div>';
+		hdrFg.innerHTML = '<div class="c-color-head__row1">' + t('settings.color_head_fg','字体颜色') + '</div><div class="c-color-head__row2">' + modeIcons + '</div>';
 		hdr.appendChild(hdrFg);
-		bColor.appendChild(hdr);
-		grp.items.forEach(function(cfg) { bColor.appendChild(_buildColorRow(cfg)); });
+		group.appendChild(hdr);
+		grp.items.forEach(function(cfg) { group.appendChild(_buildColorRow(cfg)); });
+		bColor.appendChild(group);
 		// Render preview after DOM attached
 		setTimeout(function() { _renderColorPreview(grp.items, preview); }, 10);
 	});
-	panelDisplay.appendChild(bColor);
+	panelColors.appendChild(bColor);
 
 	// ── Panel: 外观 ──
 	var panelAppear = document.createElement('div');
 	panelAppear.className = 'settings-panel is-hidden';
 	panelAppear.setAttribute('data-panel', 'appearance');
 
-	var bLook = _bubble(t('settings.bubble_look','整体外观'));
-	var modeBar = document.createElement('div');
-	modeBar.className = 'settings-mode-bar';
-	[{ v: 'auto', k: 'theme.auto_label', fb: '跟随系统', ico: 'theme_auto' },
-	 { v: 'dark', k: 'theme.dark_label', fb: '深色',   ico: 'theme_dark' },
-	 { v: 'light', k: 'theme.light_label', fb: '浅色', ico: 'theme_light' }].forEach(function(m) {
-		var btn = document.createElement('button');
-		btn.className = 'settings-mode-btn';
-		btn.innerHTML = icon(m.ico, 16, 16) + ' <span>' + t(m.k, m.fb) + '</span>';
-		if (state.colorThemeMode === m.v) btn.classList.add('is-active');
-		btn.addEventListener('click', function() {
-			state.colorThemeMode = m.v;
-			modeBar.querySelectorAll('.settings-mode-btn').forEach(function(b) { b.classList.remove('is-active'); });
-			btn.classList.add('is-active');
-			applyColorTheme();
-			saveSettings();
-		});
-		modeBar.appendChild(btn);
-	});
-	bLook.appendChild(modeBar);
+	// 深浅模式：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色）
+	var bLook = _bubble(t('settings.bubble_look','深浅模式'));
+	var lookGrid = document.createElement('div');
+	lookGrid.className = 'settings-look';
+	lookGrid.id = 'settingsLookGrid';
+	bLook.appendChild(lookGrid);
 	panelAppear.appendChild(bLook);
+	renderSettingsLookGrid();
 
 	var themeRefresh = document.createElement('button');
 	themeRefresh.className = 'c-icon-btn';
@@ -413,7 +435,7 @@ function buildSettingsPage() {
 	themeGrid.className = 'settings-theme-grid';
 	themeGrid.id = 'settingsThemeGrid';
 	bTheme.appendChild(themeGrid);
-	bTheme.appendChild(_bubbleFooter('colors', t('settings.hint_colors','想使用其他主题？在软件目录中新建 \\themes\\colors\\ 导入主题文件，或单击此按键创建示例文件夹')));
+	bTheme.appendChild(_bubbleFooter('colors', t('settings.hint_colors','想使用其他主题？在软件目录中新建 resources\\themes\\ 下的主题文件夹导入，或单击此按键创建示例主题')));
 	panelAppear.appendChild(bTheme);
 
 	var iconRefresh = document.createElement('button');
@@ -428,7 +450,7 @@ function buildSettingsPage() {
 	iconGrid.className = 'settings-theme-grid';
 	iconGrid.id = 'settingsIconGrid';
 	bIcons.appendChild(iconGrid);
-	bIcons.appendChild(_bubbleFooter('icons', t('settings.hint_icons','想使用其他图标主题？在软件目录中新建 \\themes\\icons\\ 导入图标文件，或单击此按键创建示例文件夹')));
+	bIcons.appendChild(_bubbleFooter('icons', t('settings.hint_icons','想使用其他图标主题？在软件目录中新建 resources\\icons\\ 下的图标包导入，或单击此按键创建示例图标包')));
 	panelAppear.appendChild(bIcons);
 
 	// ── Panel: 存储与行为 ──
@@ -455,28 +477,91 @@ function buildSettingsPage() {
 	langList.className = 'settings-lang-list';
 	langList.id = 'settingsLangList';
 	bLang.appendChild(langList);
-	bLang.appendChild(_bubbleFooter('i18n', t('settings.hint_i18n','想使用其他语言？在软件目录中新建 \\i18n\\ 导入语言文件，或单击此按键创建示例文件夹')));
+	bLang.appendChild(_bubbleFooter('i18n', t('settings.hint_i18n','想使用其他语言？在软件目录中新建 resources\\i18n\\ 导入语言文件，或单击此按键创建示例语言文件')));
 	panelLang.appendChild(bLang);
 
 	// ── Panel: 关于 ──
 	var panelAbout = document.createElement('div');
 	panelAbout.className = 'settings-panel is-hidden';
 	panelAbout.setAttribute('data-panel', 'about');
-	var bAbout = _bubble(t('settings.about_version','版本'));
-	var aboutInfo = document.createElement('div');
-	aboutInfo.style.cssText = 'font-size:13px;line-height:2;color:var(--fg);';
-	var aboutHTML = '<div style="font-size:18px;font-weight:700;margin-bottom:6px">' + escHtml(t('app.title','串口调试工具')) + ' v' + (window._appVersion || '0.6.1') + '</div>';
-	aboutHTML += '<div style="color:var(--placeholder);margin-bottom:14px">' + escHtml(t('settings.about_desc','Go + Wails 跨平台串口调试工具')) + '</div>';
-	aboutHTML += '<p style="margin-bottom:6px;line-height:1.8">' + escHtml(t('settings.about_p1','')) + '</p>';
-	aboutHTML += '<p style="margin-bottom:6px;line-height:1.8">' + escHtml(t('settings.about_p2','')) + '</p>';
-	aboutHTML += '<p style="line-height:1.8">' + escHtml(t('settings.about_p3','')) + '</p>';
-	aboutInfo.innerHTML = aboutHTML;
-	bAbout.appendChild(aboutInfo);
+
+	// 名片 + 两列（运行信息 / 说明）
+	var bAbout = document.createElement('div');
+	bAbout.className = 'settings-bubble settings-bubble--bare';
+	var aboutWrap = document.createElement('div');
+	aboutWrap.className = 'settings-about2';
+
+	var hero = document.createElement('div');
+	hero.className = 'settings-about-hero';
+	var heroHead = document.createElement('div');
+	heroHead.className = 'settings-about-hero-head';
+	var heroName = document.createElement('span');
+	heroName.className = 'settings-about-hero-name';
+	heroName.textContent = t('app.title', '串口调试工具');
+	heroHead.appendChild(heroName);
+	var heroVer = document.createElement('span');
+	heroVer.className = 'settings-about-hero-ver';
+	heroVer.textContent = 'v' + (window._appVersion || '0.8.2');
+	heroHead.appendChild(heroVer);
+	hero.appendChild(heroHead);
+	var heroDesc = document.createElement('p');
+	heroDesc.className = 'settings-about-hero-desc';
+	heroDesc.setAttribute('data-i18n', 'settings.about_desc');
+	heroDesc.textContent = t('settings.about_desc', 'Go + Wails 跨平台串口调试工具');
+	hero.appendChild(heroDesc);
+	aboutWrap.appendChild(hero);
+
+	var colA = document.createElement('div');
+	colA.className = 'settings-about-col';
+	var hA = document.createElement('div');
+	hA.className = 'settings-about-h';
+	hA.setAttribute('data-i18n', 'settings.about_runtime');
+	hA.textContent = t('settings.about_runtime', '运行信息');
+	colA.appendChild(hA);
+	var kv = document.createElement('div');
+	kv.className = 'settings-about-kv';
+	[['settings.about_kv_proto', '协议号', 'IPC 1'],
+	 ['settings.about_kv_dir', '程序目录', ''],
+	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
+	 ['settings.about_kv_back', '后端', 'Go / Wails v2'],
+	 ['settings.about_kv_render', '渲染', 'WebView2'],
+	 ['settings.about_kv_conf', '配置文件', 'settings.ini']].forEach(function(row) {
+		var k = document.createElement('span');
+		k.className = 'settings-about-k';
+		k.setAttribute('data-i18n', row[0]);
+		k.textContent = t(row[0], row[1]);
+		var v = document.createElement('span');
+		v.className = 'settings-about-v';
+		v.textContent = row[2];
+		kv.appendChild(k);
+		kv.appendChild(v);
+	});
+	colA.appendChild(kv);
+	aboutWrap.appendChild(colA);
+
+	var colB = document.createElement('div');
+	colB.className = 'settings-about-col';
+	var hB = document.createElement('div');
+	hB.className = 'settings-about-h';
+	hB.setAttribute('data-i18n', 'settings.about_notes');
+	hB.textContent = t('settings.about_notes', '说明');
+	colB.appendChild(hB);
+	['settings.about_p1', 'settings.about_p2', 'settings.about_p3'].forEach(function(key) {
+		var p = document.createElement('p');
+		p.className = 'settings-about-p';
+		p.setAttribute('data-i18n', key);
+		p.textContent = t(key, '');
+		colB.appendChild(p);
+	});
+	aboutWrap.appendChild(colB);
+
+	bAbout.appendChild(aboutWrap);
 	panelAbout.appendChild(bAbout);
 
 	// Nav items + panels
 	var sections = [
 		{ key: 'display',    i18n: 'settings.nav_display',    fb: '编码与显示', panel: panelDisplay },
+		{ key: 'colors',     i18n: 'settings.nav_colors',     fb: '数据高亮',   panel: panelColors },
 		{ key: 'appearance', i18n: 'settings.nav_appearance', fb: '外观',       panel: panelAppear },
 		{ key: 'storage',    i18n: 'settings.nav_storage',    fb: '存储与行为', panel: panelStorage },
 		{ key: 'language',   i18n: 'settings.nav_language',   fb: '语言',       panel: panelLang },
@@ -486,9 +571,16 @@ function buildSettingsPage() {
 	sections.forEach(function(sec, idx) {
 		var item = document.createElement('div');
 		item.className = 'settings-nav-item' + (idx === 0 ? ' is-active' : '');
-		item.setAttribute('data-i18n', sec.i18n);
-		item.textContent = t(sec.i18n, sec.fb);
 		item.setAttribute('data-nav', sec.key);
+		var navIco = document.createElement('span');
+		navIco.className = 'settings-nav-icon';
+		navIco.innerHTML = icon(SETTINGS_NAV_ICONS[sec.key] || 'settings', 18, 18);
+		item.appendChild(navIco);
+		var navLab = document.createElement('span');
+		navLab.className = 'settings-nav-label';
+		navLab.setAttribute('data-i18n', sec.i18n);
+		navLab.textContent = t(sec.i18n, sec.fb);
+		item.appendChild(navLab);
 		item.addEventListener('click', function() {
 			nav.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
 			item.classList.add('is-active');
@@ -500,6 +592,15 @@ function buildSettingsPage() {
 			if (sec.key === 'language') {
 				setTimeout(function() { refreshSettingsLangList(); }, 50);
 			}
+			// 面板显示出来后：补渲染颜色预览，并重新量标题高度（隐藏时量到 0）
+			setTimeout(function() {
+				_measureBubbleHeads(sec.panel);
+				if (sec.key === 'colors') {
+					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
+						if (el._colorItems) _renderColorPreview(el._colorItems, el);
+					});
+				}
+			}, 50);
 		});
 		nav.appendChild(item);
 		body.appendChild(sec.panel);
@@ -536,6 +637,10 @@ function buildSettingsPage() {
 			item.classList.toggle('is-hidden', q !== '' && text.indexOf(q) < 0);
 		});
 	});
+
+	// 两列卡的竖线起点：量一次卡片头高度写进 CSS 变量，避免竖线贯穿标题行。
+	// 隐藏面板（display:none）量出来是 0，所以切到该面板时要再量一次。
+	setTimeout(function() { _measureBubbleHeads(wrapper); }, 0);
 
 	return wrapper;
 }
@@ -686,19 +791,65 @@ function _themeColorsForMode(data, mode) {
 	return { bg: bg || (mode === 'dark' ? '#1e1e1e' : '#f5f5f5'), fg: fg || (mode === 'dark' ? '#e0e0e0' : '#333') };
 }
 
-function _makeSwatch(mode, bg, fg, label) {
-	var sw = document.createElement('span');
-	sw.className = 'settings-theme-swatch';
-	sw.title = label;
-	sw.style.background = bg;
-	sw.style.color = fg;
-	var dot = document.createElement('span');
-	dot.className = 'settings-theme-swatch-dot';
-	dot.style.background = fg;
-	sw.appendChild(dot);
-	var lbl = document.createTextNode(label);
-	sw.appendChild(lbl);
-	return sw;
+function _themeAccent(data, mode) {
+	var block = data || {};
+	var pick = function (b) { return b && b['--accent'] ? b['--accent'] : ''; };
+	return pick(block[mode]) || pick(block.common) || '';
+}
+
+// 主题缩略图：--thumb-image（可用 --thumb-overlay 压暗，不写就借用 --app-bg-overlay）
+function _themeThumb(data, mode) {
+	var dm = (data && data[mode]) || {};
+	var cm = (data && data.common) || {};
+	return {
+		img: dm['--thumb-image'] || cm['--thumb-image'] || '',
+		overlay: dm['--thumb-overlay'] || cm['--thumb-overlay'] ||
+			dm['--app-bg-overlay'] || cm['--app-bg-overlay'] || ''
+	};
+}
+
+// 色样的一半：底色 + 字体样本「Aa」+ 强调色胶囊（“按键示例”）
+// 主题给了缩略图就铺图（再叠遮罩），没给就还是纯色块
+function _makeThemeHalf(data, mode) {
+	var c = _themeColorsForMode(data, mode);
+	var accent = _themeAccent(data, mode);
+	if (!accent) accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || c.fg;
+	var half = document.createElement('span');
+	half.className = 'settings-theme-half';
+	half.style.background = c.bg;
+	var thumb = _themeThumb(data, mode);
+	if (thumb.img) {
+		half.classList.add('has-thumb');
+		half.style.backgroundImage = (thumb.overlay ? thumb.overlay + ', ' : '') + thumb.img;
+		half.style.backgroundSize = thumb.overlay ? 'cover, cover' : 'cover';
+		half.style.backgroundPosition = 'center';
+		half.style.backgroundRepeat = 'no-repeat';
+	}
+	half.title = (mode === 'dark' ? t('theme.dark_label','深色') : t('theme.light_label','浅色'));
+	var fg = document.createElement('span');
+	fg.className = 'settings-theme-sample-fg';
+	fg.textContent = 'Aa';
+	fg.style.color = c.fg;
+	half.appendChild(fg);
+	var acc = document.createElement('i');
+	acc.className = 'settings-theme-sample-accent';
+	acc.style.background = accent;
+	half.appendChild(acc);
+	return half;
+}
+
+// 色样：支持深浅两种模式就左右各画一半（左浅右深），只支持一种就整条。
+// 不用窗口预览，免得和「深浅模式」那三张卡重复。
+function _makeThemeSample(th, data) {
+	var modes = th.modes || ['dark'];
+	var order = [];
+	if (modes.indexOf('light') >= 0) order.push('light');
+	if (modes.indexOf('dark') >= 0) order.push('dark');
+	if (!order.length) order.push('dark');
+	var box = document.createElement('span');
+	box.className = 'settings-theme-sample' + (order.length > 1 ? ' is-pair' : '');
+	order.forEach(function(mode) { box.appendChild(_makeThemeHalf(data, mode)); });
+	return box;
 }
 
 async function _fetchThemeColors(th) {
@@ -739,22 +890,15 @@ async function renderSettingsThemeGrid() {
 		if (th.id === 'system') data = _systemThemeComputedFallback();
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.colorThemeId === th.id ? ' is-selected' : '');
+		card.appendChild(_makeThemeSample(th, data));
 		var name = document.createElement('span');
 		name.className = 'settings-theme-card-name';
 		name.textContent = th.name || th.id;
 		card.appendChild(name);
-		var modes = th.modes || ['dark'];
-		var swatches = document.createElement('span');
-		swatches.className = 'settings-theme-swatches';
-		if (modes.indexOf('dark') >= 0) {
-			var dc = _themeColorsForMode(data, 'dark');
-			swatches.appendChild(_makeSwatch('dark', dc.bg, dc.fg, t('theme.dark_label','深色')));
-		}
-		if (modes.indexOf('light') >= 0) {
-			var lc = _themeColorsForMode(data, 'light');
-			swatches.appendChild(_makeSwatch('light', lc.bg, lc.fg, t('theme.light_label','浅色')));
-		}
-		card.appendChild(swatches);
+		var chk = document.createElement('span');
+		chk.className = 'settings-pick-check';
+		chk.innerHTML = icon('check', 11, 11);
+		card.appendChild(chk);
 		card.addEventListener('click', function() {
 			if (th.external) {
 				window.go.main.App.GetExternalColorTheme(th.id).then(function(data2) {
@@ -780,25 +924,125 @@ async function renderSettingsThemeGrid() {
 		});
 		grid.appendChild(card);
 	});
+	// 换了颜色主题：上面那三张迷你窗口要跟着换配色
+	renderSettingsLookGrid();
 }
 
 function _systemThemeComputedFallback() {
-	var cs = getComputedStyle(document.documentElement);
 	// The system theme has no explicit data — it follows the browser's
-	// prefers-color-scheme.  Sample the current computed colours for dark
-	// mode and use the built-in light-mode defaults for light mode (both
-	// must match the values in style.css :root / media-query blocks).
+	// prefers-color-scheme. 两套都写死内置默认值：读当前 computed style 会把
+	// 正在用的那套颜色带到另一套里，「系统」卡片的深色预览就会跟浅色一样。
 	return {
 		common: {},
 		dark:  {
-			'--bg': cs.getPropertyValue('--bg').trim() || '#1e1e1e',
-			'--fg': cs.getPropertyValue('--fg').trim() || '#d4d4d4'
+			'--bg': '#1b1b1d',
+			'--fg': '#e9e9ec'
 		},
 		light: {
-			'--bg': '#f3f3f3',
-			'--fg': '#1a1a1a'
+			'--bg': '#f6f6f7',
+			'--fg': '#1d1d20'
 		}
 	};
+}
+
+// ---- 深浅模式：三张迷你窗口预览卡 ----
+var LOOK_MODES = [
+	{ v: 'auto',  k: 'theme.auto_label',  fb: '跟随系统', ico: 'computer' },
+	{ v: 'light', k: 'theme.light_label', fb: '浅色',     ico: 'theme_light' },
+	{ v: 'dark',  k: 'theme.dark_label',  fb: '深色',     ico: 'theme_dark' }
+];
+
+// 预览窗口用当前颜色主题自己的深浅两套配色；主题数据还没取到时退回内置默认值
+function _lookPalette(mode) {
+	var id = state.colorThemeId || 'system';
+	var data = _themeColorCache[id];
+	if (!data || !Object.keys(data).length) {
+		data = (id === 'system') ? _systemThemeComputedFallback() : {};
+	}
+	var c = _themeColorsForMode(data, mode);
+	var accent = _themeAccent(data, mode);
+	if (!accent) {
+		var cur = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+		accent = cur || (mode === 'dark' ? '#4cc2ff' : '#2563eb');
+	}
+	return { bg: c.bg, fg: c.fg, accent: accent };
+}
+
+function _lookNode(tag, cls) {
+	var n = document.createElement(tag);
+	if (cls) n.className = cls;
+	return n;
+}
+
+// 一个迷你窗口：标题条 + 侧栏 + 四行内容 + 强调胶囊
+function _lookWindow(mode) {
+	var pal = _lookPalette(mode);
+	var win = _lookNode('span', 'settings-look-win');
+	win.style.setProperty('--p-bg', pal.bg);
+	win.style.setProperty('--p-fg', pal.fg);
+	win.style.setProperty('--p-accent', pal.accent);
+
+	var bar = _lookNode('span', 'settings-look-win-bar');
+	for (var i = 0; i < 3; i++) bar.appendChild(_lookNode('i', 'settings-look-win-dot'));
+	win.appendChild(bar);
+
+	var body = _lookNode('span', 'settings-look-win-body');
+	body.appendChild(_lookNode('span', 'settings-look-win-side'));
+	var main = _lookNode('span', 'settings-look-win-main');
+	['56%', '86%', '68%', '44%'].forEach(function(w, j) {
+		var ln = _lookNode('i', 'settings-look-win-line' + (j === 0 ? ' is-head' : ''));
+		ln.style.width = w;
+		main.appendChild(ln);
+	});
+	main.appendChild(_lookNode('i', 'settings-look-win-pill'));
+	body.appendChild(main);
+	win.appendChild(body);
+	return win;
+}
+
+function renderSettingsLookGrid() {
+	var grid = document.getElementById('settingsLookGrid');
+	if (!grid) return;
+	grid.innerHTML = '';
+	LOOK_MODES.forEach(function(m) {
+		var card = _lookNode('button', 'settings-look-card' + (state.colorThemeMode === m.v ? ' is-active' : ''));
+		card.type = 'button';
+		card.setAttribute('data-look', m.v);
+
+		var pv = _lookNode('span', 'settings-look-pv');
+		if (m.v === 'auto') {
+			// 跟随系统：左浅右深，中间一条缝
+			var pair = _lookNode('span', 'settings-look-pv-pair');
+			pair.appendChild(_lookWindow('light'));
+			pair.appendChild(_lookWindow('dark'));
+			pv.appendChild(pair);
+		} else {
+			pv.appendChild(_lookWindow(m.v));
+		}
+		card.appendChild(pv);
+
+		var meta = _lookNode('span', 'settings-look-meta');
+		meta.innerHTML = icon(m.ico, 15, 15);
+		var name = _lookNode('span', 'settings-look-name');
+		name.textContent = t(m.k, m.fb);
+		meta.appendChild(name);
+		card.appendChild(meta);
+
+		var chk = _lookNode('span', 'settings-pick-check');
+		chk.innerHTML = icon('check', 11, 11);
+		card.appendChild(chk);
+
+		card.addEventListener('click', function() {
+			state.colorThemeMode = m.v;
+			grid.querySelectorAll('.settings-look-card').forEach(function(c) { c.classList.remove('is-active'); });
+			card.classList.add('is-active');
+			applyColorTheme();
+			saveSettings();
+			// 深浅换了：下面颜色主题卡的色样也要跟着换成对应模式
+			renderSettingsThemeGrid();
+		});
+		grid.appendChild(card);
+	});
 }
 
 function renderSettingsIconGrid() {
@@ -809,15 +1053,61 @@ function renderSettingsIconGrid() {
 	themes.forEach(function(th) {
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.iconThemeId === th.id ? ' is-selected' : '');
-		if (th._i18nKey) { card.textContent = t(th._i18nKey, '内置默认'); }
-		else if (th.name && typeof th.name === 'object') { card.textContent = _themeName(th.name); }
-		else { card.textContent = th.name || th.id; }
+
+		// 示例图标：内置默认用当前已加载的图标集，外置图标包逐个读它自己的 svg
+		var preview = document.createElement('div');
+		preview.className = 'settings-icon-preview';
+		card.appendChild(preview);
+
+		var iconName = document.createElement('span');
+		iconName.className = 'settings-theme-card-name';
+		if (th._i18nKey) { iconName.textContent = t(th._i18nKey, '内置默认'); }
+		else if (th.name && typeof th.name === 'object') { iconName.textContent = _themeName(th.name); }
+		else { iconName.textContent = th.name || th.id; }
+		card.appendChild(iconName);
+
 		card.addEventListener('click', function() {
 			state.iconThemeId = th.id;
 			saveSettings();
 			renderSettingsIconGrid();
 		});
 		grid.appendChild(card);
+
+		_fillIconPreview(preview, th);
+	});
+}
+
+/* 往预览格里塞最多 6 个示例图标 */
+async function _fillIconPreview(box, th) {
+	var icons = null;
+	if (th.builtin) {
+		if (!th.id) {
+			// 「内置默认」= system 包，用当前已加载的那套
+			icons = (typeof activeIcons !== 'undefined' && activeIcons) ? activeIcons : null;
+		} else {
+			try {
+				var bt = await window.go.main.App.GetBuiltinIconTheme(th.id);
+				if (bt && bt.icons) icons = bt.icons;
+			} catch (e) {}
+		}
+	} else {
+		try {
+			var ext = await window.go.main.App.GetExternalIconTheme(th.id);
+			if (ext && ext.icons) icons = ext.icons;
+		} catch (e) {}
+	}
+	if (!icons) return;
+	// 优先拿常用图标当门面，不够再按字母序补
+	var prefer = ['settings', 'terminal', 'send', 'reset', 'search', 'menu', 'history', 'swap', 'close', 'plus'];
+	var keys = Object.keys(icons).filter(function(k) { return k.charAt(0) !== '_'; });
+	keys.sort();
+	var picked = prefer.filter(function(k) { return !!icons[k]; });
+	keys.forEach(function(k) { if (picked.length < 6 && picked.indexOf(k) < 0) picked.push(k); });
+	picked.slice(0, 6).forEach(function(k) {
+		var span = document.createElement('span');
+		span.className = 'settings-icon-preview-item';
+		span.innerHTML = icons[k];
+		box.appendChild(span);
 	});
 }
 
@@ -864,11 +1154,18 @@ async function refreshSettingsLangList() {
 			isFirstExt = false;
 		}
 		var row = document.createElement('div');
-		row.className = 'settings-lang-item' + (lang === item.code ? ' is-selected' : '');
-		row.textContent = item.name;
+		row.className = 'settings-lang-card' + (lang === item.code ? ' is-selected' : '');
+		var langName = document.createElement('span');
+		langName.className = 'settings-lang-name';
+		langName.textContent = item.name;
+		row.appendChild(langName);
+		var langCode = document.createElement('span');
+		langCode.className = 'settings-lang-code';
+		langCode.textContent = item.code;
+		row.appendChild(langCode);
 		(function(code, el) {
 			el.addEventListener('click', function() {
-				el.parentNode.querySelectorAll('.settings-lang-item').forEach(function(s) { s.classList.remove('is-selected'); });
+				el.parentNode.querySelectorAll('.settings-lang-card').forEach(function(s) { s.classList.remove('is-selected'); });
 				el.classList.add('is-selected');
 				if (typeof setLanguage === 'function') {
 					setLanguage(code).then(function() {
@@ -884,10 +1181,82 @@ async function refreshSettingsLangList() {
 }
 
 // ---- color picker integration ----
-function _openColorPicker(trigger, defaultColor, onApply) {
+// 标题走 `title` 属性（优先级高于组件 i18n 的 header.title）：
+// 「设置项名 · 背景/字体 · 深色/浅色」。列名用短词（背景 / 字体），因为标题栏窄。
+var _COLOR_TITLE_SEP = ' · ';
+
+// 弹窗宽度：组件 `:host` 写死 320px。三段式标题在 en/fr/ja/ru 下 320px 会被组件
+// 的字号自适应压到 15~17px 或用省略号截断；360px 下 9 语言都能保持 19px 单行
+// （实测最紧 5.9px，日语）。用内联样式覆盖 :host 的 width，不改组件文件。
+var _COLOR_PICKER_WIDTH = 360;
+
+// `<color-picker>` 0.2.6 的内置文案 key → 项目 i18n key（九语言在 config/i18n 里）。
+// 组件未提供的 key 自动回落内置中文；这里给全，非中文界面才不会露中文。
+var _COLOR_PICKER_I18N_KEYS = {
+	'header.title': 'colorpicker.title',
+	'header.close': 'colorpicker.close',
+	'hex.label': 'colorpicker.hex_label',
+	'eyedropper.title': 'colorpicker.eyedropper',
+	'eyedropper.unsupported': 'colorpicker.eyedropper_unsupported',
+	'section.basic': 'colorpicker.basic',
+	'section.saved': 'colorpicker.saved',
+	'action.save': 'colorpicker.save',
+	'action.apply': 'colorpicker.apply',
+	'basicColor.pureRed': 'colorpicker.c_pure_red',
+	'basicColor.pureOrange': 'colorpicker.c_pure_orange',
+	'basicColor.pureYellow': 'colorpicker.c_pure_yellow',
+	'basicColor.yellowGreen': 'colorpicker.c_yellow_green',
+	'basicColor.pureGreen': 'colorpicker.c_pure_green',
+	'basicColor.springGreen': 'colorpicker.c_spring_green',
+	'basicColor.pureCyan': 'colorpicker.c_pure_cyan',
+	'basicColor.skyBlue': 'colorpicker.c_sky_blue',
+	'basicColor.pureBlue': 'colorpicker.c_pure_blue',
+	'basicColor.blueViolet': 'colorpicker.c_blue_violet',
+	'basicColor.magenta': 'colorpicker.c_magenta',
+	'basicColor.roseRed': 'colorpicker.c_rose_red',
+	'basicColor.pureWhite': 'colorpicker.c_pure_white',
+	'basicColor.grayLight': 'colorpicker.c_gray_light',
+	'basicColor.grayMedium': 'colorpicker.c_gray_medium',
+	'basicColor.grayDark': 'colorpicker.c_gray_dark',
+	'basicColor.halfRed': 'colorpicker.c_half_red',
+	'basicColor.halfOrange': 'colorpicker.c_half_orange',
+	'basicColor.halfYellow': 'colorpicker.c_half_yellow',
+	'basicColor.halfGreen': 'colorpicker.c_half_green',
+	'basicColor.halfCyan': 'colorpicker.c_half_cyan',
+	'basicColor.halfBlue': 'colorpicker.c_half_blue',
+	'basicColor.halfMagenta': 'colorpicker.c_half_magenta',
+	'basicColor.halfWhite': 'colorpicker.c_half_white',
+	'basicColor.halfBlack': 'colorpicker.c_half_black',
+	'basicColor.halfRedLight': 'colorpicker.c_half_red_light',
+	'basicColor.halfGreenLight': 'colorpicker.c_half_green_light',
+	'basicColor.halfBlueLight': 'colorpicker.c_half_blue_light',
+	'basicColor.halfYellowLight': 'colorpicker.c_half_yellow_light',
+	'basicColor.halfPurpleLight': 'colorpicker.c_half_purple_light',
+	'basicColor.halfCyanLight': 'colorpicker.c_half_cyan_light',
+	'basicColor.halfGray': 'colorpicker.c_half_gray'
+};
+
+// 取当前语言下的组件文案表；缺失的键不放进 map，交给组件回落内置中文。
+function _colorPickerI18n() {
+	var map = {};
+	for (var k in _COLOR_PICKER_I18N_KEYS) {
+		if (!Object.prototype.hasOwnProperty.call(_COLOR_PICKER_I18N_KEYS, k)) continue;
+		var v = t(_COLOR_PICKER_I18N_KEYS[k], '');
+		if (v) map[k] = v;
+	}
+	return map;
+}
+
+function _openColorPicker(trigger, defaultColor, onApply, title) {
 	var picker = document.createElement('color-picker');
+	if (title) picker.setAttribute('title', title);
 	picker.setAttribute('theme', document.documentElement.getAttribute('data-theme') || 'dark');
 	picker.setAttribute('transparency', 'solid');
+	picker.style.width = _COLOR_PICKER_WIDTH + 'px';
+	var i18nMap = _colorPickerI18n();
+	if (Object.keys(i18nMap).length) {
+		try { picker.setAttribute('i18n', JSON.stringify(i18nMap)); } catch (e) { /* 忽略：回落内置中文 */ }
+	}
 	var cur = trigger.style.background;
 	// Pass current color to picker if it differs from default; fall back to default.
 	if (cur && !/^\s*$/.test(cur) && cur !== defaultColor) picker.setAttribute('color', cur);
@@ -989,7 +1358,8 @@ function _buildColorRow(cfg) {
 	// Label
 	var lbl = document.createElement('span');
 	lbl.className = 'c-color-label';
-	lbl.textContent = t(cfg.i18n, cfg.fb);
+	var itemName = t(cfg.i18n, cfg.fb);
+	lbl.textContent = itemName;
 	row.appendChild(lbl);
 
 	// Bold checkbox
@@ -1013,7 +1383,7 @@ function _buildColorRow(cfg) {
 	row.appendChild(italicWrap);
 
 	// Helper: make a swatch pair (dark + light) inside a container
-	function _makeSwatchPair(swrap, curDark, curLight, defDark, defLight, onDark, onLight) {
+	function _makeSwatchPair(swrap, curDark, curLight, defDark, defLight, onDark, onLight, name, kindKey) {
 		function _one(cls, fill, pickerDef, onClick) {
 			var outer = document.createElement('span');
 			outer.className = 'c-color-swatch ' + cls;
@@ -1021,9 +1391,15 @@ function _buildColorRow(cfg) {
 			inner.className = 'c-color-swatch-fill';
 			inner.style.background = fill;
 			outer.appendChild(inner);
-			outer.title = cls === 'sw-dark' ? t('settings.color_sw_dark','深色主题') : t('settings.color_sw_light','浅色主题');
+			var isDark = cls === 'sw-dark';
+			outer.title = isDark ? t('settings.color_sw_dark','深色主题') : t('settings.color_sw_light','浅色主题');
 			outer.addEventListener('click', function() {
-				_openColorPicker(outer, pickerDef, function(color) { onClick(color); });
+				var shade = isDark ? t('theme.dark_label','深色') : t('theme.light_label','浅色');
+				var kind = kindKey ? t(kindKey, '') : '';
+				var title = name
+					? name + _COLOR_TITLE_SEP + (kind ? kind + _COLOR_TITLE_SEP : '') + shade
+					: '';
+				_openColorPicker(outer, pickerDef, function(color) { onClick(color); }, title);
 			});
 			swrap.appendChild(outer);
 			return { outer: outer, fill: inner };
@@ -1043,7 +1419,8 @@ function _buildColorRow(cfg) {
 		function(c) {
 			if (cfg.bgKey) { bgV.light = c; } else { bgV.bgLight = c; }
 			bgLight = c; _updateSwatchFills(bgWrap, bgDark, bgLight); _persistColor(bgKey, bgV);
-		}
+		},
+		itemName, 'settings.color_bg_short'
 	);
 	row.appendChild(bgWrap);
 
@@ -1052,7 +1429,8 @@ function _buildColorRow(cfg) {
 	fgWrap.className = 'c-color-swatches';
 	_makeSwatchPair(fgWrap, fgDark, fgLight, fgDflt.dark, fgDflt.light,
 		function(c) { fgV.dark = c; fgDark = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); },
-		function(c) { fgV.light = c; fgLight = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); }
+		function(c) { fgV.light = c; fgLight = c; _updateSwatchFills(fgWrap, fgDark, fgLight); _persistColor(fgKey, fgV); },
+		itemName, 'settings.color_fg_short'
 	);
 	row.appendChild(fgWrap);
 
@@ -1121,129 +1499,99 @@ function _refreshColorPreview(key) {
 		}
 	}
 
-	function _renderColorPreview(items, container) {
+	// 预热变量：把某一主题的一整套 --dc-* 内联到预览容器上。
+// `_applyDisplayColors()` 只把两套配色写到 `:root[data-theme="dark"|"light"]`，
+// 而预览要在同一屏里并排显示深浅两栏，所以按主题把变量注入到各自容器。
+function _applyPreviewVars(box, mode) {
+	var colors = state.displayColors || {};
+	var dflt = _defaultDisplayColors();
+	for (var i = 0; i < _displayColorKeys.length; i++) {
+		var k = _displayColorKeys[i];
+		var v = colors[k] || {};
+		var d = dflt[k] || {};
+		var fg = v[mode] || d[mode] || '';
+		if (fg) box.style.setProperty('--dc-' + k, fg);
+		var bg = (mode === 'dark' ? v.bgDark : v.bgLight);
+		if (bg === undefined) bg = (mode === 'dark' ? d.bgDark : d.bgLight);
+		if (bg) box.style.setProperty('--dc-' + k + '-bg', bg);
+		var bold = (v.bold !== undefined) ? v.bold : d.bold;
+		if (bold) box.style.setProperty('--dc-' + k + '-bold', 'bold');
+		var italic = (v.italic !== undefined) ? v.italic : d.italic;
+		if (italic) box.style.setProperty('--dc-' + k + '-italic', 'italic');
+	}
+}
+
+// 数据高亮预览：走主显示区同一条渲染路径（`makeDataRow` + `renderSegments`），
+// 这样看到的就是真实显示框里的样子（时间戳行、字符统计、控制字符标记、转义字节、
+// 字号字体都跟 `state.displayFontSize` / `displayFontFamily` 一致）。
+// `opts.displayMode` 让同一栏里既能画文本行也能画 Hex 行，不必动全局 state。
+function _renderColorPreview(items, container) {
 	if (!container) return;
 	container.innerHTML = '';
-	var colors = state.displayColors || _defaultDisplayColors();
-	var darkLight = ['dark','light'];
-	var groupKey = items[0].key;
-	var isSingle = groupKey === 'tsTx';
-	var isFwd = groupKey === 'ts1';
+	var isFwd = items[0].key === 'ts1';
+	var samples = isFwd ? [
+		{ dir: '1', ts: '13:00:02.100', hex: 'E8AFB7E6B182020D0A',
+		  segs: [{ t: 'text', v: '请求' }, { t: 'hex', v: '02' }, { t: 'cr' }, { t: 'lf' }] },
+		{ dir: '2', ts: '13:00:02.200', hex: 'E7A1AEE8AEA4030D0A',
+		  segs: [{ t: 'text', v: '确认' }, { t: 'hex', v: '03' }, { t: 'cr' }, { t: 'lf' }] }
+	] : [
+		{ dir: 'rx', ts: '13:00:01.100', hex: '4869010D0A',
+		  segs: [{ t: 'text', v: 'Hi' }, { t: 'hex', v: '01' }, { t: 'cr' }, { t: 'lf' }] },
+		{ dir: 'tx', ts: '13:00:01.200', hex: '4F4BFF0D0A',
+		  segs: [{ t: 'text', v: 'OK' }, { t: 'hex', v: 'FF' }, { t: 'cr' }, { t: 'lf' }] }
+	];
+	var modes = ['dark', 'light'];
 	for (var m = 0; m < 2; m++) {
-		var ml = darkLight[m];
+		var mode = modes[m];
 		var box = document.createElement('div');
 		box.className = 'c-color-preview ' + (m === 0 ? 'c-preview-dark' : 'c-preview-light');
-		// Get color + bg + bold for a key
-		function _clr(k) {
-			var v = colors[k] || _defaultDisplayColors()[k] || {};
-			if (v[ml]) return v[ml];
-			var d = (_defaultDisplayColors()[k]) || {};
-			return d[ml] || '';
+		box.setAttribute('data-preview-theme', mode);
+		_applyPreviewVars(box, mode);
+		for (var s = 0; s < samples.length; s++) {
+			var sm = samples[s];
+			makeDataRow(box, sm.dir, sm.ts, sm.hex, sm.segs, { displayMode: 'text' });
+			makeDataRow(box, sm.dir, sm.ts, sm.hex, null, { displayMode: 'hex' });
 		}
-		function _cbg(k) {
-			var v = colors[k] || _defaultDisplayColors()[k] || {};
-			if (v.bgDark !== undefined && v.bgLight !== undefined) { return ml === 'dark' ? (v.bgDark || 'transparent') : (v.bgLight || 'transparent'); }
-			var d = (_defaultDisplayColors()[k]) || {};
-			var bv = ml === 'dark' ? d.bgDark : d.bgLight;
-			return bv || 'transparent';
-		}
-		function _cbold(k) {
-			var v = colors[k] || _defaultDisplayColors()[k] || {};
-			if (v.bold !== undefined) return v.bold;
-			var d = (_defaultDisplayColors()[k]) || {};
-			return !!d.bold;
-		}
-		function _span(k, t) {
-			var fw = _cbold(k) ? 'font-weight:bold;' : '';
-			var bg = _cbg(k);
-			return '<span style="color:' + _clr(k) + ';background:' + bg + ';' + fw + '">' + escHtml(t) + '</span>';
-		}
-		// Preview ctrl char — child-span structure matching decoder.js
-		// .ctrl-mark (visible, colored) + .ctrl-real (font-size:0, hidden)
-		var _ctrl = function(clbl, ws) {
-			var cfgKey = isSingle ? 'ctrlFg' : 'fctrlFg';
-			var cbgKey = isSingle ? 'ctrlBg' : 'fctrlBg';
-			var fw = _cbold(cfgKey) ? 'font-weight:bold;' : '';
-			return '<span style="background:' + _clr(cbgKey) + ';">'
-				+ '<span class="ctrl-mark" style="color:' + _clr(cfgKey) + ';' + fw + '">' + escHtml(clbl) + '</span>'
-				+ '<span class="ctrl-real">' + escHtml(ws) + '</span>'
-				+ '</span>';
-		};
-		var html = '';
-		if (isSingle) {
-			// Rx text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsRx', '[13:00:01.100] Rx ⇃ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('textRx', 'Hi') + _span('hexEsc', '/01') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// Rx hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsRx', '[13:00:01.100] Rx ⇃ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hexRx', '48 69 01 0D 0A') + '</div>';
-			// Tx text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsTx', '[13:00:01.200] Tx ↾ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('textTx', 'OK') + _span('hexEsc', '/FF') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// Tx hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('tsTx', '[13:00:01.200] Tx ↾ ') + _span('stat', '~5B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hexTx', '4F 4B FF 0D 0A') + '</div>';
-		} else if (isFwd) {
-			// P1 text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts1', '[13:00:02.100] P1 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('text1', '请求') + _span('fhexEsc', '/02') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// P1 hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts1', '[13:00:02.100] P1 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hex1', 'E8 AF B7 E6 B1 82 02 0D 0A') + '</div>';
-			// P2 text line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts2', '[13:00:02.200] P2 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('text2', '确认') + _span('fhexEsc', '/03') + _ctrl('←', '\r') + _ctrl('↵', '\n') + '</div>';
-			// P2 hex line
-			html += '<div style="font-size:10px;line-height:1.4">' +
-				_span('ts2', '[13:00:02.200] P2 ') + _span('fstat', '~10B') + '</div>' +
-				'<div style="font-size:11px;line-height:1.5">' +
-				_span('hex2', 'E7 A1 AE E8 AE A4 03 0D 0A') + '</div>';
-		}
-		box.innerHTML = html;
 		container.appendChild(box);
 	}
 }
 
 // ---- refresh settings page ----
 function refreshSettingsPage() {
-	var page = document.querySelector('.settings-layout');
-	if (!page) return;
-	// Remember which panel is active before rebuilding
-	var activeNav = page.parentNode.querySelector('.settings-nav-item.is-active');
-	var activeKey = activeNav ? activeNav.getAttribute('data-nav') : 'display';
-	var parent = page.parentNode;
-	if (parent) {
-		var newPage = buildSettingsPage();
-		parent.replaceChild(newPage, page);
-		// Restore the active panel
-		var newNav = parent.querySelector('.settings-nav-item[data-nav="' + activeKey + '"]');
-		var newPanel = parent.querySelector('.settings-panel[data-panel="' + activeKey + '"]');
-		if (newNav) {
-			parent.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
-			newNav.classList.add('is-active');
-		}
-		if (newPanel) {
-			parent.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
-			newPanel.classList.remove('is-hidden');
-		}
-		renderSettingsThemeGrid();
-		renderSettingsIconGrid();
-		refreshSettingsLangList();
+	var layout = document.querySelector('.settings-layout');
+	if (!layout) return;
+	// 要替换的是**整个 wrapper**（`buildSettingsPage()` 返回的就是它），不是里面的
+	// `.settings-layout`。旧实现拿 layout 当替换目标，于是每次刷新都多套一层
+	// `.settings-wrapper`、多复制一个 `position:absolute` 的 `.settings-header` ——
+	// header 叠在同一坐标，标题「设置」就一层层压上去，看起来像越来越黑的重影
+	// （切一次语言 / 点一次颜色重置各加一层）。
+	var old = layout.closest('.settings-wrapper') || layout;
+	// 自愈：旧版本会一层套一层地留下 `.settings-wrapper`，向上找到最外层整体替换，
+	// 这样已经叠出好几层的窗口刷新一次就能回到 1 层，不必关掉设置页重开。
+	while (old.parentNode && old.parentNode.classList && old.parentNode.classList.contains('settings-wrapper')) {
+		old = old.parentNode;
 	}
+	var parent = old.parentNode;
+	if (!parent) return;
+	// Remember which panel is active before rebuilding
+	var activeNav = old.querySelector('.settings-nav-item.is-active');
+	var activeKey = activeNav ? activeNav.getAttribute('data-nav') : 'display';
+	var newPage = buildSettingsPage();
+	parent.replaceChild(newPage, old);
+	// Restore the active panel
+	var newNav = newPage.querySelector('.settings-nav-item[data-nav="' + activeKey + '"]');
+	var newPanel = newPage.querySelector('.settings-panel[data-panel="' + activeKey + '"]');
+	if (newNav) {
+		newPage.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
+		newNav.classList.add('is-active');
+	}
+	if (newPanel) {
+		newPage.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
+		newPanel.classList.remove('is-hidden');
+	}
+	renderSettingsThemeGrid();
+	renderSettingsIconGrid();
+	refreshSettingsLangList();
 }
 
 // ---- check if settings tab is active ----
