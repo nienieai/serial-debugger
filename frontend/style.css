@@ -1,4 +1,4 @@
-/* ============================================================
+﻿/* ============================================================
    串口调试工具 v0.7.4 — CSS
    Organization: vars → reset → utilities → states → base
                  → layout-overlays → components → rtl → scrollbar
@@ -338,6 +338,7 @@ button:disabled:active { transform: none; box-shadow: none; }
   background-color: var(--input-bg);
   background-image: var(--tab-bg-overlay, none), var(--tab-bg-image, none);
   background-size: cover, cover; background-position: center, center; background-repeat: no-repeat, no-repeat;
+  background-attachment: fixed, fixed;
   border: 1px solid var(--border);
   border-radius: 10px 10px 0 0; padding: 5px; cursor: pointer; font-size: 13px;
   color: var(--fg); position: relative; height: 30px; line-height: 1; white-space: nowrap;
@@ -368,6 +369,10 @@ button:disabled:active { transform: none; box-shadow: none; }
   background-size: cover, cover;
   background-position: center, center;
   background-repeat: no-repeat, no-repeat;
+  /* fixed：以视口为基准铺图，几条栏取到的是同一张图的不同切片，
+     看起来像「一整张照片从窗口后面透出来」；用默认的 local 会按每条栏自己
+     那点高度放大，取到的是几块随机纹理，像裂开的图 */
+  background-attachment: fixed, fixed;
 }
 .header::before    { background-image: var(--menubar-bg-overlay, none),   var(--menubar-bg-image, none); }
 .tabs-bar::before  { background-image: var(--tabbar-bg-overlay, none),    var(--tabbar-bg-image, none); }
@@ -714,6 +719,7 @@ button:disabled:active { transform: none; box-shadow: none; }
   background-size: cover, cover;
   background-position: center, center;
   background-repeat: repeat, no-repeat;
+  background-attachment: fixed, fixed;
 }
 .tab-page { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; z-index: 1; }
 .tab-page-inner { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
