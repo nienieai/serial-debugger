@@ -407,50 +407,27 @@ function buildSettingsPage() {
 	panelAppear.className = 'settings-panel is-hidden';
 	panelAppear.setAttribute('data-panel', 'appearance');
 
-	// 整体外观：一行式（图标 + 标题说明 + 右侧分段控件）
-	var bLook = document.createElement('div');
-	bLook.className = 'settings-bubble settings-bubble--bare';
-	var modeLine = document.createElement('div');
-	modeLine.className = 'settings-modeline';
-	var mlMain = document.createElement('div');
-	mlMain.className = 'settings-modeline-main';
-	var mlIco = document.createElement('span');
-	mlIco.className = 'settings-modeline-icon';
-	mlIco.innerHTML = icon('theme_auto', 20, 20);
-	mlMain.appendChild(mlIco);
-	var mlText = document.createElement('div');
-	mlText.className = 'settings-modeline-text';
-	var mlTitle = document.createElement('div');
-	mlTitle.className = 'settings-modeline-title';
-	mlTitle.textContent = t('settings.bubble_look','整体外观');
-	var mlDesc = document.createElement('div');
-	mlDesc.className = 'settings-modeline-desc';
-	mlDesc.setAttribute('data-i18n', 'settings.look_hint');
-	mlDesc.textContent = t('settings.look_hint','适用于新的选项卡、页面、对话框和其他菜单。');
-	mlText.appendChild(mlTitle);
-	mlText.appendChild(mlDesc);
-	mlMain.appendChild(mlText);
-	modeLine.appendChild(mlMain);
-	var seg = document.createElement('div');
-	seg.className = 'settings-segctl';
+	// 整体外观：三张卡片（跟随系统 / 浅色 / 深色）
+	var bLook = _bubble(t('settings.bubble_look','整体外观'));
+	var modeBar = document.createElement('div');
+	modeBar.className = 'settings-mode-bar';
 	[{ v: 'auto', k: 'theme.auto_label', fb: '跟随系统', ico: 'theme_auto' },
 	 { v: 'light', k: 'theme.light_label', fb: '浅色', ico: 'theme_light' },
 	 { v: 'dark', k: 'theme.dark_label', fb: '深色', ico: 'theme_dark' }].forEach(function(m) {
 		var btn = document.createElement('button');
-		btn.type = 'button';
-		btn.className = 'settings-segctl-btn' + (state.colorThemeMode === m.v ? ' is-active' : '');
-		btn.innerHTML = icon(m.ico, 16, 16) + '<span>' + t(m.k, m.fb) + '</span>';
+		btn.className = 'settings-mode-btn';
+		btn.innerHTML = icon(m.ico, 18, 18) + '<span>' + t(m.k, m.fb) + '</span>';
+		if (state.colorThemeMode === m.v) btn.classList.add('is-active');
 		btn.addEventListener('click', function() {
 			state.colorThemeMode = m.v;
-			seg.querySelectorAll('.settings-segctl-btn').forEach(function(b) { b.classList.remove('is-active'); });
+			modeBar.querySelectorAll('.settings-mode-btn').forEach(function(b) { b.classList.remove('is-active'); });
 			btn.classList.add('is-active');
 			applyColorTheme();
 			saveSettings();
 		});
-		seg.appendChild(btn);
+		modeBar.appendChild(btn);
 	});
-	modeLine.appendChild(seg);
-	bLook.appendChild(modeLine);
+	bLook.appendChild(modeBar);
 	panelAppear.appendChild(bLook);
 
 	var themeRefresh = document.createElement('button');
@@ -940,20 +917,18 @@ async function renderSettingsThemeGrid() {
 }
 
 function _systemThemeComputedFallback() {
-	var cs = getComputedStyle(document.documentElement);
 	// The system theme has no explicit data — it follows the browser's
-	// prefers-color-scheme.  Sample the current computed colours for dark
-	// mode and use the built-in light-mode defaults for light mode (both
-	// must match the values in style.css :root / media-query blocks).
+	// prefers-color-scheme. 两套都写死内置默认值：读当前 computed style 会把
+	// 正在用的那套颜色带到另一套里，「系统」卡片的深色预览就会跟浅色一样。
 	return {
 		common: {},
 		dark:  {
-			'--bg': cs.getPropertyValue('--bg').trim() || '#1e1e1e',
-			'--fg': cs.getPropertyValue('--fg').trim() || '#d4d4d4'
+			'--bg': '#1b1b1d',
+			'--fg': '#e9e9ec'
 		},
 		light: {
-			'--bg': '#f3f3f3',
-			'--fg': '#1a1a1a'
+			'--bg': '#f6f6f7',
+			'--fg': '#1d1d20'
 		}
 	};
 }

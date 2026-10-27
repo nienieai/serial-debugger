@@ -1546,6 +1546,34 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
 
+/* ---- 整体外观：三张卡片 ---- */
+.settings-mode-bar { display: flex; gap: 8px; }
+.settings-mode-btn {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 0;
+  font-size: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg2) 42%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.settings-mode-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+.settings-mode-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.settings-mode-btn svg { flex: 0 0 auto; }
+
 /* ---- 主题 / 图标：等宽卡片网格（auto-fill + minmax，同类卡片同宽） ---- */
 .settings-theme-grid {
   display: grid;
