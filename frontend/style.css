@@ -135,76 +135,71 @@ button:disabled:active { transform: none; box-shadow: none; }
 .o-empty__btn  { padding: 8px 24px; font-size: 15px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; }
 .o-empty__btn:hover { opacity: 0.85; }
 
-/* New-session chooser — 两张模式卡片（单端口 / 端口转发）。
-   布局与皮肤分开：o-chooser 只管位置与尺寸，t-chooser-bg 只管背景。 */
+/* New-session chooser — 两种模式的卡片（单端口 / 端口转发）。
+   布局与皮肤分开：o-chooser 只管位置与尺寸，t-chooser-bg 只管背景。
+   网格用 auto-fit：以后多一种模式就是多一张卡，自动换行、等高，不用改布局。 */
 .o-chooser {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   padding: 40px 24px; min-height: 320px; overflow-y: auto;
 }
 .t-chooser-bg { background: radial-gradient(120% 90% at 50% 0%, var(--bg2) 0%, var(--bg) 62%); }
-.o-chooser__inner { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 780px; }
-.o-chooser__title { font-size: 26px; font-weight: 700; color: var(--fg); margin: 0; letter-spacing: 0.2px; }
-.o-chooser__hint  { font-size: 14px; color: var(--placeholder); margin: 8px 0 0 0; }
+.o-chooser__inner { display: flex; flex-direction: column; width: 100%; max-width: 780px; }
+.o-chooser__head { margin-bottom: 22px; }
+.o-chooser__title { font-size: 22px; font-weight: 600; color: var(--fg); margin: 0; letter-spacing: 0.2px; }
+.o-chooser__hint  { font-size: 13px; color: var(--placeholder); margin: 6px 0 0 0; }
 .o-chooser__grid {
-  display: grid; width: 100%; margin-top: 30px; gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  display: grid; width: 100%; gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
 .o-chooser.is-busy .c-mode-card { opacity: 0.55; }
 
 .c-mode-card {
-  display: flex; flex-direction: column; gap: 14px;
-  padding: 22px; text-align: left; font: inherit; color: var(--fg);
-  background: var(--input-bg); border: 1px solid var(--border); border-radius: 14px;
-  cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  transition: border-color .18s, transform .18s, box-shadow .18s;
+  display: flex; flex-direction: column; align-items: stretch;
+  padding: 16px; text-align: left; font: inherit; color: var(--fg);
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: 12px;
+  cursor: pointer; transition: border-color .18s, box-shadow .18s, transform .18s;
 }
 .c-mode-card:hover:not(:disabled) {
-  border-color: var(--accent); transform: translateY(-2px);
-  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.10);
+  border-color: var(--accent);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.10);
 }
-.c-mode-card:active:not(:disabled) { transform: translateY(0); }
+.c-mode-card:active:not(:disabled) { transform: translateY(1px); }
 .c-mode-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .c-mode-card:disabled { cursor: default; }
 
 .c-mode-card__head { display: flex; align-items: center; gap: 12px; }
 .c-mode-card__icon {
   display: flex; align-items: center; justify-content: center;
-  width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
+  width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
   background: var(--bg3); color: var(--accent);
   transition: background .18s, color .18s;
 }
 .c-mode-card--forward .c-mode-card__icon { color: var(--fwd-p1); }
 .c-mode-card:hover:not(:disabled) .c-mode-card__icon { background: var(--hover); }
-.c-mode-card__name { font-size: 18px; font-weight: 600; }
+.c-mode-card__names { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.c-mode-card__name { font-size: 16px; font-weight: 600; }
+.c-mode-card__desc { font-size: 12.5px; line-height: 1.4; color: var(--placeholder); }
 
-.c-mode-card__desc { font-size: 13px; line-height: 1.6; color: var(--placeholder); }
-
-.c-mode-card__features { display: flex; flex-direction: column; gap: 8px; }
-.c-mode-card__feature { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.5; color: var(--fg); }
-.c-mode-card__tick { flex-shrink: 0; color: var(--green); font-weight: 700; line-height: 1.5; }
-
-/* 连接示意：一条 2px 的线 + 两个端点，转发模式额外画上 ↔ */
-.c-mode-card__preview {
-  display: flex; align-items: center; gap: 10px; height: 44px;
-  padding: 0 14px; border-radius: 10px; background: var(--bg2);
+/* 特性清单：绿点用 ::before 画，文案长短不一也能自动换行、缩进对齐 */
+.c-mode-card__tips { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
+.c-mode-card__tip { position: relative; padding-left: 14px; font-size: 12.5px; line-height: 1.45; color: var(--fg); }
+.c-mode-card__tip::before {
+  content: ''; position: absolute; left: 2px; top: 7px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--green);
 }
-.c-mode-card__dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; background: var(--accent); }
-.c-mode-card__wire {
-  flex: 1; height: 44px; display: flex; align-items: center; justify-content: center;
-  font-size: 15px; line-height: 1; color: var(--accent);
-  background: linear-gradient(var(--border), var(--border)) center / 100% 2px no-repeat;
-}
-/* ↔ 自带底色，把线在中间断开一小段，不然字符会被线穿过 */
-.c-mode-card__wire-label { padding: 0 6px; background: var(--bg2); }
-.c-mode-card--forward .c-mode-card__preview .c-mode-card__dot:first-child { background: var(--fwd-p1); }
-.c-mode-card--forward .c-mode-card__preview .c-mode-card__dot:last-child { background: var(--fwd-p2); }
 
+/* 底部整宽「开始 →」：转发卡用 P1 蓝区分，点击由整张卡片接管。
+   文字色取 --input-bg 而不是固定白：深色主题的 accent 是亮青，白字对比不足；
+   浅色主题的 accent 是深蓝、input-bg 是白，反过来正好。 */
 .c-mode-card__cta {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border);
-  font-size: 13px; font-weight: 600; color: var(--accent);
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-top: 16px; height: 34px; border-radius: 8px;
+  background: var(--accent); color: var(--input-bg); font-size: 13px; font-weight: 600;
+  transition: filter .18s;
 }
+.c-mode-card--forward .c-mode-card__cta { background: var(--fwd-p1); }
+.c-mode-card:hover:not(:disabled) .c-mode-card__cta { filter: brightness(1.08); }
 .c-mode-card__cta-arrow { transition: transform .18s; }
 .c-mode-card:hover:not(:disabled) .c-mode-card__cta-arrow { transform: translateX(4px); }
 /* RTL：卡片里的「开始 →」箭头要朝左，悬停方向也跟着翻 */

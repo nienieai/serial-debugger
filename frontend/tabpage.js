@@ -499,9 +499,10 @@ function createWelcomePage() {
 // app.js 的 chooseNewSessionMode() 把这个标签页**原地**换成会话页 —— 所以直接
 // 关掉选择页不会留下任何孤儿进程。
 //
-// 结构：标题 / 副标题 / 两张卡片。每张卡片 = 图标 + 名称 + 一句话说明 +
-// 三条特性 + 连接示意 + 底部「开始」。卡片是 <button>（保留 _setChooserBusy 里
-// 的 disabled 语义），所以内部只用 span 这类行内元素。
+// 结构：标题 / 副标题 / 卡片网格。每张卡片 = 图标 + 名称&说明 + 三条特性 +
+// 底部整宽「开始 →」。网格是 auto-fit，以后多一种模式就多一张卡（自动换行、
+// 等高），不用改布局。卡片是 <button>（保留 _setChooserBusy 里的 disabled
+// 语义），所以内部只用 span 这类行内元素。
 function createModeChooserPage() {
 	var page = document.createElement('div');
 	page.className = 'tab-page o-chooser t-chooser-bg';
@@ -509,6 +510,9 @@ function createModeChooserPage() {
 
 	var inner = document.createElement('div');
 	inner.className = 'o-chooser__inner';
+
+	var head = document.createElement('div');
+	head.className = 'o-chooser__head';
 
 	var title = document.createElement('h1');
 	title.className = 'o-chooser__title';
@@ -537,37 +541,25 @@ function createModeChooserPage() {
 		card.className = 'c-mode-card c-mode-card--' + mode;
 		card.setAttribute('data-mode', mode);
 
-		// 图标 + 名称
-		var head = span('c-mode-card__head');
+		// 图标 + 名称 + 一句话说明（名称与说明同列，图标占左侧）
+		var head2 = span('c-mode-card__head');
 		var badge = span('c-mode-card__icon');
 		badge.innerHTML = iconHtml;
-		head.appendChild(badge);
-		head.appendChild(span('c-mode-card__name', t(titleKey, titleDef), titleKey));
-		card.appendChild(head);
+		var names = span('c-mode-card__names');
+		names.appendChild(span('c-mode-card__name', t(titleKey, titleDef), titleKey));
+		names.appendChild(span('c-mode-card__desc', t(descKey, descDef), descKey));
+		head2.appendChild(badge);
+		head2.appendChild(names);
+		card.appendChild(head2);
 
-		// 一句话说明
-		card.appendChild(span('c-mode-card__desc', t(descKey, descDef), descKey));
-
-		// 三条特性
-		var feats = span('c-mode-card__features');
+		// 三条特性：绿点 + 文案
+		var tips = span('c-mode-card__tips');
 		featureKeys.forEach(function(f) {
-			var row = span('c-mode-card__feature');
-			row.appendChild(span('c-mode-card__tick', '✓'));
-			row.appendChild(span('c-mode-card__feature-text', t(f[0], f[1]), f[0]));
-			feats.appendChild(row);
+			tips.appendChild(span('c-mode-card__tip', t(f[0], f[1]), f[0]));
 		});
-		card.appendChild(feats);
+		card.appendChild(tips);
 
-		// 连接示意：单端口一个端点接工具；转发两个端点 + 双向箭头
-		var preview = span('c-mode-card__preview');
-		preview.appendChild(span('c-mode-card__dot'));
-		var wire = span('c-mode-card__wire');
-		if (mode === 'forward') wire.appendChild(span('c-mode-card__wire-label', '↔'));
-		preview.appendChild(wire);
-		preview.appendChild(span('c-mode-card__dot'));
-		card.appendChild(preview);
-
-		// 底部「开始 →」
+		// 底部整宽「开始 →」：视觉上是按钮，点击由整张卡片接管
 		var foot = span('c-mode-card__cta');
 		foot.appendChild(span('c-mode-card__cta-text', t('newtab.start', '开始'), 'newtab.start'));
 		foot.appendChild(span('c-mode-card__cta-arrow', '→'));
@@ -580,21 +572,22 @@ function createModeChooserPage() {
 		return card;
 	}
 
-	makeCard('single', icon('terminal', 22, 22), 'btn.single', '单端口',
+	makeCard('single', icon('terminal', 20, 20), 'btn.single', '单端口',
 		'newtab.single_desc', '连接一个串口，收发调试', [
 			['newtab.single_f1', '打开一个串口，收发都在这一页'],
 			['newtab.single_f2', '文本 / Hex 双视图，随时切换'],
 			['newtab.single_f3', '历史记录、自动发送、多字符串预设']
 		]);
-	makeCard('forward', icon('swap', 22, 22), 'btn.forward', '端口转发',
+	makeCard('forward', icon('swap', 20, 20), 'btn.forward', '端口转发',
 		'newtab.forward_desc', '把两个串口对接，数据互相转发', [
 			['newtab.forward_f1', '两个串口对接，数据双向转发'],
 			['newtab.forward_f2', '两端各自独立的波特率与串口参数'],
 			['newtab.forward_f3', '适合联调、透传与协议抓包']
 		]);
 
-	inner.appendChild(title);
-	inner.appendChild(hint);
+	head.appendChild(title);
+	head.appendChild(hint);
+	inner.appendChild(head);
 	inner.appendChild(grid);
 	page.appendChild(inner);
 
