@@ -31,8 +31,7 @@
     "--hex-escape": "#b4b4b4",
     "--badge-cli": "#ffab00",
     "--status-offline": "#8a8a8a",
-    "--tab-close": "#a0a0a0",
-    "--thumb-image": "url(thumb-dark.png)"
+    "--tab-close": "#a0a0a0"
   },
   "light": {
     "--fg": "#000000",
@@ -51,7 +50,6 @@
     "--hex-escape": "#4a4a4a",
     "--badge-cli": "#b26a00",
     "--status-offline": "#6f6f6f",
-    "--tab-close": "#6f6f6f",
-    "--thumb-image": "url(thumb-light.png)"
+    "--tab-close": "#6f6f6f"
   }
 }
