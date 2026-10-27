@@ -334,7 +334,7 @@
   "settings.bubble_encoding": "الترميز",
   "settings.bubble_hex": "عرض Hex",
   "settings.bubble_text": "عرض النص",
-  "settings.bubble_look": "المظهر",
+  "settings.bubble_look": "الفاتح / الداكن",
   "settings.bubble_colors": "سمة الألوان",
   "settings.auto_refill": "تحميل السجل الأقدم تلقائيا",
   "settings.auto_refill_on": "مفعّل (عند الوصول للأعلى)",

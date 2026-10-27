@@ -334,7 +334,7 @@
   "settings.bubble_encoding": "エンコーディング",
   "settings.bubble_hex": "Hex表示",
   "settings.bubble_text": "テキスト表示",
-  "settings.bubble_look": "外観モード",
+  "settings.bubble_look": "ライト / ダーク",
   "settings.bubble_colors": "カラーテーマ",
   "settings.auto_refill": "古い履歴の自動読み込み",
   "settings.auto_refill_on": "オン（先頭まで戻ると読み込む）",

@@ -1546,7 +1546,7 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
 
-/* ---- 整体外观：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色） ---- */
+/* ---- 深浅模式：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色） ---- */
 .settings-look { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .settings-look-card {
   position: relative; display: flex; flex-direction: column; gap: 8px;

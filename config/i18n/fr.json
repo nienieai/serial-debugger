@@ -334,7 +334,7 @@
   "settings.bubble_encoding": "Encodage",
   "settings.bubble_hex": "Affichage Hex",
   "settings.bubble_text": "Affichage Texte",
-  "settings.bubble_look": "Apparence",
+  "settings.bubble_look": "Clair / sombre",
   "settings.bubble_colors": "Thème Couleur",
   "settings.auto_refill": "Charger l'historique plus ancien",
   "settings.auto_refill_on": "Activé (au défilement vers le haut)",

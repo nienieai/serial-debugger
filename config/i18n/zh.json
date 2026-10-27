@@ -357,7 +357,7 @@
   "settings.color_ctrl": "控制字符",
   "settings.color_stat": "字符统计",
   "settings.bubble_text": "文本显示设置",
-  "settings.bubble_look": "整体外观",
+  "settings.bubble_look": "深浅模式",
   "settings.bubble_colors": "颜色主题",
   "settings.auto_refill": "自动回补更早历史",
   "settings.auto_refill_on": "开启（翻到顶自动加载）",

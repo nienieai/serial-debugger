@@ -334,7 +334,7 @@
   "settings.bubble_encoding": "Кодировка",
   "settings.bubble_hex": "Отображение Hex",
   "settings.bubble_text": "Отображение Текст",
-  "settings.bubble_look": "Оформление",
+  "settings.bubble_look": "Светлая / тёмная",
   "settings.bubble_colors": "Цветовая тема",
   "settings.auto_refill": "Автозагрузка ранней истории",
   "settings.auto_refill_on": "Вкл. (при прокрутке вверх)",

@@ -407,8 +407,8 @@ function buildSettingsPage() {
 	panelAppear.className = 'settings-panel is-hidden';
 	panelAppear.setAttribute('data-panel', 'appearance');
 
-	// 整体外观：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色）
-	var bLook = _bubble(t('settings.bubble_look','整体外观'));
+	// 深浅模式：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色）
+	var bLook = _bubble(t('settings.bubble_look','深浅模式'));
 	var lookGrid = document.createElement('div');
 	lookGrid.className = 'settings-look';
 	lookGrid.id = 'settingsLookGrid';
@@ -921,7 +921,7 @@ function _systemThemeComputedFallback() {
 	};
 }
 
-// ---- 整体外观：三张迷你窗口预览卡 ----
+// ---- 深浅模式：三张迷你窗口预览卡 ----
 var LOOK_MODES = [
 	{ v: 'auto',  k: 'theme.auto_label',  fb: '跟随系统', ico: 'theme_auto' },
 	{ v: 'light', k: 'theme.light_label', fb: '浅色',     ico: 'theme_light' },

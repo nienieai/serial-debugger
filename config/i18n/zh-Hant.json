@@ -334,7 +334,7 @@
   "settings.bubble_encoding": "編碼格式",
   "settings.bubble_hex": "Hex顯示設定",
   "settings.bubble_text": "文字顯示設定",
-  "settings.bubble_look": "整體外觀",
+  "settings.bubble_look": "深淺模式",
   "settings.bubble_colors": "顏色主題",
   "settings.auto_refill": "自動回補更早歷史",
   "settings.auto_refill_on": "開啟（翻到頂自動載入）",

@@ -334,7 +334,7 @@
   "settings.bubble_encoding": "인코딩",
   "settings.bubble_hex": "Hex 표시",
   "settings.bubble_text": "텍스트 표시",
-  "settings.bubble_look": "외관 모드",
+  "settings.bubble_look": "라이트 / 다크",
   "settings.bubble_colors": "색상 테마",
   "settings.auto_refill": "이전 기록 자동 불러오기",
   "settings.auto_refill_on": "켬(맨 위로 가면 불러옴)",
