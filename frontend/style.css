@@ -1241,6 +1241,24 @@ button.qp-icon-btn:active { background: var(--border) !important; }
 .qp-gap-before { margin-top: 6px; }
 .qp-gap-after { margin-bottom: 6px; }
 
+/* 拖动排序中：被拖的那行固定成压暗的一行，贴着列表上下滑；原位交给 .qp-placeholder，
+   其余行用 FLIP 平滑让位。行间分割线先藏起来，免得占位块位置看着错位。 */
+.qp-row.qp-src {
+  position: fixed; z-index: 9999; margin: 0;
+  pointer-events: none; opacity: 0.9;
+  filter: brightness(0.72) saturate(0.85);
+  background: var(--bg2);   /* 行本身是透明的，不铺底会露出下面的占位块 */
+  border-radius: 4px;
+}
+.qp-rows.is-dragging .qp-divider { display: none; }
+.qp-placeholder {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg3);
+}
+body.is-qp-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+
 /* ── row children: explicit grid-column placement ── */
 .qp-drag  { grid-column: 1; grid-row: 1 / 3; }
 .qp-row input[id^="qp-enable"]  { grid-column: 2; grid-row: 1 / 3; }

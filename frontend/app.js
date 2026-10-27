@@ -1494,22 +1494,22 @@ function _tabDragPlace(st, clientX) {
 
   for (var k = 0; k < kids.length; k++) {
     var dx = prev[k] - kids[k].getBoundingClientRect().left;
-    if (dx) _tabShift(kids[k], dx);
+    if (dx) _flipShift(kids[k], dx, 0);
   }
 }
 
-// 反向位移 → 下一帧过渡回 0；动画结束后清掉内联样式，别影响下次布局
-function _tabShift(el, dx) {
+// FLIP 通用件：反向位移 → 下一帧过渡回 0；动画结束后清掉内联样式，别影响下次布局
+function _flipShift(el, dx, dy) {
   el.style.transition = 'none';
-  el.style.transform = 'translateX(' + dx + 'px)';
+  el.style.transform = 'translate(' + (dx || 0) + 'px, ' + (dy || 0) + 'px)';
   void el.offsetWidth;   // 强制回流，让上面的反向位移先落地
   el.style.transition = 'transform .16s cubic-bezier(.2, .8, .3, 1)';
   el.style.transform = '';
-  if (el._tabShiftTimer) clearTimeout(el._tabShiftTimer);
-  el._tabShiftTimer = setTimeout(function() {
+  if (el._flipTimer) clearTimeout(el._flipTimer);
+  el._flipTimer = setTimeout(function() {
     el.style.transition = '';
     el.style.transform = '';
-    el._tabShiftTimer = null;
+    el._flipTimer = null;
   }, 220);
 }
 
@@ -1685,10 +1685,11 @@ window.addEventListener('DOMContentLoaded', () => {
   if (bar) {
     // 标签拖动：pointer 事件（拖动时实时补位）
     document.addEventListener('pointermove', _tabDragMove);
-    document.addEventListener('pointerup', function() { _tabDragFinishAll(true); });
-    document.addEventListener('pointercancel', function() { _tabDragFinishAll(false); });
+    document.addEventListener('pointermove', _qpDragMove);
+    document.addEventListener('pointerup', function() { _tabDragFinishAll(true); _qpDragFinishAll(true); });
+    document.addEventListener('pointercancel', function() { _tabDragFinishAll(false); _qpDragFinishAll(false); });
     document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') _tabDragFinishAll(false);
+      if (e.key === 'Escape') { _tabDragFinishAll(false); _qpDragFinishAll(false); }
     });
     // Mouse wheel horizontal scroll for tab bar
     bar.addEventListener('wheel', function(e) {
@@ -4222,56 +4223,125 @@ function quickPanelClearAll() {
     saveSettings();
   }, 'confirm.ok_clear', 'confirm.cancel_clear');
 }
-var _qpDragSide = 'above';
+// ---- 多字符串（快速面板）拖动：pointer 事件 + 实时补位 ----
+//
+// 和标签栏那套同一观感：按住左侧 ⋮⋮ 上下拖，被拖的那行原样压暗、贴着列表上下滑；
+// 原位由等高的占位块让开，其余行用 FLIP 平滑让位；松手按占位块位置结算顺序。
+// 不用 HTML5 拖放，原因同标签栏（dragstart 里隐藏源元素会被浏览器取消拖动）。
+var _qpDrag = null;   // { row, idx, started, ph, ... }
 
-function qpDragStart(e, idx) {
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', String(idx));
+function qpDragDown(e, idx) {
+  if (e.button !== 0) return;
+  var row = e.currentTarget.closest('.qp-row');
+  if (!row) return;
+  var r = row.getBoundingClientRect();
+  _qpDrag = {
+    row: row, idx: idx, started: false,
+    startY: e.clientY, offY: e.clientY - r.top,
+    h: r.height, w: r.width, left: r.left, top: r.top,
+    ph: null,
+  };
+  if (e.cancelable) e.preventDefault();
 }
 
-function qpDragEnd(e) {
-  var page = getActivePage();
-  var rows = page && page.quickPanel ? page.quickPanel.querySelector('.qp-rows') : null;
-  if (!rows) return;
-  rows.querySelectorAll('.qp-gap-before,.qp-gap-after').forEach(function(el) { el.classList.remove('qp-gap-before','qp-gap-after'); });
+function _qpDragBegin(st) {
+  st.started = true;
+  var rowsEl = st.row.parentNode;            // .qp-rows（display:contents，行是祖父网格的 item）
+  var host = rowsEl.parentElement;           // 真正的 grid 容器，克隆要借它的列宽
+  var cols = host ? getComputedStyle(host).gridTemplateColumns : '';
+
+  st.row.classList.add('qp-src');
+  st.row.style.left = st.left + 'px';
+  st.row.style.top = st.top + 'px';
+  st.row.style.width = st.w + 'px';
+  st.row.style.height = st.h + 'px';
+  if (cols) st.row.style.gridTemplateColumns = cols;
+
+  var ph = document.createElement('div');
+  ph.className = 'qp-placeholder';
+  ph.style.height = st.h + 'px';
+  rowsEl.insertBefore(ph, st.row);
+  st.ph = ph;
+
+  rowsEl.classList.add('is-dragging');
+  document.body.classList.add('is-qp-dragging');
 }
 
-function qpDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  var row = e.currentTarget;
-  var rect = row.getBoundingClientRect();
-  var pct = (e.clientY - rect.top) / rect.height;
-  // Remove old gap classes first
-  var rows = (getActivePage()&&getActivePage().quickPanel?getActivePage().quickPanel.querySelector('.qp-rows'):null);
-  if (rows) rows.querySelectorAll('.qp-gap-before,.qp-gap-after').forEach(function(el) { el.classList.remove('qp-gap-before','qp-gap-after'); });
-  if (pct < 0.5) {
-    row.classList.add('qp-gap-before');
-    _qpDragSide = 'above';
-  } else {
-    row.classList.add('qp-gap-after');
-    _qpDragSide = 'below';
+function _qpDragPlace(st, clientY) {
+  var rowsEl = st.row.parentNode;
+  if (!rowsEl || !st.ph) return;
+  var rows = rowsEl.querySelectorAll('.qp-row');
+  var before = null;
+  for (var j = 0; j < rows.length; j++) {
+    var r0 = rows[j];
+    if (r0 === st.row) continue;
+    var rc = r0.getBoundingClientRect();
+    if (clientY < rc.top + rc.height / 2) { before = r0; break; }
+  }
+  var kids = Array.prototype.filter.call(rowsEl.children, function(el) { return el !== st.row; });
+  var target = before ? kids.indexOf(before) : kids.length;
+  if (kids.indexOf(st.ph) === target) return;
+
+  var prev = [];
+  for (var i = 0; i < kids.length; i++) prev.push(kids[i].getBoundingClientRect().top);
+  var ref = target < kids.length ? kids[target] : null;
+  if (ref) rowsEl.insertBefore(st.ph, ref); else rowsEl.appendChild(st.ph);
+  for (var k = 0; k < kids.length; k++) {
+    var dy = prev[k] - kids[k].getBoundingClientRect().top;
+    if (dy) _flipShift(kids[k], 0, dy);
   }
 }
 
-function qpDragLeave(e) {
-  e.currentTarget.classList.remove('qp-gap-before','qp-gap-after');
+function _qpDragMove(e) {
+  var st = _qpDrag;
+  if (!st) return;
+  if (!st.started) {
+    if (Math.abs(e.clientY - st.startY) < 4) return;
+    _qpDragBegin(st);
+  }
+  if (e.cancelable) e.preventDefault();
+  var rowsEl = st.row.parentNode;
+  var top = e.clientY - st.offY;
+  // .qp-rows 是 display:contents，自己的 getBoundingClientRect() 是空矩形，
+  // 夹边界要用它的父容器（真正的网格/滚动容器）。
+  var host = rowsEl ? rowsEl.parentElement : null;
+  if (host) {
+    var rr = host.getBoundingClientRect();
+    top = Math.max(rr.top, Math.min(top, rr.bottom - st.h));
+  }
+  st.row.style.top = top + 'px';
+  _qpDragPlace(st, e.clientY);
 }
 
-function qpDrop(e, toIdx) {
-  e.preventDefault();
-  e.currentTarget.classList.remove('qp-gap-before','qp-gap-after');
-  var fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
-  if (isNaN(fromIdx)) return;
-  var rect = e.currentTarget.getBoundingClientRect();
-  var pct = (e.clientY - rect.top) / rect.height;
-  var gap = (pct >= 0.5) ? toIdx + 1 : toIdx;
-  if (fromIdx === gap || fromIdx + 1 === gap) return;
-  var moved = state.quickPresets.splice(fromIdx, 1)[0];
-  var insertAt = (fromIdx < gap) ? gap - 1 : gap;
-  state.quickPresets.splice(insertAt, 0, moved);
+function _qpDragFinish(commit) {
+  var st = _qpDrag;
+  if (!st) return;
+  _qpDrag = null;
+  if (!st.started) return;
+
+  var rowsEl = st.row.parentNode;
+  var kids = rowsEl ? Array.prototype.filter.call(rowsEl.children, function(el) { return el !== st.row; }) : [];
+  var target = st.ph ? kids.indexOf(st.ph) : -1;
+  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+  if (rowsEl) rowsEl.classList.remove('is-dragging');
+  document.body.classList.remove('is-qp-dragging');
+  st.row.classList.remove('qp-src');
+  st.row.style.left = '';
+  st.row.style.top = '';
+  st.row.style.width = '';
+  st.row.style.height = '';
+  st.row.style.gridTemplateColumns = '';
+
+  if (commit && target >= 0 && target !== st.idx) {
+    var moved = state.quickPresets.splice(st.idx, 1)[0];
+    state.quickPresets.splice(target, 0, moved);
+    saveSettings();
+  }
   quickPanelRender();
-  saveSettings();
+}
+
+function _qpDragFinishAll(commit) {
+  if (_qpDrag) _qpDragFinish(commit);
 }
 function quickPanelSend(idx) {
   var preset = state.quickPresets[idx];
@@ -4330,13 +4400,9 @@ function quickPanelRender() {
     var note = escHtml(p.note || '');
     var dly = (p.delay != null) ? p.delay : 1000;
     var noteCls = p.note ? ' qp-note has-content' : ' qp-note';
-    h += '<div class="qp-row" data-idx="' + i + '"' +
-      ' ondragover="qpDragOver(event)"' +
-      ' ondragleave="qpDragLeave(event)"' +
-      ' ondrop="qpDrop(event,' + i + ')">' +
-      '<span class="qp-drag" draggable="true" title="' + t('quick_panel.drag', '拖动排序') + '"' +
-      ' ondragstart="qpDragStart(event,' + i + ')"' +
-      ' ondragend="qpDragEnd(event)">⋮⋮</span>' +
+    h += '<div class="qp-row" data-idx="' + i + '">' +
+      '<span class="qp-drag" title="' + t('quick_panel.drag', '拖动排序') + '"' +
+      ' onpointerdown="qpDragDown(event,' + i + ')">⋮⋮</span>' +
       '<input type="checkbox" id="qp-enable-' + i + '" name="qp-enable-' + i + '"' + en + ' onchange="quickPanelUpdate(' + i + ',&quot;enabled&quot;,this.checked)">' +
       '<input type="checkbox" id="qp-hex-' + i + '" name="qp-hex-' + i + '"' + hexChk + ' onchange="quickPanelUpdate(' + i + ',&quot;hex&quot;,this.checked)">' +
       '<input type="text" id="qp-content-' + i + '" name="qp-content-' + i + '" value="' + cnt + '" onchange="quickPanelUpdate(' + i + ',&quot;content&quot;,this.value)" placeholder="' + t('quick_panel.content_placeholder', '请输入内容') + '">' +
