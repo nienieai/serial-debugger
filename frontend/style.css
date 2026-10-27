@@ -1,4 +1,4 @@
-﻿/* ============================================================
+/* ============================================================
    串口调试工具 v0.7.4 — CSS
    Organization: vars → reset → utilities → states → base
                  → layout-overlays → components → rtl → scrollbar
@@ -306,9 +306,14 @@ button:disabled:active { transform: none; box-shadow: none; }
   padding: 0 4px; flex-shrink: 0; gap: 2px;
   height: 36px; overflow: visible; position: relative;
 }
+/* 标签栏底线。z-index 必须是 0（与 ::before 同层、排在它后面）：
+   标签现在被 .tabs-viewport（z-index:1）包着，视口是独立层叠上下文，标签自己的
+   z-index:2 只在视口内部排序，赢不了同层的伪元素。底线若是 1，就会画在整条视口
+   之上，横穿激活标签的底边（看起来像把标签切断了）。放到 0 之后：标签压住底线，
+   标签之间的空隙仍露出底线；激活标签靠同色的 border-bottom 与内容区连成一片。 */
 .tabs-bar::after {
   content: ''; position: absolute; bottom: 0; left: 0; right: 0;
-  height: 1px; background: var(--border); z-index: 1; pointer-events: none;
+  height: 1px; background: var(--border); z-index: 0; pointer-events: none;
 }
 /* 视口：包住滚动容器，给左右箭头（.tabs-scroll-arrow）提供定位上下文。
    align-self: stretch 保证它撑满标签栏高度，箭头才能上下贴边。
