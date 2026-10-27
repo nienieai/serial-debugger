@@ -333,23 +333,46 @@ button:disabled:active { transform: none; box-shadow: none; }
 .tabs-scroll-arrow--right { right: 0; background: linear-gradient(to left,  var(--bg2) 45%, transparent); }
 .tab-btn {
   display: flex; align-items: center; gap: 4px;
-  background: var(--input-bg); border: 1px solid var(--border);
+  /* 用 background-color 而不是 background 简写：主题可以给标签配图片
+     （--tab-bg-image），简写会把 background-image 一起清掉 */
+  background-color: var(--input-bg);
+  background-image: var(--tab-bg-overlay, none), var(--tab-bg-image, none);
+  background-size: cover, cover; background-position: center, center; background-repeat: no-repeat, no-repeat;
+  border: 1px solid var(--border);
   border-radius: 10px 10px 0 0; padding: 5px; cursor: pointer; font-size: 13px;
   color: var(--fg); position: relative; height: 30px; line-height: 1; white-space: nowrap;
-  transition: margin 0.2s, background 0.15s, border-color 0.15s, color 0.15s, border-radius 0.2s, opacity 0.2s;
+  transition: margin 0.2s, background-color 0.15s, border-color 0.15s, color 0.15s, border-radius 0.2s, opacity 0.2s;
 }
 .tab-btn:not(.is-active) {
-  align-self: center; border-radius: 8px; background: var(--input-bg); opacity: 0.7;
+  align-self: center; border-radius: 8px; background-color: var(--input-bg); opacity: 0.7;
 }
-.tab-btn:not(.is-active):hover { opacity: 1; background: var(--bg3); border-color: var(--hover); }
+.tab-btn:not(.is-active):hover { opacity: 1; background-color: var(--bg3); border-color: var(--hover); }
 .tab-btn.is-active {
-  background: var(--input-bg); border-color: var(--border) var(--border) var(--input-bg);
+  background-color: var(--input-bg);
+  border-color: var(--border) var(--border) var(--input-bg);
   border-radius: 12px 12px 0 0; color: var(--fg); font-weight: 600;
   z-index: 2; margin-bottom: -1px; padding-bottom: 8px; height: 33px;
   box-shadow: 0 -1px 3px rgba(0,0,0,0.06);
 }
 .tab-btn:active { transform: scale(0.96); }
-.tab-btn.is-active:active { background: var(--input-bg); }
+.tab-btn.is-active:active { background-color: var(--input-bg); }
+
+/* ---- 7b. 各条栏的主题背景图 + 遮罩 ----
+   主题里可选写：--menubar-bg-image / --tabbar-bg-image / --statusbar-bg-image
+   各配一个 --*-bg-overlay 压暗；都支持在 dark / light 段里分别给值。
+   不写就是现在的纯色，什么都不变。 */
+.header::before,
+.tabs-bar::before,
+.statusbar::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-size: cover, cover;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+}
+.header::before    { background-image: var(--menubar-bg-overlay, none),   var(--menubar-bg-image, none); }
+.tabs-bar::before  { background-image: var(--tabbar-bg-overlay, none),    var(--tabbar-bg-image, none); }
+.statusbar::before { background-image: var(--statusbar-bg-overlay, none), var(--statusbar-bg-image, none); }
+.header > *, .tabs-bar > *, .statusbar > * { position: relative; z-index: 1; }
 
 .tab-dot { width: 8px; height: 8px; min-width: 8px; flex-shrink: 0; border-radius: 50%; transition: background 0.25s, box-shadow 0.25s; background: transparent; align-self: center; }
 .tab-dot.live { background: var(--green); box-shadow: 0 0 5px rgba(22,198,12,0.55); }
@@ -1681,6 +1704,8 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   border-left: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
 }
 .settings-theme-sample-fg { font-size: 14px; font-weight: 600; line-height: 1; }
+/* 铺了缩略图的那一半：给「Aa」加一点投影，免得压在浅色照片上看不见 */
+.settings-theme-half.has-thumb .settings-theme-sample-fg { text-shadow: 0 1px 3px rgba(0, 0, 0, .65); }
 .settings-theme-sample-accent { width: 20px; height: 7px; border-radius: 999px; flex: 0 0 auto; }
 
 /* ---- 语言：选项卡片 ---- */

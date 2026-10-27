@@ -797,7 +797,19 @@ function _themeAccent(data, mode) {
 	return pick(block[mode]) || pick(block.common) || '';
 }
 
+// 主题缩略图：--thumb-image（可用 --thumb-overlay 压暗，不写就借用 --app-bg-overlay）
+function _themeThumb(data, mode) {
+	var dm = (data && data[mode]) || {};
+	var cm = (data && data.common) || {};
+	return {
+		img: dm['--thumb-image'] || cm['--thumb-image'] || '',
+		overlay: dm['--thumb-overlay'] || cm['--thumb-overlay'] ||
+			dm['--app-bg-overlay'] || cm['--app-bg-overlay'] || ''
+	};
+}
+
 // 色样的一半：底色 + 字体样本「Aa」+ 强调色胶囊（“按键示例”）
+// 主题给了缩略图就铺图（再叠遮罩），没给就还是纯色块
 function _makeThemeHalf(data, mode) {
 	var c = _themeColorsForMode(data, mode);
 	var accent = _themeAccent(data, mode);
@@ -805,6 +817,14 @@ function _makeThemeHalf(data, mode) {
 	var half = document.createElement('span');
 	half.className = 'settings-theme-half';
 	half.style.background = c.bg;
+	var thumb = _themeThumb(data, mode);
+	if (thumb.img) {
+		half.classList.add('has-thumb');
+		half.style.backgroundImage = (thumb.overlay ? thumb.overlay + ', ' : '') + thumb.img;
+		half.style.backgroundSize = thumb.overlay ? 'cover, cover' : 'cover';
+		half.style.backgroundPosition = 'center';
+		half.style.backgroundRepeat = 'no-repeat';
+	}
 	half.title = (mode === 'dark' ? t('theme.dark_label','深色') : t('theme.light_label','浅色'));
 	var fg = document.createElement('span');
 	fg.className = 'settings-theme-sample-fg';
