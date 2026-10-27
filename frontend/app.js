@@ -1519,12 +1519,19 @@ function _tabDragMove(e) {
   }
   if (e.cancelable) e.preventDefault();
   // 只跟水平方向：压暗的那个标签留在标签栏这一行里左右滑，不跟着鼠标上下跑，
-  // 也不在光标下面变成一块浮起来的方块。左右夹在标签栏范围内，滑不出窗口。
+  // 也不在光标下面变成一块浮起来的方块。右边界停在「+」左边 —— 拖到最右时标签
+  // 顶住「+」而不是压上去，看起来就是把它往后挤。
   var gx = e.clientX - st.offX;
   var bar = document.getElementById('tabsBar');
   if (bar) {
     var br = bar.getBoundingClientRect();
-    gx = Math.max(br.left + 4, Math.min(gx, br.right - st.w - 4));
+    var limit = br.right - st.w - 4;
+    var addBtn = document.getElementById('tabAddBtn');
+    if (addBtn) {
+      var ar = addBtn.getBoundingClientRect();
+      limit = Math.min(limit, ar.left - st.w - 2);
+    }
+    gx = Math.max(br.left + 4, Math.min(gx, limit));
   }
   st.btn.style.left = gx + 'px';
   _tabDragPlace(st, e.clientX);

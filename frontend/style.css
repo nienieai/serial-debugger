@@ -405,6 +405,9 @@ button:disabled:active { transform: none; box-shadow: none; }
   filter: brightness(0.72) saturate(0.85);
 }
 body.is-tab-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+/* 拖动时「+」压在压暗标签之上：它永远排在占位框后面一格，拖过来的标签应该从它
+   底下滑过去，而不是把「+」盖住。 */
+body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 /* 落点占位块：只占位置、不画出来（透明）。落点靠其余标签让位来提示，
    它也负责把「+」按钮一起推着走，所以宽高必须照旧占着。 */
 .tab-placeholder {
