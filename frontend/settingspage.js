@@ -141,6 +141,15 @@ var SETTINGS_NAV_ICONS = {
 	about: 'info'
 };
 
+/* 把每张卡的标题行高度写进 --bubble-head-h，供竖线定位用 */
+function _measureBubbleHeads(root) {
+	if (!root) return;
+	root.querySelectorAll('.settings-bubble').forEach(function(card) {
+		var head = card.querySelector(':scope > .settings-bubble-head');
+		if (head) card.style.setProperty('--bubble-head-h', head.offsetHeight + 'px');
+	});
+}
+
 function buildSettingsPage() {
 
 	var wrapper = document.createElement('div');
@@ -613,13 +622,15 @@ function buildSettingsPage() {
 			if (sec.key === 'language') {
 				setTimeout(function() { refreshSettingsLangList(); }, 50);
 			}
-			if (sec.key === 'colors') {
-				setTimeout(function() {
+			// 面板显示出来后：补渲染颜色预览，并重新量标题高度（隐藏时量到 0）
+			setTimeout(function() {
+				_measureBubbleHeads(sec.panel);
+				if (sec.key === 'colors') {
 					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
 						if (el._colorItems) _renderColorPreview(el._colorItems, el);
 					});
-				}, 50);
-			}
+				}
+			}, 50);
 		});
 		nav.appendChild(item);
 		body.appendChild(sec.panel);
@@ -657,13 +668,9 @@ function buildSettingsPage() {
 		});
 	});
 
-	// 两列卡的竖线起点：量一次卡片头高度写进 CSS 变量，避免竖线贯穿标题行
-	setTimeout(function() {
-		wrapper.querySelectorAll('.settings-panel > .settings-bubble').forEach(function(card) {
-			var head = card.querySelector(':scope > .settings-bubble-head');
-			if (head) card.style.setProperty('--bubble-head-h', head.offsetHeight + 'px');
-		});
-	}, 0);
+	// 两列卡的竖线起点：量一次卡片头高度写进 CSS 变量，避免竖线贯穿标题行。
+	// 隐藏面板（display:none）量出来是 0，所以切到该面板时要再量一次。
+	setTimeout(function() { _measureBubbleHeads(wrapper); }, 0);
 
 	return wrapper;
 }
