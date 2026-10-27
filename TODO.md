@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.1）的已完成记录；
+> 本文档维护当前待实现事项、已知问题，以及近期版本（v0.6.3 ～ v0.8.2）的已完成记录；
 > 更早版本完成情况见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 待实现
@@ -123,7 +123,7 @@
 | 87 | 设置页标题「设置」越用越黑，像叠了重影 | 已修复 | **2026-10-26 修复**（用户截图：设置页左上角「设置」二字带明显黑色重影，「改一次字体阴影就黑一次」）。根因不在样式（`computed textShadow === 'none'`，全仓库也没有 `text-shadow`）：`refreshSettingsPage()` 找的是 `.settings-layout`，却拿 `buildSettingsPage()`（返回整个 `.settings-wrapper`）去 `replaceChild`，于是每刷新一次就**多套一层 wrapper、多复制一个 `position:absolute` 的 `.settings-header`**；header 叠在同一坐标 (16,62)，标题文字一层层压上去就成了"黑重影"。触发点两处：切语言（`i18n.js:28`）、颜色区「重置」按钮（`settingspage.js:1023`）—— 改字体/字号本身不重建，只是用户往往在改完设置后切语言看效果。实测：切 3 次语言后 wrapper/header/title 各 4 个，标题区域平均灰度 **211.64 → 174.40**（暗像素占比 18.68% → 30.77%）；人为克隆 3 份 header 得到同样的 174.40，确认是叠层而非阴影。修法：替换目标改成 `layout.closest('.settings-wrapper')`，并向上找到**最外层** wrapper（已叠出多层的窗口刷新一次即自愈回 1 层），nav/panel 的查找改在新 wrapper 内做。夹具 `_audit/settings_refresh_no_dup.py` 12 项（改字体/改字号/切 3 次语言/颜色重置/激活面板保留/自愈）；变异：替换目标退回 layout → 5 项红、wrapper 一路涨到 7 |
 | 88 | 设置页「数据高亮」的预览不像显示框 | 已修复 | **2026-10-27 改**（用户请求：「能让设置中高亮的预览窗口用类似显示框的渲染方式吗」）。旧预览是 `innerHTML` 拼串：字号写死 10px/11px、颜色逐 span 内联、控制字符自己拼 `.ctrl-mark/.ctrl-real`、转义字节用带内联色的裸 span，跟主显示区两套实现 —— 所以预览里的行距、字重、`←↵` 标记、`/FF`、Hex 行都跟真实显示框对不上。改法：① `makeDataRow()` 增加可选第 6 参数 `{ displayMode }`（默认行为不变），让预览能在同一栏里同时画「文本」和「Hex」两种渲染而不去动全局 `state.displayMode`；② `_renderColorPreview()` 改为每栏调 4 次 `makeDataRow`（Rx 文本 / Rx Hex / Tx 文本 / Tx Hex，转发用 P1/P2），segments 手工构造，转义/控制字符全部走 `renderSegments()` 的真实路径；③ 深浅两栏各用 `_applyPreviewVars(box, mode)` 把该主题的 `--dc-*` 内联到容器（`_applyDisplayColors` 只写 `:root[data-theme=…]`，两套配色要同屏并排只能这样）；④ `_applyDisplayStyle()` 的规则选择器加上 `.c-color-preview`，预览字号/字体/tab 宽度跟 `state.displayFontSize` / `displayFontFamily`。**顺带发现**：旧预览硬编码的「~10B」是错的，转发示例实际是 9 字节，真实渲染算出来是 `~9B`。夹具 `_audit/settings_color_preview.py` 21 项；变异：把 `.c-color-preview` 从字号规则里去掉 → 3 项红，`makeDataRow` 忽略 `opts` → 2 项红 |
 
-## 未发布（0.8.2）已完成
+## v0.8.2 已完成
 
 | 需求 / 问题 | 说明 |
 |---|---|
@@ -134,6 +134,17 @@
 | 调色板标题 + 内部文案 i18n（#86） | 标题「设置项名 · 背景/字体 · 深色/浅色」，列名用短词，弹窗内联加宽 360px；组件 41 个 key 全部接上 9 语言（键数 410 → 453）。夹具 `colorpicker_title.py` 75 项 + `colorpicker_component.py` 22 项 |
 | 设置页标题叠影（#87） | `refreshSettingsPage()` 改成替换整个 `.settings-wrapper`（原来只换内层 `.settings-layout`，导致每刷新一次多套一层 wrapper + 一个绝对定位 header 叠在同一坐标）；另加"向上找最外层 wrapper"的自愈，已叠出多层的窗口刷新一次即恢复。夹具 `settings_refresh_no_dup.py` 12 项 |
 | 数据高亮预览改用显示框渲染（#88） | 预览不再 `innerHTML` 拼串，改调 `makeDataRow(..., {displayMode})` + `renderSegments()`，结构/样式/字号字体与主显示区同源；深浅两栏各自内联 `--dc-*`。顺带修正旧预览硬编码的 `~10B`（实际 9 字节）。夹具 `settings_color_preview.py` 21 项 |
+| 资源统一到 `resources/` | 主题改成「一个主题一个文件夹」（`theme.json` + 自带素材），图标包与语言包同根；旧 `builtin/`、`themes/colors/`、`themes/icons/` 不再读取 |
+| 资源分内置 / 外置两层 | `resources-system\`（内置，动态版）与 `resources\`（外置，成品版也认），查找顺序 内置 → 外置 → 内嵌，逐个文件回退；成品版顺序自动退化成 外置 → 内嵌。列表里内置资源强制在前 |
+| 主题支持图片 | 全页背景 `--app-bg-image`、四条栏背景与遮罩、主题卡缩略图 `--thumb-image`；外置素材由 Go 读盘内联成 data URI（asset server 出不了 frontend 目录）。条栏用 `background-attachment: fixed` 与全页背景拼成同一张照片 |
+| 设置页外观卡 | 「整体外观」改名「深浅模式」，三张迷你窗口预览卡；颜色主题卡改色样样式（底色 + `Aa` + 强调色胶囊），支持深浅的左右各画一半 |
+| 数据高亮调整 | 控件右对齐、去掉行选中高亮、行距与组间距加大、行间淡分割线；双列门槛 1100→1300，表头改 `B`/`I` 与月亮/太阳图标，长语言不再压字 |
+| 新建会话页（第二版） | #85 的 380×315 大卡改成紧凑网格卡（绿点特性 + 整宽「开始」），卡片 315→208px，`auto-fit` 加模式自动换行；深色下 CTA 文字色取 `--input-bg` 保证对比 |
+| 标签栏拖动重做 | 竖线指示器换成实时补位：原标签压暗在栏内滑动、占位块不可见只占位、FLIP 让位动画；pointer 事件替代 HTML5 拖放（后者隐藏源元素会被取消拖动），`setPointerCapture` 保证拖出窗口也能松手；「+」可被推到窗口边界；拖到左右边缘自动滚动 |
+| 多字符串拖动重做 | 与标签栏同一套：压暗行、不可见占位块、FLIP、上下边缘自动滚动、推挤「+ 添加」 |
+| 菜单下拉层级 | 下拉被标签栏盖掉上半截 —— `.header` 自成层叠上下文（z-index 6） |
+| 文言文语言包 | 补齐到 461 键（旧包 344），放外置层 `resources\i18n\lzh.json` |
+| 旧路径文案 | 「创建示例 / 打开文件夹」与 9 语言提示从 `themes\colors\`、`\i18n\` 改到 `resources\{themes,icons,i18n}` |
 
 ## v0.8.1 已完成
 
