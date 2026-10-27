@@ -790,34 +790,34 @@ function _themeAccent(data, mode) {
 	return pick(block[mode]) || pick(block.common) || '';
 }
 
-function _makeSwatch(mode, bg, fg, label, accent) {
+// 颜色主题卡里展示哪个模式：跟随当前深浅设置；主题不支持该模式就用它自己的第一个
+function _themeSampleMode(th) {
+	var mode = state.colorThemeMode;
+	if (mode === 'auto') mode = _colorSchemeQuery && _colorSchemeQuery.matches ? 'dark' : 'light';
+	var modes = th.modes || ['dark'];
+	if (modes.indexOf(mode) < 0) mode = modes[0] || 'dark';
+	return mode;
+}
+
+// 色样：底色 + 字体样本「Aa」+ 强调色胶囊。
+// 不用窗口预览，免得和「深浅模式」那三张卡重复。
+function _makeThemeSample(data, mode) {
+	var c = _themeColorsForMode(data, mode);
+	var accent = _themeAccent(data, mode);
+	if (!accent) accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || c.fg;
 	var box = document.createElement('span');
-	box.className = 'settings-theme-preview';
-	box.style.background = bg;
-	box.title = label;
-	// 侧栏
-	var side = document.createElement('span');
-	side.className = 'settings-theme-preview-side';
-	side.style.background = fg;
-	box.appendChild(side);
-	// 两行内容条 + 一个强调点
-	var body = document.createElement('span');
-	body.className = 'settings-theme-preview-body';
-	var l1 = document.createElement('span');
-	l1.className = 'settings-theme-preview-line';
-	l1.style.background = fg;
-	l1.style.width = '58%';
-	var l2 = document.createElement('span');
-	l2.className = 'settings-theme-preview-line is-dim';
-	l2.style.background = fg;
-	l2.style.width = '36%';
-	var dot = document.createElement('span');
-	dot.className = 'settings-theme-preview-dot';
-	dot.style.background = accent || fg;
-	body.appendChild(l1);
-	body.appendChild(l2);
-	body.appendChild(dot);
-	box.appendChild(body);
+	box.className = 'settings-theme-sample';
+	box.style.background = c.bg;
+	box.title = (mode === 'dark' ? t('theme.dark_label','深色') : t('theme.light_label','浅色'));
+	var fg = document.createElement('span');
+	fg.className = 'settings-theme-sample-fg';
+	fg.textContent = 'Aa';
+	fg.style.color = c.fg;
+	box.appendChild(fg);
+	var acc = document.createElement('i');
+	acc.className = 'settings-theme-sample-accent';
+	acc.style.background = accent;
+	box.appendChild(acc);
 	return box;
 }
 
@@ -859,22 +859,15 @@ async function renderSettingsThemeGrid() {
 		if (th.id === 'system') data = _systemThemeComputedFallback();
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.colorThemeId === th.id ? ' is-selected' : '');
-		var modes = th.modes || ['dark'];
-		var swatches = document.createElement('span');
-		swatches.className = 'settings-theme-swatches';
-		if (modes.indexOf('dark') >= 0) {
-			var dc = _themeColorsForMode(data, 'dark');
-			swatches.appendChild(_makeSwatch('dark', dc.bg, dc.fg, t('theme.dark_label','深色'), _themeAccent(data, 'dark')));
-		}
-		if (modes.indexOf('light') >= 0) {
-			var lc = _themeColorsForMode(data, 'light');
-			swatches.appendChild(_makeSwatch('light', lc.bg, lc.fg, t('theme.light_label','浅色'), _themeAccent(data, 'light')));
-		}
-		card.appendChild(swatches);
+		card.appendChild(_makeThemeSample(data, _themeSampleMode(th)));
 		var name = document.createElement('span');
 		name.className = 'settings-theme-card-name';
 		name.textContent = th.name || th.id;
 		card.appendChild(name);
+		var chk = document.createElement('span');
+		chk.className = 'settings-pick-check';
+		chk.innerHTML = icon('check', 11, 11);
+		card.appendChild(chk);
 		card.addEventListener('click', function() {
 			if (th.external) {
 				window.go.main.App.GetExternalColorTheme(th.id).then(function(data2) {
@@ -1004,7 +997,7 @@ function renderSettingsLookGrid() {
 		meta.appendChild(name);
 		card.appendChild(meta);
 
-		var chk = _lookNode('span', 'settings-look-check');
+		var chk = _lookNode('span', 'settings-pick-check');
 		chk.innerHTML = icon('check', 11, 11);
 		card.appendChild(chk);
 
@@ -1014,6 +1007,8 @@ function renderSettingsLookGrid() {
 			card.classList.add('is-active');
 			applyColorTheme();
 			saveSettings();
+			// 深浅换了：下面颜色主题卡的色样也要跟着换成对应模式
+			renderSettingsThemeGrid();
 		});
 		grid.appendChild(card);
 	});

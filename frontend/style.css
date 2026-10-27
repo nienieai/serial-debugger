@@ -1601,8 +1601,8 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .settings-look-card.is-active .settings-look-meta svg { color: var(--accent); opacity: 1; }
 .settings-look-card.is-active .settings-look-name { opacity: 1; font-weight: 600; }
 
-/* 选中对勾 */
-.settings-look-check {
+/* 选中对勾：深浅模式卡与颜色主题卡共用 */
+.settings-pick-check {
   position: absolute; top: 14px; right: 14px;
   display: flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 50%;
@@ -1611,8 +1611,9 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   opacity: 0; transform: scale(.62);
   transition: opacity .15s, transform .15s;
 }
-.settings-look-card.is-active .settings-look-check { opacity: 1; transform: scale(1); }
-.settings-look-check svg { width: 11px; height: 11px; }
+.settings-look-card.is-active .settings-pick-check,
+.settings-theme-card.is-selected .settings-pick-check { opacity: 1; transform: scale(1); }
+.settings-pick-check svg { width: 11px; height: 11px; }
 
 /* ---- 主题 / 图标：等宽卡片网格（auto-fill + minmax，同类卡片同宽） ---- */
 .settings-theme-grid {
@@ -1621,38 +1622,42 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   gap: 10px;
 }
 .settings-theme-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 9px;
+  padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   cursor: pointer;
   color: var(--fg);
   background: color-mix(in srgb, var(--bg2) 42%, transparent);
   -webkit-backdrop-filter: blur(12px) saturate(1.2);
   backdrop-filter: blur(12px) saturate(1.2);
-  transition: border-color .15s;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
   min-width: 0;
 }
-.settings-theme-card:hover { border-color: var(--accent); }
-.settings-theme-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent); }
-.settings-theme-card-name { font-size: 13px; font-weight: 600; line-height: 1.2; text-align: center; }
-.settings-theme-swatches { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
-.settings-theme-swatch {
+.settings-theme-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.settings-theme-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.settings-theme-card-name { font-size: 13px; line-height: 1.2; text-align: center; opacity: .78; }
+.settings-theme-card.is-selected .settings-theme-card-name { opacity: 1; font-weight: 600; }
+
+/* 颜色主题的色样：底色 + 字体样本「Aa」+ 强调色胶囊。
+   刻意不用窗口预览，免得和上面「深浅模式」那三张卡重复。 */
+.settings-theme-sample {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  height: 26px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
+  gap: 8px;
+  height: 46px;
+  padding: 0 10px;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
   flex-shrink: 0;
-  font-size: 12px;
-  line-height: 1;
 }
-.settings-theme-swatch-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.settings-theme-card.is-selected .settings-theme-swatch { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.settings-theme-sample-fg { font-size: 15px; font-weight: 600; line-height: 1; }
+/* 强调色胶囊紧跟在「Aa」后面，右半边留给选中对勾，避免叠在胶囊上 */
+.settings-theme-sample-accent { width: 26px; height: 8px; border-radius: 999px; flex: 0 0 auto; }
 
 /* ---- 语言：选项卡片 ---- */
 .settings-lang-list {
@@ -1883,39 +1888,7 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .settings-icon-preview-item { display: flex; width: 18px; height: 18px; flex: 0 0 18px; }
 .settings-icon-preview-item svg { width: 18px; height: 18px; }
 
-/* 主题卡：迷你界面预览（底色 + 侧栏 + 内容条 + 强调点） */
-.settings-theme-swatches { gap: 8px; }
-.settings-theme-preview {
-  position: relative;
-  display: flex;
-  width: 100%;
-  height: 64px;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  flex-shrink: 0;
-}
-.settings-theme-preview-side { width: 26%; opacity: .12; }
-.settings-theme-preview-body { position: relative; flex: 1 1 auto; padding: 12px 10px 0; display: flex; flex-direction: column; gap: 5px; }
-.settings-theme-preview-line { display: block; height: 4px; border-radius: 2px; opacity: .5; }
-.settings-theme-preview-line.is-dim { opacity: .26; }
-.settings-theme-preview-dot {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px color-mix(in srgb, #000 24%, transparent);
-}
-/* 卡片本身：选中给一圈 accent，hover 抬一下 */
-.settings-theme-card { padding: 10px; border-radius: 12px; transition: border-color .15s, transform .15s, box-shadow .15s; }
-.settings-theme-card:hover { transform: translateY(-1px); }
-.settings-theme-card.is-selected { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
-.settings-theme-card-name { margin-top: 2px; }
-
-/* 主题卡：色块区固定高度，名称在下，各卡等高 */
-.settings-theme-swatches { min-height: 34px; align-items: center; }
+/* 主题卡 / 图标卡：名称在下，各卡等高（色样高度见 .settings-theme-sample） */
 @media (max-width: 1100px) {
   .settings-panel[data-panel="colors"] > .settings-bubble { display: block; }
 }
