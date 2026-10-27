@@ -1417,55 +1417,69 @@ document.addEventListener('copy', function(e) {
   }
 });
 
-// ---- Tab drag：拖动时实时补位 ----
+// ---- Tab drag：pointer 事件自实现（拖动时实时补位）----
 //
-// 走 HTML5 拖放（拖影由浏览器画），拖动期间做三件事：
-//   1. 被拖的标签改成 position:absolute，真正脱离文档流（opacity:0，只剩拖影）
-//   2. 原位插一个等宽的 .tab-placeholder 占位块
-//   3. dragover 时按鼠标位置把占位块移到落点，其余标签跟着让位
-// 松手后按占位块在 DOM 里的位置结算 state.tabs，再 renderTabs() 重排。
-// 所以是「拖到哪、标签让到哪」，不再是一条竖线指示器。
-var _tabDrag = null;   // { btn, from, ph }
+// 为什么不用 HTML5 拖放：dragstart 里把源元素改成 position:absolute / display:none，
+// 浏览器会判定「拖动源消失」直接把这次拖动取消掉 —— 表现就是按住标签拖不动。
+// 改成 pointer 事件后全程可控：
+//   1. 按住标签、移动超过 4px 才算拖动，否则照常点击切换
+//   2. 拖动开始：原标签隐藏，原位插等宽占位块；再克隆一个 .tab-ghost 跟着鼠标
+//      （外观和原来一模一样，只是加了投影），所以「手上那个」看起来没变
+//   3. 移动时按鼠标位置把占位块挪到落点，其余标签即时让位
+//   4. 松手按占位块在 DOM 里的位置结算 state.tabs，再 renderTabs()；Esc 取消
+var _tabDrag = null;   // { btn, idx, started, ph, ghost, ... }
 
-function _tabDragBegin(e, btn, idx) {
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', String(idx));
+function _tabDragDown(e) {
+  if (e.button !== 0) return;
+  var btn = e.currentTarget;
+  if (e.target && e.target.closest && e.target.closest('.close-tab')) return;
+  var idx = parseInt(btn.dataset.tabIdx, 10);
+  if (isNaN(idx)) return;
   var r = btn.getBoundingClientRect();
+  _tabDrag = {
+    btn: btn, idx: idx, started: false,
+    startX: e.clientX, startY: e.clientY,
+    offX: e.clientX - r.left, offY: e.clientY - r.top,
+    w: r.width, h: r.height,
+    ph: null, ghost: null,
+  };
+}
+
+function _tabDragStart(st) {
+  st.started = true;
+  var r = st.btn.getBoundingClientRect();
+  var ghost = st.btn.cloneNode(true);
+  ghost.classList.add('tab-ghost');
+  ghost.classList.remove('is-active');   // 激活态有更高更圆的样式，克隆体统一成普通标签
+  ghost.style.width = st.w + 'px';
+  ghost.style.height = st.h + 'px';
+  ghost.style.left = r.left + 'px';
+  ghost.style.top = r.top + 'px';
+  document.body.appendChild(ghost);
+  st.ghost = ghost;
+
   var ph = document.createElement('div');
   ph.className = 'tab-placeholder';
-  ph.style.width = r.width + 'px';   // 不取整：和原标签同宽，避免整条栏被挪动 1px
-  btn.parentNode.insertBefore(ph, btn);
-  btn.classList.add('tab-dragging');
-  btn.style.width = r.width + 'px';
-  _tabDrag = { btn: btn, from: idx, ph: ph };
+  ph.style.width = st.w + 'px';
+  st.btn.parentNode.insertBefore(ph, st.btn);
+  st.ph = ph;
+
+  st.btn.classList.add('tab-src-hidden');
+  document.body.classList.add('is-tab-dragging');
 }
 
-// 结束拖动（松手、取消、拖出窗口都走这里）：清占位块、还原标签，不碰 state.tabs
-function _tabDragCleanup() {
-  var st = _tabDrag;
-  if (!st) return;
-  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
-  st.btn.classList.remove('tab-dragging');
-  st.btn.style.width = '';
-  _tabDrag = null;
-}
-
-function _tabDragOver(e) {
-  var st = _tabDrag;
+// 落点 = 第一个「鼠标还在它左半区」的标签之前；都没有就排到最后
+function _tabDragPlace(st, clientX) {
   var scroll = document.getElementById('tabsScroll');
-  if (!st || !scroll) return;
-  e.preventDefault();   // 不 preventDefault 浏览器不会触发 drop
-
-  // 落点 = 第一个「鼠标还在它左半区」的标签之前；找不到就排到最后
+  if (!scroll || !st.ph) return;
   var before = null;
   var tabs = scroll.querySelectorAll('.tab-btn:not(.tab-new)');
   for (var j = 0; j < tabs.length; j++) {
     var t = tabs[j];
     if (t === st.btn) continue;
     var r = t.getBoundingClientRect();
-    if (e.clientX < r.left + r.width / 2) { before = t; break; }
+    if (clientX < r.left + r.width / 2) { before = t; break; }
   }
-
   var kids = Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; });
   var target = before ? kids.indexOf(before) : kids.length;
   if (kids.indexOf(st.ph) === target) return;
@@ -1473,26 +1487,50 @@ function _tabDragOver(e) {
   if (ref) scroll.insertBefore(st.ph, ref); else scroll.appendChild(st.ph);
 }
 
-function _tabDrop(e) {
+function _tabDragMove(e) {
   var st = _tabDrag;
   if (!st) return;
-  e.preventDefault();
-  var scroll = document.getElementById('tabsScroll');
-  var kids = Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; });
-  var target = kids.indexOf(st.ph);
-  _tabDragCleanup();
-  if (target < 0) { renderTabs(); return; }
+  if (!st.started) {
+    if (Math.abs(e.clientX - st.startX) < 4 && Math.abs(e.clientY - st.startY) < 4) return;
+    _tabDragStart(st);
+  }
+  if (e.cancelable) e.preventDefault();
+  st.ghost.style.left = (e.clientX - st.offX) + 'px';
+  st.ghost.style.top = (e.clientY - st.offY) + 'px';
+  _tabDragPlace(st, e.clientX);
+}
 
-  // kids 里已经排除被拖的标签，含占位块；占位块在 kids 中的下标就是「拖拽元素
-  // 最终该落在 state.tabs 的第几位」（占位块自己占了被腾出来的那个位置）。
-  var from = st.from;
-  if (target === from) { renderTabs(); return; }
-  var moved = state.tabs.splice(from, 1)[0];
-  state.tabs.splice(target, 0, moved);
-  if (state.activeTab === from) state.activeTab = target;
-  else if (from < state.activeTab && target >= state.activeTab) state.activeTab--;
-  else if (from > state.activeTab && target <= state.activeTab) state.activeTab++;
+// commit=false 表示取消（Esc / pointercancel）：只清理，不改顺序
+function _tabDragFinish(commit) {
+  var st = _tabDrag;
+  if (!st) return;
+  _tabDrag = null;
+
+  if (st.ghost && st.ghost.parentNode) st.ghost.parentNode.removeChild(st.ghost);
+  document.body.classList.remove('is-tab-dragging');
+  if (!st.started) return;
+  st.btn.classList.remove('tab-src-hidden');
+
+  var scroll = document.getElementById('tabsScroll');
+  var kids = scroll ? Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; }) : [];
+  var target = st.ph ? kids.indexOf(st.ph) : -1;
+  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+
+  if (commit && target >= 0 && target !== st.idx) {
+    var moved = state.tabs.splice(st.idx, 1)[0];
+    state.tabs.splice(target, 0, moved);
+    if (state.activeTab === st.idx) state.activeTab = target;
+    else if (st.idx < state.activeTab && target >= state.activeTab) state.activeTab--;
+    else if (st.idx > state.activeTab && target <= state.activeTab) state.activeTab++;
+    // 拖动结束后浏览器还会补一个 click，别让它把标签又切回去
+    window._tabClickSuppress = true;
+    setTimeout(function() { window._tabClickSuppress = false; }, 0);
+  }
   renderTabs();
+}
+
+function _tabDragFinishAll(commit) {
+  if (_tabDrag) _tabDragFinish(commit);
 }
 
 
@@ -1612,8 +1650,13 @@ window.addEventListener('DOMContentLoaded', () => {
   // Bind stable tab drag handlers to bar
   var bar = document.getElementById('tabsBar');
   if (bar) {
-    bar.addEventListener('dragover', _tabDragOver);
-    bar.addEventListener('drop', _tabDrop);
+    // 标签拖动：pointer 事件（拖动时实时补位）
+    document.addEventListener('pointermove', _tabDragMove);
+    document.addEventListener('pointerup', function() { _tabDragFinishAll(true); });
+    document.addEventListener('pointercancel', function() { _tabDragFinishAll(false); });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') _tabDragFinishAll(false);
+    });
     // Mouse wheel horizontal scroll for tab bar
     bar.addEventListener('wheel', function(e) {
       var scroll = document.getElementById('tabsScroll');
@@ -2930,12 +2973,11 @@ function renderTabs() {
     btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '')
       + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
     if (!t.portOpen) btn.className += ' tab-idle';
-    btn.draggable = true;
     btn.dataset.tabIdx = i;
-    btn.onclick = () => switchTab(i);
-    // drag handlers（拖动时实时补位，见 _tabDragBegin）
-    btn.ondragstart = (e) => _tabDragBegin(e, btn, i);
-    btn.ondragend = () => _tabDragCleanup();
+    btn.onclick = () => { if (window._tabClickSuppress) return; switchTab(i); };
+    // 拖动排序走 pointer 事件（见 _tabDragDown）：HTML5 拖放在隐藏源元素时会被
+    // 浏览器取消，拖不动。
+    btn.onpointerdown = _tabDragDown;
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
