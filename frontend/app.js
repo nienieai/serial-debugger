@@ -621,8 +621,20 @@ async function initIconThemes() {
   try {
     var external = await window.go.main.App.ListExternalIconThemes();
     var all = [];
-    // built-in default is always available — i18n key for dynamic translation
-    all.push({ id: '', name: '', _i18nKey: 'theme.icons_default', builtin: true });
+    // 内置图标包：config/icons/<pack>/ 随二进制嵌入，system 包对外仍叫「内置默认」
+    var builtinPacks = [];
+    try { builtinPacks = await window.go.main.App.ListBuiltinIconThemes() || []; } catch (e) { builtinPacks = []; }
+    if (builtinPacks.length) {
+      for (var b = 0; b < builtinPacks.length; b++) {
+        if (builtinPacks[b].id === 'system') {
+          all.push({ id: '', pack: 'system', name: builtinPacks[b].name, _i18nKey: 'theme.icons_default', builtin: true });
+        } else {
+          all.push({ id: builtinPacks[b].id, pack: builtinPacks[b].id, name: builtinPacks[b].name, builtin: true });
+        }
+      }
+    } else {
+      all.push({ id: '', name: '', _i18nKey: 'theme.icons_default', builtin: true });
+    }
     if (external) {
       for (var j = 0; j < external.length; j++) {
         all.push({ id: external[j].id, name: external[j].name, builtin: false });
@@ -632,7 +644,11 @@ async function initIconThemes() {
     state.iconThemes = all;
     var saved = state.iconThemeId;
     if (saved) {
-      var ext = await window.go.main.App.GetExternalIconTheme(saved);
+      var _isBuiltin = false;
+      for (var bi = 0; bi < all.length; bi++) { if (all[bi].id === saved && all[bi].builtin) { _isBuiltin = true; break; } }
+      var ext = _isBuiltin
+        ? await window.go.main.App.GetBuiltinIconTheme(saved)
+        : await window.go.main.App.GetExternalIconTheme(saved);
       if (ext && ext.icons) {
         applyIconTheme(ext);
         state.iconThemeId = saved;
@@ -653,7 +669,13 @@ function setIconTheme(id) {
     _populateIcons();
     return;
   }
-  window.go.main.App.GetExternalIconTheme(id).then(function(ext) {
+  var isBuiltin = false;
+  var list = state.iconThemes || [];
+  for (var i = 0; i < list.length; i++) { if (list[i].id === id && list[i].builtin) { isBuiltin = true; break; } }
+  var req = isBuiltin
+    ? window.go.main.App.GetBuiltinIconTheme(id)
+    : window.go.main.App.GetExternalIconTheme(id);
+  req.then(function(ext) {
     if (ext && ext.icons) {
       applyIconTheme(ext);
       state.iconThemeId = id;

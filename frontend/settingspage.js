@@ -994,7 +994,15 @@ function renderSettingsIconGrid() {
 async function _fillIconPreview(box, th) {
 	var icons = null;
 	if (th.builtin) {
-		icons = (typeof activeIcons !== 'undefined' && activeIcons) ? activeIcons : null;
+		if (!th.id) {
+			// 「内置默认」= system 包，用当前已加载的那套
+			icons = (typeof activeIcons !== 'undefined' && activeIcons) ? activeIcons : null;
+		} else {
+			try {
+				var bt = await window.go.main.App.GetBuiltinIconTheme(th.id);
+				if (bt && bt.icons) icons = bt.icons;
+			} catch (e) {}
+		}
 	} else {
 		try {
 			var ext = await window.go.main.App.GetExternalIconTheme(th.id);
