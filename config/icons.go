@@ -17,11 +17,9 @@ import (
 //go:embed icons/*/icons.json
 var iconsFS embed.FS
 
-var builtinIcons map[string]string
-
-func init() {
-	builtinIcons = loadIconPack("system")
-}
+// 不再在 init() 里缓存图标表：每次调用都按磁盘（builtin/icons/<pack>/）优先重新读，
+// 这样新增/修改 .svg 后只要前端刷新一次就生效，不用重启 exe。
+// 一个包就几十个小文件，读一次的开销可以忽略。
 
 // loadIconDir 从一个真实目录读 key -> svg（目录不存在返回 nil）
 func loadIconDir(dir string) map[string]string {
@@ -190,19 +188,22 @@ func GetBuiltinIconTheme(id string) map[string]any {
 // GetBuiltinIcon returns the built-in SVG icon for the given key.
 // Key is the filename without .svg (e.g. "plus", "close", "settings").
 func GetBuiltinIcon(key string) string {
-	return builtinIcons[key]
+	return loadIconPack("system")[key]
 }
 
 // ListBuiltinIconKeys returns all built-in icon keys.
 func ListBuiltinIconKeys() []string {
-	keys := make([]string, 0, len(builtinIcons))
-	for k := range builtinIcons {
+	icons := loadIconPack("system")
+	keys := make([]string, 0, len(icons))
+	for k := range icons {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
 // GetBuiltinIcons returns all built-in icons as a map (system pack).
+// 每次调用都读盘，前端刷新即拿到最新的图标集合。
 func GetBuiltinIcons() map[string]string {
-	return builtinIcons
+	return loadIconPack("system")
 }
