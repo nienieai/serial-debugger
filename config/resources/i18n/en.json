@@ -438,7 +438,7 @@
   "theme.dark": "Theme: Dark",
   "theme.dark_label": "Dark",
   "theme.dark_section": "Dark",
-  "theme.empty": "No themes yet — check the themes/colors/ folder",
+  "theme.empty": "No themes yet — check the resources\\themes\\ folder",
   "theme.icons": "Icon Theme",
   "theme.icons_default": "Built-in Default",
   "theme.light": "Theme: Light",

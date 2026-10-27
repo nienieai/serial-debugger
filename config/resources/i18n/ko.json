@@ -438,7 +438,7 @@
   "theme.dark": "테마: 다크",
   "theme.dark_label": "어두움",
   "theme.dark_section": "어두움",
-  "theme.empty": "테마가 없습니다 — themes/colors/ 폴더를 확인하세요",
+  "theme.empty": "테마가 없습니다 — resources\\themes\\ 폴더를 확인하세요",
   "theme.icons": "아이콘 테마",
   "theme.icons_default": "내장 기본값",
   "theme.light": "테마: 라이트",

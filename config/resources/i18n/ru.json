@@ -438,7 +438,7 @@
   "theme.dark": "Тема: Тёмная",
   "theme.dark_label": "Тёмная",
   "theme.dark_section": "Тёмная",
-  "theme.empty": "Нет тем — проверьте папку themes/colors/",
+  "theme.empty": "Нет тем — проверьте папку resources\\themes\\",
   "theme.icons": "Тема значков",
   "theme.icons_default": "Встроенный по умолчанию",
   "theme.light": "Тема: Светлая",

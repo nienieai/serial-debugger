@@ -438,7 +438,7 @@
   "theme.dark": "主題：深色",
   "theme.dark_label": "深色",
   "theme.dark_section": "深色",
-  "theme.empty": "暫無主題，請檢查 themes/colors/ 目錄",
+  "theme.empty": "暫無主題，請檢查 resources\\themes\\ 目錄",
   "theme.icons": "圖示主題",
   "theme.icons_default": "內建預設",
   "theme.light": "主題：淺色",

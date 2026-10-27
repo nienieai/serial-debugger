@@ -438,7 +438,7 @@
   "theme.dark": "主题：深色",
   "theme.dark_label": "深色",
   "theme.dark_section": "深色",
-  "theme.empty": "暂无主题，请检查 themes/colors/ 目录",
+  "theme.empty": "暂无主题，请检查 resources\\themes\\ 目录",
   "theme.icons": "图标主题",
   "theme.icons_default": "内置默认",
   "theme.light": "主题：浅色",

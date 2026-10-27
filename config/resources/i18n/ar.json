@@ -438,7 +438,7 @@
   "theme.dark": "السمة: داكن",
   "theme.dark_label": "داكن",
   "theme.dark_section": "داكن",
-  "theme.empty": "لا توجد سمات — تحقّق من المجلد themes/colors/",
+  "theme.empty": "لا توجد سمات — تحقّق من المجلد resources\\themes\\",
   "theme.icons": "موضوع الأيقونات",
   "theme.icons_default": "الافتراضي المدمج",
   "theme.light": "السمة: فاتح",

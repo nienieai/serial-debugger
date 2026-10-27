@@ -438,7 +438,7 @@
   "theme.dark": "テーマ：ダーク",
   "theme.dark_label": "ダーク",
   "theme.dark_section": "ダーク",
-  "theme.empty": "テーマがありません — themes/colors/ を確認してください",
+  "theme.empty": "テーマがありません — resources\\themes\\ を確認してください",
   "theme.icons": "アイコンテーマ",
   "theme.icons_default": "内蔵デフォルト",
   "theme.light": "テーマ：ライト",

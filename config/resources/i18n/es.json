@@ -438,7 +438,7 @@
   "theme.dark": "Tema: Oscuro",
   "theme.dark_label": "Oscuro",
   "theme.dark_section": "Oscuro",
-  "theme.empty": "No hay temas: revisa la carpeta themes/colors/",
+  "theme.empty": "No hay temas: revisa la carpeta resources\\themes\\",
   "theme.icons": "Tema de iconos",
   "theme.icons_default": "Predeterminado",
   "theme.light": "Tema: Claro",
