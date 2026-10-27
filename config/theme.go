@@ -11,8 +11,9 @@ import (
 	"strings"
 )
 
-// 主题 = 一个文件夹：resources/themes/<id>/theme.json，自带素材（背景图、缩略图等）放在同一目录。
-// 磁盘上的 <exe>/resources/themes/<id>/ 覆盖嵌入的同名目录。
+// 主题 = 一个文件夹：<资源层>/themes/<id>/theme.json，自带素材（背景图、缩略图等）放同一目录。
+// 资源层有两份（见 resources.go）：内置 resources-system、外置 resources；
+// 都没有时才用嵌入的那份。<exe>/themes/ 这个旧布局已经不读了。
 //
 //go:embed resources/themes/*/*
 var themesFS embed.FS
@@ -33,7 +34,8 @@ type ExternalThemeInfo struct {
 	Fallback string   `json:"fallback"`
 }
 
-// themeIDs 列出所有主题 id（= 文件夹名）：磁盘上的在前，嵌入的补上缺的。
+// themeIDs 列出所有主题 id（= 文件夹名）：按资源层优先级收集（内置 → 外置 → 嵌入），
+// 同名只留优先级最高的那个。
 func themeIDs() []string {
 	seen := map[string]bool{}
 	var ids []string
@@ -45,12 +47,15 @@ func themeIDs() []string {
 		ids = append(ids, id)
 	}
 
-	if dir := resourcePath("themes"); dir != "" {
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && fileExists(filepath.Join(dir, e.Name(), "theme.json")) {
-					add(e.Name())
-				}
+	for _, base := range resourceDirs() {
+		dir := filepath.Join(base, "themes")
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() && fileExists(filepath.Join(dir, e.Name(), "theme.json")) {
+				add(e.Name())
 			}
 		}
 	}
@@ -67,9 +72,9 @@ func themeIDs() []string {
 	return ids
 }
 
-// readThemeJSON 读主题定义：磁盘优先。
+// readThemeJSON 读主题定义：按资源层优先级找，最后回退嵌入。
 func readThemeJSON(id string) (map[string]any, bool) {
-	if p := resourcePath("themes", id, "theme.json"); fileExists(p) {
+	if p := findResource("themes", id, "theme.json"); fileExists(p) {
 		if data, err := os.ReadFile(p); err == nil {
 			var m map[string]any
 			if json.Unmarshal(data, &m) == nil {
@@ -88,13 +93,13 @@ func readThemeJSON(id string) (map[string]any, bool) {
 	return m, true
 }
 
-// readThemeAsset 读主题文件夹里的素材（缩略图、背景图）：磁盘优先，其次嵌入。
+// readThemeAsset 读主题文件夹里的素材（缩略图、背景图）：按资源层优先级找，最后回退嵌入。
 func readThemeAsset(id, name string) ([]byte, string, bool) {
 	clean := filepath.Clean(filepath.FromSlash(name))
 	if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
 		return nil, "", false
 	}
-	if p := resourcePath("themes", id, clean); fileExists(p) {
+	if p := findResource("themes", id, clean); fileExists(p) {
 		if data, err := os.ReadFile(p); err == nil {
 			return data, p, true
 		}

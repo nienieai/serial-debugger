@@ -48,10 +48,11 @@ func loadIconDir(dir string) map[string]string {
 }
 
 // loadIconPack 读一个图标包，返回 key -> svg。
-// 磁盘 resources/icons/<pack>/ 优先，方便查看和替换；没有再退回嵌入的那份。
+// 按资源层优先级找（内置 resources-system → 外置 resources）：哪一层里有这个包的
+// .svg 就用哪一层；都没有再退回嵌入的那份。
 func loadIconPack(pack string) map[string]string {
-	if dir := resourcePath("icons", pack); dir != "" {
-		if out := loadIconDir(dir); len(out) > 0 {
+	for _, base := range resourceDirs() {
+		if out := loadIconDir(filepath.Join(base, "icons", pack)); len(out) > 0 {
 			return out
 		}
 	}
@@ -78,24 +79,26 @@ func loadIconPack(pack string) map[string]string {
 	return out
 }
 
-// ListBuiltinIconPacks 列出图标包（resources/icons/ 下的子目录，含 icons.json 的才算）。
+// ListBuiltinIconPacks 列出图标包（各资源层 icons/ 下的子目录，含 icons.json 的才算）。
 func ListBuiltinIconPacks() []string {
 	seen := map[string]bool{}
 	var packs []string
-	// 磁盘 resources/icons/ 里的包优先
-	if dir := resourcePath("icons"); dir != "" {
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				if !fileExists(filepath.Join(dir, e.Name(), "icons.json")) {
-					continue
-				}
-				if !seen[e.Name()] {
-					seen[e.Name()] = true
-					packs = append(packs, e.Name())
-				}
+	for _, base := range resourceDirs() {
+		dir := filepath.Join(base, "icons")
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if !fileExists(filepath.Join(dir, e.Name(), "icons.json")) {
+				continue
+			}
+			if !seen[e.Name()] {
+				seen[e.Name()] = true
+				packs = append(packs, e.Name())
 			}
 		}
 	}

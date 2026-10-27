@@ -445,29 +445,22 @@ type ExternalI18nInfo struct {
 	Dir      string `json:"dir"`
 }
 
-// i18nDir 返回磁盘上的语言包目录：<exe>/resources/i18n（或工作目录下的）。
-// 和嵌入的 resources/i18n 是同一个布局，磁盘上的同名文件覆盖内置。
+// i18nDir 返回优先级最高的磁盘语言包目录：<exe>/resources-system/i18n 或
+// <exe>/resources/i18n（见 config/resources.go）。
 func i18nDir() string {
 	return config.I18nDir()
 }
 
-// ListExternalI18n scans the i18n/ directory next to the exe and returns
-// metadata for each external .json translation file found.
+// ListExternalI18n 扫描各资源层的 i18n/ 目录，返回每份语言文件的元数据。
+// 同名语言按优先级只取第一份（内置 resources-system > 外置 resources）。
 func (a *App) ListExternalI18n() []ExternalI18nInfo {
-	dir := i18nDir()
-	if dir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
 	var result []ExternalI18nInfo
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+	for _, lang := range config.I18nLangs() {
+		path, ok := config.I18nFile(lang)
+		if !ok {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
@@ -476,7 +469,7 @@ func (a *App) ListExternalI18n() []ExternalI18nInfo {
 			continue
 		}
 		info := ExternalI18nInfo{
-			Filename: e.Name(),
+			Filename: filepath.Base(path),
 			Lang:     m["_lang"],
 			Name:     m["_name"],
 			Dir:      m["_dir"],
@@ -489,14 +482,13 @@ func (a *App) ListExternalI18n() []ExternalI18nInfo {
 	return result
 }
 
-// LoadExternalI18n loads i18n/{lang}.json from the external directory.
+// LoadExternalI18n loads i18n/{lang}.json from the highest-priority resource layer.
 // Returns nil if the file does not exist or is invalid.
 func (a *App) LoadExternalI18n(lang string) map[string]string {
-	dir := i18nDir()
-	if dir == "" {
+	path, ok := config.I18nFile(lang)
+	if !ok {
 		return nil
 	}
-	path := filepath.Join(dir, lang+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
