@@ -799,6 +799,24 @@ function _themeSampleMode(th) {
 	return mode;
 }
 
+// 该主题支持哪些深浅：用小月亮 / 小太阳标出来，跟「深浅模式」那三张卡同一套图标语言。
+// 只画支持的那个（仅深色就只月亮），两个都在就是深浅都能切。
+function _themeModeIcons(th) {
+	var modes = th.modes || ['dark'];
+	var box = document.createElement('span');
+	box.className = 'settings-theme-mode-icons';
+	function add(key, label) {
+		var el = document.createElement('span');
+		el.className = 'settings-theme-mode-ico';
+		el.title = label;
+		el.innerHTML = icon(key, 13, 13);
+		box.appendChild(el);
+	}
+	if (modes.indexOf('dark') >= 0) add('theme_dark', t('theme.dark_label', '深色'));
+	if (modes.indexOf('light') >= 0) add('theme_light', t('theme.light_label', '浅色'));
+	return box;
+}
+
 // 色样：底色 + 字体样本「Aa」+ 强调色胶囊。
 // 不用窗口预览，免得和「深浅模式」那三张卡重复。
 function _makeThemeSample(data, mode) {
@@ -860,10 +878,14 @@ async function renderSettingsThemeGrid() {
 		var card = document.createElement('div');
 		card.className = 'settings-theme-card' + (state.colorThemeId === th.id ? ' is-selected' : '');
 		card.appendChild(_makeThemeSample(data, _themeSampleMode(th)));
+		var foot = document.createElement('span');
+		foot.className = 'settings-theme-card-foot';
 		var name = document.createElement('span');
 		name.className = 'settings-theme-card-name';
 		name.textContent = th.name || th.id;
-		card.appendChild(name);
+		foot.appendChild(name);
+		foot.appendChild(_themeModeIcons(th));
+		card.appendChild(foot);
 		var chk = document.createElement('span');
 		chk.className = 'settings-pick-check';
 		chk.innerHTML = icon('check', 11, 11);

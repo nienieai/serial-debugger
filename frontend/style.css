@@ -1639,8 +1639,14 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 }
 .settings-theme-card:hover { border-color: var(--accent); transform: translateY(-2px); }
 .settings-theme-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
-.settings-theme-card-name { font-size: 13px; line-height: 1.2; text-align: center; opacity: .78; }
+/* 卡底行：主题名 + 支持哪些深浅（月亮 / 太阳） */
+.settings-theme-card-foot { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; }
+.settings-theme-card-name { font-size: 13px; line-height: 1.2; text-align: center; opacity: .78; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-theme-card.is-selected .settings-theme-card-name { opacity: 1; font-weight: 600; }
+.settings-theme-mode-icons { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; color: var(--placeholder); }
+.settings-theme-card.is-selected .settings-theme-mode-icons { color: var(--accent); }
+.settings-theme-mode-ico { display: flex; width: 13px; height: 13px; }
+.settings-theme-mode-ico svg { width: 13px; height: 13px; }
 
 /* 颜色主题的色样：底色 + 字体样本「Aa」+ 强调色胶囊。
    刻意不用窗口预览，免得和上面「深浅模式」那三张卡重复。 */
