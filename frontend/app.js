@@ -1863,6 +1863,11 @@ async function syncDaemonSessions(procData) {
   if (syncPending) return;
   syncPending = true;
   try {
+  // 守护进程事件可能比语言包先到：这时建出来的标签页/快捷面板会拿到空文案
+  // （t() 缺键给空串），而且之后没有任何补译路径。先把语言包装好再建 UI。
+  if (!_i18nLoaded) {
+    try { await loadI18n(state.language || 'zh'); } catch (e) {}
+  }
   if (!state.daemonOnline) return;
 
   let daemonSessions;
@@ -2879,6 +2884,18 @@ function closeTab(idx) {
 
 function closeCurrentTab() { closeTab(state.activeTab); }
 
+// 标签页标题：tab.label 在标签页创建时就算好了，如果那一刻语言包还没装好，
+// 算出来就是空串，之后再渲染也补不回来。这里按标签页自身状态兜一个。
+function _tabLabelText(tb) {
+  if (tb.label) return tb.label;
+  var sp = tb.syncedParams;
+  if (sp && sp.portName) {
+    if (tb.mode === 'forward') return sp.portName;
+    return sp.baud ? (sp.portName + ' @ ' + sp.baud) : sp.portName;
+  }
+  return tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
+}
+
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
@@ -2912,7 +2929,7 @@ function renderTabs() {
     btn.appendChild(dot);
     // Label text
     const labelSpan = document.createElement('span');
-    labelSpan.textContent = t.label + tag;
+    labelSpan.textContent = _tabLabelText(t) + tag;
     btn.appendChild(labelSpan);
     const v2 = t.viewers || {gui:0, cli:0, mcp:0};
     [['gui','#4a9eff'],['cli','#4caf50'],['mcp','#ff9800']].forEach(function(s) {
