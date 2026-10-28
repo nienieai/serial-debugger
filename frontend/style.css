@@ -958,7 +958,15 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 }
 .hist-unread:hover { border-color: var(--accent); color: var(--accent); }
 .display-content .placeholder { color: var(--placeholder); font-style: italic; padding: 8px 0; }
-.data-row { margin-bottom: 2px; }
+/* 数据行：屏幕外的行跳过布局与绘制（轻量虚拟化）。
+   窗口本身就只保留 150~400 行，这里再让浏览器别去排版、绘制看不见的那些。
+   contain-intrinsic-size 给一个「时间戳 1 行 + 数据 1 行」的典型高度，`auto`
+   让浏览器记住每行真实高度，回滚到看过的位置不会再估错。 */
+.data-row {
+  margin-bottom: 2px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 46px;
+}
 .ts-line { line-height: 1.4; }
 .ts-rx { color: var(--dc-tsRx); background: var(--dc-tsRx-bg, transparent); font-weight: var(--dc-tsRx-bold, normal); font-style: var(--dc-tsRx-italic, normal); }
 .ts-tx { color: var(--dc-tsTx); background: var(--dc-tsTx-bg, transparent); font-weight: var(--dc-tsTx-bold, normal); font-style: var(--dc-tsTx-italic, normal); }

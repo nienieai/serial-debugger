@@ -209,6 +209,48 @@ function _dropDomRows(n) {
   }
 }
 
+// ---- 行高估算（配 .data-row 的 content-visibility:auto 用） ----
+//
+// 屏外行没有真实高度，浏览器只能用 contain-intrinsic-size 的估值占位。若统一按
+// 46px 估，4 KB 的大包会被估成一行、实际却是上百行，滚动时整块内容会跳；
+// 所以这里按「时间戳行 + 数据折行行数」逐行算一个贴近真实的占位高度。
+
+var _charWCache = { key: '', w: 0 };
+
+// 等宽字符宽度：用显示区实际字体量一次；字体或字号变了就重测。
+function _monoCharWidth() {
+  var key = (state.displayFontFamily || '') + '|' + (state.displayFontSize || 15);
+  if (_charWCache.key === key && _charWCache.w > 0) return _charWCache.w;
+  var w = 0;
+  try {
+    var display = pageEl('displayContent');
+    var cs = display ? getComputedStyle(display) : null;
+    var font = cs
+      ? (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily)
+      : '15px monospace';
+    var ctx = document.createElement('canvas').getContext('2d');
+    if (ctx) {
+      ctx.font = font;
+      w = ctx.measureText('0'.repeat(64)).width / 64;
+    }
+  } catch (e) { w = 0; }
+  if (!(w > 0)) w = (state.displayFontSize || 15) * 0.6;   // 兜底：等宽约 0.6em
+  _charWCache.key = key;
+  _charWCache.w = w;
+  return w;
+}
+
+function _estRowHeight(dataEl) {
+  var display = pageEl('displayContent');
+  var fs = state.displayFontSize || 15;
+  var width = display ? (display.clientWidth - 28) : 900;   // 左右 padding
+  if (!(width > 40)) width = 900;
+  var cols = Math.max(10, Math.floor(width / _monoCharWidth()));
+  var chars = dataEl ? (dataEl.textContent || '').length : 0;
+  var lines = Math.max(1, Math.ceil(chars / cols));
+  return Math.ceil(fs * 1.4 + lines * fs * 1.5 + 2);        // .ts-line 1.4 / .data-line 1.5 + 行间距
+}
+
 // ---- 单行构造（不再有滚动副作用，贴底统一由批次处理） ----
 
 // opts（可选）：{ displayMode } —— 只给设置页的颜色预览用，让它能在一屏里同时
@@ -268,6 +310,10 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts) {
   }
 
   row.appendChild(dataLine);
+  // 给屏外行一个贴近真实的占位高度（见 _estRowHeight 的说明）
+  if (window.CSS && CSS.supports && CSS.supports('contain-intrinsic-size', 'auto 46px')) {
+    row.style.setProperty('contain-intrinsic-size', 'auto ' + _estRowHeight(dataLine) + 'px');
+  }
   container.appendChild(row);
   return row;
 }
