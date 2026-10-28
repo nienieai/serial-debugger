@@ -17,6 +17,10 @@ async function setLanguage(lang) {
   // Update language menu checkmarks
   updateLangMenu();
   applyI18n();
+  // 标签浮窗（c-tabpop）是 JS 拼的 HTML，applyI18n 扫不到，换语言后手动重画一遍
+  if (typeof _tabPop !== 'undefined' && _tabPop && typeof _tabPopRender === 'function') {
+    try { _tabPopRender(); } catch (_) {}
+  }
   // Re-render history with new language
   var tab = getActiveTab();
   if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {

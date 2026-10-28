@@ -47,6 +47,9 @@ const state = {
   statsBase: {},
   autoCreateSession: false,
   autoSaveHistory: true,
+  // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
+  // 标签浮窗要显示它，所以在 updatePortList 里留一份。
+  portDescs: {},
 };
 
 function newTabSendState() {
@@ -1449,6 +1452,7 @@ function _tabDragDown(e) {
 
 function _tabDragStart(st) {
   st.started = true;
+  _tabPopClose();   // 拖标签时浮窗跟着飘很怪
   var r = st.btn.getBoundingClientRect();
   var ph = document.createElement('div');
   ph.className = 'tab-placeholder';
@@ -1766,7 +1770,7 @@ window.addEventListener('DOMContentLoaded', () => {
       if (document.hidden) { _tabDragFinishAll(false); _qpDragFinishAll(false); }
     });
     document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') { _tabDragFinishAll(false); _qpDragFinishAll(false); }
+      if (e.key === 'Escape') { _tabDragFinishAll(false); _qpDragFinishAll(false); _tabPopClose(); }
     });
     // Mouse wheel horizontal scroll for tab bar
     bar.addEventListener('wheel', function(e) {
@@ -1777,6 +1781,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   initStatusBar();
   bindTabsScroll();
+  initTabPopup();
   // Fetch version once
   window.go.main.App.GetVersion().then(function(v) { window._appVersion = v || '0.6.1'; document.title = '串口调试工具 v' + window._appVersion; }).catch(function() { window._appVersion = '0.6.1'; });
   // Create global overlays (moved from static HTML to JS)
@@ -2609,6 +2614,16 @@ function _applyPortOptions(selId, optionsHtml, placeholder) {
 }
 
 function updatePortList(ports) {
+  // 顺手缓存「COM → 设备描述」：标签浮窗（c-tabpop）要显示串口名，
+  // 而这里刷出来的描述原本只用于拼下拉框文案，用完就丢。
+  state.portDescs = {};
+  if (ports) {
+    for (let i = 0; i < ports.length; i++) {
+      const p = ports[i];
+      if (!p || !p.port) continue;
+      state.portDescs[p.port] = (p.description && p.description !== p.port) ? p.description : '';
+    }
+  }
   let html = '';
   if (!ports || ports.length === 0) {
     html = `<option value="">${t('status.no_ports', '-- 无可用串口 --')}</option>`;
@@ -3072,6 +3087,429 @@ function _tabLabelText(tb) {  if (tb.label) return tb.label;
   return tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
 }
 
+// ---- 标签高级信息浮窗（设计稿 A：c-tabpop） ----
+//
+// 悬停标签时自绘浮窗，替代原生 title —— 原生 tooltip 只能放纯文本、不跟主题、
+// 约 1s 才出现，也显示不了实时速率。数据来源：
+//   端口 / 波特率 / 8N1   tab.syncedParams（app.js:3228、3280）
+//   串口名                state.portDescs（updatePortList 缓存，来自 daemon 的 description）
+//   速率 / 累计 / 错误    GetSessionStats（app.go:728）+ stats-rate / stats-count 事件
+//   运行时长              stats.uptimeSec（daemon/serial.go:61）
+var _tabPopEl = null;          // 浮窗 DOM 单例，挂在 body 下
+var _tabPop = null;            // 当前打开状态：{ tabEl, tab, idx, sessionId, stats, model }
+var _tabPopShowTimer = null;
+var _tabPopHideTimer = null;
+var _TABPOP_SHOW_DELAY = 140;
+var _TABPOP_HIDE_DELAY = 160;
+
+function _tabPopParityLetter(p) {
+  switch (String(p || 'none')) {
+    case 'odd': return 'O';
+    case 'even': return 'E';
+    case 'mark': return 'M';
+    case 'space': return 'S';
+    default: return 'N';
+  }
+}
+
+function _tabPopRateText(bps) {
+  if (!bps) return '0.0 B/s';
+  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+  if (bps >= 1024) return (bps / 1024).toFixed(1) + ' kB/s';
+  return bps.toFixed(1) + ' B/s';
+}
+
+function _tabPopDuration(sec) {
+  if (!sec || sec < 0) return '—';
+  var h = Math.floor(sec / 3600);
+  var m = Math.floor((sec % 3600) / 60);
+  var s = Math.floor(sec % 60);
+  return h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+// 从标签自身状态推出浮窗要显示的东西（不依赖统计接口）
+function _tabPopModel(tab) {
+  var sp = tab.syncedParams || null;
+  var isFwd = tab.mode === 'forward';
+  var ports = [];
+  var baud = 0;
+  if (sp) {
+    baud = sp.baud || 0;
+    if (isFwd) {
+      // 已连接时 portName 是 "COM4 ↔ COM14"；未连接时只有 portName + forwardPortB
+      var parts = String(sp.portName || '').split(' ↔ ');
+      if (parts[0]) ports.push({ tag: 'A', port: parts[0] });
+      var pb = sp.forwardPortB || parts[1] || '';
+      if (pb) ports.push({ tag: 'B', port: pb });
+    } else if (sp.portName) {
+      ports.push({ tag: '', port: sp.portName });
+    }
+  }
+  var params = '';
+  if (sp) {
+    var fmt = (sp.dataBits || 8) + _tabPopParityLetter(sp.parity) + (sp.stopBits || 1);
+    params = (isFwd && sp.forwardBaudB && sp.forwardBaudB !== baud)
+      ? (baud + ' ⇄ ' + sp.forwardBaudB + ' · ' + fmt)
+      : (baud + ' · ' + fmt);
+  }
+  return { ports: ports, params: params, declared: !!(sp && sp.portName), baud: baud, fwd: isFwd };
+}
+
+function _tabPopValues() {
+  var tab = _tabPop.tab;
+  var s = _tabPop.stats;
+  var isFwd = tab.mode === 'forward';
+  var on = !!tab.portOpen && !!s;
+  if (!on) {
+    return { rxRate: 0, txRate: 0, rxTotal: 0, txTotal: 0, errRx: 0, errTx: 0, uptime: '—', live: false };
+  }
+  // uptimeSec 只在 GetSessionStats 里给一次，事件不带它 —— 用取到的那一刻往后推算，
+  // 这样「运行」的秒数才是活的（每秒 tick 一次 _tabPopUpdate）。
+  var upSec = s.uptimeSec || 0;
+  if (_tabPop.uptimeAt) upSec += (Date.now() - _tabPop.uptimeAt) / 1000;
+  return {
+    rxRate: s.readRateBps || 0,
+    txRate: s.writeRateBps || 0,
+    rxTotal: isFwd ? (s.bytesPort1 || 0) : (s.bytesRead || 0),
+    txTotal: isFwd ? (s.bytesPort2 || 0) : (s.bytesWritten || 0),
+    errRx: s.readErrors || 0,
+    errTx: s.writeErrors || 0,
+    uptime: _tabPopDuration(upSec),
+    live: true,
+  };
+}
+
+// 条形颜色：>=80% 黄、>=90% 红（与状态栏 rate-orange / rate-red 同阈值）
+function _tabPopBarColor(pct, baseColor, live) {
+  if (!live) return baseColor;
+  if (pct >= 90) return 'var(--red)';
+  if (pct >= 80) return 'var(--yellow)';
+  return baseColor;
+}
+
+// 技术性取值（端口号、速率、累计、比例…）一律按 LTR 隔离：阿拉伯语界面是 RTL，
+// 不隔离的话 "115200 · 8N1" 会变成 "8N1 · 115200"、"⇃ RX" 变成 "RX ⇃"。
+// 设备名可能是阿拉伯语，用 <bdi> 让它按内容自己判定方向。
+function _tabPopIsRTL() {
+  return document.documentElement.dir === 'rtl';
+}
+
+function _tabPopLaneHTML(tag, color, totalText, rateText, pct, live, idx) {
+  return '<div class="c-tabpop__lane">' +
+    '<span class="c-tabpop__tag" style="color:' + color + '" dir="ltr">' + tag + '</span>' +
+    '<span class="c-tabpop__total" data-role="total' + idx + '" dir="ltr">' + totalText + '</span>' +
+    '<span class="c-tabpop__rate" data-role="rate' + idx + '" dir="ltr">' + rateText + '</span>' +
+    '<span class="c-tabpop__bar">' +
+      '<i data-role="bar' + idx + '" style="width:' + pct + '%;background:' + _tabPopBarColor(pct, color, live) + '"></i>' +
+    '</span>' +
+  '</div>';
+}
+
+// RTL 下条形从右往左排（RX 在右），百分数也跟着从右往左读，
+// 否则左边数字配右边色块会对不上。
+function _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) {
+  if (!hasRatio) return '<span class="c-tabpop__rval-dim">—</span>';
+  var firstPct = _tabPopIsRTL() ? (100 - rp) : rp;
+  var secondPct = 100 - firstPct;
+  var firstColor = _tabPopIsRTL() ? cTx : cRx;
+  var secondColor = _tabPopIsRTL() ? cRx : cTx;
+  return '<b style="color:' + firstColor + '">' + firstPct + '%</b> / ' +
+         '<b style="color:' + secondColor + '">' + secondPct + '%</b>';
+}
+
+// 结构性内容（连接状态 / 模式 / 客户端 / 端口）变了才整块重画，其余只改数值，
+// 条形才能靠 CSS transition 平滑地动起来。
+function _tabPopSig() {
+  var tb = _tabPop.tab, m = _tabPop.model, vw = tb.viewers || {};
+  return [
+    // 统计拿到没有也要算进签名：徽标（已连接/已声明）跟着它变
+    _tabPop.stats ? 1 : 0,
+    tb.portOpen ? 1 : 0,
+    tb.mode,
+    (vw.gui || 0) + ',' + (vw.cli || 0) + ',' + (vw.mcp || 0),
+    m.params,
+    m.ports.map(function (p) { return p.port; }).join(',')
+  ].join('|');
+}
+
+// 语言包还没跟上新键时（比如只换了前端、没重编 exe）不要显示空白：
+// t() 在语言包装好之后遇到缺键一律返回空串，浮窗这里兜一层中文。
+function _tabPopT(key, fb) {
+  var v = t(key, fb);
+  return v || fb;
+}
+
+function _tabPopRender() {
+  if (!_tabPop || !_tabPopEl) return;
+  var el = _tabPopEl;
+  var tab = _tabPop.tab;
+  var m = _tabPop.model;
+  var v = _tabPopValues();
+  var isFwd = tab.mode === 'forward';
+  var on = v.live;
+
+  var badgeCls = on ? 'is-ok' : (m.declared ? 'is-warn' : 'is-dim');
+  var badgeTxt = on ? _tabPopT('tabpop.state.connected', '已连接')
+    : (m.declared ? _tabPopT('tabpop.state.declared', '已声明') : _tabPopT('tabpop.state.idle', '未连接'));
+
+  var portsHTML = '';
+  for (var i = 0; i < m.ports.length; i++) {
+    var p = m.ports[i];
+    var dev = state.portDescs[p.port] || '';
+    portsHTML += '<div class="c-tabpop__port">' +
+      (p.tag ? '<span class="c-tabpop__ptag" dir="ltr">' + p.tag + '</span>' : '') +
+      '<span class="c-tabpop__pname" dir="ltr">' + escHtml(p.port) + '</span>' +
+      (dev ? '<bdi class="c-tabpop__pdev">' + escHtml(dev) + '</bdi>' : '') +
+    '</div>';
+  }
+
+  var base = m.baud ? m.baud / 10 : 0;
+  var pctRx = (base && on) ? Math.min(100, Math.round(v.rxRate / base * 100)) : 0;
+  var pctTx = (base && on) ? Math.min(100, Math.round(v.txRate / base * 100)) : 0;
+  var totalRx = on ? fmtBytes(v.rxTotal) : '—';
+  var totalTx = on ? fmtBytes(v.txTotal) : '—';
+  var rateRx = on ? _tabPopRateText(v.rxRate) : '—';
+  var rateTx = on ? _tabPopRateText(v.txRate) : '—';
+
+  var lanes = '';
+  if (isFwd) {
+    lanes += _tabPopLaneHTML('A→B', 'var(--fwd-p1)', totalRx, rateRx, pctRx, on, 0);
+    lanes += _tabPopLaneHTML('B→A', 'var(--fwd-p2)', totalTx, rateTx, pctTx, on, 1);
+  } else {
+    lanes += _tabPopLaneHTML('⇃ RX', 'var(--green)', totalRx, rateRx, pctRx, on, 0);
+    lanes += _tabPopLaneHTML('↾ TX', 'var(--accent)', totalTx, rateTx, pctTx, on, 1);
+  }
+
+  // 收发比一直画：没数据时是一条空轨道 + 破折号，不整行消失
+  var cRx = isFwd ? 'var(--fwd-p1)' : 'var(--green)';
+  var cTx = isFwd ? 'var(--fwd-p2)' : 'var(--accent)';
+  var sum = v.rxTotal + v.txTotal;
+  var hasRatio = on && sum > 0;
+  var rp = hasRatio ? Math.round(v.rxTotal / sum * 100) : 0;
+  var ratioHTML = '<div class="c-tabpop__ratio">' +
+    '<span class="c-tabpop__rlbl">' + (isFwd ? _tabPopT('tabpop.ratio_fwd', '分流比') : _tabPopT('tabpop.ratio', '收发比')) + '</span>' +
+    '<span class="c-tabpop__rbar">' +
+      '<i data-role="ratio-rx" style="width:' + rp + '%;background:' + cRx + '"></i>' +
+      '<i data-role="ratio-tx" style="width:' + (hasRatio ? (100 - rp) : 0) + '%;background:' + cTx + '"></i>' +
+    '</span>' +
+    '<span class="c-tabpop__rval" data-role="ratio-val" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
+  '</div>';
+
+  var viewers = tab.viewers || { gui: 0, cli: 0, mcp: 0 };
+  var clients = (viewers.gui || 0) + (viewers.cli || 0) + (viewers.mcp || 0);
+
+  el.innerHTML =
+    '<span class="c-tabpop__arrow"></span>' +
+    '<div class="c-tabpop__head">' +
+      '<span class="c-tabpop__title">' + _tabPopT('tabpop.title', '会话') + ' <span dir="ltr">#' + tab.id + '</span></span>' +
+      '<span class="c-tabpop__badge ' + badgeCls + '"><i class="c-tabpop__dot"></i>' + badgeTxt + '</span>' +
+    '</div>' +
+    (portsHTML ? '<div class="c-tabpop__ports">' + portsHTML + '</div>' : '') +
+    (m.params ? '<div class="c-tabpop__meta" dir="ltr">' + m.params + '</div>' : '') +
+    '<div class="c-tabpop__sep"></div>' +
+    lanes +
+    ratioHTML +
+    '<div class="c-tabpop__sep"></div>' +
+    '<div class="c-tabpop__foot">' +
+      '<span>' + _tabPopT('tabpop.clients', '客户端') + ' <b dir="ltr">' + clients + '</b></span>' +
+      '<span>' + _tabPopT('tabpop.errors', '错误') + ' <b dir="ltr" data-role="errors">' + (on ? (v.errRx + '/' + v.errTx) : '0/0') + '</b></span>' +
+      '<span>' + _tabPopT('tabpop.uptime', '运行') + ' <b dir="ltr" data-role="uptime">' + v.uptime + '</b></span>' +
+    '</div>' +
+    ((!on && m.declared) ? '<div class="c-tabpop__hint">' + _tabPopT('tabpop.connect_hint', '点击标签连接此端口') + '</div>' : '');
+  _tabPop.sig = _tabPopSig();
+  _tabPop.lastH = el.offsetHeight;
+}
+
+// 只更新数值：不动 DOM 结构，条形靠 transition 平滑跟随
+function _tabPopUpdate() {
+  if (!_tabPop || !_tabPopEl) return;
+  var el = _tabPopEl;
+  if (_tabPop.sig !== _tabPopSig()) {
+    _tabPopRender();
+    _tabPopPlace(_tabPop.tabEl);
+    return;
+  }
+  var tab = _tabPop.tab, m = _tabPop.model;
+  var v = _tabPopValues();
+  var isFwd = tab.mode === 'forward';
+  var on = v.live;
+  var base = m.baud ? m.baud / 10 : 0;
+  var pctRx = (base && on) ? Math.min(100, Math.round(v.rxRate / base * 100)) : 0;
+  var pctTx = (base && on) ? Math.min(100, Math.round(v.txRate / base * 100)) : 0;
+  var cRx = isFwd ? 'var(--fwd-p1)' : 'var(--green)';
+  var cTx = isFwd ? 'var(--fwd-p2)' : 'var(--accent)';
+
+  function q(role) { return el.querySelector('[data-role="' + role + '"]'); }
+  function setText(role, txt) { var n = q(role); if (n) n.textContent = txt; }
+  function setBar(role, pct, color) {
+    var n = q(role);
+    if (!n) return;
+    n.style.width = pct + '%';
+    n.style.background = color;
+  }
+
+  setText('total0', on ? fmtBytes(v.rxTotal) : '—');
+  setText('rate0', on ? _tabPopRateText(v.rxRate) : '—');
+  setBar('bar0', pctRx, _tabPopBarColor(pctRx, cRx, on));
+  setText('total1', on ? fmtBytes(v.txTotal) : '—');
+  setText('rate1', on ? _tabPopRateText(v.txRate) : '—');
+  setBar('bar1', pctTx, _tabPopBarColor(pctTx, cTx, on));
+
+  var sum = v.rxTotal + v.txTotal;
+  var hasRatio = on && sum > 0;
+  var rp = hasRatio ? Math.round(v.rxTotal / sum * 100) : 0;
+  setBar('ratio-rx', rp, cRx);
+  setBar('ratio-tx', hasRatio ? (100 - rp) : 0, cTx);
+  var rv = q('ratio-val');
+  if (rv) rv.innerHTML = _tabPopRatioValHTML(hasRatio, rp, cRx, cTx);
+
+  setText('errors', on ? (v.errRx + '/' + v.errTx) : '0/0');
+  setText('uptime', v.uptime);
+
+  // 文本长度变了导致高度变化时重新摆一次
+  var h = el.offsetHeight;
+  if (_tabPop.lastH !== h) {
+    _tabPop.lastH = h;
+    _tabPopPlace(_tabPop.tabEl);
+  }
+}
+
+function _tabPopEnsure() {
+  if (_tabPopEl) return _tabPopEl;
+  var el = document.createElement('div');
+  el.className = 'c-tabpop is-hidden';
+  el.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(el);
+  _tabPopEl = el;
+  return el;
+}
+
+function _tabPopPlace(tabEl) {
+  var el = _tabPopEl;
+  if (!el || !tabEl) return;
+  var r = tabEl.getBoundingClientRect();
+  var w = el.offsetWidth, h = el.offsetHeight;
+  var left;
+  if (_tabPopIsRTL()) {
+    // RTL：默认让浮窗右缘对齐标签右缘（视觉上与标签「同侧起」），左边放不下再改左缘
+    left = r.right - w;
+    if (left < 10) left = Math.min(window.innerWidth - w - 10, r.left);
+  } else {
+    left = r.left;
+    if (left + w > window.innerWidth - 10) left = Math.max(10, r.right - w);
+  }
+  left = Math.max(10, Math.min(Math.max(10, window.innerWidth - w - 10), left));
+  var top = r.bottom + 8;
+  var above = false;
+  if (top + h > window.innerHeight - 10) {
+    top = Math.max(10, r.top - h - 8);
+    above = true;
+  }
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+  el.classList.toggle('is-above', above);
+  var arrow = el.querySelector('.c-tabpop__arrow');
+  if (arrow) arrow.style.left = Math.max(10, Math.min(w - 20, r.left + r.width / 2 - left - 4.5)) + 'px';
+}
+
+function _tabPopOpen(tabEl, idx) {
+  var tab = state.tabs[idx];
+  if (!tab) return;
+  var el = _tabPopEnsure();
+  _tabPop = {
+    tabEl: tabEl, tab: tab, idx: idx,
+    sessionId: tab.sessionId || '',
+    stats: null,
+    uptimeAt: 0,
+    model: _tabPopModel(tab),
+  };
+  el.classList.remove('is-hidden');
+  _tabPopRender();
+  _tabPopPlace(tabEl);
+  requestAnimationFrame(function () { if (_tabPop) el.classList.add('is-visible'); });
+  _tabPopStartTick();
+  if (!tab.portOpen || !tab.sessionId) return;
+  window.go.main.App.GetSessionStats(tab.sessionId).then(function (res) {
+    if (!_tabPop || _tabPop.sessionId !== tab.sessionId) return;
+    if (res && res.stats) {
+      _tabPop.stats = res.stats;
+      _tabPop.uptimeAt = Date.now();   // 从这一刻起本地推算运行时长
+      _tabPopUpdate();
+    }
+  }).catch(function () {});
+}
+
+// 「运行」秒数要跳：uptimeSec 只在打开时取到一次，之后靠本地时钟补
+var _tabPopTickTimer = null;
+
+function _tabPopStartTick() {
+  _tabPopStopTick();
+  _tabPopTickTimer = setInterval(function () {
+    if (!_tabPop) { _tabPopStopTick(); return; }
+    _tabPopUpdate();
+  }, 1000);
+}
+
+function _tabPopStopTick() {
+  if (_tabPopTickTimer) {
+    clearInterval(_tabPopTickTimer);
+    _tabPopTickTimer = null;
+  }
+}
+
+function _tabPopClose() {
+  clearTimeout(_tabPopShowTimer);
+  clearTimeout(_tabPopHideTimer);
+  _tabPopShowTimer = null;
+  _tabPopHideTimer = null;
+  _tabPopStopTick();
+  _tabPop = null;
+  if (!_tabPopEl) return;
+  var el = _tabPopEl;
+  el.classList.remove('is-visible');
+  setTimeout(function () { if (!_tabPop) el.classList.add('is-hidden'); }, 130);
+}
+
+function _tabPopSchedule(tabEl, idx) {
+  if (document.body.classList.contains('is-tab-dragging')) return;
+  // 刚点过标签：切换会重绘按钮，指针下的新按钮会再收到一次 pointerenter，
+  // 不挡一下的话浮窗会在点击后 140ms 又自己弹出来。
+  if (Date.now() - (window._tabPopClickedAt || 0) < 400) return;
+  clearTimeout(_tabPopHideTimer);
+  clearTimeout(_tabPopShowTimer);
+  if (_tabPop) {
+    if (_tabPop.tabEl === tabEl) return;   // 已经在这枚标签上，别重建
+    _tabPopClose();
+  }
+  _tabPopShowTimer = setTimeout(function () { _tabPopOpen(tabEl, idx); }, _TABPOP_SHOW_DELAY);
+}
+
+function _tabPopScheduleClose() {
+  clearTimeout(_tabPopShowTimer);
+  clearTimeout(_tabPopHideTimer);
+  _tabPopHideTimer = setTimeout(_tabPopClose, _TABPOP_HIDE_DELAY);
+}
+
+// 滚动 / 缩放时浮窗要么跟着锚点走，要么（标签已经滚出可视区）收起。
+// 不能一见 scroll 就关：hover 本身可能带一次 scrollIntoView，会把自己的浮窗打掉。
+function _tabPopReposition() {
+  if (!_tabPop || !_tabPop.tabEl) return;
+  var r = _tabPop.tabEl.getBoundingClientRect();
+  var bar = document.getElementById('tabsBar');
+  if (bar) {
+    var br = bar.getBoundingClientRect();
+    if (r.right <= br.left || r.left >= br.right) { _tabPopClose(); return; }
+  }
+  _tabPopPlace(_tabPop.tabEl);
+}
+
+// 滚动 / 缩放 / 换语言时锚点位置会变，跟着挪
+function initTabPopup() {
+  window.addEventListener('resize', _tabPopReposition);
+  var scroll = document.getElementById('tabsScroll');
+  if (scroll) scroll.addEventListener('scroll', _tabPopReposition, { passive: true });
+}
+
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
@@ -3085,13 +3523,34 @@ function renderTabs() {
       + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
     if (!t.portOpen) btn.className += ' tab-idle';
     btn.dataset.tabIdx = i;
-    btn.onclick = () => { if (window._tabClickSuppress) return; switchTab(i); };
+    btn.onclick = () => {
+      if (window._tabClickSuppress) return;
+      window._tabPopClickedAt = Date.now();   // 重绘后别再自动弹出，见 _tabPopSchedule
+      _tabPopClose();
+      switchTab(i);
+    };
     // 拖动排序走 pointer 事件（见 _tabDragDown）：HTML5 拖放在隐藏源元素时会被
     // 浏览器取消，拖不动。
     btn.onpointerdown = _tabDragDown;
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
+    // 会话标签：悬停出自绘浮窗（c-tabpop），不再挂原生 title
+    if (!isSettings && !isChooser) {
+      btn.addEventListener('pointerenter', function (e) {
+        if (e.pointerType === 'touch') return;
+        _tabPopSchedule(btn, i);
+      });
+      btn.addEventListener('pointerleave', function (e) {
+        if (e.pointerType === 'touch') return;
+        _tabPopScheduleClose();
+      });
+      btn.addEventListener('focus', function () {
+        // 鼠标点出来的焦点不弹（不然点完标签浮窗又冒出来），键盘 Tab 才弹
+        if (btn.matches && btn.matches(':focus-visible')) _tabPopSchedule(btn, i);
+      });
+      btn.addEventListener('blur', function () { _tabPopScheduleClose(); });
+    }
     const tag = (isSettings || isChooser) ? '' : (isFwd ? ' ↔' : '');
     // Status dot (gear icon for settings, plus icon for the new-session page)
     const dot = document.createElement('span');
@@ -3115,12 +3574,12 @@ function renderTabs() {
     });
     if (isChooser) {
       btn.title = window.t('newtab.hint', '选择一种模式开始');
-    } else if (t.syncedParams) {
-      btn.title = `会话: ${t.label}
-数据位:${t.syncedParams.dataBits} 停止位:${t.syncedParams.stopBits} 校验:${t.syncedParams.parity}`;
-    } else {
-      btn.title = t.portOpen ? `会话 #${t.id}` : window.t('tooltip.idle_process', '空闲进程');
+    } else if (isSettings) {
+      // 设置页不是「空闲进程」，别拿进程状态当提示
+      btn.title = window.t('tooltip.settings', '详细设置');
     }
+    // 会话标签这里原本挂三行原生 title（会话号 / 数据位 / 空闲进程），
+    // 现在统一由 c-tabpop 浮窗承担，不再设置。
     {
       const span = document.createElement('span');
       span.className = 'close-tab';
@@ -3133,6 +3592,22 @@ function renderTabs() {
   // Update add button i18n (static HTML, outside scroll wrapper)
   var addBtn = document.getElementById('tabAddBtn');
   if (addBtn) { addBtn.title = (typeof t === 'function') ? t('tooltip.new_tab', '新建会话') : '新建会话'; }
+
+  // 重绘会把按钮换成新节点：浮窗开着的话，重新挂到同一个标签页的新按钮上，
+  // 否则每次刷会话/读计数都会把浮窗闪没。标签被关掉就确实收起。
+  if (_tabPop) {
+    var keepIdx = state.tabs.indexOf(_tabPop.tab);
+    var again = keepIdx >= 0
+      ? scroll.querySelector('.tab-btn[data-tab-idx="' + keepIdx + '"]')
+      : null;
+    if (again) {
+      _tabPop.idx = keepIdx;
+      _tabPop.tabEl = again;
+      _tabPopPlace(again);
+    } else {
+      _tabPopClose();
+    }
+  }
 
   // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
   // 变多而触发）—— 见 bindTabsScroll / TODO #26。
@@ -3780,6 +4255,18 @@ function setStatArrows(isFwd) {
 
 // ---- stats (daemon subscription events) ----
 function onStatsCount(data) {
+  // 标签浮窗也吃这份事件：它不是活动标签，但也得实时跳数
+  if (_tabPop && data && _tabPop.sessionId && data.processId === _tabPop.sessionId) {
+    if (!_tabPop.stats) _tabPop.stats = {};
+    if (_tabPop.tab.mode === 'forward') {
+      _tabPop.stats.bytesPort1 = data.bytesPort1 || 0;
+      _tabPop.stats.bytesPort2 = data.bytesPort2 || 0;
+    } else {
+      _tabPop.stats.bytesRead = data.bytesRead || 0;
+      _tabPop.stats.bytesWritten = data.bytesWritten || 0;
+    }
+    _tabPopUpdate();
+  }
   const tab = getActiveTab();
   if (!tab || !tab.sessionId || data.processId !== tab.sessionId) return;
   const sid = tab.sessionId;
@@ -3802,6 +4289,13 @@ function onStatsCount(data) {
 }
 
 function onStatsRate(data) {
+  // 同上：浮窗按自己的 processId 匹配，和活动标签互不影响
+  if (_tabPop && data && _tabPop.sessionId && data.processId === _tabPop.sessionId) {
+    if (!_tabPop.stats) _tabPop.stats = {};
+    _tabPop.stats.readRateBps = data.readRateBps || 0;
+    _tabPop.stats.writeRateBps = data.writeRateBps || 0;
+    _tabPopUpdate();
+  }
   const tab = getActiveTab();
   if (!tab || !tab.sessionId || data.processId !== tab.sessionId) return;
   const sid = tab.sessionId;

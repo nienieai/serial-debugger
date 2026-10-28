@@ -26,6 +26,11 @@
     --fwd-p1-hover: #2563eb; --fwd-p2-hover: #d97706;
     --hex-escape: #8b8b8b; --badge-cli: #10b981;
     --status-offline: #888; --tab-close: #888;
+    /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
+    --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+    --tabpop-glass-border: rgba(160, 160, 160, 0.10);
+    --tabpop-glass-blur: blur(20px);
+    --tabpop-bg-solid: #2d2d2d;
   }
 }
 
@@ -39,6 +44,10 @@
     --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
     --hex-escape: #777; --badge-cli: #059669;
     --status-offline: #aaa; --tab-close: #999;
+    --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+    --tabpop-glass-border: rgba(128, 128, 128, 0.10);
+    --tabpop-glass-blur: blur(20px);
+    --tabpop-bg-solid: #e8e8e8;
   }
 }
 
@@ -52,6 +61,10 @@
   --fwd-p1-hover: #2563eb; --fwd-p2-hover: #d97706;
   --hex-escape: #8b8b8b; --badge-cli: #10b981;
   --status-offline: #888; --tab-close: #888;
+  --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+  --tabpop-glass-border: rgba(160, 160, 160, 0.10);
+  --tabpop-glass-blur: blur(20px);
+  --tabpop-bg-solid: #2d2d2d;
 }
 
 :root[data-theme="light"] {
@@ -63,6 +76,10 @@
   --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
   --hex-escape: #777; --badge-cli: #059669;
   --status-offline: #aaa; --tab-close: #999;
+  --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+  --tabpop-glass-border: rgba(128, 128, 128, 0.10);
+  --tabpop-glass-blur: blur(20px);
+  --tabpop-bg-solid: #e8e8e8;
 }
 
 /* ---- 2. Body & App Shell ---- */
@@ -422,6 +439,155 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   height: 28px; width: 28px; min-width: 28px; border: 1px solid var(--border); background: var(--bg);
   flex-shrink: 0; margin-right: 4px; padding: 0;
 }
+
+/* ---- 8b. 标签信息浮窗（c-tabpop） ----
+   悬停标签时自绘的浮窗，替代原生 title。结构与文案见 app.js 的 _tabPopRender：
+   标题 + 状态徽标 / 串口名 / 参数 / 两条速率（累计·速率·通栏条）/ 收发比 / 页脚。
+   只显示、不接收鼠标：pointer-events:none，避免它盖住标签本身。 */
+.c-tabpop {
+  position: fixed; z-index: 4000;
+  width: 264px; padding: 9px 11px 10px;
+  /* 毛玻璃参数与调色板一致（color-picker.html 的 transparency="glass"）：
+     深色 rgba(255,255,255,.10)、浅色 rgba(0,0,0,.10)，模糊 blur(20px)；
+     不支持 backdrop-filter 时由下面的 @supports 回退成不透明底色。 */
+  background-color: var(--tabpop-glass-bg);
+  backdrop-filter: var(--tabpop-glass-blur);
+  -webkit-backdrop-filter: var(--tabpop-glass-blur);
+  color: var(--fg);
+  border: 1px solid var(--tabpop-glass-border); border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .28);
+  font-size: 12.5px; line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none; user-select: none; -webkit-user-select: none;
+  opacity: 0; transform: translateY(-3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.c-tabpop.is-visible { opacity: 1; transform: none; }
+.c-tabpop.is-hidden  { display: none; }
+:root[data-theme="light"] .c-tabpop {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .18), 0 2px 6px rgba(0, 0, 0, .10);
+}
+
+/* 箭头：旋转方块，和浮窗同色同边框；翻到标签上方时改指下方 */
+.c-tabpop__arrow {
+  position: absolute; top: -5px; left: 18px;
+  width: 9px; height: 9px; border-radius: 2px;
+  background-color: var(--tabpop-glass-bg);
+  backdrop-filter: var(--tabpop-glass-blur);
+  -webkit-backdrop-filter: var(--tabpop-glass-blur);
+  border-left: 1px solid var(--tabpop-glass-border);
+  border-top: 1px solid var(--tabpop-glass-border);
+  transform: rotate(45deg);
+}
+/* 没有 backdrop-filter 的老 WebView2：退回纯色，否则半透明底会糊成一片 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .c-tabpop,
+  .c-tabpop__arrow {
+    background-color: var(--tabpop-bg-solid);
+    border-color: var(--border);
+  }
+}
+.c-tabpop.is-above .c-tabpop__arrow {
+  top: auto; bottom: -5px; border-left: 0; border-top: 0;
+  border-right: 1px solid var(--tabpop-glass-border);
+  border-bottom: 1px solid var(--tabpop-glass-border);
+}
+
+.c-tabpop__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.c-tabpop__title { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
+.c-tabpop__badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; line-height: 1.7; padding: 0 7px; border-radius: 999px;
+  border: 1px solid currentColor; background: transparent;
+  /* 不支持 color-mix 的 WebView2 会丢掉下面两行，只留透明底 + 同色描边，也看得清 */
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  white-space: nowrap;
+}
+.c-tabpop__badge.is-ok   { color: var(--green); }
+.c-tabpop__badge.is-warn { color: var(--yellow); }
+.c-tabpop__badge.is-dim  { color: var(--placeholder); }
+.c-tabpop__dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+/* 串口名：COMx 是口子，后面的设备描述才是用户认设备的东西 */
+.c-tabpop__ports { display: grid; gap: 1px; margin-top: 3px; min-width: 0; }
+.c-tabpop__port { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12px; }
+.c-tabpop__ptag  { flex: none; color: var(--placeholder); font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; }
+.c-tabpop__pname { flex: none; color: var(--fg); font-weight: 600; font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; }
+.c-tabpop__pdev  {
+  min-width: 0; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow-wrap: anywhere;
+}
+.c-tabpop__meta {
+  margin-top: 2px; color: var(--placeholder); font-size: 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+.c-tabpop__sep { height: 1px; background: var(--border); opacity: .7; margin: 7px -11px; }
+
+/* 速率行：一行「方向 · 累计 · 当前速率」，下面一条通栏进度条 */
+.c-tabpop__lane {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px; row-gap: 4px; align-items: center;
+  margin-top: 7px;
+}
+.c-tabpop__sep + .c-tabpop__lane { margin-top: 0; }
+.c-tabpop__tag   { grid-area: 1 / 1 / 2 / 2; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
+.c-tabpop__total {
+  grid-area: 1 / 2 / 2 / 3; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 12px;
+}
+.c-tabpop__rate {
+  grid-area: 1 / 3 / 2 / 4; justify-self: end;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 13px;
+}
+.c-tabpop__bar {
+  grid-area: 2 / 1 / 3 / 4;
+  display: block; height: 4px; border-radius: 999px;
+  background: var(--bg3); overflow: hidden;
+}
+.c-tabpop__bar > i {
+  display: block; height: 100%; border-radius: 999px;
+  transition: width .28s ease, background-color .28s ease;
+}
+
+/* 收发比：和上面两条速率行同构 —— 第一行「标签 + 百分比」，第二行通栏条 */
+.c-tabpop__ratio {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px; row-gap: 4px; align-items: center;
+  margin-top: 7px;
+  font-size: 11px; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+.c-tabpop__rlbl { grid-area: 1 / 1 / 2 / 2; }
+.c-tabpop__rval { grid-area: 1 / 2 / 2 / 3; justify-self: end; }
+.c-tabpop__rbar {
+  grid-area: 2 / 1 / 3 / 3;
+  display: flex; height: 3px; min-width: 40px;
+  border-radius: 999px; overflow: hidden; background: var(--bg3);
+}
+.c-tabpop__rbar > i {
+  display: block; height: 100%;
+  transition: width .28s ease, background-color .28s ease;
+}
+.c-tabpop__rbar > i + i { border-inline-start: 1px solid var(--tabpop-bg-solid); }
+.c-tabpop__rval b { font-weight: 600; }
+.c-tabpop__rval-dim { color: var(--placeholder); }
+
+.c-tabpop__foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  color: var(--placeholder); font-size: 11px;
+}
+.c-tabpop__foot b {
+  color: var(--fg); font-weight: 600;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+.c-tabpop__hint { margin-top: 6px; color: var(--placeholder); font-size: 11px; }
+
 
 /* ---- 9. Components: Config Bar ---- */
 /* Port & Baud wraps (set by JS initCustomSelect) */
