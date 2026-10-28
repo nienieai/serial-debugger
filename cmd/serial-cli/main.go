@@ -43,7 +43,7 @@ func detectLang() string {
 
 func main() {
 	cliLang = detectLang()
-	args := stripLangFlag(os.Args[1:])
+	args := stripColorFlag(stripLangFlag(os.Args[1:]))
 	if len(args) == 0 {
 		interactiveMode()
 		return
@@ -84,8 +84,8 @@ func interactiveMode() {
 
 	dc, err := client.NewDaemonClient("cli")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "无法连接守护进程: %v\n", err)
-		fmt.Fprintln(os.Stderr, "请先运行 serial-cli start 启动守护进程")
+		printErr("无法连接守护进程: %v", err)
+		printErr("请先运行 serial-cli start 启动守护进程")
 		os.Exit(1)
 	}
 	defer dc.Close()
@@ -147,15 +147,20 @@ func parseArgs(line string) []string {
 
 func cmdCheck() {
 	processRunning := client.IsDaemonProcessRunning()
-	fmt.Printf("进程检测 (tasklist): %v\n", processRunning)
+	runColor := ansiGreen
+	if !processRunning {
+		runColor = ansiRed
+	}
+	fmt.Printf("进程检测 (tasklist): %s\n",
+		paintOut(map[bool]string{true: "true", false: "false"}[processRunning], runColor))
 
 	info, err := client.DaemonInfo()
 	if err == nil {
-		fmt.Println("IPC 健康检查: ok")
+		fmt.Println("IPC 健康检查: " + paintOut("ok", ansiGreen))
 		fmt.Printf("守护进程版本: %s (IPC 协议 %d)\n", info.Version, info.ProtocolVersion)
 		fmt.Printf("客户端版本:   %s (IPC 协议 %d)\n", version.Version, protocol.ProtocolVersion)
 		if !info.Compatible() {
-			fmt.Println("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程")
+			fmt.Println(paintOut("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程", ansiYellow))
 		}
 		if !processRunning {
 			fmt.Println("(tasklist 检测失效，但守护进程实际运行中)")
@@ -167,29 +172,29 @@ func cmdCheck() {
 	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
 		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC 协议 %d)\n",
 			version.Version, protocol.ProtocolVersion)
-		fmt.Println("请执行 serial-cli start 重启守护进程")
+		fmt.Println(paintOut("请执行 serial-cli start 重启守护进程", ansiYellow))
 		return
 	}
 	if processRunning {
-		fmt.Printf("管道连接 / IPC 健康检查: 失败 (%v)\n", err)
+		fmt.Println(paintOut(fmt.Sprintf("管道连接 / IPC 健康检查: 失败 (%v)", err), ansiRed))
 	} else {
-		fmt.Printf("守护进程未运行 (%v)\n", err)
+		fmt.Println(paintOut(fmt.Sprintf("守护进程未运行 (%v)", err), ansiRed))
 	}
 }
 
 func cmdStart() {
 	status, err := client.StartDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
+		printErr(`{"error": "%s"}`, err.Error())
 		os.Exit(1)
 	}
 	switch status {
 	case "already_running":
-		fmt.Println("守护进程已在运行中")
+		fmt.Println(paintOut("守护进程已在运行中", ansiGreen))
 	case "restarted":
-		fmt.Println("检测到守护进程版本不一致，已重启为当前版本")
+		fmt.Println(paintOut("检测到守护进程版本不一致，已重启为当前版本", ansiYellow))
 	default:
-		fmt.Println("守护进程已启动")
+		fmt.Println(paintOut("守护进程已启动", ansiGreen))
 	}
 }
 
@@ -208,15 +213,15 @@ func cmdLogs(args []string) {
 
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "无法确定程序目录:", err)
+		printErr("无法确定程序目录: %v", err)
 		os.Exit(1)
 	}
 	path := filepath.Join(filepath.Dir(exe), "logs", "daemon.log")
 
 	f, err := os.Open(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "无法读取守护进程日志 %s: %v\n", path, err)
-		fmt.Fprintln(os.Stderr, "提示：守护进程启动后才会创建该文件。")
+		printErr("无法读取守护进程日志 %s: %v", path, err)
+		printWarn("提示：守护进程启动后才会创建该文件。")
 		os.Exit(1)
 	}
 	defer f.Close()
@@ -233,7 +238,7 @@ func cmdLogs(args []string) {
 		lines = append(lines, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "读取日志失败: %v\n", err)
+		printErr("读取日志失败: %v", err)
 		os.Exit(1)
 	}
 
@@ -243,7 +248,7 @@ func cmdLogs(args []string) {
 		return
 	}
 	for _, l := range lines {
-		fmt.Println(l)
+		fmt.Println(colorizeLogLine(l))
 	}
 }
 
@@ -258,7 +263,7 @@ func runCommandInteractive(dc *client.DaemonClient, args []string) {
 	case "status":
 		result, err := client.CallOnce(contract.Status, nil, "cli")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "错误:", err)
+			printErr("错误: %v", err)
 			return
 		}
 		printJSON(result)
@@ -274,7 +279,7 @@ func runCommand(args []string) {
 	// 下面 case 里会再解析一次，成本可忽略。
 	if args[0] == "probe" {
 		if _, _, _, perr := parseProbeArgs(args[1:]); perr != nil {
-			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", perr.Error())
+			printErr(`{"error": "%s"}`, perr.Error())
 			os.Exit(1)
 		}
 	}
@@ -294,7 +299,7 @@ func runCommand(args []string) {
 			// 不要在这里断言「daemon not running」：连接失败的原因可能是
 			// 守护进程未运行、版本不匹配、管道握手失败等，硬套一个错误
 			// 结论会把排查方向带偏。让底层错误自己说话。
-			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
+			printErr(`{"error": "%s"}`, err.Error())
 			os.Exit(1)
 		}
 		defer dc.Close()
@@ -541,7 +546,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		}
 		if port == "" {
-			fmt.Fprintln(os.Stderr, "错误: 必须指定端口")
+			printErr("错误: 必须指定端口")
 			if interactive {
 				return
 			}
@@ -558,7 +563,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		if mode == "forward" {
 			if portB == "" {
-				fmt.Fprintln(os.Stderr, "错误: 转发模式需要 --portB")
+				printErr("错误: 转发模式需要 --portB")
 				if interactive {
 					return
 				}
@@ -669,7 +674,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		pid := args[1]
 		mode := args[2]
 		if mode != "single" && mode != "forward" {
-			fmt.Fprintln(os.Stderr, "错误: mode 必须是 single 或 forward")
+			printErr("错误: mode 必须是 single 或 forward")
 			if interactive {
 				return
 			}
@@ -842,7 +847,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 			printJSON(result)
 		default:
-			fmt.Fprintf(os.Stderr, "unknown autosend subcommand: %s\n", sub)
+			printErr("unknown autosend subcommand: %s", sub)
 			if interactive {
 				return
 			}
@@ -975,7 +980,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 				printJSON(result)
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "unknown multistr subcommand: %s\n", sub)
+			printErr("unknown multistr subcommand: %s", sub)
 			if interactive {
 				return
 			}
@@ -1003,7 +1008,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		printJSON(probeOutcomeJSON(outcome))
 		if len(outcome.Results) == 0 {
-			fmt.Fprintln(os.Stderr, "注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
+			printWarn("注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
 		}
 
 	case "monitor":
@@ -1153,7 +1158,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		printErr("unknown command: %s", args[0])
 		fmt.Fprintln(os.Stderr, "run 'serial-cli help' for available commands")
 		if interactive {
 			return
@@ -1178,7 +1183,7 @@ func cmdMonitor(dc *client.DaemonClient, timeout int) {
 			return
 		case msg, ok := <-events:
 			if !ok {
-				fmt.Fprintln(os.Stderr, "connection lost")
+				printErr("connection lost")
 				os.Exit(1)
 			}
 			if timer != nil {
@@ -1208,7 +1213,7 @@ func firstConnectedIDDC(dc *client.DaemonClient) string {
 			return id
 		}
 	}
-	fmt.Fprintln(os.Stderr, `{"error": "no connected process"}`)
+	printErr(`{"error": "no connected process"}`)
 	os.Exit(1)
 	return ""
 }
@@ -1245,12 +1250,12 @@ func errExit(err error, interactive bool) {
 	if !interactive {
 		exitOnErr(err)
 	}
-	fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+	printErr("错误: %v", err)
 }
 
 func exitOnErr(err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
+		printErr(`{"error": "%s"}`, err.Error())
 		os.Exit(1)
 	}
 }
