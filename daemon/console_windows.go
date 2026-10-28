@@ -12,6 +12,35 @@ func setConsoleOutputCP() {
 	windows.SetConsoleOutputCP(65001)
 }
 
+// stdoutIsTTY 判断标准输出是不是真控制台。
+// 客户端以 `--silent` 拉起守护进程时 Stdout 接到空设备，这里返回 false，
+// 日志就自然不带 ANSI 转义。
+func stdoutIsTTY() bool {
+	h, err := windows.GetStdHandle(windows.STD_OUTPUT_HANDLE)
+	if err != nil {
+		return false
+	}
+	var mode uint32
+	return windows.GetConsoleMode(h, &mode) == nil
+}
+
+// enableVirtualTerminal 打开控制台的 VT 处理，让 ANSI 颜色生效。
+// 旧控制台默认不解析转义序列；开失败返回 false，调用方降级无色。
+func enableVirtualTerminal() bool {
+	h, err := windows.GetStdHandle(windows.STD_OUTPUT_HANDLE)
+	if err != nil {
+		return false
+	}
+	var mode uint32
+	if err := windows.GetConsoleMode(h, &mode); err != nil {
+		return false
+	}
+	if mode&windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0 {
+		return true
+	}
+	return windows.SetConsoleMode(h, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING) == nil
+}
+
 // disableQuickEdit 关闭控制台的「快速编辑模式」。
 //
 // 这是必须的。开启快速编辑时，只要用户点击一下控制台窗口，控制台就进入选择

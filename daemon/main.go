@@ -61,6 +61,7 @@ func main() {
 	// 之后所有往控制台写日志的操作都会阻塞，进而卡住连接处理。
 	quickEditDisabled := disableQuickEdit()
 	loadDaemonLang()
+	initColor(os.Args[1:])
 
 	// 日志文件要尽早打开：由客户端拉起的守护进程没有控制台（Stdout/Stderr
 	// 被 os/exec 接到空设备），不开文件就等于没有任何日志（TODO #30）。
@@ -137,6 +138,11 @@ func main() {
 func logOp(category string, format string, args ...any) {
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
-	fmt.Print(formatLogLine(ts, category, msg))
+	// 控制台可彩色，文件永远纯文本（否则 `serial-cli logs` 读到的是转义串）
+	if colorEnabled {
+		fmt.Print(formatLogLineColor(ts, category, msg))
+	} else {
+		fmt.Print(formatLogLine(ts, category, msg))
+	}
 	writeLogLine(formatLogLine(ts, category, msg))
 }

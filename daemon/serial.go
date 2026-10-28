@@ -538,16 +538,6 @@ func (p *Process) autoSendLoop() {
 				})
 			}
 			p.recordHistory(hexData, "tx")
-			if p.pushEventFn != nil {
-				p.pushEventFn(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-					},
-				})
-			}
 
 		case <-p.autoSendStopCh:
 			return
@@ -707,16 +697,6 @@ func (p *Process) sendOneRound() {
 		} else {
 			p.recordHistory(hexData, "tx")
 		}
-		if p.pushEventFn != nil {
-			p.pushEventFn(protocol.Event{
-				Event: "stats-count",
-				Params: map[string]any{
-					"processId":    p.id,
-					"bytesRead":    p.bytesRead.Load(),
-					"bytesWritten": p.bytesWritten.Load(),
-				},
-			})
-		}
 
 		// Wait per-entry delay (interruptible).
 		// delay=0 表示不额外延时：立即发下一条（不再回落到 autoSendIntervalMs，
@@ -870,25 +850,21 @@ func (p *Process) forwardLoop(direction string, src, dst serial.Port, portBytes 
 			} else {
 				p.recordHistory(hexData, direction)
 			}
-
-			if p.pushEventFn != nil {
-				p.pushEventFn(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-						"bytesPort1":   p.bytesPort1.Load(),
-						"bytesPort2":   p.bytesPort2.Load(),
-					},
-				})
-			}
 		}
 	}
 }
 
+// 合包参数：一次 Read 之后继续收 readCoalesceWindow，单次最多 readBufferSize 字节。
+//   - 16 ms：延迟可忽略，而「小包高频」场景的事件量能降一个量级；
+//   - 2 ms 的轮询超时只让循环在断流时尽快退出，不改变整体延迟。
+const (
+	readCoalesceWindow = 16 * time.Millisecond
+	readPollTimeout    = 2 * time.Millisecond
+	readBufferSize     = 4096
+)
+
 func (p *Process) readLoop(broadcast func(RxTxMessage)) {
-	buf := make([]byte, 4096)
+	buf := make([]byte, readBufferSize)
 	for {
 		select {
 		case <-p.stopCh:
@@ -910,10 +886,14 @@ func (p *Process) readLoop(broadcast func(RxTxMessage)) {
 			continue
 		}
 		if n > 0 {
-			// 短超时累积读取：串口数据到达速度远快于应用层处理，
-			// 首字节触发 Read 返回后立即再读几次，将后续字节合并为单包
-			p.port.SetReadTimeout(5 * time.Millisecond)
-			for {
+			// 合包：首字节触发 Read 返回后继续读，直到攒够 readCoalesceWindow 或缓冲满。
+			//
+			// 旧实现只再读 5 ms，遇到「小包高频」的设备（截图里那种 ~21 B/包、230400 baud）
+			// 会退化成每秒几百个独立事件，每个都要过一遍 IPC + DOM，GUI 直接卡死。
+			// 16 ms 的合并窗把事件数压到 ~60/s，最坏只增加 16 ms 显示延迟。
+			p.port.SetReadTimeout(readPollTimeout)
+			deadline := time.Now().Add(readCoalesceWindow)
+			for time.Now().Before(deadline) {
 				n2, err2 := p.port.Read(buf[n:])
 				if err2 != nil || n2 == 0 {
 					break
@@ -939,17 +919,6 @@ func (p *Process) readLoop(broadcast func(RxTxMessage)) {
 				TsMs:      tsMs,
 			})
 			p.recordHistoryAt(tsMs, hexData, "rx")
-
-			if p.pushEventFn != nil {
-				p.pushEventFn(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-					},
-				})
-			}
 		}
 	}
 }
@@ -1001,16 +970,6 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 			}
 			broadcast(msg)
 			p.recordHistoryAt(tsMs, hexData, "tx")
-			if pushEvent != nil {
-				pushEvent(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-					},
-				})
-			}
 
 		case <-time.After(3 * time.Second):
 			p.writeErrors.Add(1)
@@ -1031,6 +990,17 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 	}
 }
 
+// statsTickInterval 是计数推送的节拍：stats-count 每拍一次（10 Hz），
+// stats-rate（速率）每 10 拍算一次（仍是 1 s 窗口）。
+//
+// 以前 stats-count 是**每个收/发包推一次**——大流量小包时（230400 baud、21 B/包）
+// 一秒能推几百上千次 IPC 事件，GUI 侧每个事件都要过一遍 JSON 桥 + DOM 更新，
+// 整机就卡住了。计数器本来只需要「看起来实时」，10 Hz 足够。
+const (
+	statsTickInterval = 100 * time.Millisecond
+	statsRateEvery    = 10
+)
+
 func (p *Process) statsLoop(broadcast func(RxTxMessage), pushEvent func(protocol.Event)) {
 	if p.mode == "forward" {
 		p.recordSystemEvent("sys.stats_started", p.config.Port+" ↔ "+p.forwardConfigB.Port)
@@ -1038,27 +1008,45 @@ func (p *Process) statsLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 		p.recordSystemEvent("sys.stats_started", p.config.Port)
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(statsTickInterval)
 	defer ticker.Stop()
 
 	lastBytesRead := int64(0)
 	lastBytesWritten := int64(0)
 	lastBytesPort1 := int64(0)
 	lastBytesPort2 := int64(0)
+	tick := 0
 
 	for {
 		select {
 		case <-ticker.C:
+			tick++
 			now := time.Now()
 			curRead := p.bytesRead.Load()
 			curWritten := p.bytesWritten.Load()
 			curP1 := p.bytesPort1.Load()
 			curP2 := p.bytesPort2.Load()
 
-			readRate := float64(curRead - lastBytesRead)
-			writeRate := float64(curWritten - lastBytesWritten)
-			p1Rate := float64(curP1 - lastBytesPort1)
-			p2Rate := float64(curP2 - lastBytesPort2)
+			// 每拍：累计计数（单端口用 bytesRead/Written，转发用 bytesPort1/2）
+			pushEvent(protocol.Event{
+				Event: "stats-count",
+				Params: map[string]any{
+					"processId":    p.id,
+					"bytesRead":    curRead,
+					"bytesWritten": curWritten,
+					"bytesPort1":   curP1,
+					"bytesPort2":   curP2,
+				},
+			})
+
+			if tick%statsRateEvery != 0 {
+				continue
+			}
+
+			readRate := float64(curRead-lastBytesRead) / (statsTickInterval.Seconds() * statsRateEvery)
+			writeRate := float64(curWritten-lastBytesWritten) / (statsTickInterval.Seconds() * statsRateEvery)
+			p1Rate := float64(curP1-lastBytesPort1) / (statsTickInterval.Seconds() * statsRateEvery)
+			p2Rate := float64(curP2-lastBytesPort2) / (statsTickInterval.Seconds() * statsRateEvery)
 
 			sample := &statsSample{
 				readRateBps:  readRate,
