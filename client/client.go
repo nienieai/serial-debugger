@@ -1076,6 +1076,13 @@ func waitDaemonExit(timeout time.Duration) {
 	}
 }
 
+// WaitDaemonReady 阻塞到守护进程端点可连接为止（超时返回 false）。
+//
+// GUI 用它代替「每秒试连一次」：守护进程一就绪就能立刻连上，不必等下一次轮询。
+func WaitDaemonReady(timeout time.Duration) bool {
+	return pipe.WaitReady(timeout)
+}
+
 func startDaemonProcess() (string, error) {
 	exePath := findDaemonExe()
 	if exePath == "" {
@@ -1088,14 +1095,19 @@ func startDaemonProcess() (string, error) {
 		return "", fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	for i := 0; i < 60; i++ {
-		time.Sleep(100 * time.Millisecond)
-		_, err := CallOnce(contract.Status, nil, "cli")
-		if err == nil {
+	// 等 OS 级「管道可用」这个就绪信号，而不是每 100ms 盲发一次 Status。
+	// 这也修掉了「进程已经起来、管道还没建好就判失败」的竞态。
+	if !pipe.WaitReady(6 * time.Second) {
+		return "", fmt.Errorf("daemon started but its pipe never became ready (6s)")
+	}
+	// 就绪后再确认一次能真正通信；协议版本不匹配由 StartDaemon 的 DaemonInfo 负责。
+	for i := 0; i < 20; i++ {
+		if _, err := CallOnce(contract.Status, nil, "cli"); err == nil {
 			return "started", nil
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	return "", fmt.Errorf("daemon started but not responsive after 6s")
+	return "", fmt.Errorf("daemon pipe ready but not responsive")
 }
 
 func findDaemonExe() string {

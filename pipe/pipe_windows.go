@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -42,6 +43,42 @@ const Addr = `\\.\pipe\serial-tool-daemon`
 
 // endpoint 把逻辑名映射为该平台的端点地址。
 func endpoint(name string) string { return `\\.\pipe\` + name }
+
+// waitReady 用 WaitNamedPipe 等「有一个可连接的管道实例」。
+//
+// 守护进程 Listen 时就已经创建一个实例（listenPipe 的注释），所以这个调用在
+// 守护进程就绪后**立即返回**；守护进程还没起来时按 20ms 的间隔重试，直到超时。
+func waitReady(timeout time.Duration) bool {
+	return waitReadyAddr(Addr, timeout)
+}
+
+// waitReadyAddr 是带地址的版本，测试用它验证不同管道名的就绪/关闭行为。
+func waitReadyAddr(addr string, timeout time.Duration) bool {
+	name, err := windows.UTF16PtrFromString(addr)
+	if err != nil {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		ms := uint32(remaining / time.Millisecond)
+		if ms == 0 {
+			ms = 1
+		}
+		ret, _, _ := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(name)), uintptr(ms))
+		if ret != 0 {
+			return true
+		}
+		// 管道还不存在（守护进程没起来）：小幅退避后重试
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
 
 // callErrno 取出 Proc.Call 第三个返回值中的 Win32 错误码。
 //

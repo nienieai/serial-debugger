@@ -1824,6 +1824,8 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('ports-list', (data) => updatePortList(data.ports));
     window.runtime.EventsOn('daemon-offline', () => onDaemonGone('offline'));
     window.runtime.EventsOn('daemon-shutdown', () => onDaemonGone('shutdown'));
+    // 守护进程就绪（管道可连接）时立刻连，别等 checkOffline 的 1s 轮询
+    window.runtime.EventsOn('daemon-ready', () => { if (!state.daemonOnline) tryConnect(); });
     window.runtime.EventsOn('process-changed', (data) => syncDaemonSessions(data));
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));

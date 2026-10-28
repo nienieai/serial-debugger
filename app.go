@@ -16,6 +16,7 @@ import (
 	"github.com/nienieai/serial-debugger/config"
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/decode"
+	"github.com/nienieai/serial-debugger/pipe"
 	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -78,6 +79,26 @@ func NewApp() *App {
 
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	// 守护进程就绪通知：阻塞等 OS 级「管道可连接」，就绪后立刻推给前端，
+	// 前端收到就能马上连，不必等 checkOffline 的 1s 轮询。
+	go a.watchDaemonReady(ctx)
+}
+
+// watchDaemonReady 把「守护进程就绪」变成前端可订阅的事件。
+//
+// pipe.WaitReady 在 Windows 上就是 WaitNamedPipe：守护进程一 Listen 就返回，
+// 不存在「进程起来了但管道还没建好」的误判。就绪期间不重复通知，等端点消失
+// （守护进程退出）后回到外层继续等下一次。
+func (a *App) watchDaemonReady(ctx context.Context) {
+	for ctx.Err() == nil {
+		if !pipe.WaitReady(1 * time.Second) {
+			continue
+		}
+		runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
+		for ctx.Err() == nil && pipe.WaitReady(300*time.Millisecond) {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
 }
 
 func (a *App) Shutdown(ctx context.Context) {

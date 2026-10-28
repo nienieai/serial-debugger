@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 var lockFile *os.File
@@ -85,6 +86,25 @@ func clientPID(conn io.ReadWriteCloser) (uint32, error) {
 // cancelPending is a no-op on Unix: closing the net.Conn already unblocks any
 // goroutine parked in Read or Write.
 func cancelPending(conn io.ReadWriteCloser) {}
+
+// waitReady 轮询 socket 文件是否出现。Unix 没有 WaitNamedPipe 这类原语，
+// 用「文件存在」近似：Listen 完成即创建 socket，进程退出由内核/监听器清理。
+func waitReady(timeout time.Duration) bool {
+	return waitReadyAddr(Addr, timeout)
+}
+
+func waitReadyAddr(addr string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := os.Stat(addr); err == nil {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
 
 func dialPipe(addr string) (io.ReadWriteCloser, error) {
 	conn, err := net.Dial("unix", addr)
