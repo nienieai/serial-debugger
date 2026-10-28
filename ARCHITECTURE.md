@@ -1,4 +1,4 @@
-﻿# 串口调试工具 v0.7.4 框架文档
+# 串口调试工具 v0.7.4 框架文档
 
 ## 一、整体框架
 
@@ -1299,7 +1299,7 @@ Go 后端 `CreateExampleFiles(kind)` 根据 kind 创建：
 
 ## 九、图标系统
 
-内置图标位于 `config/resources/icons/system/`（20 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
+内置图标位于 `config/resources/icons/system/`（28 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
 
 `GetBuiltinIcons()` Wails 绑定返回全部内置图标，前端 `_initIcons()` 启动时加载。`applyIconTheme()` 支持 `_fallback` 回退机制。
 

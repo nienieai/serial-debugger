@@ -1,4 +1,4 @@
-﻿# 构建说明
+# 构建说明
 
 ## 环境要求
 
@@ -184,7 +184,7 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 │   ├── i18n.go                #   内置 i18n 翻译加载
 │   ├── i18n/                  #   9 种语言翻译 JSON
 │   ├── icons.go               #   内置图标加载 (embed icons/system/*.svg)
-│   ├── icons/system/          #   内置图标主题（20 个 24×24 SVG + icons.json）
+│   ├── icons/system/          #   内置图标主题（28 个 24×24 SVG + icons.json）
 │   ├── theme.go               #   主题系统 (颜色+图标)
 │   ├── themes/system.json     #   内置颜色主题
 │   └── probe.toml             #   设备探测规则配置
