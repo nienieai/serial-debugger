@@ -113,6 +113,28 @@ function formatHex(bytes) {
   }).join(sep);
 }
 
+// 直接把守护进程给的 hex 字符串格式化成显示串。
+// 与 formatHex(hexToBytes(hex)) 等价，但省掉「拆成数字数组再拼」的一次分配 ——
+// 大包 / 高吞吐时这条路径每秒要走几百次。
+function formatHexString(hex) {
+  if (!hex) return '';
+  var norm = String(hex).replace(/0x/gi, '').replace(/[\s,]+/g, '');
+  if (norm.length === 0) return '';
+  if (norm.length % 2 !== 0) norm = norm.slice(0, -1);
+  const upper = state.hexCase === 'upper';
+  const prefix = state.hexPrefix ? '0x' : '';
+  var sep;
+  if (state.hexSep === 'comma') sep = ',';
+  else if (state.hexSep === 'none') sep = '';
+  else sep = ' ';
+  var out = [];
+  for (var i = 0; i < norm.length; i += 2) {
+    var h = norm.substr(i, 2);
+    out.push(prefix + (upper ? h.toUpperCase() : h.toLowerCase()));
+  }
+  return out.join(sep);
+}
+
 function sanitizeText(s) {
   if (!s) return '';
   const asciiMode = (state.encoding === 'ascii');

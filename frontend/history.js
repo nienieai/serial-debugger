@@ -220,7 +220,10 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts) {
     const hexSpan = document.createElement('span');
     var hexDirClass = dir === '1' ? 'hex-1' : dir === '2' ? 'hex-2' : (dir === 'rx' ? 'hex-rx' : 'hex-tx');
     hexSpan.className = 'hex-data ' + hexDirClass;
-    hexSpan.textContent = formatHex(hexToBytes(hex));
+    // 直接从 hex 串格式化（formatHexString 少一次数组分配）
+    hexSpan.textContent = (typeof formatHexString === 'function')
+      ? formatHexString(hex)
+      : formatHex(hexToBytes(hex));
     dataLine.appendChild(hexSpan);
   } else if (segments && segments.length > 0) {
     // Go-decoded segments — zero-innerHTML rendering
@@ -559,7 +562,13 @@ function initSendScrollbar(box) {
   _initOverlayScrollbar(box, { className: 'is-send', top: 40 });
 }
 
-function _syncCustomScrollbar(display) {
+// 自绘滚动条同步：每次 flush 都调会读 scrollHeight（强制布局），大流量时
+// 每帧一次很不划算 —— 滑块位置 12 Hz 的更新在肉眼上已经连续。
+var _sbSyncLast = 0;
+function _syncCustomScrollbar(display, force) {
+  var now = performance.now();
+  if (!force && now - _sbSyncLast < 80) return;
+  _sbSyncLast = now;
   if (display && typeof display._syncScrollbar === 'function') display._syncScrollbar();
 }
 
