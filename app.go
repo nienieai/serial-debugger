@@ -51,6 +51,22 @@ type rxTxEnvelope struct {
 	params map[string]any
 }
 
+// maxSegmentHexLen 是「还值得逐字符解 segments」的上限（十六进制字符数）。
+//
+// 一条 4 KB 的包解码出来是 ~3300 个 segment 对象、序列化约 70 KB；历史一次取
+// 1 万条时就是 ~700 MB 的 JSON + JS 对象（实测），这是 GUI 内存暴涨与高 CPU 的
+// 主因。大包本来也不需要「控制字符可视化」，超过这个长度就跳过，前端退回纯文本
+// 渲染（live 数据走同一条规则）。
+const maxSegmentHexLen = 256
+
+// decodeSegments 只对足够小的包做逐字符解码；大包返回 nil。
+func decodeSegments(hexStr, enc string) []decode.Segment {
+	if len(hexStr) > maxSegmentHexLen {
+		return nil
+	}
+	return decode.Decode(hexStr, enc)
+}
+
 func (td *tabDecodeUnit) run() {
 	for {
 		select {
@@ -59,7 +75,7 @@ func (td *tabDecodeUnit) run() {
 			td.encMu.RLock()
 			enc := td.encoding
 			td.encMu.RUnlock()
-			env.params["segments"] = decode.Decode(hex, enc)
+			env.params["segments"] = decodeSegments(hex, enc)
 			runtime.EventsEmit(td.a.ctx, env.event, env.params)
 		case <-td.quit:
 			return
@@ -734,7 +750,11 @@ func (a *App) GetSessionHistory(processID string, limit int, beforeTsMs int64, s
 					entry, ok := entryRaw.(map[string]any)
 					if ok {
 						if hexStr, _ := entry["hex"].(string); hexStr != "" {
-							entry["segments"] = decode.Decode(hexStr, enc)
+							// 大包不解码（见 maxSegmentHexLen）：否则 1 万条历史能把
+							// 前端堆撑到几百 MB
+							if segs := decodeSegments(hexStr, enc); segs != nil {
+								entry["segments"] = segs
+							}
 						}
 					}
 					history[i] = entry

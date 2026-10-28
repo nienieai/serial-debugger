@@ -31,10 +31,13 @@ var HISTORY_WINDOW = HISTORY_WINDOW_MIN; // 兼容旧引用；实际用 historyW
 var HISTORY_CACHE_MAX = 10000;
 var HISTORY_CACHE_HARD = 40000;
 var HISTORY_CACHE_SLACK = 512;
+// 缓存里 hex 字符总量上限。只按条数裁不够：4 KB 的包一条就是 8 K 字符，
+// 1 万条 = 80 MB 字符串，再叠上 Go 解码出来的 segments 会更炸。
+var HISTORY_CACHE_MAX_CHARS = 6 * 1024 * 1024;
 
-// 一页回补多少条；首次加载取 MAX（回看深度至少等于稳态缓存）
-var HISTORY_PAGE_SIZE = 5000;
-var HISTORY_INITIAL = HISTORY_CACHE_MAX;
+// 一页回补多少条；首次加载取 INITIAL（回看深度至少等于稳态缓存的量级）
+var HISTORY_PAGE_SIZE = 2000;
+var HISTORY_INITIAL = 3000;
 
 var _renderStart = -1; // DOM 窗口起点（cache 索引）
 var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
@@ -149,15 +152,40 @@ function _cursorFrom(entries) {
 //
 // 裁到窗口里时，把对应的 DOM 行也一并去掉 —— 不能留着缓存里已经不存在的行
 // 继续显示（那会让重绘与屏幕对不上）。
+// 缓存里 hex 字符总量：用作「按字节预算裁剪」的依据。
+// 平时靠 push 时累加；批量替换/合并之后把它置 undefined，下一次裁剪时重算。
+function _cacheChars(arr) {
+  if (!arr) return 0;
+  if (typeof arr._hexChars === 'number') return arr._hexChars;
+  var n = 0;
+  for (var i = 0; i < arr.length; i++) {
+    if (arr[i] && arr[i].hex) n += arr[i].hex.length;
+  }
+  arr._hexChars = n;
+  return n;
+}
+
 function _trimCache(arr) {
   if (!arr) return 0;
   var active = (_activeCache() === arr);
   var cap = (active && _frozen) ? HISTORY_CACHE_HARD : HISTORY_CACHE_MAX;
-  var over = arr.length - cap;
-  if (over < HISTORY_CACHE_SLACK) return 0;
+  var drop = Math.max(0, arr.length - cap);
 
-  var drop = over;
+  // 再按字符预算裁：大包场景下 1 万条会撑到几十上百 MB
+  var chars = _cacheChars(arr);
+  var overBudget = chars > HISTORY_CACHE_MAX_CHARS;
+  while (chars > HISTORY_CACHE_MAX_CHARS && arr.length - drop > 200) {
+    var head = arr[drop];
+    chars -= (head && head.hex) ? head.hex.length : 0;
+    drop++;
+  }
+
+  if (drop <= 0) return 0;
+  // 小批裁剪会白付 splice 的代价：攒够一批再裁；但超预算时必须立刻裁
+  if (!overBudget && drop < HISTORY_CACHE_SLACK) return 0;
+
   arr.splice(0, drop);
+  arr._hexChars = chars;
   if (typeof arr._clearedAt === 'number') {
     arr._clearedAt -= drop;
     if (arr._clearedAt < 0) delete arr._clearedAt; // 清空标记本身也被裁掉了，它已经没有意义
@@ -271,6 +299,7 @@ function appendSystemMsg(msg) {
     var arr = state.historyCache[tab.sessionId];
     var dup = arr.length > 0 && arr[arr.length - 1].direction === 'system' && arr[arr.length - 1].hex === msg;
     if (!dup) arr.push(entry);
+    arr._hexChars = undefined;   // 批量入口：下次裁剪时重算字符总量
     if (_renderEnd >= 0) _renderEnd = arr.length;
     _trimCache(arr);
   }
@@ -293,6 +322,9 @@ function appendLine(dir, msg) {
   if (!state.historyCache[ownerTab.sessionId]) { state.historyCache[ownerTab.sessionId] = []; state.historyCache[ownerTab.sessionId]._id = ownerTab.sessionId; }
   var ownerCache = state.historyCache[ownerTab.sessionId];
   ownerCache.push(entry);
+  if (typeof ownerCache._hexChars === 'number') {
+    ownerCache._hexChars += entry.hex ? entry.hex.length : 0;
+  }
   _trimCache(ownerCache);
 
   // Only render to DOM if this tab is currently active
@@ -879,6 +911,7 @@ async function _loadOlderFromDaemon(sessionId, entries) {
   if (history.length === 0) return 0;
 
   Array.prototype.unshift.apply(entries, history);
+  entries._hexChars = undefined;
   if (typeof entries._clearedAt === 'number') entries._clearedAt += history.length;
   return history.length;
 }
@@ -920,6 +953,7 @@ async function _searchDiskHistory(sessionId, entries) {
 
     if (prepend.length > 0) {
       Array.prototype.unshift.apply(entries, prepend);
+      entries._hexChars = undefined;
       if (entries._clearedAt !== undefined) {
         entries._clearedAt += prepend.length;
       }
@@ -985,6 +1019,7 @@ async function mergeRingBuffer(sessionId) {
           if (sysFp) seen.add(sysFp);
         }
       }
+      arr._hexChars = undefined;
     }
     _trimCache(arr);
   } catch {}
@@ -1057,6 +1092,7 @@ function clearDisplay() {
   var ts = new Date().toISOString().slice(11, 23).replace(/\./g, ':').slice(0, 12);
   cache._clearedAt = cache.length;
   cache.push({ direction: 'system', hex: 'sys.history_cleared', timestamp: ts });
+  cache._hexChars = undefined;
 
   // Reset stats display (local counters only).
   state.statsBase[cacheKey] = { tx: 0, rx: 0 };
