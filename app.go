@@ -1088,6 +1088,32 @@ func (a *App) GetHistoryStatus() bool {
 	return v
 }
 
+// SetHistoryEnabledFor 设置单个进程（标签）是否把历史写入磁盘。
+//
+// 标签级开关：同一窗口里可以有的标签落盘、有的不落盘。开启会立即建文件，
+// 关闭会关掉当前文件（已写入内容保留）。
+func (a *App) SetHistoryEnabledFor(processID string, enabled bool) error {
+	a.daemonMu.Lock()
+	ec := a.eventConn
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return fmt.Errorf("not connected")
+	}
+	return ec.SetHistoryEnabledFor(processID, enabled)
+}
+
+// GetHistoryStatusFor 返回单个进程实际生效的落盘开关。
+func (a *App) GetHistoryStatusFor(processID string) bool {
+	a.daemonMu.Lock()
+	ec := a.eventConn
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return false
+	}
+	v, _ := ec.GetHistoryStatusFor(processID)
+	return v
+}
+
 // AttachHistoryFile opens a history file for a process and loads its content.
 func (a *App) AttachHistoryFile(processID, filename string) error {
 	a.daemonMu.Lock()

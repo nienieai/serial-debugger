@@ -31,8 +31,8 @@
 | P3 | GUI 性能面板 | `session.stats` IPC 已就绪 | - |
 | P2 | Linux 版本 | 跨平台构建脚本 | 产出 `serial-{gui,daemon,cli,mcp}` 的 Linux 版本；GUI 走 Wails 的 Linux 后端（WebKitGTK），daemon/CLI/MCP 是纯 Go 可直接交叉编译。**已有 Linux 虚拟机，可在其上构建与实机验证**（需要时授权使用） |
 | P2 | 标签高级信息浮窗 | `session.stats` / `GetClients` | 现在悬停标签只有原生 `title`（会话号 / 数据位 / 空闲进程）。改成**自绘浮窗**：连接状态（端口、波特率、是否转发、客户端数）+ 当前速率（B/s）+ 累计数据量（Tx/Rx 字节数与帧数），样式跟主题变量走，不依赖原生 tooltip |
-| P2 | 标签存储设置分离 | 历史/配置按 tag 存 | 「保存历史」从全局设置下沉到**每个标签页独立开关**：同一窗口里可以有标签落盘、有的不落盘；标签级配置要随会话持久化（现在只有全局 `autoSaveHistory`） |
-| P2 | 新建标签默认保存历史 | 依赖上一条 | 取代全局「自动保存历史」开关的语义：新建会话标签默认开启保存历史，用户可在该标签里单独关掉 |
+| P2 | 标签存储设置分离 | 历史/配置按 tag 存 | **后端已就绪（0.8.3）**：`history.enable` 带 `processId` 按进程开关、`history.status` 可查单进程；开启立即建文件、关闭保留已写内容；GUI 绑定 `SetHistoryEnabledFor` / `GetHistoryStatusFor` 已加。**剩余（下轮）**：标签级 UI 开关（计划放标签悬停卡片）、标签设置随会话持久化 |
+| P2 | 新建标签默认保存历史 | 依赖上一条 | 全局开关已改为「默认自动保存」（`gui.ini` 的 `auto_save_history`），**默认关闭 = 默认不保存**；新标签继承该默认值，用户可在标签里单独开启（UI 待下轮） |
 | P3 | 每个标签一个图标 | 图标包 `resources\icons\` | 标签左侧按类型给图标（单端口 / 端口转发 / 设置 / 新建之外，再支持自定义图标），且随图标主题切换；当前只有状态圆点与设置/新建两个特例 |
 | P3 | all-in-one 融合可执行 | 现有四个入口 | 一个 exe 同时包含 GUI / CLI / MCP / daemon，按第一个参数或调用方式切换（双击 / `--cli` / `--mcp` / `--daemon`）。难点在 Windows 子系统：GUI 需要 `-H windowsgui`，而它会让 CLI 的 stdout 无处可去，需要 `AttachConsole`/`AllocConsole` 一类的处理，或分成两个构建标签 |
 

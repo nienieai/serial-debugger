@@ -147,8 +147,13 @@ type Process struct {
 	ringBufMu       sync.Mutex          // 串行化 historyRing 的读写与关闭
 	histFileMu      sync.RWMutex        // 保护 historyFile / historyFileName
 	ringDrops       atomic.Int64        // 环装不下的包数（单包超过整环容量时才会非 0）
-	stopCh          chan struct{}
-	stopOnce        sync.Once // ensures stopIO runs only once
+	// saveHistory / saveHistorySet：该进程是否落盘，以及用户是否显式设置过。
+	// 未显式设置时取全局默认（defaultSaveHistory），因此全局默认变化会作用到
+	// 所有未单独设置过的进程；显式设置后不再被全局值覆盖。
+	saveHistory    atomic.Bool
+	saveHistorySet atomic.Bool
+	stopCh         chan struct{}
+	stopOnce       sync.Once // ensures stopIO runs only once
 
 	sendCh chan sendJob
 
@@ -324,7 +329,7 @@ func (p *Process) recordHistoryAt(ts int64, hexData, direction, origin string) {
 	p.histFileMu.RUnlock()
 
 	// Lazy-create history file on first real data (not system events).
-	if f == nil && direction != "system" && isHistoryEnabled() {
+	if f == nil && direction != "system" && p.shouldSaveHistory() {
 		p.newHistoryFile()
 		p.histFileMu.RLock()
 		f = p.historyFile
@@ -1288,18 +1293,54 @@ func (p *Process) closeSendRing() {
 	}
 }
 
+// shouldSaveHistory 返回该进程实际是否落盘：显式设置优先，否则跟随全局默认。
+func (p *Process) shouldSaveHistory() bool {
+	if p.saveHistorySet.Load() {
+		return p.saveHistory.Load()
+	}
+	return defaultSaveHistory()
+}
+
+// SetSaveHistory 按进程开关历史落盘（GUI/CLI 的「这个标签要不要保存」）。
+//
+// 开启时立即建文件，不等第一条数据——用户能马上看到文件名；关闭时把当前文件
+// 关掉，已写入的内容保留，之后的帧不再追加。环形缓冲与界面显示完全不受影响。
+func (p *Process) SetSaveHistory(enabled bool) {
+	p.saveHistory.Store(enabled)
+	p.saveHistorySet.Store(true)
+	if enabled {
+		p.openHistoryFile()
+		return
+	}
+	p.detachHistoryFile()
+}
+
+// applyDefaultSaveHistory 把全局默认作用到「没有单独设置过」的进程上。
+func (p *Process) applyDefaultSaveHistory() {
+	if p.saveHistorySet.Load() {
+		return
+	}
+	if defaultSaveHistory() {
+		p.openHistoryFile()
+	} else {
+		p.detachHistoryFile()
+	}
+}
+
 func (p *Process) openHistoryFile() {
-	if !isHistoryEnabled() {
+	if !p.shouldSaveHistory() {
 		return
 	}
-	f, _, err := newHistoryFile(historyDir(), p.id)
-	if err != nil {
+	// 已有文件就别再建：全局默认切换 / 重复开启不应产生一串空文件。
+	p.histFileMu.RLock()
+	hasFile := p.historyFile != nil
+	p.histFileMu.RUnlock()
+	if hasFile {
+		return
+	}
+	if err := p.newHistoryFile(); err != nil {
 		logOp("错误", "打开历史文件失败 (进程 #%s): %v", p.id, err)
-		return
 	}
-	p.histFileMu.Lock()
-	p.historyFile = f
-	p.histFileMu.Unlock()
 }
 
 func (p *Process) attachHistoryFile(filename string) error {
@@ -2187,6 +2228,40 @@ func (pm *ProcessManager) FirstConnectedID() string {
 		}
 	}
 	return ""
+}
+
+// SetDefaultHistorySave 修改新进程的默认落盘开关，并作用到所有未单独设置过的
+// 进程——老行为是全局开关立即生效，这里保持兼容；显式设置过的进程不被覆盖。
+func (pm *ProcessManager) SetDefaultHistorySave(v bool) {
+	setDefaultSaveHistory(v)
+	pm.mu.RLock()
+	procs := make([]*Process, 0, len(pm.processes))
+	for _, p := range pm.processes {
+		procs = append(procs, p)
+	}
+	pm.mu.RUnlock()
+	for _, p := range procs {
+		p.applyDefaultSaveHistory()
+	}
+}
+
+// SetProcessHistorySave 设置单个进程的落盘开关（GUI/CLI 的「按标签保存」）。
+func (pm *ProcessManager) SetProcessHistorySave(id string, enabled bool) error {
+	proc := pm.Get(id)
+	if proc == nil {
+		return fmt.Errorf("process not found: %s", id)
+	}
+	proc.SetSaveHistory(enabled)
+	return nil
+}
+
+// ProcessHistorySave 返回单个进程实际生效的落盘开关。
+func (pm *ProcessManager) ProcessHistorySave(id string) (bool, error) {
+	proc := pm.Get(id)
+	if proc == nil {
+		return false, fmt.Errorf("process not found: %s", id)
+	}
+	return proc.shouldSaveHistory(), nil
 }
 
 func (pm *ProcessManager) Send(id string, data string, format string, origin string) error {

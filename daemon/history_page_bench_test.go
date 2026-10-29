@@ -14,8 +14,8 @@ import (
 //
 // 跑法：go test ./daemon/ -bench BenchmarkHistoryRead -benchmem -run XXX
 func BenchmarkHistoryRead(b *testing.B) {
-	setHistoryEnabled(false)
-	b.Cleanup(func() { setHistoryEnabled(true) })
+	setDefaultSaveHistory(false)
+	b.Cleanup(func() { setDefaultSaveHistory(false) })
 
 	pm := NewProcessManager()
 	b.Cleanup(pm.DestroyAll)

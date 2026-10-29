@@ -1450,19 +1450,46 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 
 	case contract.HistoryEnable:
 		var p struct {
-			Enabled bool `json:"enabled"`
+			Enabled   bool   `json:"enabled"`
+			ProcessID string `json:"processId"`
 		}
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		setHistoryEnabled(p.Enabled)
+		// 带 processId 是按进程（标签）设置；不带是改新进程的默认值。
+		if p.ProcessID != "" {
+			if err := s.pm.SetProcessHistorySave(p.ProcessID, p.Enabled); err != nil {
+				return protocol.Response{ID: req.ID, Error: err.Error()}
+			}
+			logOp("历史", "%s 进程 #%s 历史落盘: %v", label, p.ProcessID, p.Enabled)
+			return protocol.Response{ID: req.ID, Result: map[string]any{
+				"enabled":   p.Enabled,
+				"processId": p.ProcessID,
+			}}
+		}
+		s.pm.SetDefaultHistorySave(p.Enabled)
+		logOp("历史", "%s 历史落盘默认值: %v", label, p.Enabled)
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"enabled": p.Enabled,
 		}}
 
 	case contract.HistoryStatus:
+		var ps struct {
+			ProcessID string `json:"processId"`
+		}
+		_ = convParams(req.Params, &ps)
+		if ps.ProcessID != "" {
+			on, err := s.pm.ProcessHistorySave(ps.ProcessID)
+			if err != nil {
+				return protocol.Response{ID: req.ID, Error: err.Error()}
+			}
+			return protocol.Response{ID: req.ID, Result: map[string]any{
+				"enabled":   on,
+				"processId": ps.ProcessID,
+			}}
+		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{
-			"enabled": isHistoryEnabled(),
+			"enabled": defaultSaveHistory(),
 		}}
 
 	case contract.HistoryAttach:

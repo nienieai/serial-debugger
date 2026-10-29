@@ -10,8 +10,8 @@ import (
 func newHistoryProc(t *testing.T) (*ProcessManager, *Process) {
 	t.Helper()
 	// 不落盘：historyDir() 会指向测试二进制所在目录。
-	setHistoryEnabled(false)
-	t.Cleanup(func() { setHistoryEnabled(true) })
+	setDefaultSaveHistory(false)
+	t.Cleanup(func() { setDefaultSaveHistory(false) })
 
 	pm := NewProcessManager()
 	t.Cleanup(pm.DestroyAll)

@@ -42,6 +42,7 @@ func TestSettingsINIRoundTrip(t *testing.T) {
 	cfg.Serial.Parity = "even"
 	cfg.AutoSend.IntervalMs = 250
 	cfg.Append.Suffix = "\\r\\n"
+	cfg.AutoSaveHistory = true
 
 	f, err := os.CreateTemp(t.TempDir(), "gui-*.ini")
 	if err != nil {
@@ -81,6 +82,7 @@ func TestSaveAppSettingsCreatesDirAndReloads(t *testing.T) {
 	cfg := defaultSettings()
 	cfg.Theme = "dark"
 	cfg.Language = "en"
+	cfg.AutoSaveHistory = true
 	if err := app.SaveAppSettings(cfg); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
@@ -89,7 +91,7 @@ func TestSaveAppSettingsCreatesDirAndReloads(t *testing.T) {
 	}
 
 	got := app.LoadAppSettings()
-	if got.Theme != "dark" || got.Language != "en" {
-		t.Fatalf("读回的值不对: theme=%q language=%q", got.Theme, got.Language)
+	if got.Theme != "dark" || got.Language != "en" || !got.AutoSaveHistory {
+		t.Fatalf("读回的值不对: theme=%q language=%q autoSaveHistory=%v", got.Theme, got.Language, got.AutoSaveHistory)
 	}
 }

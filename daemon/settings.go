@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/nienieai/serial-debugger/config"
 	"github.com/nienieai/serial-debugger/ini"
@@ -16,10 +17,12 @@ import (
 type daemonSettings struct {
 	LogLanguage string
 	LogColor    string
+	// HistoryAutoSave 是新进程默认是否把数据写进 history/*.log（默认关）。
+	HistoryAutoSave bool
 }
 
 func defaultDaemonSettings() daemonSettings {
-	return daemonSettings{LogLanguage: "zh", LogColor: colorModeAuto}
+	return daemonSettings{LogLanguage: "zh", LogColor: colorModeAuto, HistoryAutoSave: false}
 }
 
 // loadDaemonSettings 读取 exe 同级的 settings/daemon.ini。
@@ -38,6 +41,11 @@ func loadDaemonSettings(exeDir string) daemonSettings {
 	switch v := f.Get("log", "color", ""); v {
 	case colorModeAuto, colorModeAlways, colorModeNever:
 		s.LogColor = v
+	}
+	if v := f.Get("history", "auto_save", ""); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			s.HistoryAutoSave = b
+		}
 	}
 	return s
 }

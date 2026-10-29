@@ -454,8 +454,8 @@ var All = []Method{ Register, Subscribe, ..., ProcessCreate, ... }
 | `autosend.interval` | pm.AutoSendSetInterval — 运行中修改间隔 |
 | `history.files` | listHistoryFiles(historyDir()) — 列出 `history/*.log` 文件及元信息 |
 | `history.search` | searchHistoryFile(path, keyword, limit, offset) — 二进制帧顺序扫描，分页返回 |
-| `history.enable` | setHistoryEnabled(bool) — 开关历史自动保存 |
-| `history.status` | isHistoryEnabled() — 查询自动保存状态 |
+| `history.enable` | pm.SetDefaultHistorySave(bool) / pm.SetProcessHistorySave(pid, bool) — 不带 processId 改新进程默认落盘开关（未单独设置过的进程跟着变）；带 processId 只改该进程 |
+| `history.status` | defaultSaveHistory() / pm.ProcessHistorySave(pid) — 查询默认值或指定进程的落盘状态 |
 | `history.attach` | proc.attachHistoryFile(file) — 加载已有文件到环形缓冲区 + 打开追加 |
 | `history.new` | proc.newHistoryFile() — 为进程新建历史文件 |
 | `history.detach` | closeHistoryFile(proc.historyFile) — 分离当前文件（保留在磁盘） |
@@ -469,8 +469,14 @@ recordHistory(hexData, direction)
   ├── 环形缓冲区 Write(pkt)
   └── 若 historyFile != nil → f.Write(pkt)
 
-文件创建：惰性策略——进程创建时不建文件，首次实际数据（非 system 方向）到达时自动创建。
-自动保存开关：history.enable IPC 控制，关闭时仅环形缓冲区不写盘。
+文件创建：**默认不落盘**（`settings/daemon.ini` 的 `[history] auto_save` 默认 false，GUI 设置页的
+「默认自动保存」也默认关）。两个建文件时机：
+  ① 按进程显式开启（`history.enable` 带 `processId`）时立即创建；
+  ② 未显式设置时跟随默认值，在首次实际数据（非 system 方向）到达时惰性创建。
+自动保存开关：两级——默认值（`history.enable` 不带 pid，只影响未单独设置过的进程）
+         与进程级覆盖（带 `processId`，不受默认值变化影响）。关闭时只写环形缓冲区，
+         当前文件关闭、已写入的内容保留。
+GUI：设置页「默认自动保存」→ `gui.ini` 的 `auto_save_history`，连上守护进程后推送默认值。
 文件路径：<daemon.exe>/history/YYYYMMDDhhmm_进程ID.log
 文件格式：与环形缓冲区包格式完全一致 [8B ts | 1B dir | 2B hexLen | N hexData]...
 ```
@@ -1098,8 +1104,8 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `history` | `[pid] [--limit n] [--before ms] [--skip n]` | `session.history`（读取共享内存环；`--limit` 只取最新 n 条，`--before`/`--skip` 用上一条响应里最旧一条的 `tsMs` 与同毫秒条数继续往前翻） |
 | `history-files` | — | `history.files`（列出历史记录文件） |
 | `history-search` | `<file> <kw> [limit]` | `history.search`（分页搜索关键字） |
-| `history-enable` | `[true\|false]` | `history.enable`（开关自动保存，默认 true） |
-| `history-status` | — | `history.status`（查询自动保存状态） |
+| `history-enable` | `[true\|false] [pid]` | `history.enable`（不带 pid 改默认落盘开关，**默认 false**；带 pid 只改该进程） |
+| `history-status` | `[pid]` | `history.status`（查询默认值或指定进程的落盘状态） |
 | `history-attach` | `<pid> <file>` | `history.attach`（加载文件到环形缓冲区 + 继续追加） |
 | `history-new` | `[pid]` | `history.new`（为进程新建历史文件） |
 | `history-detach` | `[pid]` | `history.detach`（分离历史文件） |

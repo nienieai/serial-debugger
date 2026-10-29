@@ -2,6 +2,32 @@ package main
 
 import "testing"
 
+// `history-enable` 的参数：[true|false] [processId]；带 pid 表示只改那个进程。
+func TestHistoryEnableParams(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantEnabled bool
+		wantPid     string
+	}{
+		{"不带参数默认开", []string{"history-enable"}, true, ""},
+		{"显式关", []string{"history-enable", "false"}, false, ""},
+		{"显式开带进程", []string{"history-enable", "true", "3"}, true, "3"},
+		{"只给进程时默认开", []string{"history-enable", "false", "7"}, false, "7"},
+		{"非法布尔按关处理", []string{"history-enable", "xyz"}, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := historyEnableParams(tc.args)
+			enabled, _ := got["enabled"].(bool)
+			pid, _ := got["processId"].(string)
+			if enabled != tc.wantEnabled || pid != tc.wantPid {
+				t.Fatalf("got enabled=%v pid=%q, want enabled=%v pid=%q", enabled, pid, tc.wantEnabled, tc.wantPid)
+			}
+		})
+	}
+}
+
 // `history` 的分页参数解析：位置参数与三个选项可以混用，未知选项必须报错。
 func TestParseHistoryArgs(t *testing.T) {
 	cases := []struct {

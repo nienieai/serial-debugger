@@ -1113,11 +1113,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "history-enable":
-		enabled := true
-		if len(args) >= 2 {
-			enabled, _ = strconv.ParseBool(args[1])
-		}
-		result, err := dc.Call(contract.HistoryEnable, map[string]any{"enabled": enabled})
+		result, err := dc.Call(contract.HistoryEnable, historyEnableParams(args))
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -1125,7 +1121,12 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "history-status":
-		result, err := dc.Call(contract.HistoryStatus, nil)
+		// history-status [processId]
+		params := map[string]any(nil)
+		if len(args) >= 2 {
+			params = map[string]any{"processId": args[1]}
+		}
+		result, err := dc.Call(contract.HistoryStatus, params)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -1201,6 +1202,24 @@ func cmdMonitor(dc *client.DaemonClient, timeout int) {
 			fmt.Printf("[%s] %s\n", msg.Event, string(b))
 		}
 	}
+}
+
+// historyEnableParams 解析 history-enable 的参数：[true|false] [processId]。
+//
+//	不带 pid → 改「新进程默认是否落盘」（旧语义：未单独设置过的进程会跟着变）
+//	带 pid   → 只改这个进程（GUI 里就是某个标签）；开启立即建文件，关闭保留已写内容
+//
+// 参数缺失/解析失败按 true 处理，与旧版本行为一致。
+func historyEnableParams(args []string) map[string]any {
+	enabled := true
+	if len(args) >= 2 {
+		enabled, _ = strconv.ParseBool(args[1])
+	}
+	params := map[string]any{"enabled": enabled}
+	if len(args) >= 3 {
+		params["processId"] = args[2]
+	}
+	return params
 }
 
 func resolveProcessID(dc *client.DaemonClient, args []string, pos int) string {
@@ -1444,8 +1463,8 @@ func printHelp() {
 历史记录:
   history-files                      列出所有历史记录文件 (.log)
   history-search <file> <kw> [limit] 在历史文件中搜索关键字
-  history-enable [true|false]        开关自动保存 (默认 true)
-  history-status                     查看自动保存状态
+  history-enable [true|false] [pid]  默认落盘开关（默认 false）；带 pid 只改该进程
+  history-status [pid]               查看默认/指定进程的落盘状态
   history-attach <pid> <file>        为进程附加历史文件 (加载内容+继续追加)
   history-new [pid]                  为进程新建历史文件
   history-detach [pid]               分离进程的当前历史文件

@@ -38,7 +38,10 @@ type AppSettings struct {
 	IconThemeID       string  `json:"iconThemeId" ini:"icon_theme_id"`
 	Language          string  `json:"language" ini:"language"`
 	AutoCreateSession bool    `json:"autoCreateSession" ini:"auto_create_session"`
-	DisplayColors     string  `json:"displayColors" ini:"display_colors"`
+	// AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
+	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
+	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
+	DisplayColors   string `json:"displayColors" ini:"display_colors"`
 
 	Serial   SerialDefaults   `json:"serial" ini:"serial"`
 	AutoSend AutoSendDefaults `json:"autoSend" ini:"autosend"`

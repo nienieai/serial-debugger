@@ -41,8 +41,8 @@ func (s *stubPort) Write(p []byte) (int, error) {
 // 一次发送要同时体现在两个地方：广播的 Tx 事件（实时，所有订阅客户端）
 // 与历史环（GUI 回补 / CLI / MCP 读历史）。两者的来源必须一致。
 func TestWriteLoopTagsTxOrigin(t *testing.T) {
-	setHistoryEnabled(false)
-	t.Cleanup(func() { setHistoryEnabled(true) })
+	setDefaultSaveHistory(false)
+	t.Cleanup(func() { setDefaultSaveHistory(false) })
 
 	name := fmt.Sprintf("st-test-txorigin-%d", time.Now().UnixNano())
 	ring, err := ringbuf.CreateSharedRing(name, 1<<20)

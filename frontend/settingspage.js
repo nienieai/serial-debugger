@@ -458,7 +458,7 @@ function buildSettingsPage() {
 	panelStorage.className = 'settings-panel is-hidden';
 	panelStorage.setAttribute('data-panel', 'storage');
 	var bStorage = _bubble(t('settings.bubble_storage','存储与行为'));
-	bStorage.appendChild(_row(t('settings.auto_save','自动保存历史记录'), _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory !== false)));
+	bStorage.appendChild(_row(t('settings.auto_save','默认自动保存'), _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true)));
 	bStorage.appendChild(_row(t('settings.auto_create','启动时自动创建会话'), _buildToggle(function() { toggleAutoCreateSession(); }, state.autoCreateSession !== false)));
 	panelStorage.appendChild(bStorage);
 

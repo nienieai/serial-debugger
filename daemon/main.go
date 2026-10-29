@@ -20,9 +20,11 @@ func main() {
 	// 必须在任何日志输出之前关掉：控制台一旦被点击进入选择模式，
 	// 之后所有往控制台写日志的操作都会阻塞，进而卡住连接处理。
 	quickEditDisabled := disableQuickEdit()
-	// 设置来自 <exe>/settings/daemon.ini（语言 + 着色），只由守护进程读。
+	// 设置来自 <exe>/settings/daemon.ini（语言 + 着色 + 历史落盘默认值），
+	// 只由守护进程读。
 	ds := processDaemonSettings()
 	daemonLang = ds.LogLanguage
+	setDefaultSaveHistory(ds.HistoryAutoSave)
 	initColor(os.Args[1:], ds.LogColor)
 
 	// 日志文件要尽早打开：由客户端拉起的守护进程没有控制台（Stdout/Stderr

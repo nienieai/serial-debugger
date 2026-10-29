@@ -14,24 +14,38 @@ import (
 	"github.com/nienieai/serial-debugger/ringbuf"
 )
 
+// 历史落盘的**默认值**：新进程是否把数据写进 history/*.log。
+//
+// 默认关闭：只有用户显式开启才生成历史文件（以前默认开，跑一次就多一个
+// 日志文件）。单个进程还可以被 history.enable{processId} 覆盖，见
+// Process.SetSaveHistory。启动时由 settings/daemon.ini 的 [history] auto_save
+// 覆盖（GUI 连上后还会用自身的「默认自动保存」推一次 history.enable）。
 var (
-	historyEnabled   = true
-	historyEnabledMu sync.RWMutex
+	historyDefaultSave   = false
+	historyDefaultSaveMu sync.RWMutex
 )
 
-func isHistoryEnabled() bool {
-	historyEnabledMu.RLock()
-	defer historyEnabledMu.RUnlock()
-	return historyEnabled
+// defaultSaveHistory 返回新进程的默认落盘开关。
+func defaultSaveHistory() bool {
+	historyDefaultSaveMu.RLock()
+	defer historyDefaultSaveMu.RUnlock()
+	return historyDefaultSave
 }
 
-func setHistoryEnabled(v bool) {
-	historyEnabledMu.Lock()
-	historyEnabled = v
-	historyEnabledMu.Unlock()
+// setDefaultSaveHistory 修改默认值；已经显式设置过（SetSaveHistory）的进程不受影响。
+func setDefaultSaveHistory(v bool) {
+	historyDefaultSaveMu.Lock()
+	historyDefaultSave = v
+	historyDefaultSaveMu.Unlock()
 }
+
+// historyDirOverride 仅测试用：指向临时目录，避免测试往二进制旁写 history/。
+var historyDirOverride string
 
 func historyDir() string {
+	if historyDirOverride != "" {
+		return historyDirOverride
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "history"

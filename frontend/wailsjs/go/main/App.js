@@ -86,6 +86,10 @@ export function GetHistoryStatus() {
   return window['go']['main']['App']['GetHistoryStatus']();
 }
 
+export function GetHistoryStatusFor(arg1) {
+  return window['go']['main']['App']['GetHistoryStatusFor'](arg1);
+}
+
 export function GetI18n(arg1) {
   return window['go']['main']['App']['GetI18n'](arg1);
 }
@@ -200,6 +204,10 @@ export function SetAutoSendInterval(arg1, arg2) {
 
 export function SetHistoryEnabled(arg1) {
   return window['go']['main']['App']['SetHistoryEnabled'](arg1);
+}
+
+export function SetHistoryEnabledFor(arg1, arg2) {
+  return window['go']['main']['App']['SetHistoryEnabledFor'](arg1, arg2);
 }
 
 export function SetProcessMode(arg1, arg2) {

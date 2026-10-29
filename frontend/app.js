@@ -46,7 +46,8 @@ const state = {
   autoRefillHistory: true,
   statsBase: {},
   autoCreateSession: false,
-  autoSaveHistory: true,
+  // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
+  autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
   // 标签浮窗要显示它，所以在 updatePortList 里留一份。
   portDescs: {},
@@ -105,6 +106,7 @@ function saveSettings() {
       iconThemeId: state.iconThemeId,
       language: state.language,
       autoCreateSession: state.autoCreateSession,
+      autoSaveHistory: state.autoSaveHistory === true,
       historyWindowRows: state.historyWindowRows,
       autoRefillHistory: state.autoRefillHistory,
       displayColors: JSON.stringify(state.displayColors || _defaultDisplayColors()),
@@ -189,6 +191,9 @@ async function loadSettings() {
       if (s.iconThemeId && typeof s.iconThemeId === 'string') state.iconThemeId = s.iconThemeId;
       if (typeof s.autoCreateSession === 'boolean') state.autoCreateSession = s.autoCreateSession;
       updateAutoCreateCheck(state.autoCreateSession);
+      // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
+      state.autoSaveHistory = s.autoSaveHistory === true;
+      updateAutoSaveCheck(state.autoSaveHistory);
       if (s.language && typeof s.language === 'string') state.language = s.language;
       if (typeof s.displayFontFamily === 'string') state.displayFontFamily = s.displayFontFamily;
       if (typeof s.displayFontSize === 'number') state.displayFontSize = s.displayFontSize;
@@ -1961,7 +1966,10 @@ async function tryConnect() {
         updateDaemonUI();
         updateOpenBtn();
         await syncDaemonSessions();
-        goGetHistoryStatus().then(on => updateAutoSaveCheck(on));
+        // GUI 的「默认自动保存」存在 gui.ini，是本地真相：连上后推给守护进程，
+        // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
+        window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
+        updateAutoSaveCheck(state.autoSaveHistory === true);
         const t = getActiveTab();
         state.currentMode = (t && t.mode) ? t.mode : 'single';
         updateModeUI();
@@ -5222,18 +5230,12 @@ function updateQuickPanelCheck() {
 }
 
 async function toggleAutoSaveHistory() {
-  const cur = await goGetHistoryStatus();
-  const next = !cur;
+  state.autoSaveHistory = state.autoSaveHistory !== true;
+  saveSettings();
+  updateAutoSaveCheck(state.autoSaveHistory);
   try {
-    await window.go.main.App.SetHistoryEnabled(next);
-    updateAutoSaveCheck(next);
-  } catch (e) { /* ignore */ }
-}
-
-async function goGetHistoryStatus() {
-  try {
-    return await window.go.main.App.GetHistoryStatus();
-  } catch (e) { return true; }
+    await window.go.main.App.SetHistoryEnabled(state.autoSaveHistory);
+  } catch (e) { /* 守护进程离线时只留本地设置，连上后 connect 流程会再推一次 */ }
 }
 
 function updateAutoSaveCheck(on) {

@@ -46,6 +46,8 @@ export function GetGoroutines():Promise<Record<string, any>>;
 
 export function GetHistoryStatus():Promise<boolean>;
 
+export function GetHistoryStatusFor(arg1:string):Promise<boolean>;
+
 export function GetI18n(arg1:string):Promise<Record<string, string>>;
 
 export function GetPorts():Promise<Array<Record<string, any>>>;
@@ -103,6 +105,8 @@ export function SendDataShm(arg1:string,arg2:string,arg3:string):Promise<void>;
 export function SetAutoSendInterval(arg1:string,arg2:number):Promise<void>;
 
 export function SetHistoryEnabled(arg1:boolean):Promise<void>;
+
+export function SetHistoryEnabledFor(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetProcessMode(arg1:string,arg2:string):Promise<void>;
 

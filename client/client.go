@@ -938,15 +938,38 @@ func (c *DaemonClient) SearchHistory(file, keyword string, limit int, offset int
 	})
 }
 
-// SetHistoryEnabled toggles auto-save for history files.
+// SetHistoryEnabled 修改「新进程默认是否把历史写入磁盘」。
+//
+// 已有的进程如果没被单独设置过会跟着变（老语义），显式按进程设置过的保持原样。
 func (c *DaemonClient) SetHistoryEnabled(enabled bool) error {
 	_, err := c.Call(contract.HistoryEnable, map[string]any{"enabled": enabled})
 	return err
 }
 
-// GetHistoryStatus returns whether history auto-save is enabled.
+// GetHistoryStatus 返回新进程的默认落盘开关。
 func (c *DaemonClient) GetHistoryStatus() (bool, error) {
 	result, err := c.Call(contract.HistoryStatus, nil)
+	if err != nil {
+		return false, err
+	}
+	v, _ := result["enabled"].(bool)
+	return v, nil
+}
+
+// SetHistoryEnabledFor 按进程（GUI 里就是「这个标签」）开关历史落盘。
+//
+// 开启会立即创建一个新的 history/*.log；关闭会关掉当前文件（已写入的内容保留）。
+func (c *DaemonClient) SetHistoryEnabledFor(processID string, enabled bool) error {
+	_, err := c.Call(contract.HistoryEnable, map[string]any{
+		"enabled":   enabled,
+		"processId": processID,
+	})
+	return err
+}
+
+// GetHistoryStatusFor 返回单个进程实际生效的落盘开关。
+func (c *DaemonClient) GetHistoryStatusFor(processID string) (bool, error) {
+	result, err := c.Call(contract.HistoryStatus, map[string]any{"processId": processID})
 	if err != nil {
 		return false, err
 	}
