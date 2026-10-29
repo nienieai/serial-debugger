@@ -8,6 +8,7 @@ const state = {
   tabCounter: 0,
   displayMode: 'text',
   txDisplayMode: 'text',
+  stlogShowYear: true,   // .stlog 文件页行时间戳是否带年份（设置持久化）
   p1DisplayMode: 'text',
   p2DisplayMode: 'text',
   currentMode: 'single',
@@ -75,6 +76,7 @@ function saveSettings() {
       txDisplayMode: state.txDisplayMode,
       sendRatio: state.sendRatio,
       quickPanelRatio: state.quickPanelRatio,
+      stlogShowYear: state.stlogShowYear !== false,
       serial: {
         baud: parseInt((pageEl('baudSelect')||{}).value) || 115200,
         dataBits: parseInt((pageEl('dataBitsSelect')||{}).value) || 8,
@@ -194,6 +196,7 @@ async function loadSettings() {
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
+      if (typeof s.stlogShowYear === 'boolean') state.stlogShowYear = s.stlogShowYear;
       if (s.language && typeof s.language === 'string') state.language = s.language;
       if (typeof s.displayFontFamily === 'string') state.displayFontFamily = s.displayFontFamily;
       if (typeof s.displayFontSize === 'number') state.displayFontSize = s.displayFontSize;
@@ -2535,9 +2538,12 @@ function updateDaemonUI() {
   const overlay = document.getElementById('offlineOverlay');
   const portSel = pageEl('portSelect');
   if (_statusBar) _statusBar.updateDaemon({online: state.daemonOnline, tabsCount: state.tabs.length});
-  // Show overlay only when daemon is offline AND the active tab is not settings
-  const isSettings = getActiveTab() && getActiveTab().type === 'settings';
-  if (state.daemonOnline || isSettings) {
+  // Show overlay only when daemon is offline AND the active tab is a session tab.
+  // 设置页 / .stlog 文件页 / 新建选择页都不需要守护进程，被遮住等于把「离线也能
+  // 看文件」这条路堵死（实测拖入 .stlog 后整页被「守护进程未启用」盖住）。
+  const at = getActiveTab();
+  const isNonSession = !!at && (at.type === 'settings' || at.type === 'stlog' || at.type === 'new');
+  if (state.daemonOnline || isNonSession) {
     overlay.classList.add('is-hidden');
     var mt = document.getElementById('menuToggleDaemon');
     if (mt) { var mts = mt.querySelector('.menu-text'); if (mts) mts.textContent = t('menu.stop_daemon', '停止守护进程'); }
@@ -2550,11 +2556,13 @@ function updateDaemonUI() {
       portSel.innerHTML = '<option value="">' + t('offline.title', '-- 守护进程未运行 --') + '</option>';
     }
   }
-  // Disable new-tab buttons when daemon is offline
-  const addBtn = document.getElementById('tabAddBtn');
-  if (addBtn) addBtn.disabled = !state.daemonOnline;
-  const menuNew = document.getElementById('menuNewSession');
-  if (menuNew) menuNew.disabled = !state.daemonOnline;
+  // 「+」和「文件 → 新建会话」不再随守护进程状态置灰：离线也能进选择页，
+  // 页内再按能力置灰（串口卡禁用、从文件打开可用）。
+  state.tabs.forEach(function (t) {
+    if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
+      _syncChooserAvailability(t._page.root);
+    }
+  });
   _updateStatsVisible();
 }
 
@@ -2745,7 +2753,7 @@ let _creatingTab = false;
 // 进程里建空闲进程，并把这个标签页**原地**换成会话页 —— 所以直接关掉选择页
 // 不会留下孤儿进程（旧流程先把进程建出来再建页，关掉就漏了）。
 function openNewSessionTab() {
-  if (!state.daemonOnline) return;
+  // 守护进程没起来也照样能进来：页内的串口卡会置灰，「从文件打开」始终可用。
   // 已经有一个选择页就切过去，不重复开
   var existing = state.tabs.findIndex(function(x) { return x.type === 'new'; });
   if (existing >= 0) { switchTab(existing); return; }
@@ -2823,9 +2831,15 @@ function _sessionTabDefaults(mode, id) {
 
 // 选择页卡片被点：建进程 → 原地换成会话页。
 async function chooseNewSessionMode(mode) {
+  // 「从文件打开」不碰守护进程，走自己的分支。
+  if (mode === 'file') { chooseOpenFile(); return; }
   var tab = getActiveTab();
   if (!tab || tab.type !== 'new') return;
-  if (!state.daemonOnline) return;
+  if (!state.daemonOnline) {
+    showAlert(t('confirm.title', '提示'),
+      t('newtab.need_daemon', '这个模式需要守护进程，请先启动它（菜单 守护进程 → 启停），或改用「从文件打开」'));
+    return;
+  }
   if (tab._choosing) return;   // 防连点：两次点击只建一个进程
   tab._choosing = true;
   _setChooserBusy(tab, true);
@@ -2843,7 +2857,11 @@ function _setChooserBusy(tab, busy) {
   if (!tab || !tab._page || !tab._page.root) return;
   tab._page.root.classList.toggle('is-busy', !!busy);
   var cards = tab._page.root.querySelectorAll('.c-mode-card');
-  for (var i = 0; i < cards.length; i++) cards[i].disabled = !!busy;
+  for (var i = 0; i < cards.length; i++) {
+    // 「从文件打开」不吃这个忙碌态：它跟守护进程里的建进程无关
+    if (cards[i].getAttribute('data-mode') === 'file') continue;
+    cards[i].disabled = !!busy;
+  }
 }
 
 // 选择页 → 会话页：同一个标签、同一个下标，不新增标签页。
@@ -3170,27 +3188,40 @@ function _tabPopModel(tab) {
   return { ports: ports, params: params, declared: !!(sp && sp.portName), baud: baud, fwd: isFwd };
 }
 
+// _tabPopValues 取浮窗的数值。两个概念必须分开：
+//
+//	live    —— 端口开着：速率、条形、运行时长才有意义
+//	hasData —— 拿得到统计：累计收发/错误/比例就该显示
+//
+// 以前只有一个 on = portOpen && stats，于是"关掉串口但明明收过 52 KB"整块显示成 —。
+// daemon 侧的累计计数是进程生命期的，断开后照样能读（ProcessManager.GetStats 只看
+// 进程是否存在），所以断开后仍然要把累计值显示出来，只有速率/条形归零。
 function _tabPopValues() {
   var tab = _tabPop.tab;
   var s = _tabPop.stats;
   var isFwd = tab.mode === 'forward';
-  var on = !!tab.portOpen && !!s;
-  if (!on) {
-    return { rxRate: 0, txRate: 0, rxTotal: 0, txTotal: 0, errRx: 0, errTx: 0, uptime: '—', live: false };
+  var live = !!tab.portOpen && !!s;
+  if (!s) {
+    return {
+      rxRate: 0, txRate: 0, rxTotal: 0, txTotal: 0, errRx: 0, errTx: 0,
+      uptime: '—', live: false, hasData: false,
+    };
   }
-  // uptimeSec 只在 GetSessionStats 里给一次，事件不带它 —— 用取到的那一刻往后推算，
-  // 这样「运行」的秒数才是活的（每秒 tick 一次 _tabPopUpdate）。
+  // uptimeSec 只在 GetSessionStats 里给一次，事件不带它。连着的时候按取到的那一刻
+  // 往后推算（每秒 tick 读一次）；断开后必须冻结，否则"运行"会一直跳。
   var upSec = s.uptimeSec || 0;
-  if (_tabPop.uptimeAt) upSec += (Date.now() - _tabPop.uptimeAt) / 1000;
+  if (live && _tabPop.uptimeAt) upSec += (Date.now() - _tabPop.uptimeAt) / 1000;
+  var hasUptime = (s.uptimeSec || 0) > 0 || (live && _tabPop.uptimeAt);
   return {
-    rxRate: s.readRateBps || 0,
-    txRate: s.writeRateBps || 0,
+    rxRate: live ? (s.readRateBps || 0) : 0,
+    txRate: live ? (s.writeRateBps || 0) : 0,
     rxTotal: isFwd ? (s.bytesPort1 || 0) : (s.bytesRead || 0),
     txTotal: isFwd ? (s.bytesPort2 || 0) : (s.bytesWritten || 0),
     errRx: s.readErrors || 0,
     errTx: s.writeErrors || 0,
-    uptime: _tabPopDuration(upSec),
-    live: true,
+    uptime: hasUptime ? _tabPopDuration(upSec) : '—',
+    live: live,
+    hasData: true,
   };
 }
 
@@ -3254,14 +3285,108 @@ function _tabPopT(key, fb) {
   return v || fb;
 }
 
+// 文件标签的浮窗。文件标签没有会话概念（没 sessionId、没端口），套会话卡片只会
+// 得到一片 —，所以单独画：文件名 / 路径 / 大小 / 收发 / 时间范围 / 来源。
+// 数据来自 tab._stlog.info（stlogLoad 每次读回来都会存一份）。
+function _tabPopRenderFile() {
+  var el = _tabPopEl;
+  var tab = _tabPop.tab;
+  var st = tab._stlog || {};
+  var info = st.info || {};
+  var path = tab.path || '';
+
+  function row(tag, val) {
+    // 文件卡的行比会话卡长（路径、时间范围、页/记录/帧串一起），用可换行的
+    // 一行一字段，别让长值把卡片撑破或被裁掉。
+    return '<div class="c-tabpop__frow">' +
+      '<span class="c-tabpop__ptag">' + tag + '</span>' +
+      '<span class="c-tabpop__fval" dir="ltr">' + val + '</span>' +
+    '</div>';
+  }
+
+  var sizeText = '—';
+  if (typeof info.size === 'number') {
+    sizeText = fmtBytes(info.size) + ' · ' + info.pages + ' 页 · ' +
+      info.records + ' 记录 · ' + info.total + ' 帧';
+  }
+  var ioText = (typeof info.rxTotal === 'number')
+    ? ('rx ' + fmtBytes(info.rxTotal) + ' / tx ' + fmtBytes(info.txTotal))
+    : '—';
+  var rangeText = stlogRangeText(info.firstTs, info.lastTs) || '—';
+  var originsText = '无来源';
+  if (info.origins && info.origins.length) {
+    var kinds = [];
+    info.origins.forEach(function (o) {
+      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
+      if (kinds.indexOf(label) < 0) kinds.push(label);
+    });
+    originsText = kinds.join(' · ');
+  }
+  // —— 两条进度条：与会话卡片同一套结构和类名，两种浮窗看起来才是一家人 ——
+  // 1) 已载入：文件是分批读的，这条说明"看到多少了"
+  var loaded = (typeof st.offset === 'number') ? st.offset : 0;
+  var totalFrames = (typeof info.total === 'number') ? info.total : 0;
+  var pctLoaded = totalFrames > 0 ? Math.min(100, Math.round(loaded / totalFrames * 100)) : 0;
+  var loadHTML = '<div class="c-tabpop__ratio">' +
+    '<span class="c-tabpop__rlbl">' + _tabPopT('tabpop.loaded', '已载入') + '</span>' +
+    '<span class="c-tabpop__rbar">' +
+      '<i data-role="file-load" style="width:' + pctLoaded + '%;background:var(--accent)"></i>' +
+    '</span>' +
+    '<span class="c-tabpop__rval" dir="ltr">' + loaded + ' / ' + totalFrames + '</span>' +
+  '</div>';
+
+  // 2) 收发比：和会话卡片完全同一套渲染
+  var cRx = 'var(--green)', cTx = 'var(--accent)';
+  var sum = (info.rxTotal || 0) + (info.txTotal || 0);
+  var hasRatio = sum > 0;
+  var rp = hasRatio ? Math.round((info.rxTotal || 0) / sum * 100) : 0;
+  var ratioHTML = '<div class="c-tabpop__ratio">' +
+    '<span class="c-tabpop__rlbl">' + _tabPopT('tabpop.ratio', '收发比') + '</span>' +
+    '<span class="c-tabpop__rbar">' +
+      '<i style="width:' + rp + '%;background:' + cRx + '"></i>' +
+      '<i style="width:' + (hasRatio ? (100 - rp) : 0) + '%;background:' + cTx + '"></i>' +
+    '</span>' +
+    '<span class="c-tabpop__rval" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
+  '</div>';
+
+  el.innerHTML =
+    '<span class="c-tabpop__arrow"></span>' +
+    '<div class="c-tabpop__head">' +
+      '<span class="c-tabpop__title">' + escHtml(stlogBaseName(path)) + '</span>' +
+      '<span class="c-tabpop__badge is-dim"><i class="c-tabpop__dot"></i>' +
+        _tabPopT('tabpop.file', '文件') + '</span>' +
+    '</div>' +
+    '<div class="c-tabpop__meta" dir="ltr" title="' + escHtml(path) + '">' + escHtml(path) + '</div>' +
+    '<div class="c-tabpop__sep"></div>' +
+    row('大小', sizeText) +
+    row('收发', ioText) +
+    row('时间', rangeText) +
+    row('来源', originsText) +
+    '<div class="c-tabpop__sep"></div>' +
+    loadHTML +
+    ratioHTML;
+  _tabPop.fileSig = _tabPopFileSig();
+  _tabPop.lastH = el.offsetHeight;
+}
+
+// 文件浮窗只需要在"已载入帧数"变化时重画（其余字段是静态的）
+function _tabPopFileSig() {
+  var st = (_tabPop && _tabPop.tab && _tabPop.tab._stlog) || {};
+  var info = st.info || {};
+  return ['file', info.path || '', info.total || 0, st.offset || 0].join('|');
+}
+
 function _tabPopRender() {
   if (!_tabPop || !_tabPopEl) return;
+  // 文件标签没有会话概念，走专门的卡片（否则就是一片 —，见 _tabPopRenderFile）
+  if (_tabPop.tab && _tabPop.tab.type === 'stlog') { _tabPopRenderFile(); return; }
   var el = _tabPopEl;
   var tab = _tabPop.tab;
   var m = _tabPop.model;
   var v = _tabPopValues();
   var isFwd = tab.mode === 'forward';
-  var on = v.live;
+  var on = v.live;           // 徽标 / 速率 / 条形
+  var hasData = v.hasData;   // 累计 / 错误 / 收发比
 
   var badgeCls = on ? 'is-ok' : (m.declared ? 'is-warn' : 'is-dim');
   var badgeTxt = on ? _tabPopT('tabpop.state.connected', '已连接')
@@ -3281,8 +3406,8 @@ function _tabPopRender() {
   var base = m.baud ? m.baud / 10 : 0;
   var pctRx = (base && on) ? Math.min(100, Math.round(v.rxRate / base * 100)) : 0;
   var pctTx = (base && on) ? Math.min(100, Math.round(v.txRate / base * 100)) : 0;
-  var totalRx = on ? fmtBytes(v.rxTotal) : '—';
-  var totalTx = on ? fmtBytes(v.txTotal) : '—';
+  var totalRx = hasData ? fmtBytes(v.rxTotal) : '—';
+  var totalTx = hasData ? fmtBytes(v.txTotal) : '—';
   var rateRx = on ? _tabPopRateText(v.rxRate) : '—';
   var rateTx = on ? _tabPopRateText(v.txRate) : '—';
 
@@ -3299,7 +3424,7 @@ function _tabPopRender() {
   var cRx = isFwd ? 'var(--fwd-p1)' : 'var(--green)';
   var cTx = isFwd ? 'var(--fwd-p2)' : 'var(--accent)';
   var sum = v.rxTotal + v.txTotal;
-  var hasRatio = on && sum > 0;
+  var hasRatio = hasData && sum > 0;
   var rp = hasRatio ? Math.round(v.rxTotal / sum * 100) : 0;
   var ratioHTML = '<div class="c-tabpop__ratio">' +
     '<span class="c-tabpop__rlbl">' + (isFwd ? _tabPopT('tabpop.ratio_fwd', '分流比') : _tabPopT('tabpop.ratio', '收发比')) + '</span>' +
@@ -3327,7 +3452,7 @@ function _tabPopRender() {
     '<div class="c-tabpop__sep"></div>' +
     '<div class="c-tabpop__foot">' +
       '<span>' + _tabPopT('tabpop.clients', '客户端') + ' <b dir="ltr">' + clients + '</b></span>' +
-      '<span>' + _tabPopT('tabpop.errors', '错误') + ' <b dir="ltr" data-role="errors">' + (on ? (v.errRx + '/' + v.errTx) : '0/0') + '</b></span>' +
+      '<span>' + _tabPopT('tabpop.errors', '错误') + ' <b dir="ltr" data-role="errors">' + (hasData ? (v.errRx + '/' + v.errTx) : '0/0') + '</b></span>' +
       '<span>' + _tabPopT('tabpop.uptime', '运行') + ' <b dir="ltr" data-role="uptime">' + v.uptime + '</b></span>' +
     '</div>' +
     ((!on && m.declared) ? '<div class="c-tabpop__hint">' + _tabPopT('tabpop.connect_hint', '点击标签连接此端口') + '</div>' : '');
@@ -3338,6 +3463,11 @@ function _tabPopRender() {
 // 只更新数值：不动 DOM 结构，条形靠 transition 平滑跟随
 function _tabPopUpdate() {
   if (!_tabPop || !_tabPopEl) return;
+  // 文件标签：信息是静态的，只有「已载入帧数」会变，签名一变重画一次就够
+  if (_tabPop.tab && _tabPop.tab.type === 'stlog') {
+    if (_tabPop.fileSig !== _tabPopFileSig()) _tabPopRenderFile();
+    return;
+  }
   var el = _tabPopEl;
   if (_tabPop.sig !== _tabPopSig()) {
     _tabPopRender();
@@ -3348,6 +3478,7 @@ function _tabPopUpdate() {
   var v = _tabPopValues();
   var isFwd = tab.mode === 'forward';
   var on = v.live;
+  var hasData = v.hasData;
   var base = m.baud ? m.baud / 10 : 0;
   var pctRx = (base && on) ? Math.min(100, Math.round(v.rxRate / base * 100)) : 0;
   var pctTx = (base && on) ? Math.min(100, Math.round(v.txRate / base * 100)) : 0;
@@ -3363,22 +3494,22 @@ function _tabPopUpdate() {
     n.style.background = color;
   }
 
-  setText('total0', on ? fmtBytes(v.rxTotal) : '—');
+  setText('total0', hasData ? fmtBytes(v.rxTotal) : '—');
   setText('rate0', on ? _tabPopRateText(v.rxRate) : '—');
   setBar('bar0', pctRx, _tabPopBarColor(pctRx, cRx, on));
-  setText('total1', on ? fmtBytes(v.txTotal) : '—');
+  setText('total1', hasData ? fmtBytes(v.txTotal) : '—');
   setText('rate1', on ? _tabPopRateText(v.txRate) : '—');
   setBar('bar1', pctTx, _tabPopBarColor(pctTx, cTx, on));
 
   var sum = v.rxTotal + v.txTotal;
-  var hasRatio = on && sum > 0;
+  var hasRatio = hasData && sum > 0;
   var rp = hasRatio ? Math.round(v.rxTotal / sum * 100) : 0;
   setBar('ratio-rx', rp, cRx);
   setBar('ratio-tx', hasRatio ? (100 - rp) : 0, cTx);
   var rv = q('ratio-val');
   if (rv) rv.innerHTML = _tabPopRatioValHTML(hasRatio, rp, cRx, cTx);
 
-  setText('errors', on ? (v.errRx + '/' + v.errTx) : '0/0');
+  setText('errors', hasData ? (v.errRx + '/' + v.errTx) : '0/0');
   setText('uptime', v.uptime);
 
   // 文本长度变了导致高度变化时重新摆一次
@@ -3443,7 +3574,7 @@ function _tabPopOpen(tabEl, idx) {
   _tabPopPlace(tabEl);
   requestAnimationFrame(function () { if (_tabPop) el.classList.add('is-visible'); });
   _tabPopStartTick();
-  if (!tab.portOpen || !tab.sessionId) return;
+  if (!tab.sessionId) return;
   window.go.main.App.GetSessionStats(tab.sessionId).then(function (res) {
     if (!_tabPop || _tabPop.sessionId !== tab.sessionId) return;
     if (res && res.stats) {
@@ -5640,10 +5771,319 @@ function applySendRatio() {
 
 
 
-// ---- .stlog 拖入（离线只读摘要） ----
+// ---- .stlog 文件标签页 ----
 //
-// 只做到"拖进来能看见内容"：分页/搜索/导出还没接，见
-// 0.8.3-dev/会话文件方案-v1.4.md 的 P1 阶段。刻意不动 tabs 系统。
+// 拖入 .stlog 开成一个真正的标签页（P1）。壳子照抄设置页那套「非会话标签」：
+// 只要 t.type 有值，isSessionTab() 就返回 false，所有会碰串口 / 发送队列 /
+// 历史缓存的入口都会自动绕开它（见 isSessionTab 上方的注释）。
+//
+// 行渲染直接调 history.js 的 makeDataRow：Rx/Tx 配色、Hex/文本开关、等宽字体、
+// 屏外不绘制全部继承，不另起一套渲染器。
+
+// 首屏/每批 500 帧。一帧最大 4016 B，转十六进制就是 8 KB 字符串，一次给太多
+// 会把过桥的 JSON 和 DOM 一起撑爆；其余靠底部的「加载更多」。
+var STLOG_PAGE_SIZE = 500;
+
+function stlogBaseName(p) {
+  return String(p).split(/[\\/]/).pop();
+}
+
+// 与 Go 侧 stlogDirName / 导出一致：1/2/3/4 是 rx/tx/P1/P2，其它算系统事件。
+function stlogDirName(d) {
+  switch (d & 0x7f) {
+    case 1: return 'rx';
+    case 2: return 'tx';
+    case 3: return '1';
+    case 4: return '2';
+    default: return 'system';
+  }
+}
+
+// 时间戳格式：文件里存的是绝对毫秒时间，年一直在数据里，只是逐行显示时可以选择
+// 是否带上（顶栏的时间范围永远带年）。
+function stlogPad(n, w) { var s = String(n); while (s.length < w) s = '0' + s; return s; }
+function stlogDateText(d) { return d.getFullYear() + '-' + stlogPad(d.getMonth() + 1, 2) + '-' + stlogPad(d.getDate(), 2); }
+function stlogTimeText(d) {
+  return stlogPad(d.getHours(), 2) + ':' + stlogPad(d.getMinutes(), 2) + ':' +
+    stlogPad(d.getSeconds(), 2) + '.' + stlogPad(d.getMilliseconds(), 3);
+}
+function stlogTsText(ms, withYear) {
+  var d = new Date(ms);
+  var day = withYear
+    ? stlogDateText(d)
+    : stlogPad(d.getMonth() + 1, 2) + '-' + stlogPad(d.getDate(), 2);
+  return day + ' ' + stlogTimeText(d);
+}
+function stlogFullTs(ms) { var d = new Date(ms); return stlogDateText(d) + ' ' + stlogTimeText(d); }
+// 顶栏时间范围：同一天只写一次日期，跨天两边都写全
+function stlogRangeText(first, last) {
+  if (typeof first !== 'number' || typeof last !== 'number') return '';
+  var a = new Date(first), b = new Date(last);
+  return stlogFullTs(first) + ' ~ ' +
+    (stlogDateText(a) === stlogDateText(b) ? stlogTimeText(b) : stlogFullTs(last));
+}
+
+function stlogSysRow(tab, text) {
+  var line = document.createElement('div');
+  line.className = 'sys-msg';
+  line.textContent = '── ' + text + ' ──';
+  var st = tab._stlog;
+  st.content.insertBefore(line, st.more);
+  return line;
+}
+
+// 顶栏一行元信息：时间范围 / 大小 / 页 / 记录 / rx-tx / 设置 / 异常标记。
+function stlogBarText(info) {
+  var parts = [];
+  var range = stlogRangeText(info.firstTs, info.lastTs);
+  if (range) parts.push(range);
+  parts.push(info.size + ' B');
+  parts.push(info.pages + ' 页');
+  parts.push(info.records + ' 记录');
+  parts.push('rx/tx ' + info.rxTotal + '/' + info.txTotal + ' B');
+  if (info.settings && info.settings.label) parts.push('设置 ' + info.settings.label);
+  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
+  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
+  if (info.origins && info.origins.length) {
+    var kinds = [];
+    info.origins.forEach(function (o) {
+      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
+      if (kinds.indexOf(label) < 0) kinds.push(label);
+    });
+    parts.push('来源 ' + kinds.join(' · '));
+  } else {
+    parts.push('无来源');
+  }
+  if (info.recovered && info.recovered.length) parts.push('影子恢复 ' + info.recovered.length + ' 页');
+  if (info.truncated) parts.push('末帧未结束');
+  if (info.brokenChain) parts.push('续片链被切断');
+  if (info.stoppedAt) parts.push('停在 0x' + Number(info.stoppedAt).toString(16).toUpperCase());
+  if (info.stopErr) parts.push(info.stopErr);
+  return parts.join(' · ');
+}
+
+function stlogUpdateChrome(tab, info) {
+  var st = tab._stlog;
+  st.meta.textContent = stlogBarText(info);
+  // 完整来源串放进 title：顶栏只显示种类，鼠标停上去能看到具体是哪个客户端
+  st.meta.title = (info.origins && info.origins.length)
+    ? info.origins.join(', ')
+    : '这个文件里没有来源信息（Rx 恒无来源；样本文件通常是合成的）';
+  st.count.textContent = '帧 ' + st.offset + ' / ' + st.total;
+  if (st.offset >= st.total) {
+    st.more.style.display = 'none';
+  } else {
+    st.more.style.display = '';
+    st.moreBtn.textContent = '加载更多（还有 ' + (st.total - st.offset) + ' 帧）';
+  }
+}
+
+// stlogLoad 追加一批帧。offset 由服务端回显，避免前后端各算一套。
+function stlogLoad(tab) {
+  var st = tab._stlog;
+  if (st.loading || (st.loaded && st.offset >= st.total)) return;
+  st.loading = true;
+  st.moreBtn.disabled = true;
+  window.go.main.App.ReadStlogFrames(tab.path, st.offset, STLOG_PAGE_SIZE).then(function (info) {
+    st.loading = false;
+    st.moreBtn.disabled = false;
+    st.loaded = true;
+    st.total = info.total;
+    st.info = info;             // 浮窗要拿它显示大小/页/记录/时间范围/来源
+    var frames = info.frames || [];
+    frames.forEach(function (f) {
+      st.frames.push(f);          // 缓存一份，切 Hex/文本、切年份时重画不用重新读文件
+      makeDataRow(st.content, stlogDirName(f.dir),
+                  stlogTsText(f.ts, state.stlogShowYear !== false), f.hex,
+                  null, { displayMode: st.mode }, f.origin || '');
+    });
+    st.offset = info.offset + frames.length;
+    if (!st.rendered) {
+      st.rendered = true;
+      if (st.total === 0) stlogSysRow(tab, '文件里没有帧');
+      st.content.scrollTop = 0;
+    }
+    stlogUpdateChrome(tab, info);
+    st.content.appendChild(st.more); // 「加载更多」永远待在最后一行之后
+  }).catch(function (err) {
+    st.loading = false;
+    st.moreBtn.disabled = false;
+    if (window.console) console.error('[stlog] ' + tab.path, err);
+    stlogSysRow(tab, '读取失败: ' + String(err));
+  });
+}
+
+// stlogToggleMode 切换文件页的 Hex / 文本 视图。
+//
+// 文件页不复用全局 state.displayMode：会话页默认文本（用户在那儿发的是 ASCII），
+// 而 .stlog 里是原始字节，一打开就该按 Hex 看。两边各存一份，谁也别改对方的设置。
+function stlogToggleMode(tab) {
+  var st = tab._stlog;
+  st.mode = (st.mode === 'hex') ? 'text' : 'hex';
+  stlogRerender(tab);
+}
+
+// stlogRerender 用缓存的帧按当前 mode 重画（不重新读文件、不动 offset）。
+function stlogRerender(tab) {
+  var st = tab._stlog;
+  st.content.innerHTML = '';
+  st.frames.forEach(function (f) {
+    makeDataRow(st.content, stlogDirName(f.dir),
+                stlogTsText(f.ts, state.stlogShowYear !== false), f.hex,
+                null, { displayMode: st.mode }, f.origin || '');
+  });
+  st.content.appendChild(st.more);
+  st.modeBtn.textContent = (st.mode === 'hex') ? 'Hex' : '文本';
+}
+
+function stlogExport(path, btn) {
+  var label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '导出中…'; }
+  window.go.main.App.ExportStlogText(path).then(function (res) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (!res || res.canceled) return; // 用户自己取消，不弹框
+    showAlert('.stlog 已导出',
+      res.path + '\n\n' + res.frames + ' 帧 · ' + res.bytes + ' B', null, true);
+  }).catch(function (err) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    showAlert('导出失败', String(err), null, true);
+  });
+}
+
+function openStlogTab(path) {
+  for (var i = 0; i < state.tabs.length; i++) {
+    if (state.tabs[i].type === 'stlog' && state.tabs[i].path === path) {
+      switchTab(i);
+      return state.tabs[i];
+    }
+  }
+
+  var page = document.createElement('div');
+  page.className = 'tab-page';
+  page.style.display = 'none';
+
+  var bar = document.createElement('div');
+  bar.className = 'o-stlog-bar t-stlog-bar';
+
+  var infoBox = document.createElement('div');
+  infoBox.className = 'o-stlog-bar__info';
+  var nameEl = document.createElement('div');
+  nameEl.className = 't-stlog-name';
+  nameEl.textContent = stlogBaseName(path);
+  var metaEl = document.createElement('div');
+  metaEl.className = 't-stlog-meta';
+  metaEl.textContent = path;
+  infoBox.appendChild(nameEl);
+  infoBox.appendChild(metaEl);
+
+  var actions = document.createElement('div');
+  actions.className = 'o-stlog-bar__actions';
+  // 行时间戳是否带年份（顶栏的时间范围永远带年，这个开关只影响逐行显示）。
+  // 选择持久化到 settings/gui.ini 的 stlog_show_year。
+  var yearBtn = document.createElement('button');
+  yearBtn.className = 't-stlog-btn' + (state.stlogShowYear !== false ? ' is-on' : '');
+  yearBtn.textContent = '年';
+  yearBtn.title = '行时间戳显示年份（顶栏始终带年）';
+  yearBtn.addEventListener('click', function () {
+    state.stlogShowYear = !(state.stlogShowYear !== false);
+    yearBtn.classList.toggle('is-on', state.stlogShowYear);
+    stlogRerender(tab);
+    if (typeof saveSettings === 'function') saveSettings();
+  });
+  var countEl = document.createElement('span');
+  countEl.className = 't-stlog-meta';
+  // Hex / 文本 切换：标签显示的是**当前**视图，点一下换另一种。
+  var modeBtn = document.createElement('button');
+  modeBtn.className = 't-stlog-btn';
+  modeBtn.textContent = 'Hex';
+  modeBtn.title = 'Hex / 文本 视图切换';
+  modeBtn.addEventListener('click', function () { stlogToggleMode(tab); });
+  var exportBtn = document.createElement('button');
+  exportBtn.className = 't-stlog-btn';
+  exportBtn.textContent = '导出文本';
+  exportBtn.addEventListener('click', function () { stlogExport(path, exportBtn); });
+  actions.appendChild(countEl);
+  actions.appendChild(yearBtn);
+  actions.appendChild(modeBtn);
+  actions.appendChild(exportBtn);
+
+  bar.appendChild(infoBox);
+  bar.appendChild(actions);
+  page.appendChild(bar);
+
+  var content = document.createElement('div');
+  content.className = 'o-stlog-rows t-stlog-rows';
+  page.appendChild(content);
+
+  var more = document.createElement('div');
+  more.className = 'o-stlog-more';
+  var moreBtn = document.createElement('button');
+  moreBtn.className = 't-stlog-btn';
+  moreBtn.textContent = '加载更多';
+  more.addEventListener('click', function () { stlogLoad(tab); });
+  more.appendChild(moreBtn);
+  content.appendChild(more);
+
+  var oldPage = getActivePage();
+  if (oldPage) oldPage.hide();
+  if (state._welcomePage) state._welcomePage.hide();
+
+  var tab = {
+    id: state.tabCounter++,
+    label: stlogBaseName(path),
+    type: 'stlog',
+    path: path,
+    portOpen: false,
+    mode: 'single',
+    source: 'gui',
+    _stlog: {
+      offset: 0, total: 0, loaded: false, loading: false, rendered: false,
+      mode: 'hex', frames: [], modeBtn: modeBtn,
+      content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
+    },
+    _page: {
+      root: page,
+      show: function () {
+        page.style.display = '';
+        if (!tab._stlog.loaded && !tab._stlog.loading) stlogLoad(tab);
+      },
+      hide: function () { page.style.display = 'none'; },
+      destroy: function () { page.remove(); }
+    }
+  };
+  state.tabs.push(tab);
+  var mc = document.getElementById('mainContent');
+  if (mc) mc.appendChild(page);
+
+  state.activeTab = state.tabs.length - 1;
+  state.currentMode = 'single';
+  page.style.display = '';
+  renderTabs();
+  updateOpenBtn();
+  updateEmptyState();
+  // 关键：遮罩是按「当前活动标签」判定的，直接改 state.activeTab 不会触发重算。
+  // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
+  updateDaemonUI();
+  stlogLoad(tab);
+  return tab;
+}
+
+// chooseOpenFile 弹系统文件对话框选一个 .stlog，再开成文件标签页。
+//
+// 「新建会话 → 从文件打开」这条路不碰守护进程，所以选择页离线时只放行它。
+function chooseOpenFile() {
+  window.go.main.App.PickStlogFile().then(function (path) {
+    if (!path) return; // 用户取消
+    // 先关选择页再开文件页：反过来的话 closeTab 可能把焦点从新标签挪走
+    var idx = state.tabs.findIndex(function (t) { return t.type === 'new'; });
+    if (idx >= 0) closeTab(idx);
+    openStlogTab(path);
+  }).catch(function (err) {
+    showAlert('打开失败', String(err), null, true);
+  });
+}
+
+// ---- 拖入注册 ----
 //
 // 用 window.runtime / window.go 而不是 import：index.html 是经典 <script>，
 // wailsjs/ 下都是 ES 模块，混用会抛错。
@@ -5664,6 +6104,10 @@ function applySendRatio() {
       'App = ' + (window.go && window.go.main ? typeof window.go.main.App : 'n/a'),
       'OpenStlogFile = ' + (window.go && window.go.main && window.go.main.App
                             ? typeof window.go.main.App.OpenStlogFile : 'n/a'),
+      'ReadStlogFrames = ' + (window.go && window.go.main && window.go.main.App
+                            ? typeof window.go.main.App.ReadStlogFrames : 'n/a'),
+      'ExportStlogText = ' + (window.go && window.go.main && window.go.main.App
+                            ? typeof window.go.main.App.ExportStlogText : 'n/a'),
       'enableWailsDragAndDrop = ' + (window.wails && window.wails.flags
                             ? window.wails.flags.enableWailsDragAndDrop : 'n/a')
     ].join('\n');
@@ -5680,62 +6124,27 @@ function applySendRatio() {
     window.alert(title + '\n\n' + msg);
   }
 
-  function pad(n, w) { var s = String(n); while (s.length < w) s = ' ' + s; return s; }
-
-  var DIR_NAMES = { 0: 'sys', 1: 'rx', 2: 'tx', 3: 'p1', 4: 'p2' };
-  function dirName(d) { return DIR_NAMES[d & 0x7f] || ('?' + (d & 0x7f)); }
-
-  function summaryText(info) {
-    var out = [];
-    out.push('文件: ' + info.path);
-    out.push('大小: ' + info.size + ' B    页: ' + info.pages +
-             '    记录: ' + info.records + '    帧: ' + info.frames);
-    out.push('rx/tx: ' + info.rxTotal + ' / ' + info.txTotal + ' B');
-    if (info.settings) {
-      out.push('设置: ' + (info.settings.label || '') + '  (' + (info.settings.uuid || '') + ')');
-    }
-    if (info.recovered && info.recovered.length) {
-      out.push('已从影子页恢复: ' + info.recovered.join(', '));
-    }
-    if (info.brokenChain) out.push('警告: 续片链在页边界被切断，有一帧不完整');
-    if (info.stoppedAt) {
-      out.push('停止于偏移 ' + info.stoppedAt + (info.stopErr ? '（' + info.stopErr + '）' : ''));
-    }
-    out.push('');
-    (info.preview || []).forEach(function (f, i) {
-      out.push((f.partial ? '!' : ' ') + pad(i, 4) + '  ' +
-               new Date(f.ts).toLocaleTimeString() + '  ' +
-               dirName(f.dir) + '  ' + pad(f.len, 6) + '  ' + f.head);
-    });
-    var shown = (info.preview || []).length;
-    if (info.frames > shown) out.push('... 其余 ' + (info.frames - shown) + ' 帧未显示');
-    return out.join('\n');
-  }
-
-  function baseName(p) { return p.split(/[\\/]/).pop(); }
-
-  function showFile(path) {
-    window.go.main.App.OpenStlogFile(path).then(function (info) {
-      var text = summaryText(info);
-      if (window.console) console.log('[stlog] ' + path + '\n' + text);
-      say('.stlog 摘要 — ' + baseName(path), text, true);
-    }).catch(function (err) {
-      var msg = path + '\n\n' + String(err);
-      if (window.console) console.error('[stlog] ' + msg);
-      say('打不开 .stlog', msg, true);
-    });
-  }
-
+  // 拖进来的 .stlog 一律开成标签页；打不开才弹错误框（见 openStlogTab）。
   function onDrop(x, y, paths) {
-    var files = (paths || []).filter(function (p) { return /\.stlog$/i.test(p); });
-    files.forEach(showFile);
+    (paths || []).filter(function (p) { return /\.stlog$/i.test(p); }).forEach(function (p) {
+      try {
+        openStlogTab(p);
+      } catch (err) {
+        if (window.console) console.error('[stlog] ' + p, err);
+        say('打不开 .stlog', p + '\n\n' + String(err), true);
+      }
+    });
   }
 
   function install() {
     if (window[INSTALLED_KEY]) return true;
     if (!window.runtime || typeof window.runtime.OnFileDrop !== 'function') return false;
     if (!window.go || !window.go.main || !window.go.main.App) return false;
-    if (typeof window.go.main.App.OpenStlogFile !== 'function') return false;
+    // 要求的是标签页真正用到的两个绑定：老 exe 只有 OpenStlogFile，
+    // 配新前端时会因为缺 ReadStlogFrames 而开不出页签——这时宁可弹诊断框，
+    // 也别让用户以为"拖放又没反应"。
+    if (typeof window.go.main.App.ReadStlogFrames !== 'function') return false;
+    if (typeof window.go.main.App.ExportStlogText !== 'function') return false;
     window.runtime.OnFileDrop(onDrop, false); // false = 整窗口接收，不需要 drop-target 元素
     window[INSTALLED_KEY] = true;
     if (window.console) console.log('[stlog] drag-and-drop registered');

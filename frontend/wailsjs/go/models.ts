@@ -106,6 +106,7 @@ export namespace main {
 	    autoCreateSession: boolean;
 	    autoSaveHistory: boolean;
 	    displayColors: string;
+	    stlogShowYear: boolean;
 	    serial: SerialDefaults;
 	    autoSend: AutoSendDefaults;
 	    append: AppendDefaults;
@@ -138,6 +139,7 @@ export namespace main {
 	        this.autoCreateSession = source["autoCreateSession"];
 	        this.autoSaveHistory = source["autoSaveHistory"];
 	        this.displayColors = source["displayColors"];
+	        this.stlogShowYear = source["stlogShowYear"];
 	        this.serial = this.convertValues(source["serial"], SerialDefaults);
 	        this.autoSend = this.convertValues(source["autoSend"], AutoSendDefaults);
 	        this.append = this.convertValues(source["append"], AppendDefaults);

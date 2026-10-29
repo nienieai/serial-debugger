@@ -28,6 +28,8 @@ export function DisconnectSession(arg1:string):Promise<void>;
 
 export function EncodeTextForSend(arg1:string,arg2:string):Promise<string>;
 
+export function ExportStlogText(arg1:string):Promise<Record<string, any>>;
+
 export function ForwardConnect(arg1:string,arg2:main.SerialConfig,arg3:main.SerialConfig):Promise<void>;
 
 export function ForwardCreate(arg1:string,arg2:number,arg3:string,arg4:number):Promise<Record<string, any>>;
@@ -92,7 +94,11 @@ export function OpenSession(arg1:main.SerialConfig):Promise<string>;
 
 export function OpenStlogFile(arg1:string):Promise<Record<string, any>>;
 
+export function PickStlogFile():Promise<string>;
+
 export function ReadMultistrEntries(arg1:string):Promise<string>;
+
+export function ReadStlogFrames(arg1:string,arg2:number,arg3:number):Promise<Record<string, any>>;
 
 export function RefreshPorts():Promise<Array<Record<string, any>>>;
 

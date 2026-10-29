@@ -183,7 +183,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .c-mode-card:active:not(:disabled) { transform: translateY(1px); }
 .c-mode-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.c-mode-card:disabled { cursor: default; }
+.c-mode-card:disabled { cursor: default; opacity: 0.45; }
 
 .c-mode-card__head { display: flex; align-items: center; gap: 12px; }
 .c-mode-card__icon {
@@ -193,6 +193,8 @@ button:disabled:active { transform: none; box-shadow: none; }
   transition: background .18s, color .18s;
 }
 .c-mode-card--forward .c-mode-card__icon { color: var(--fwd-p1); }
+/* 文件卡：绿=不依赖守护进程，离线也能用 */
+.c-mode-card--file .c-mode-card__icon { color: var(--green); }
 .c-mode-card:hover:not(:disabled) .c-mode-card__icon { background: var(--hover); }
 .c-mode-card__names { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .c-mode-card__name { font-size: 16px; font-weight: 600; }
@@ -216,6 +218,7 @@ button:disabled:active { transform: none; box-shadow: none; }
   transition: filter .18s;
 }
 .c-mode-card--forward .c-mode-card__cta { background: var(--fwd-p1); }
+.c-mode-card--file .c-mode-card__cta { background: var(--green); }
 .c-mode-card:hover:not(:disabled) .c-mode-card__cta { filter: brightness(1.08); }
 .c-mode-card__cta-arrow { transition: transform .18s; }
 .c-mode-card:hover:not(:disabled) .c-mode-card__cta-arrow { transform: translateX(4px); }
@@ -594,6 +597,16 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 .c-tabpop__hint { margin-top: 6px; color: var(--placeholder); font-size: 11px; }
+/* 文件浮窗的一行一字段：布局放在 frow 上，长值（路径 / 时间范围 / 页记录帧串）
+   允许换行、右对齐，别把卡片撑破。排版在 fval 上。 */
+.c-tabpop__frow { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.c-tabpop__frow + .c-tabpop__frow { margin-top: 2px; }
+.c-tabpop__frow > :last-child { min-width: 0; text-align: right; }
+.c-tabpop__fval {
+  color: var(--fg); font-weight: 600; font-size: 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow-wrap: anywhere;
+}
 
 
 /* ---- 9. Components: Config Bar ---- */
@@ -2207,3 +2220,40 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+/* ---- 22. Components: .stlog 文件标签页 ---- */
+/* 顶栏只做布局，视觉在 t-stlog-bar 上（见 CLAUDE.md 的 o-/t- 职责分离） */
+.o-stlog-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; }
+.o-stlog-bar__info { flex: 1 1 auto; min-width: 0; }
+.o-stlog-bar__actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.o-stlog-more { display: flex; justify-content: center; }
+/* 文件页自己滚：不复用 .display-content，因为它把原生滚动条藏了（改由
+   .hist-scrollbar 自绘），而自绘那套跟会话页的分页/缓存绑在一起。 */
+.o-stlog-rows { flex: 1; min-height: 0; overflow-y: auto; }
+
+.t-stlog-rows {
+  padding: 8px 16px 8px 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 15px; line-height: 1.6;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+}
+
+.t-stlog-bar { padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.t-stlog-name {
+  font-size: 13px; font-weight: 600; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t-stlog-meta {
+  font-size: 11.5px; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t-stlog-btn {
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 12px; font-size: 12px; cursor: pointer;
+}
+.t-stlog-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+/* 开关态（如「年」）：按住不放的按钮要有别于普通按钮 */
+.t-stlog-btn.is-on { color: var(--accent); border-color: var(--accent); }
+.t-stlog-btn:active { transform: scale(0.96); }
+.t-stlog-btn:disabled { opacity: .5; cursor: default; }

@@ -1069,7 +1069,7 @@ func (a *App) SearchHistory(file, keyword string, limit int, offset int64) map[s
 // OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
 //
 // 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，
-// 分页/搜索/导出属于后续接入，见 0.8.3-dev/会话文件方案-v1.4.md 的 P1 阶段。
+// 分页/搜索/导出属于后续接入，见 docs/archive/会话文件方案-v1.4.md 的 P1 阶段。
 func (a *App) OpenStlogFile(path string) (map[string]any, error) {
 	info, err := sessionfile.ReadFile(path)
 	if err != nil {
@@ -1115,6 +1115,154 @@ func (a *App) OpenStlogFile(path string) (map[string]any, error) {
 		out["stopErr"] = info.StopErr.Error()
 	}
 	return out, nil
+}
+
+// maxStlogOrigins 是「来源汇总」的条数上限。一份录制正常只有几个客户端，
+// 真出现几百个也不该把响应撑大。
+const maxStlogOrigins = 32
+
+// ReadStlogFrames 分页读 .stlog 的帧，给 GUI 的文件标签页渲染。
+//
+// 每次调用都重读整个文件：v1.4 明确不建 sidecar 索引（§2.12），单文件通常几 MB，
+// 重读几十毫秒可以接受；真要读几百 MB 的录制，再上增量索引。
+//
+// limit 上限 1000 帧——一帧最大 4016 B，转成十六进制是 8 KB 字符串，一次给太多
+// 会让过桥的 JSON 和 DOM 都爆掉。标签页首屏 500 帧，其余靠"加载更多"。
+func (a *App) ReadStlogFrames(path string, offset, limit int) (map[string]any, error) {
+	info, err := sessionfile.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	total := len(info.Frames)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	frames := make([]map[string]any, 0, end-offset)
+	for i := offset; i < end; i++ {
+		f := info.Frames[i]
+		frames = append(frames, map[string]any{
+			"index":   i,
+			"ts":      f.Ts,
+			"dir":     f.Dir,
+			"len":     len(f.Payload),
+			"hex":     strings.ToUpper(hex.EncodeToString(f.Payload)),
+			"partial": f.Partial,
+			"origin":  f.OriginStr,
+		})
+	}
+
+	out := map[string]any{
+		"path":        path,
+		"size":        info.Size,
+		"pages":       len(info.Pages),
+		"records":     info.Records,
+		"total":       total,
+		"offset":      offset,
+		"frames":      frames,
+		"rxTotal":     info.RxTotal,
+		"txTotal":     info.TxTotal,
+		"truncated":   info.Truncated,
+		"brokenChain": info.BrokenChain,
+		"recovered":   info.Recovered,
+		"stoppedAt":   info.StoppedAt,
+	}
+	// 首末帧时间：顶栏要显示「2023-11-15 06:13:20.000 ~ 06:13:20.019」。
+	// 文件里存的是绝对毫秒时间戳，年份本来就在数据里，只是逐行显示时刻意省了。
+	if total > 0 {
+		out["firstTs"] = info.Frames[0].Ts
+		out["lastTs"] = info.Frames[total-1].Ts
+	}
+	// 来源汇总：整份文件里出现过的 origin 字符串，按首次出现的顺序去重。
+	// 顶栏拿它显示「来源 GUI · CLI」；没有来源的文件显示「无来源」——
+	// 空着不说话，最容易让人以为来源功能没做（样本文件就是这样）。
+	seen := make(map[string]bool, 8)
+	origins := make([]string, 0, 8)
+	for i := range info.Frames {
+		s := info.Frames[i].OriginStr
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		origins = append(origins, s)
+		if len(origins) >= maxStlogOrigins {
+			break
+		}
+	}
+	out["origins"] = origins
+	if info.Settings != nil {
+		out["settings"] = info.Settings
+	}
+	if info.StopErr != nil {
+		out["stopErr"] = info.StopErr.Error()
+	}
+	return out, nil
+}
+
+// PickStlogFile 弹系统打开对话框选一个 .stlog，返回绝对路径。
+//
+// 用户取消时返回空串（不是错误）——前端据此静默作罢。单开一个方法而不是并到
+// ReadStlogFrames 里：对话框是用户主动触发的动作，"新建会话 → 从文件打开"
+// 和拖入共用同一条打开路径。
+func (a *App) PickStlogFile() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "打开 .stlog 会话文件",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "会话文件 (*.stlog)", Pattern: "*.stlog"},
+			{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
+		},
+	})
+}
+
+// ExportStlogText 弹保存对话框，把 .stlog 导成"一行一帧"的纯文本。
+//
+// 格式由 sessionfile.WriteText 决定（CRLF、十六进制每 32 B 换行、系统帧按文本），
+// 目标文件双击就能用记事本打开。用户取消时返回 {"canceled": true}，不算错误。
+func (a *App) ExportStlogText(path string) (map[string]any, error) {
+	info, err := sessionfile.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	out, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "导出 .stlog 文本",
+		DefaultFilename: base + ".txt",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "文本文件 (*.txt)", Pattern: "*.txt"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return map[string]any{"canceled": true}, nil
+	}
+	f, err := os.Create(out)
+	if err != nil {
+		return nil, err
+	}
+	n, werr := sessionfile.WriteText(f, info)
+	cerr := f.Close()
+	if werr != nil {
+		return nil, werr
+	}
+	if cerr != nil {
+		return nil, cerr
+	}
+	return map[string]any{"path": out, "bytes": n, "frames": len(info.Frames)}, nil
 }
 
 // SetHistoryEnabled toggles auto-save for history files.

@@ -50,6 +50,10 @@ export function EncodeTextForSend(arg1, arg2) {
   return window['go']['main']['App']['EncodeTextForSend'](arg1, arg2);
 }
 
+export function ExportStlogText(arg1) {
+  return window['go']['main']['App']['ExportStlogText'](arg1);
+}
+
 export function ForwardConnect(arg1, arg2, arg3) {
   return window['go']['main']['App']['ForwardConnect'](arg1, arg2, arg3);
 }
@@ -178,8 +182,16 @@ export function OpenStlogFile(arg1) {
   return window['go']['main']['App']['OpenStlogFile'](arg1);
 }
 
+export function PickStlogFile() {
+  return window['go']['main']['App']['PickStlogFile']();
+}
+
 export function ReadMultistrEntries(arg1) {
   return window['go']['main']['App']['ReadMultistrEntries'](arg1);
+}
+
+export function ReadStlogFrames(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReadStlogFrames'](arg1, arg2, arg3);
 }
 
 export function RefreshPorts() {

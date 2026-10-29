@@ -125,6 +125,28 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 
 > 4 个可执行文件必须放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`。
 
+### 部署到开发测试目录
+
+```powershell
+.\deploy-dev.ps1            # 只同步产物（改了前端 / 语言包）
+.\deploy-dev.ps1 -Build     # 先重编译再部署（改了 Go 代码）
+```
+
+目标目录默认 `<仓库>\..\串口调试工具\0.8.3-dev`，可用 `-Target` 指定。
+
+之所以要脚本而不是只拷 exe，是因为**只换 exe 会有两处永远读到旧内容**：
+
+| 内容 | 原因 |
+| --- | --- |
+| `frontend\` | GUI 是 hotreload 构建，前端从 `<exe>\frontend\` 读盘，不读内嵌资源 |
+| `resources-system\` | 语言包 / 图标 / 主题的查找顺序是 `resources-system` → `resources` → 内嵌，内置层优先级最高 |
+
+脚本会把 4 个 exe、`frontend\`、`config\resources\`（→ `resources-system\`）一起同步，
+逐文件比对字节数，不一致非 0 退出。外置层 `resources\`（用户自己的语言包 / 主题）不碰。
+
+> 改了语言包记得**重启 GUI**：i18n 只在启动和切换语言时加载，hotreload 不盯
+> `resources-system\`。
+
 ## 源代码目录
 
 ```text

@@ -42,6 +42,10 @@ type AppSettings struct {
 	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
 	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
 	DisplayColors   string `json:"displayColors" ini:"display_colors"`
+	// StlogShowYear 控制 .stlog 文件页「行时间戳」是否带年份（MM-DD → YYYY-MM-DD）。
+	// 顶栏的时间范围永远带年，这个开关只影响逐行显示：带年一行宽 10 个字符，
+	// 紧凑优先的人可以关掉。默认开。
+	StlogShowYear bool `json:"stlogShowYear" ini:"stlog_show_year"`
 
 	Serial   SerialDefaults   `json:"serial" ini:"serial"`
 	AutoSend AutoSendDefaults `json:"autoSend" ini:"autosend"`
@@ -88,6 +92,7 @@ func defaultSettings() *AppSettings {
 		IconThemeID:       "",
 		Language:          "zh",
 		AutoCreateSession: true,
+		StlogShowYear:     true,
 		Serial: SerialDefaults{
 			Baud:        115200,
 			DataBits:    8,

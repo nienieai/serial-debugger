@@ -43,6 +43,11 @@ var _renderStart = -1; // DOM 窗口起点（cache 索引）
 var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
 var _atBottom = true;  // 用户是否贴着底部
 var _frozen = false;   // 冻结：锁定滚动，或用户往回翻离开了底部
+// 上一次 scroll 事件看到的 scrollTop。只靠 scrollHeight 判断"是否到底"会被
+// content-visibility 骗：行是屏外估值高度（contain-intrinsic-size），滚进视口后
+// 真实高度替换估值，scrollHeight 会凭空变大而 scrollTop 没动 —— 于是"明明在底部"
+// 被判成"离开底部"，自动跟滚就此停住、未读越攒越多。所以还要看 scrollTop 有没有变小。
+var _lastScrollTop = 0;
 var _healing = false;  // 未读提示自愈重绘时的递归挡板
 var _appendQueue = []; // 待渲染队列
 var _flushScheduled = false;
@@ -106,6 +111,7 @@ function _histReset() {
   _renderStart = -1;
   _renderEnd = -1;
   _atBottom = true;
+  _lastScrollTop = 0;
   _frozen = !!state.scrollLocked;
 }
 
@@ -467,6 +473,7 @@ function _stickToBottom(display) {
   if (!display) return;
   display.scrollTop = 1e9;
   _atBottom = true;
+  _lastScrollTop = display.scrollTop;   // 夹到底之后的真实值
 }
 
 // 只裁剪数据行，不碰提示行与占位块；始终执行（无论是否锁定/冻结）
@@ -768,6 +775,7 @@ function renderHistoryLines(entries, keepScroll) {
   if (!keepScroll) {
     display.scrollTop = 1e9;
     _atBottom = true;
+    _lastScrollTop = display.scrollTop;
   }
   display.onscroll = _onDisplayScroll;
   _updateUnreadChrome(display);
@@ -795,9 +803,21 @@ function _onDisplayScroll() {
   if (!display) return;
   // 滚动条只反映真实内容（未读改用右下角胶囊提示），所以到底的判断就是原生语义。
   var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
+  // 只有"scrollTop 变小"才算用户往回翻。内容长高（含 content-visibility 把估值
+  // 换成真实高度）也会触发 scroll 事件，此时 scrollTop 不变或变大，不能冻结——
+  // 否则跟滚会在某一批数据后停住，未读胶囊一路涨。
+  var movedUp = display.scrollTop < _lastScrollTop;
+  _lastScrollTop = display.scrollTop;
   var wasFrozen = _frozen;
   _atBottom = atBottom;
-  var shouldFreeze = !!state.scrollLocked || !atBottom;
+  var shouldFreeze;
+  if (state.scrollLocked) {
+    shouldFreeze = true;                       // 锁定了就不跟
+  } else if (wasFrozen) {
+    shouldFreeze = !atBottom;                  // 已冻结：真的回到底部才解冻
+  } else {
+    shouldFreeze = movedUp && !atBottom;       // 未冻结：只有用户往上滚才冻结
+  }
 
   if (wasFrozen && !shouldFreeze) {
     // 回到底部：解除冻结，把未读补上

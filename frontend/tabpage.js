@@ -561,7 +561,9 @@ function createModeChooserPage() {
 
 		// 底部整宽「开始 →」：视觉上是按钮，点击由整张卡片接管
 		var foot = span('c-mode-card__cta');
-		foot.appendChild(span('c-mode-card__cta-text', t('newtab.start', '开始'), 'newtab.start'));
+		foot.appendChild(span('c-mode-card__cta-text',
+			t(mode === 'file' ? 'newtab.open' : 'newtab.start', mode === 'file' ? '打开' : '开始'),
+			mode === 'file' ? 'newtab.open' : 'newtab.start'));
 		foot.appendChild(span('c-mode-card__cta-arrow', '→'));
 		card.appendChild(foot);
 
@@ -584,12 +586,23 @@ function createModeChooserPage() {
 			['newtab.forward_f2', '两端各自独立的波特率与串口参数'],
 			['newtab.forward_f3', '适合联调、透传与协议抓包']
 		]);
+	// 第三张卡：不碰串口，只读磁盘上的 .stlog —— 守护进程没起来也永远可用。
+	makeCard('file', icon('import', 20, 20), 'newtab.file', '从文件打开',
+		'newtab.file_desc', '浏览已录制的 .stlog 会话文件', [
+			['newtab.file_f1', '按帧浏览，可分页加载'],
+			['newtab.file_f2', 'Hex / 文本 两套视图'],
+			['newtab.file_f3', '一键导出成纯文本']
+		]);
 
 	head.appendChild(title);
 	head.appendChild(hint);
 	inner.appendChild(head);
 	inner.appendChild(grid);
 	page.appendChild(inner);
+
+	// 建页时按当前守护进程状态刷一次（离线时串口卡置灰，只留「从文件打开」）。
+	// 必须放在 grid 进 DOM 之后：在这之前 querySelectorAll 一张卡都找不到。
+	_syncChooserAvailability(page);
 
 	return {
 		root: page,
@@ -598,6 +611,27 @@ function createModeChooserPage() {
 		hide: function() { page.style.display = 'none'; },
 		destroy: function() { page.remove(); }
 	};
+}
+
+// _syncChooserAvailability 按守护进程状态刷新选择页：
+//   在线 —— 三张卡都能点；
+//   离线 —— 串口那两张置灰，「从文件打开」保持可用，副标题给出解释。
+// 做成独立函数而不是"建页时算一次"：用户完全可能停在这一页上去启动守护进程，
+// updateDaemonUI 每次状态变化都会回来调它。
+function _syncChooserAvailability(root) {
+	if (!root) return;
+	var online = !!(typeof state !== 'undefined' && state.daemonOnline);
+	var cards = root.querySelectorAll('.c-mode-card');
+	for (var i = 0; i < cards.length; i++) {
+		var isFile = cards[i].getAttribute('data-mode') === 'file';
+		cards[i].disabled = isFile ? false : !online;
+	}
+	var hint = root.querySelector('.o-chooser__hint');
+	if (hint) {
+		hint.textContent = online
+			? t('newtab.hint', '选择一种模式开始')
+			: t('newtab.offline_hint', '守护进程未运行：现在只能从文件打开');
+	}
 }
 
 // ---- active page helpers ----

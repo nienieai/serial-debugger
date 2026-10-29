@@ -10,3 +10,7 @@ multistr/
 # 系统文件
 Thumbs.db
 Desktop.ini
+
+# 设计文档归档：只在本机留档，不进 git
+# （会话文件方案 v1~v1.4 与配套布局/边界图，落盘位置 docs/archive/）
+docs/archive/

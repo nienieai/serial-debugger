@@ -23,7 +23,7 @@ type Settings struct {
 // whole page; the shadow is only written when the page has been written before
 // (see pageTouched).
 type Writer struct {
-	f   *os.File
+	f    *os.File
 	path string
 
 	tailOff      int64  // offset of the current tail page

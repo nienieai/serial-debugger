@@ -15,7 +15,7 @@ import (
 //
 // 这一层只做「直接落盘」：不做文件轮转/分卷，不参与 history.attach/new/detach
 // 那套文件流转，读取侧也不改——GUI 仍走 .log + 环形缓冲，.stlog 靠拖进界面或
-// `serial-cli stlog-read` 查看。格式规范见 0.8.3-dev/会话文件方案-v1.4.md。
+// `serial-cli stlog-read` 查看。格式规范见 docs/archive/会话文件方案-v1.4.md。
 //
 // 三个入口都挂在既有路径上，不新增钩子点：
 //   - serial.go 的 newHistoryFile()      → openStlogFile()：建 .log 时顺带建 .stlog

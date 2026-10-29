@@ -23,15 +23,15 @@ type PageSummary struct {
 
 // FileInfo is the full decoded view of a .stlog file.
 type FileInfo struct {
-	Path      string
-	Size      int64
-	Settings  *Settings
-	Pages     []PageSummary
-	Frames    []Frame
-	Records   int
-	Recovered []int64 // page offsets that had to be restored from a shadow
-	StoppedAt int64   // offset of the first unusable page (0 = none)
-	StopErr   error
+	Path        string
+	Size        int64
+	Settings    *Settings
+	Pages       []PageSummary
+	Frames      []Frame
+	Records     int
+	Recovered   []int64 // page offsets that had to be restored from a shadow
+	StoppedAt   int64   // offset of the first unusable page (0 = none)
+	StopErr     error
 	Truncated   bool // last frame never terminated
 	BrokenChain bool // a continuation chain was cut at a page boundary
 	RxTotal     uint64

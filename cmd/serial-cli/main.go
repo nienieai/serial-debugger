@@ -63,8 +63,8 @@ func main() {
 		printHelp()
 	case "check":
 		cmdCheck()
-	case "stlog-read", "stlog-verify", "stlog-dump":
-		// .stlog 是离线文件格式的检查工具，不依赖守护进程，必须在
+	case "stlog-read", "stlog-verify", "stlog-dump", "stlog-export":
+		// .stlog 是离线文件格式的工具，不依赖守护进程，必须在
 		// runCommand 之前分流，否则会先尝试连 IPC 而失败。
 		cmdStlog(args)
 	default:
@@ -195,14 +195,18 @@ func cmdCheck() {
 	}
 }
 
-// cmdStlog 是 .stlog（v1.4 会话文件）的离线检查命令。
+// cmdStlog 是 .stlog（v1.4 会话文件）的离线命令。
 //
-// 三条子命令都不碰守护进程：.stlog 的卖点之一是"文件即真相"，能脱离录制方
+// 这些子命令都不碰守护进程：.stlog 的卖点之一是"文件即真相"，能脱离录制方
 // 独立校验，所以它们必须在 runCommand 之前分流。
 func cmdStlog(args []string) {
 	if len(args) < 2 {
-		printErr("用法: serial-cli stlog-read|stlog-verify|stlog-dump <file.stlog>")
+		printErr("用法: serial-cli stlog-read|stlog-verify|stlog-dump|stlog-export <file.stlog>")
 		os.Exit(2)
+	}
+	if args[0] == "stlog-export" {
+		cmdStlogExport(args)
+		return
 	}
 	path := args[1]
 
@@ -228,6 +232,79 @@ func cmdStlog(args []string) {
 	}
 	printStlogSummary(info)
 	printStlogFrames(info, limit)
+}
+
+// cmdStlogExport 把 .stlog 导成一行一帧的纯文本。
+//
+// 默认写 stdout，可以直接 `> out.txt`；`-o` 直接落盘（省一次重定向，也方便在
+// Windows 上避开控制台编码）。`--limit N` 只导前 N 帧，用来快速取样。
+//
+// 格式由 sessionfile.WriteText 决定：CRLF 行尾、十六进制每 32 B 换行、
+// 系统帧按文本输出——目标就是"双击能用记事本打开"。
+func cmdStlogExport(args []string) {
+	if len(args) < 2 {
+		printErr("用法: serial-cli stlog-export <file> [--limit N] [-o out.txt]")
+		os.Exit(2)
+	}
+	path := args[1]
+	limit := 0
+	outPath := ""
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--limit":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					limit = n
+				}
+				i++
+			}
+		case "-o", "--out":
+			if i+1 < len(args) {
+				outPath = args[i+1]
+				i++
+			}
+		default:
+			printErr("未知参数: %s", args[i])
+			os.Exit(2)
+		}
+	}
+
+	info, err := sessionfile.ReadFile(path)
+	if err != nil {
+		printErr("读取失败: %v", err)
+		os.Exit(1)
+	}
+	total := len(info.Frames)
+	if limit > 0 && limit < total {
+		info.Frames = info.Frames[:limit]
+	}
+
+	if outPath == "" {
+		if _, err := sessionfile.WriteText(os.Stdout, info); err != nil {
+			printErr("导出失败: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+	f, err := os.Create(outPath)
+	if err != nil {
+		printErr("创建文件失败: %v", err)
+		os.Exit(1)
+	}
+	n, werr := sessionfile.WriteText(f, info)
+	cerr := f.Close()
+	if werr != nil {
+		printErr("导出失败: %v", werr)
+		os.Exit(1)
+	}
+	if cerr != nil {
+		printErr("关闭文件失败: %v", cerr)
+		os.Exit(1)
+	}
+	fmt.Printf("已导出 %d 帧 → %s (%d B)\n", len(info.Frames), outPath, n)
+	if len(info.Frames) < total {
+		fmt.Printf("（--limit 截断：文件共 %d 帧，头部 大小/页/记录 仍是整个文件的）\n", total)
+	}
 }
 
 func printStlogSummary(info *sessionfile.FileInfo) {
@@ -266,7 +343,7 @@ func printStlogFrames(info *sessionfile.FileInfo, limit int) {
 		return
 	}
 	fmt.Println()
-	fmt.Printf("%6s  %-18s  %-4s  %6s  %s\n", "#", "time", "dir", "len", "payload[0:8]")
+	fmt.Printf("%6s  %-18s  %-4s  %-12s  %6s  %s\n", "#", "time", "dir", "origin", "len", "payload[0:8]")
 	n := len(info.Frames)
 	if n > limit {
 		n = limit
@@ -277,10 +354,16 @@ func printStlogFrames(info *sessionfile.FileInfo, limit int) {
 		if f.Partial {
 			mark = "!"
 		}
-		fmt.Printf("%s%5d  %-18s  %-4s  %6d  %s\n",
+		// 来源列：Rx 恒空；Tx 是发起者（gui-… / cli-… / auto / multistr），
+		// 格式见 daemon/ipc.go 的 originOf。截到 12 字符保表宽，完整值看 dump。
+		origin := f.OriginStr
+		if len(origin) > 12 {
+			origin = origin[:12]
+		}
+		fmt.Printf("%s%5d  %-18s  %-4s  %-12s  %6d  %s\n",
 			mark, i,
 			time.UnixMilli(int64(f.Ts)).Format("01-02 15:04:05.000"),
-			stlogDirName(f.Dir), len(f.Payload), stlogHead(f.Payload, 8))
+			stlogDirName(f.Dir), origin, len(f.Payload), stlogHead(f.Payload, 8))
 	}
 	if rest := len(info.Frames) - n; rest > 0 {
 		fmt.Printf("... 其余 %d 帧省略（第二个参数可指定条数）\n", rest)
@@ -1637,7 +1720,10 @@ func printHelp() {
   stlog-read   <file>                读取 .stlog 并打印摘要与前 20 帧
   stlog-verify <file>                校验 .stlog 结构（干净=0，有问题=1）
   stlog-dump   <file>                列出 .stlog 每页的页头信息
-                                     三者均为离线操作，不需要守护进程
+  stlog-export <file> [--limit N] [-o out.txt]
+                                     导出成一行一帧的纯文本（CRLF，记事本能开）
+                                     默认写 stdout，也可用 -o 直接落盘
+                                     四条均为离线操作，不需要守护进程
 
 诊断:
   stats   [processId]                查看进程 I/O 统计（速率/字节/错误）
