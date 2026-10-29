@@ -16,6 +16,7 @@ import (
 	"github.com/nienieai/serial-debugger/config"
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/protocol"
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 )
 
@@ -62,6 +63,10 @@ func main() {
 		printHelp()
 	case "check":
 		cmdCheck()
+	case "stlog-read", "stlog-verify", "stlog-dump":
+		// .stlog 是离线文件格式的检查工具，不依赖守护进程，必须在
+		// runCommand 之前分流，否则会先尝试连 IPC 而失败。
+		cmdStlog(args)
 	default:
 		runCommand(args)
 	}
@@ -188,6 +193,165 @@ func cmdCheck() {
 	} else {
 		fmt.Println(paintOut(fmt.Sprintf("守护进程未运行 (%v)", err), ansiRed))
 	}
+}
+
+// cmdStlog 是 .stlog（v1.4 会话文件）的离线检查命令。
+//
+// 三条子命令都不碰守护进程：.stlog 的卖点之一是"文件即真相"，能脱离录制方
+// 独立校验，所以它们必须在 runCommand 之前分流。
+func cmdStlog(args []string) {
+	if len(args) < 2 {
+		printErr("用法: serial-cli stlog-read|stlog-verify|stlog-dump <file.stlog>")
+		os.Exit(2)
+	}
+	path := args[1]
+
+	if args[0] == "stlog-verify" {
+		cmdStlogVerify(path)
+		return
+	}
+
+	info, err := sessionfile.ReadFile(path)
+	if err != nil {
+		printErr("读取失败: %v", err)
+		os.Exit(1)
+	}
+	if args[0] == "stlog-dump" {
+		printStlogPages(info)
+		return
+	}
+	limit := 20
+	if len(args) >= 3 {
+		if n, err := strconv.Atoi(args[2]); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	printStlogSummary(info)
+	printStlogFrames(info, limit)
+}
+
+func printStlogSummary(info *sessionfile.FileInfo) {
+	fmt.Printf("文件    : %s (%d B)\n", info.Path, info.Size)
+	if s := info.Settings; s != nil {
+		fmt.Printf("设置    : uuid=%s created=%s label=%q\n", s.UUID, s.Created, s.Label)
+	} else {
+		fmt.Printf("设置    : %s\n", paintOut("<无法读取>", ansiYellow))
+	}
+	fmt.Printf("页/记录 : %d 页 / %d 条\n", len(info.Pages), info.Records)
+	line := fmt.Sprintf("%d", len(info.Frames))
+	if info.Truncated {
+		line += "（末帧未结束）"
+	}
+	fmt.Printf("帧      : %s\n", line)
+	fmt.Printf("rx/tx   : %d / %d B\n", info.RxTotal, info.TxTotal)
+	if len(info.Recovered) > 0 {
+		fmt.Printf("恢复    : 从影子页恢复 %v\n", info.Recovered)
+	}
+	if info.BrokenChain {
+		fmt.Println(paintOut("警告    : 续片链在页边界被切断，有一帧不完整", ansiYellow))
+	}
+	if info.StoppedAt != 0 {
+		fmt.Printf("停止    : 偏移 %d（%v）\n", info.StoppedAt, info.StopErr)
+		// 撕裂的尾页只有在既没恢复、也没被断链解释时才是"数据真丢了"。
+		if len(info.Recovered) == 0 && !info.BrokenChain {
+			fmt.Println(paintOut("警告    : 撕裂的尾页无法恢复，其中的数据已丢失", ansiYellow))
+		}
+	}
+}
+
+// printStlogFrames 用 ASCII 表头而不是中文表头：Go 的 %-Ns 按**字节**补空格，
+// 中文一列 3 字节却只显示 2 格宽，中英混排的表头必然错位。
+func printStlogFrames(info *sessionfile.FileInfo, limit int) {
+	if len(info.Frames) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Printf("%6s  %-18s  %-4s  %6s  %s\n", "#", "time", "dir", "len", "payload[0:8]")
+	n := len(info.Frames)
+	if n > limit {
+		n = limit
+	}
+	for i := 0; i < n; i++ {
+		f := info.Frames[i]
+		mark := " "
+		if f.Partial {
+			mark = "!"
+		}
+		fmt.Printf("%s%5d  %-18s  %-4s  %6d  %s\n",
+			mark, i,
+			time.UnixMilli(int64(f.Ts)).Format("01-02 15:04:05.000"),
+			stlogDirName(f.Dir), len(f.Payload), stlogHead(f.Payload, 8))
+	}
+	if rest := len(info.Frames) - n; rest > 0 {
+		fmt.Printf("... 其余 %d 帧省略（第二个参数可指定条数）\n", rest)
+	}
+}
+
+func printStlogPages(info *sessionfile.FileInfo) {
+	fmt.Printf("%4s  %-10s  %-7s  %-12s  %-5s  %s\n",
+		"pg", "offset", "commit", "firstRec", "recs", "rx/tx")
+	for i, p := range info.Pages {
+		first := fmt.Sprintf("%d", p.FirstRecOff)
+		if p.FirstRecOff == sessionfile.NoFrameStart {
+			first = "0xFFFF"
+		}
+		note := ""
+		if p.Recovered {
+			note = "  (从影子恢复)"
+		}
+		fmt.Printf("%4d  %-10d  %-7d  %-12s  %-5d  %d/%d%s\n",
+			i, p.Offset, p.CommittedLen, first, p.Rec, p.RxTotal, p.TxTotal, note)
+	}
+}
+
+func cmdStlogVerify(path string) {
+	rep, err := sessionfile.Verify(path)
+	if err != nil {
+		printErr("校验失败: %v", err)
+		os.Exit(1)
+	}
+	fmt.Printf("文件    : %s\n", path)
+	fmt.Printf("页/记录 : %d 页 / %d 条\n", rep.Pages, rep.Records)
+	fmt.Printf("帧      : %d\n", rep.Frames)
+	if len(rep.Recovered) > 0 {
+		fmt.Printf("恢复    : %v\n", rep.Recovered)
+	}
+	fmt.Printf("页内浪费: min=%d max=%d（已封印页，上限 27）\n", rep.WastedMin, rep.WastedMax)
+	fmt.Printf("末页剩余: %d B\n", rep.LastPageFree)
+	for _, w := range rep.Warnings {
+		fmt.Println(paintOut("警告: "+w, ansiYellow))
+	}
+	if len(rep.Problems) == 0 {
+		fmt.Println(paintOut("OK: 无结构问题", ansiGreen))
+		return
+	}
+	for _, p := range rep.Problems {
+		fmt.Println(paintOut("问题: "+p, ansiRed))
+	}
+	os.Exit(1)
+}
+
+func stlogDirName(d uint8) string {
+	switch d {
+	case sessionfile.DirSystem:
+		return "sys"
+	case sessionfile.DirRx:
+		return "rx"
+	case sessionfile.DirTx:
+		return "tx"
+	case sessionfile.DirP1:
+		return "p1"
+	case sessionfile.DirP2:
+		return "p2"
+	}
+	return fmt.Sprintf("?%d", d)
+}
+
+func stlogHead(b []byte, n int) string {
+	if len(b) > n {
+		b = b[:n]
+	}
+	return fmt.Sprintf("% x", b)
 }
 
 func cmdStart() {
@@ -1468,6 +1632,12 @@ func printHelp() {
   history-attach <pid> <file>        为进程附加历史文件 (加载内容+继续追加)
   history-new [pid]                  为进程新建历史文件
   history-detach [pid]               分离进程的当前历史文件
+
+会话文件 (.stlog, v1.4 格式):
+  stlog-read   <file>                读取 .stlog 并打印摘要与前 20 帧
+  stlog-verify <file>                校验 .stlog 结构（干净=0，有问题=1）
+  stlog-dump   <file>                列出 .stlog 每页的页头信息
+                                     三者均为离线操作，不需要守护进程
 
 诊断:
   stats   [processId]                查看进程 I/O 统计（速率/字节/错误）
