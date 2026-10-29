@@ -3520,9 +3520,168 @@ function initTabPopup() {
   if (scroll) scroll.addEventListener('scroll', _tabPopReposition, { passive: true });
 }
 
+// ---- 标签右键菜单（自绘，复用顶部菜单的 .menu-dropdown 皮肤） ----
+//
+// 为什么不用原生菜单：Wails 的菜单是应用级菜单栏，不能按标签弹出；原生
+// contextmenu 又会盖住自绘菜单并且样式不可控。这里直接在 body 下挂一个
+// fixed 浮层，跟随鼠标、贴边翻转，点空白 / Esc / 滚轮 / 失焦都会关。
+var _tabMenuEl = null;
+
+function _tabMenuOnDown(e) {
+  if (_tabMenuEl && !_tabMenuEl.contains(e.target)) _tabMenuClose();
+}
+
+function _tabMenuOnKey(e) {
+  if (e.key === 'Escape') _tabMenuClose();
+}
+
+function _tabMenuClose() {
+  if (!_tabMenuEl) return;
+  var el = _tabMenuEl;
+  _tabMenuEl = null;
+  if (el.parentNode) el.parentNode.removeChild(el);
+  document.removeEventListener('pointerdown', _tabMenuOnDown, true);
+  document.removeEventListener('keydown', _tabMenuOnKey, true);
+  document.removeEventListener('scroll', _tabMenuClose, true);
+  window.removeEventListener('blur', _tabMenuClose);
+  window.removeEventListener('resize', _tabMenuClose);
+}
+
+// 菜单项沿用顶部菜单的四栏网格：勾选位 | 文本 | 快捷键 | 箭头。
+function _tabMenuItem(label, opts) {
+  opts = opts || {};
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'tab-menu-item';
+  btn.setAttribute('role', 'menuitem');
+  var chk = document.createElement('span');
+  chk.className = 'menu-chk chk' + (opts.checked ? ' on' : '');
+  btn.appendChild(chk);
+  var txt = document.createElement('span');
+  txt.className = 'menu-text';
+  txt.textContent = label;
+  btn.appendChild(txt);
+  var shortcut = document.createElement('span');
+  shortcut.className = 'menu-shortcut';
+  shortcut.textContent = opts.shortcut || '';
+  btn.appendChild(shortcut);
+  var arrow = document.createElement('span');
+  arrow.className = 'menu-arrow';
+  btn.appendChild(arrow);
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    _tabMenuClose();
+    if (opts.onClick) opts.onClick();
+  });
+  return btn;
+}
+
+function _tabMenuSep() {
+  var sep = document.createElement('div');
+  sep.className = 'menu-sep';
+  return sep;
+}
+
+function _tabMenuCopy(text) {
+  if (!text) return;
+  try {
+    if (window.runtime && typeof window.runtime.ClipboardSetText === 'function') {
+      window.runtime.ClipboardSetText(String(text));
+      return;
+    }
+  } catch (e) { /* 回退到浏览器剪贴板 */ }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(String(text));
+  } catch (e) { /* 忽略 */ }
+}
+
+function _closeOtherTabs(keepTab) {
+  var guard = state.tabs.length + 2;   // closeTab 会重排数组，用对象引用定位要保留的标签
+  while (state.tabs.length > 1 && guard-- > 0) {
+    var j = -1;
+    for (var i = 0; i < state.tabs.length; i++) {
+      if (state.tabs[i] !== keepTab) { j = i; break; }
+    }
+    if (j < 0) break;
+    closeTab(j);
+  }
+}
+
+function _tabMenuItemT(key, fb) {
+  var v = (typeof t === 'function') ? t(key, fb) : '';
+  return v || fb;
+}
+
+function _tabMenuOpen(clientX, clientY, idx) {
+  _tabMenuClose();
+  if (typeof _tabPopClose === 'function') _tabPopClose();   // 悬浮卡片让位给菜单
+  var tab = state.tabs[idx];
+  if (!tab) return;
+
+  var isSession = tab.type !== 'settings' && tab.type !== 'new' && !!tab.sessionId;
+  var menu = document.createElement('div');
+  menu.className = 'menu-dropdown tab-menu';
+  menu.setAttribute('role', 'menu');
+
+  if (isSession) {
+    // 「保存历史」按进程生效（history.enable/status + processId）：勾选态先按
+    // 未知渲染，异步取到真实值再点亮，避免右键时卡一个 IPC 往返。
+    var saveOn = false;
+    var saveItem = _tabMenuItem(_tabMenuItemT('tabmenu.save_history', '保存历史'), {
+      checked: false,
+      onClick: function () {
+        saveOn = !saveOn;
+        window.go.main.App.SetHistoryEnabledFor(tab.sessionId, saveOn).catch(function () {});
+      }
+    });
+    menu.appendChild(saveItem);
+    window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
+      saveOn = !!on;
+      var chk = saveItem.querySelector('.menu-chk');
+      if (chk) chk.classList.toggle('on', saveOn);
+    }).catch(function () {});
+
+    menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.copy_session', '复制会话号'), {
+      onClick: function () { _tabMenuCopy(tab.sessionId); }
+    }));
+    var portName = tab.syncedParams && tab.syncedParams.portName;
+    if (portName) {
+      menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.copy_port', '复制端口名'), {
+        onClick: function () { _tabMenuCopy(portName); }
+      }));
+    }
+    menu.appendChild(_tabMenuSep());
+  }
+
+  menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.close', '关闭标签'), {
+    onClick: function () { closeTab(idx); }
+  }));
+  menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.close_others', '关闭其他标签'), {
+    onClick: function () { _closeOtherTabs(tab); }
+  }));
+
+  document.body.appendChild(menu);
+  // 贴边翻转：右侧/底部放不下就翻到鼠标另一侧，并至少留 4px 边距。
+  var mw = menu.offsetWidth || 176;
+  var mh = menu.offsetHeight || 40;
+  var x = clientX, y = clientY;
+  if (x + mw + 4 > window.innerWidth) x = Math.max(4, x - mw);
+  if (y + mh + 4 > window.innerHeight) y = Math.max(4, y - mh);
+  menu.style.left = Math.round(x) + 'px';
+  menu.style.top = Math.round(y) + 'px';
+
+  _tabMenuEl = menu;
+  document.addEventListener('pointerdown', _tabMenuOnDown, true);
+  document.addEventListener('keydown', _tabMenuOnKey, true);
+  document.addEventListener('scroll', _tabMenuClose, true);
+  window.addEventListener('blur', _tabMenuClose);
+  window.addEventListener('resize', _tabMenuClose);
+}
+
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
+  _tabMenuClose();   // 标签节点即将重建，菜单挂在旧位置没有意义
   scroll.innerHTML = '';
   state.tabs.forEach((t, i) => {
     if (t._page && t._page.isWelcome) return;  // skip welcome tab
@@ -3542,6 +3701,12 @@ function renderTabs() {
     // 拖动排序走 pointer 事件（见 _tabDragDown）：HTML5 拖放在隐藏源元素时会被
     // 浏览器取消，拖不动。
     btn.onpointerdown = _tabDragDown;
+    // 右键菜单：自绘，按标签类型给不同菜单项（会话 / 设置 / 新建）
+    btn.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _tabMenuOpen(e.clientX, e.clientY, i);
+    };
     const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');

@@ -280,6 +280,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-text { white-space: nowrap; }
 .menu-shortcut { white-space: nowrap; font-size: 11px; color: var(--placeholder); padding-left: 12px; }
 .menu-arrow { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
+/* 标签右键菜单：复用上面的菜单皮肤，但作为独立 fixed 浮层由 JS 跟随鼠标定位。
+   z-index 要高于标签悬停浮窗（4000），否则右键时会被它盖住。 */
+.menu-dropdown.tab-menu {
+  position: fixed; display: block; z-index: 4500;
+  min-width: 176px; padding: 4px;
+}
+.menu-dropdown.tab-menu button { padding: 5px 8px; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 12px; }
 .menu-sub { position: relative; }
 .menu-sub-trigger .arr {
