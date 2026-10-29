@@ -44,10 +44,16 @@ var categoryColors = map[string]string{
 	"探测":   "\x1b[35m",
 }
 
-// initColor 解析 --color 与 NO_COLOR，定下本次进程是否着色。
-// 必须在任何 logOp 之前调用。
-func initColor(args []string) {
+// initColor 定下本次进程是否着色。
+//
+// 优先级：--color 命令行 > NO_COLOR > settings/daemon.ini 的 [log] color > auto。
+// 必须在任何 logOp 之前调用（main 里紧随 daemon 设置加载之后）。
+func initColor(args []string, defaultMode string) {
 	colorMode = colorModeAuto
+	switch defaultMode {
+	case colorModeAuto, colorModeAlways, colorModeNever:
+		colorMode = defaultMode
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if v, ok := strings.CutPrefix(a, "--color="); ok {

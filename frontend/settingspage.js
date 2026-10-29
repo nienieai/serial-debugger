@@ -525,7 +525,7 @@ function buildSettingsPage() {
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
 	 ['settings.about_kv_back', '后端', 'Go / Wails v2'],
 	 ['settings.about_kv_render', '渲染', 'WebView2'],
-	 ['settings.about_kv_conf', '配置文件', 'settings.ini']].forEach(function(row) {
+	 ['settings.about_kv_conf', '配置文件', 'settings/gui.ini']].forEach(function(row) {
 		var k = document.createElement('span');
 		k.className = 'settings-about-k';
 		k.setAttribute('data-i18n', row[0]);
@@ -537,6 +537,15 @@ function buildSettingsPage() {
 		kv.appendChild(v);
 	});
 	colA.appendChild(kv);
+	// 设置已经拆成 settings/ 目录（gui.ini / cli.ini / daemon.ini），
+	// 这里给一个直达入口，省得用户自己去程序目录里翻。
+	var btnOpenSettings = document.createElement('button');
+	btnOpenSettings.className = 'settings-refresh-btn';
+	btnOpenSettings.textContent = t('settings.open_settings_folder', '打开设置文件夹');
+	btnOpenSettings.addEventListener('click', function() {
+		window.go.main.App.ShowFolderInExplorer('settings');
+	});
+	colA.appendChild(btnOpenSettings);
 	aboutWrap.appendChild(colA);
 
 	var colB = document.createElement('div');

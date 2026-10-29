@@ -8,9 +8,15 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/nienieai/serial-debugger/ini"
 )
 
 // AppSettings holds all user-facing GUI settings persisted to disk.
+//
+// 设置按「谁用谁存」拆成目录：<exe>/settings/{gui,cli,daemon}.ini。
+// 这个结构体只对应 gui.ini —— GUI 独占写，CLI 与守护进程各有自己的文件
+// （见 daemon/settings.go 与 cmd/serial-cli/settings.go），MCP 不落盘。
 type AppSettings struct {
 	DisplayMode       string  `json:"displayMode" ini:"display_mode"`
 	SendRatio         float64 `json:"sendRatio" ini:"send_ratio"`
@@ -95,12 +101,26 @@ func defaultSettings() *AppSettings {
 	}
 }
 
-func settingsPath() (string, error) {
+// settingsDir 返回与 exe 同级的设置目录（<exe>/settings）。
+func settingsDir() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(exe), "settings.ini"), nil
+	return ini.Dir(filepath.Dir(exe)), nil
+}
+
+// settingsPath 返回 GUI 自己的设置文件 <exe>/settings/gui.ini。
+//
+// 一个文件只有一个写者：GUI 只写 gui.ini，CLI 只写 cli.ini（第一版只读），
+// 守护进程只写 daemon.ini。此前三者共用一份 settings.ini，而保存是整文件
+// 截断重写，一旦两方都写就会互相抹掉对方的字段。
+func settingsPath() (string, error) {
+	dir, err := settingsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "gui.ini"), nil
 }
 
 // LoadAppSettings reads persisted settings; returns defaults when the file
@@ -121,7 +141,7 @@ func (a *App) LoadAppSettings() *AppSettings {
 	return cfg
 }
 
-// SaveAppSettings writes settings to the INI file next to the executable.
+// SaveAppSettings writes settings to <exe>/settings/gui.ini.
 func (a *App) SaveAppSettings(s *AppSettings) error {
 	if s == nil {
 		return nil
@@ -130,12 +150,24 @@ func (a *App) SaveAppSettings(s *AppSettings) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
 	f, err := os.Create(p)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	return marshalINI(f, s)
+}
+
+// SettingsDir 返回设置目录，供前端「打开设置文件夹」与关于页展示。
+func (a *App) SettingsDir() string {
+	dir, err := settingsDir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // ---- INI marshal / unmarshal ----
@@ -189,7 +221,9 @@ func unmarshalINI(data []byte, cfg *AppSettings) error {
 	lookup := buildINILookup(cfg)
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		// 记事本/PowerShell 写出的文件可能带 UTF-8 BOM，首行会多一个 \ufeff。
+		line := strings.TrimPrefix(scanner.Text(), "\ufeff")
+		line = strings.TrimSpace(line)
 		if line == "" || line[0] == '[' || line[0] == '#' || line[0] == ';' {
 			continue
 		}
@@ -201,7 +235,7 @@ func unmarshalINI(data []byte, cfg *AppSettings) error {
 		val := strings.TrimSpace(line[eq+1:])
 		if ptr, ok := lookup[key]; ok {
 			if err := setField(ptr, val); err != nil {
-				fmt.Fprintf(os.Stderr, "settings.ini: invalid value for '%s': %v\n", key, err)
+				fmt.Fprintf(os.Stderr, "gui.ini: invalid value for '%s': %v\n", key, err)
 			}
 		}
 	}

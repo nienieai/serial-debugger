@@ -262,10 +262,10 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 - 状态栏由 `frontend/statusbar.js` 组件化：StatusDaemon / StatusClients / StatusEncoding / StatusStats，通过 `_statusBar` API 更新
 - 设置页通过菜单「设置 → 软件设置」打开（独立标签页），左侧导航（编码与显示/外观/存储与行为/语言/关于），右侧气泡卡片布局
 - 主题/语言气泡底部"创建示例"按键通过 Go 后端 `CreateExampleFiles` 创建示例文件夹和文件
-- 设置页全部文字已 i18n 化（当前 91 个 `settings.*` 翻译键，9 语言全覆盖）
+- 设置页全部文字已 i18n 化（当前 121 个 `settings.*` 翻译键，9 语言全覆盖）
 - 所有可执行文件放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`
 - 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（发布包布局）→ `exe/../../config/`（开发布局：exe 在 `build/bin`，配置在仓库根）→ 工作目录 `probe.toml` / `config/probe.toml`，候选去重。全部未命中时回退**内置规则**（`config/probe.toml` 经 `//go:embed` 嵌入二进制），因此发布包即使不含 `config/` 目录，`probe` 也可直接使用
-- GUI 设置文件 `settings.ini`（INI 格式），与 `serial-gui.exe` 同目录
+- GUI 设置文件 `settings/gui.ini`（INI 格式），与 `serial-gui.exe` 同级的 `settings/` 目录；同目录还有 `cli.ini`（CLI 只读：`[general] language/color`）与 `daemon.ini`（守护进程只读：`[log] language/color`），一个文件只有一个写者。MCP 不落盘
 - 外部 i18n 目录 `build/bin/i18n/` 与 `serial-gui.exe` 同目录，文件名格式 `{lang}.json`，详见 README
 - 外部主题目录 `build/bin/themes/colors/`（颜色主题 .json）和 `build/bin/resources/icons/<包名>/`（图标主题文件夹，含 icons.json + .svg）
 - 图标主题文件夹中 `.svg` 文件名 = 内置图标键名，覆盖对应内置图标

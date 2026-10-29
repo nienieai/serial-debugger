@@ -681,6 +681,19 @@ func (a *App) CreateExampleFiles(kind string) map[string]any {
 }
 
 func (a *App) ShowFolderInExplorer(kind string) map[string]any {
+	// 设置目录与资源目录无关（在 exe 同级），单独处理，不去要 resources 路径。
+	if kind == "settings" {
+		dir, err := settingsDir()
+		if err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		_ = openFolder(dir)
+		return map[string]any{"ok": true}
+	}
+
 	base := config.UserResourcesDir()
 	if base == "" {
 		return map[string]any{"ok": false, "error": "resource dir not found"}

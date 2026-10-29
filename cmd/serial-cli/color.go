@@ -52,7 +52,15 @@ var categoryColors = map[string]string{
 
 // stripColorFlag 摘掉 --color / --color=X 并定下本次是否着色。
 // 返回去掉该 flag 后的参数表，交给后面的命令解析。
-func stripColorFlag(args []string) []string {
+//
+// defaultMode 来自 settings/cli.ini 的 [general] color；命令行与 NO_COLOR
+// 都能覆盖它。
+func stripColorFlag(args []string, defaultMode string) []string {
+	colorMode = colorModeAuto
+	switch defaultMode {
+	case colorModeAuto, colorModeAlways, colorModeNever:
+		colorMode = defaultMode
+	}
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		switch {

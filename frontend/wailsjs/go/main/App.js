@@ -210,6 +210,10 @@ export function SetTabEncoding(arg1, arg2) {
   return window['go']['main']['App']['SetTabEncoding'](arg1, arg2);
 }
 
+export function SettingsDir() {
+  return window['go']['main']['App']['SettingsDir']();
+}
+
 export function ShowFolderInExplorer(arg1) {
   return window['go']['main']['App']['ShowFolderInExplorer'](arg1);
 }

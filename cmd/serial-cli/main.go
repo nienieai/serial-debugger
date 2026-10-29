@@ -21,6 +21,9 @@ import (
 
 var cliLang = "zh"
 
+// cliCfg 是 settings/cli.ini 的内容，main 里读一次，供语言与着色取默认值。
+var cliCfg = defaultCLISettings()
+
 func detectLang() string {
 	// 1. --lang flag
 	for i, a := range os.Args[1:] {
@@ -37,13 +40,18 @@ func detectLang() string {
 			return s
 		}
 	}
-	// 3. Default
+	// 3. settings/cli.ini
+	if cliCfg.Language != "" {
+		return cliCfg.Language
+	}
+	// 4. Default
 	return "zh"
 }
 
 func main() {
+	cliCfg = processCLISettings()
 	cliLang = detectLang()
-	args := stripColorFlag(stripLangFlag(os.Args[1:]))
+	args := stripColorFlag(stripLangFlag(os.Args[1:]), cliCfg.Color)
 	if len(args) == 0 {
 		interactiveMode()
 		return

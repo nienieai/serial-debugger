@@ -370,6 +370,7 @@
   "settings.nav_language": "语言",
   "settings.nav_storage": "存储与行为",
   "settings.open_folder": "打开文件夹",
+  "settings.open_settings_folder": "打开设置文件夹",
   "settings.parity": "校验位",
   "settings.port": "端口",
   "settings.refresh": "刷新",

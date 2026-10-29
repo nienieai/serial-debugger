@@ -975,7 +975,17 @@ stateDiagram-v2
 
 ### 4.11 设置持久化
 
-GUI 设置通过 Go 端 `settings.go` 模块持久化到 INI 文件（`settings.ini`，与 exe 同目录）。Wails 绑定暴露 `LoadAppSettings` / `SaveAppSettings` 到前端。保存项包括：显示模式、分割比例、编码格式、Hex 样式、主题、串口默认参数、自动发送间隔、尾部追加等。用户操作后 500ms 防抖自动保存。文件缺失或损坏时回退硬编码默认值。
+设置按**程序归属**拆到与 exe 同级的 `settings/` 目录，一个文件只有一个写者：
+
+| 文件 | 归属 | 内容 |
+|---|---|---|
+| `settings/gui.ini` | GUI 独占写 | `AppSettings` 全量：显示模式、分割比例、编码、Hex 样式、主题、串口默认参数、自动发送间隔、尾部追加等 |
+| `settings/cli.ini` | CLI 只读 | `[general] language` / `color`；`--lang`、`--color`、`LANG`、`NO_COLOR` 均优先于文件 |
+| `settings/daemon.ini` | 守护进程只读 | `[log] language` / `color`（日志语言与控制台着色） |
+
+MCP 不读也不写任何设置文件（stdio JSON-RPC，仅用 `LANG` 环境变量）。GUI 通过 Wails 绑定 `LoadAppSettings` / `SaveAppSettings` 读写 `gui.ini`，用户操作后 500ms 防抖自动保存，保存前会创建 `settings/` 目录；文件缺失或字段非法时回退硬编码默认值。旧版的单文件 `settings.ini` 不再读取（未稳定阶段，不做迁移）。
+
+之所以分文件：保存是**整文件截断重写**（`os.Create`）。三者共用一份文件时，任何一方保存都会抹掉另外两方的字段。
 
 ### 4.12 编码格式
 
@@ -1312,7 +1322,7 @@ v0.6.2 重构：所有项增加背景色+加粗，`bubble`+`special` 合并为 `
 ### 架构
 
 ```
-settings.ini  →  AppSettings.DisplayColors (JSON string)
+settings/gui.ini  →  AppSettings.DisplayColors (JSON string)
   →  JS state.displayColors (parsed object)
   →  _applyDisplayColors() 注入 <style id="display-colors-style">
   →  CSS 变量 --dc-{key} / --dc-{key}-bg / --dc-{key}-bold 应用到选择器
