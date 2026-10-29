@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -92,16 +91,33 @@ func loadHistoryIntoRing(rb *ringbuf.RingBuffer, filePath string) (int, error) {
 }
 
 // readHistoryRaw reads one raw packet (the exact bytes as stored on disk).
+//
+// 包长由头部 11 字节算出；长度字段最高位为 1 时后面还跟着「来源长度(1B) +
+// 来源字符串」。原样返回（含来源段），这样写入环形缓冲的字节与文件里完全一致。
 func readHistoryRaw(r *bufio.Reader) ([]byte, error) {
 	var header [11]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
 	}
-	hexLen := binary.LittleEndian.Uint16(header[9:11])
-	pkt := make([]byte, 11+hexLen)
+	bodyLen, hasOrigin := historyPacketLen(header[:])
+	pkt := make([]byte, bodyLen)
 	copy(pkt[:11], header[:])
 	if _, err := io.ReadFull(r, pkt[11:]); err != nil {
 		return nil, fmt.Errorf("truncated entry: %w", err)
+	}
+	if hasOrigin {
+		originLen, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("truncated origin length: %w", err)
+		}
+		pkt = append(pkt, originLen)
+		if originLen > 0 {
+			origin := make([]byte, originLen)
+			if _, err := io.ReadFull(r, origin); err != nil {
+				return nil, fmt.Errorf("truncated origin: %w", err)
+			}
+			pkt = append(pkt, origin...)
+		}
 	}
 	return pkt, nil
 }
@@ -211,25 +227,13 @@ func containsDecodedHex(hexText, kwUpper string) bool {
 }
 
 func readHistoryEntry(r *bufio.Reader) (HistoryEntry, int64, error) {
-	var header [11]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
+	pkt, err := readHistoryRaw(r)
+	if err != nil {
 		return HistoryEntry{}, 0, err
 	}
-
-	ts := int64(binary.LittleEndian.Uint64(header[0:8]))
-	dir := header[8]
-	hexLen := binary.LittleEndian.Uint16(header[9:11])
-
-	hexBuf := make([]byte, hexLen)
-	if _, err := io.ReadFull(r, hexBuf); err != nil {
-		return HistoryEntry{}, 0, fmt.Errorf("truncated entry: %w", err)
+	entry, ok := decodeHistoryPacket(pkt)
+	if !ok {
+		return HistoryEntry{}, 0, fmt.Errorf("invalid history packet")
 	}
-
-	consumed := int64(11 + hexLen)
-	return HistoryEntry{
-		Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
-		Hex:       string(hexBuf),
-		Direction: byteToDir(dir),
-		TsMs:      ts,
-	}, consumed, nil
+	return entry, int64(len(pkt)), nil
 }

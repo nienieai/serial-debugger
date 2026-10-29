@@ -722,6 +722,22 @@ func sourceLabel(s string) string {
 	}
 }
 
+// originOf 生成 Tx 的来源标识（格式见 RxTxMessage.Origin）。
+//
+// 直接复用 clientId（形如 "gui-a1b2c3d4"，本身带 source 前缀）：客户端显示时
+// 取连字符前那段就是 GUI/CLI/MCP，需要追到具体会话时它又能和 client.list 里的
+// 条目对上，不用另造一套映射。一次性调用没有会话（sess == nil），用
+// "<source>-once" 表示「某个不做会话登记的一次性客户端」。
+func originOf(sess *clientSession, req *protocol.Request) string {
+	if sess != nil && sess.clientId != "" {
+		return sess.clientId
+	}
+	if req != nil && req.Source != "" {
+		return req.Source + "-once"
+	}
+	return ""
+}
+
 func convParams(params map[string]any, v any) error {
 	raw, err := json.Marshal(params)
 	if err != nil {
@@ -1163,7 +1179,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		if err := s.pm.Send(p.ProcessID, p.Data, p.Format); err != nil {
+		if err := s.pm.Send(p.ProcessID, p.Data, p.Format, originOf(sess, req)); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		s.trackCallerViewer(sess, p.ProcessID)
@@ -1224,7 +1240,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		if err := s.pm.SendTrigger(p.ProcessID, p.Raw); err != nil {
+		if err := s.pm.SendTrigger(p.ProcessID, p.Raw, originOf(sess, req)); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}

@@ -205,6 +205,8 @@
   "newtab.title": "Nouvelle session",
   "offline.hint": "Cliquez Démon → Démarrer/Arrêter",
   "offline.title": "Démon non lancé",
+  "origin.auto": "Envoi auto",
+  "origin.multistr": "Multi-chaîne",
   "placeholder.no_process": "Aucun processus série",
   "quick_panel.add": "+ Ajouter",
   "quick_panel.clear_all": "Tout effacer",

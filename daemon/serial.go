@@ -38,6 +38,11 @@ type RxTxMessage struct {
 	// 前端拿它做「回补更早历史」的分页游标：时间戳字符串只有时分秒，
 	// 跨天会撞车，而且没法跟环里的 int64 精确比较。
 	TsMs int64 `json:"tsMs"`
+	// Origin 标识这条 Tx 是谁发出的，格式见 daemon/ipc.go 的 originOf：
+	//   "gui-a1b2c3d4" / "cli-..." / "mcp-..."  —— 某个客户端会话（clientId）
+	//   "auto" / "multistr"                    —— 守护进程自己的发送循环
+	// Rx 没有来源（数据来自设备），恒为空。
+	Origin string `json:"origin,omitempty"`
 }
 
 type HistoryEntry struct {
@@ -46,6 +51,8 @@ type HistoryEntry struct {
 	Direction string `json:"direction"`
 	// TsMs 见 RxTxMessage.TsMs。
 	TsMs int64 `json:"tsMs"`
+	// Origin 见 RxTxMessage.Origin；老历史文件里没有这一项（为空）。
+	Origin string `json:"origin,omitempty"`
 }
 
 type SendErrorInfo struct {
@@ -53,6 +60,8 @@ type SendErrorInfo struct {
 	Error     string `json:"error"`
 	Data      string `json:"data"`
 	Timestamp string `json:"timestamp"`
+	// Origin 见 RxTxMessage.Origin：发送失败的那一帧本来由谁发出。
+	Origin string `json:"origin,omitempty"`
 }
 
 type ProcessStats struct {
@@ -72,9 +81,18 @@ type ProcessStats struct {
 
 // ---- send job ----
 
+// 守护进程自己产生的 Tx 没有客户端会话，用固定关键字标识来源
+// （客户端会话的来源是 clientId，如 "gui-a1b2c3d4"，见 RxTxMessage.Origin）。
+const (
+	originAuto     = "auto"     // 自动发送循环
+	originMultistr = "multistr" // 多字符串队列 / 循环发送
+)
+
 type sendJob struct {
 	raw    []byte
 	format string
+	// origin 是这次发送的发起者（见 RxTxMessage.Origin），随 Tx 事件与历史一起落盘。
+	origin string
 }
 
 // ---- stats sample ----
@@ -199,7 +217,86 @@ func (p *Process) viewerSummary() map[string]int {
 }
 
 func (p *Process) recordHistory(hexData, direction string) {
-	p.recordHistoryAt(time.Now().UnixMilli(), hexData, direction)
+	p.recordHistoryAt(time.Now().UnixMilli(), hexData, direction, "")
+}
+
+// historyOriginFlag 是历史包长度字段的最高位，表示「包尾带来源字符串」。
+//
+// 为什么复用长度字段的高位而不是加版本头：历史文件是裸包拼接、没有文件头，
+// 加头会让所有老文件读不出来；把标记放进长度字段后，老包（该位恒为 0）仍按原
+// 格式解析，新老文件可以共存。hex 长度上限 0x7FFF = 32767 个字符，而读缓冲最大
+// 4 KB（8192 个 hex 字符），余量足够。
+const historyOriginFlag = uint16(0x8000)
+
+// maxOriginLen 是来源字符串的长度上限（包内用 1 字节记长度）。
+const maxOriginLen = 255
+
+// historyPacketLen 只读头部 11 字节就算出一个历史包的总字节数（含可选来源段），
+// 供文件顺序读取使用。
+func historyPacketLen(header []byte) (total int, hasOrigin bool) {
+	rawLen := binary.LittleEndian.Uint16(header[9:11])
+	hexLen := int(rawLen &^ historyOriginFlag)
+	return 11 + hexLen, rawLen&historyOriginFlag != 0
+}
+
+func encodeHistoryPacket(ts int64, hexData, direction, origin string) []byte {
+	if len(origin) > maxOriginLen {
+		origin = origin[:maxOriginLen]
+	}
+	// Serialize: | timestamp(8B) | direction(1B) | hexLen(2B, bit15=带来源) |
+	//            | hexData(N) | [originLen(1B) | origin(M)] |
+	total := 11 + len(hexData)
+	if origin != "" {
+		total += 1 + len(origin)
+	}
+	pkt := make([]byte, total)
+	binary.LittleEndian.PutUint64(pkt[0:8], uint64(ts))
+	pkt[8] = dirToByte(direction)
+	hexLen := uint16(len(hexData))
+	if origin != "" {
+		hexLen |= historyOriginFlag
+	}
+	binary.LittleEndian.PutUint16(pkt[9:11], hexLen)
+	copy(pkt[11:], hexData)
+	if origin != "" {
+		off := 11 + len(hexData)
+		pkt[off] = byte(len(origin))
+		copy(pkt[off+1:], origin)
+	}
+	return pkt
+}
+
+// decodeHistoryPacket 解析一个完整历史包。ok=false 表示包损坏（截断、长度字段
+// 越界），调用方应跳过它——历史文件可能被外部工具截断，绝不能因此 panic。
+func decodeHistoryPacket(pkt []byte) (HistoryEntry, bool) {
+	if len(pkt) < 11 {
+		return HistoryEntry{}, false
+	}
+	ts := int64(binary.LittleEndian.Uint64(pkt[0:8]))
+	dir := pkt[8]
+	rawLen := binary.LittleEndian.Uint16(pkt[9:11])
+	hexLen := int(rawLen &^ historyOriginFlag)
+	if 11+hexLen > len(pkt) {
+		return HistoryEntry{}, false
+	}
+	entry := HistoryEntry{
+		Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
+		Hex:       string(pkt[11 : 11+hexLen]),
+		Direction: byteToDir(dir),
+		TsMs:      ts,
+	}
+	if rawLen&historyOriginFlag != 0 {
+		off := 11 + hexLen
+		if off >= len(pkt) {
+			return HistoryEntry{}, false
+		}
+		originLen := int(pkt[off])
+		if off+1+originLen > len(pkt) {
+			return HistoryEntry{}, false
+		}
+		entry.Origin = string(pkt[off+1 : off+1+originLen])
+	}
+	return entry, true
 }
 
 // recordHistoryAt 用调用方给定的毫秒时间戳记一条历史。
@@ -207,14 +304,8 @@ func (p *Process) recordHistory(hexData, direction string) {
 // 广播事件与环形缓冲必须共用**同一个** ts：前端的分页游标是拿事件的 ts 去环里
 // 定位的，两边各取一次 time.Now() 会在毫秒边界上错开，表现为回补时偶发重复行
 // 或漏行（概率约等于两次调用之间跨过毫秒边界的概率）。
-func (p *Process) recordHistoryAt(ts int64, hexData, direction string) {
-	// Serialize: | timestamp(8B) | direction(1B) | hexLen(2B) | hexData(N) |
-	pktLen := 8 + 1 + 2 + len(hexData)
-	pkt := make([]byte, pktLen)
-	binary.LittleEndian.PutUint64(pkt[0:8], uint64(ts))
-	pkt[8] = dirToByte(direction)
-	binary.LittleEndian.PutUint16(pkt[9:11], uint16(len(hexData)))
-	copy(pkt[11:], hexData)
+func (p *Process) recordHistoryAt(ts int64, hexData, direction, origin string) {
+	pkt := encodeHistoryPacket(ts, hexData, direction, origin)
 
 	p.ringBufMu.Lock()
 	if p.historyRing != nil {
@@ -516,6 +607,7 @@ func (p *Process) autoSendLoop() {
 							Error:     err.Error(),
 							Data:      hexData,
 							Timestamp: time.Now().Format("15:04:05.000"),
+							Origin:    originAuto,
 						},
 					})
 				}
@@ -528,16 +620,19 @@ func (p *Process) autoSendLoop() {
 			p.autoSendMu.Unlock()
 
 			hexData := strings.ToUpper(hex.EncodeToString(data))
+			tsMs := time.Now().UnixMilli()
 			if p.broadcastFn != nil {
 				p.broadcastFn(RxTxMessage{
 					ProcessID: p.id,
 					Data:      string(data),
 					Hex:       hexData,
 					Direction: "tx",
-					Timestamp: time.Now().Format("15:04:05.000"),
+					Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
+					TsMs:      tsMs,
+					Origin:    originAuto,
 				})
 			}
-			p.recordHistory(hexData, "tx")
+			p.recordHistoryAt(tsMs, hexData, "tx", originAuto)
 
 		case <-p.autoSendStopCh:
 			return
@@ -649,6 +744,7 @@ func (p *Process) sendOneRound() {
 						ProcessID: p.id,
 						Error:     err.Error(),
 						Timestamp: time.Now().Format("15:04:05.000"),
+						Origin:    originMultistr,
 					},
 				})
 			}
@@ -670,6 +766,7 @@ func (p *Process) sendOneRound() {
 						Error:     err.Error(),
 						Data:      hexData,
 						Timestamp: time.Now().Format("15:04:05.000"),
+						Origin:    originMultistr,
 					},
 				})
 			}
@@ -692,10 +789,11 @@ func (p *Process) sendOneRound() {
 				Direction: "tx",
 				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 				TsMs:      tsMs,
+				Origin:    originMultistr,
 			})
-			p.recordHistoryAt(tsMs, hexData, "tx")
+			p.recordHistoryAt(tsMs, hexData, "tx", originMultistr)
 		} else {
-			p.recordHistory(hexData, "tx")
+			p.recordHistoryAt(time.Now().UnixMilli(), hexData, "tx", originMultistr)
 		}
 
 		// Wait per-entry delay (interruptible).
@@ -846,7 +944,7 @@ func (p *Process) forwardLoop(direction string, src, dst serial.Port, portBytes 
 					Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 					TsMs:      tsMs,
 				})
-				p.recordHistoryAt(tsMs, hexData, direction)
+				p.recordHistoryAt(tsMs, hexData, direction, "")
 			} else {
 				p.recordHistory(hexData, direction)
 			}
@@ -918,7 +1016,7 @@ func (p *Process) readLoop(broadcast func(RxTxMessage)) {
 				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 				TsMs:      tsMs,
 			})
-			p.recordHistoryAt(tsMs, hexData, "rx")
+			p.recordHistoryAt(tsMs, hexData, "rx", "")
 		}
 	}
 }
@@ -952,6 +1050,7 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 						Error:     wr.err.Error(),
 						Data:      hexData,
 						Timestamp: time.Now().Format("15:04:05.000"),
+						Origin:    job.origin,
 					},
 				})
 				p.recordSystemEvent("sys.send_error", wr.err.Error())
@@ -967,9 +1066,10 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 				Direction: "tx",
 				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 				TsMs:      tsMs,
+				Origin:    job.origin,
 			}
 			broadcast(msg)
-			p.recordHistoryAt(tsMs, hexData, "tx")
+			p.recordHistoryAt(tsMs, hexData, "tx", job.origin)
 
 		case <-time.After(3 * time.Second):
 			p.writeErrors.Add(1)
@@ -981,6 +1081,7 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 					Error:     fmt.Sprintf("write timeout on %s", p.config.Port),
 					Data:      hexData,
 					Timestamp: time.Now().Format("15:04:05.000"),
+					Origin:    job.origin,
 				},
 			})
 			p.recordSystemEvent("sys.write_timeout", p.config.Port)
@@ -2088,7 +2189,7 @@ func (pm *ProcessManager) FirstConnectedID() string {
 	return ""
 }
 
-func (pm *ProcessManager) Send(id string, data string, format string) error {
+func (pm *ProcessManager) Send(id string, data string, format string, origin string) error {
 	proc := pm.Get(id)
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", id)
@@ -2109,7 +2210,7 @@ func (pm *ProcessManager) Send(id string, data string, format string) error {
 	}
 
 	select {
-	case proc.sendCh <- sendJob{raw: raw, format: format}:
+	case proc.sendCh <- sendJob{raw: raw, format: format, origin: origin}:
 		return nil
 	default:
 		return fmt.Errorf("send buffer full (max 32 pending)")
@@ -2197,21 +2298,9 @@ func (pm *ProcessManager) GetHistoryPage(id string, limit int, beforeMs int64, s
 func parseHistoryPackets(packets [][]byte) []HistoryEntry {
 	entries := make([]HistoryEntry, 0, len(packets))
 	for _, pkt := range packets {
-		if len(pkt) < 11 {
-			continue
+		if entry, ok := decodeHistoryPacket(pkt); ok {
+			entries = append(entries, entry)
 		}
-		ts := int64(binary.LittleEndian.Uint64(pkt[0:8]))
-		dir := pkt[8]
-		hexLen := binary.LittleEndian.Uint16(pkt[9:11])
-		if int(hexLen)+11 > len(pkt) {
-			continue
-		}
-		entries = append(entries, HistoryEntry{
-			Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
-			Hex:       string(pkt[11 : 11+int(hexLen)]),
-			Direction: byteToDir(dir),
-			TsMs:      ts,
-		})
 	}
 	return entries
 }
@@ -2315,7 +2404,7 @@ func (pm *ProcessManager) GoroutineStacks() string {
 // SendTrigger reads one entry from the send queue ring buffer and pushes it
 // through sendCh. When raw is true, the bytes are sent as-is (direct send);
 // otherwise multistr binary header decoding is applied (quick-panel / queue mode).
-func (pm *ProcessManager) SendTrigger(id string, raw bool) error {
+func (pm *ProcessManager) SendTrigger(id string, raw bool, origin string) error {
 	proc := pm.Get(id)
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", id)
@@ -2351,7 +2440,7 @@ func (pm *ProcessManager) SendTrigger(id string, raw bool) error {
 	}
 
 	select {
-	case proc.sendCh <- sendJob{raw: payload, format: "trigger"}:
+	case proc.sendCh <- sendJob{raw: payload, format: "trigger", origin: origin}:
 		return nil
 	default:
 		proc.sendRingMu.Lock()

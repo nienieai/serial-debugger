@@ -205,6 +205,8 @@
   "newtab.title": "新規セッション",
   "offline.hint": "メニュー デーモン → 起動 で開始してください",
   "offline.title": "デーモンが起動していません",
+  "origin.auto": "自動送信",
+  "origin.multistr": "マルチ文字列",
   "placeholder.no_process": "シリアルプロセスなし",
   "quick_panel.add": "+ 追加",
   "quick_panel.clear_all": "すべてクリア",

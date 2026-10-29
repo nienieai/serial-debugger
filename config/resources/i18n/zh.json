@@ -205,6 +205,8 @@
   "newtab.title": "新建会话",
   "offline.hint": "请点击菜单 守护进程 → 启停",
   "offline.title": "守护进程未启用",
+  "origin.auto": "自动发送",
+  "origin.multistr": "多字符串",
   "placeholder.no_process": "无串口进程",
   "quick_panel.add": "+ 添加",
   "quick_panel.clear_all": "清空全部",

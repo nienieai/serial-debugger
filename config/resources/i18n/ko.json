@@ -205,6 +205,8 @@
   "newtab.title": "새 세션",
   "offline.hint": "데몬 → 시작/중지를 클릭하십시오",
   "offline.title": "데몬이 실행되지 않음",
+  "origin.auto": "자동 전송",
+  "origin.multistr": "멀티 문자열",
   "placeholder.no_process": "시리얼 프로세스 없음",
   "quick_panel.add": "+ 추가",
   "quick_panel.clear_all": "모두 비우기",

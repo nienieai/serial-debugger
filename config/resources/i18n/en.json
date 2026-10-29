@@ -205,6 +205,8 @@
   "newtab.title": "New Session",
   "offline.hint": "Click Daemon → Start/Stop",
   "offline.title": "Daemon Not Running",
+  "origin.auto": "Auto-send",
+  "origin.multistr": "Multi-string",
   "placeholder.no_process": "No serial process",
   "quick_panel.add": "+ Add",
   "quick_panel.clear_all": "Clear All",

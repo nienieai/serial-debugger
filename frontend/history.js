@@ -120,7 +120,7 @@ function _activeCache() {
 // 方向 + 内容。守护进程的广播事件与写进环里的是**同一个** tsMs，因此前端
 // 手上的那条与环里那条指纹必然相同。
 function _fp(e) {
-  return e.tsMs + '|' + e.direction + '|' + e.hex;
+  return e.tsMs + '|' + e.direction + '|' + (e.origin || '') + '|' + e.hex;
 }
 
 // 分页游标：缓存里最旧一条的毫秒时间戳，以及缓存里一共有几条属于这一毫秒。
@@ -253,9 +253,26 @@ function _estRowHeight(dataEl) {
 
 // ---- 单行构造（不再有滚动副作用，贴底统一由批次处理） ----
 
+// Tx 来源的显示名。来源格式见 daemon 侧 RxTxMessage.Origin：
+//   "gui-a1b2c3d4" / "cli-..." / "mcp-..."  —— 客户端会话，取连字符前那段大写
+//   "auto" / "multistr"                     —— 守护进程自己的发送循环，走 i18n
+// 完整来源放在 title 里：同类型有多个客户端时靠它区分。
+function _originLabel(origin) {
+  var s = String(origin);
+  var dash = s.indexOf('-');
+  if (dash < 0) {
+    // 语言包已加载时 t() 对缺键返回空串，必须自己兜底成原始 token，
+    // 否则未来新增的引擎来源会渲染成一个空气泡。
+    var text = (typeof t === 'function') ? t('origin.' + s, '') : '';
+    return text || s;
+  }
+  var src = s.slice(0, dash);
+  return src ? src.toUpperCase() : s;
+}
+
 // opts（可选）：{ displayMode } —— 只给设置页的颜色预览用，让它能在一屏里同时
 // 画「文本」和「Hex」两种渲染，而不必去改全局 state.displayMode。
-function makeDataRow(container, dir, timestamp, hex, segments, opts) {
+function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
   const row = document.createElement('div');
   row.className = 'data-row';
 
@@ -268,7 +285,14 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts) {
   var tsDirClass = dir === '1' ? 'ts-1' : dir === '2' ? 'ts-2' : (dir === 'rx' ? 'ts-rx' : 'ts-tx');
   tsLine.className = 'ts-line ' + tsDirClass;
   var statClass = isFwd ? 'ts-fstat' : 'ts-stat';
-  tsLine.innerHTML = '<span class="ts-text">[' + (timestamp || '') + '] ' + label + arrow + ' </span><span class="' + statClass + '">~' + byteLen + 'B</span>';
+  // 只有 Tx 有来源；老历史（没写来源的包）origin 为空，不渲染任何标记。
+  var originHtml = '';
+  if (dir === 'tx' && origin) {
+    originHtml = '<span class="t-origin" title="' + escHtml(origin) + '">' +
+      escHtml(_originLabel(origin)) + '</span>';
+  }
+  tsLine.innerHTML = '<span class="ts-text">[' + (timestamp || '') + '] ' + label + arrow + ' </span>' +
+    originHtml + '<span class="' + statClass + '">~' + byteLen + 'B</span>';
   row.appendChild(tsLine);
 
   const dataLine = document.createElement('div');
@@ -364,7 +388,7 @@ function appendLine(dir, msg) {
   if (!ownerTab) return;
 
   // Always cache the entry for the owning tab, even if not active
-  const entry = { direction: dir, hex: msg.hex, timestamp: msg.timestamp, tsMs: msg.tsMs, segments: msg.segments };
+  const entry = { direction: dir, hex: msg.hex, timestamp: msg.timestamp, tsMs: msg.tsMs, segments: msg.segments, origin: msg.origin };
   if (!state.historyCache[ownerTab.sessionId]) { state.historyCache[ownerTab.sessionId] = []; state.historyCache[ownerTab.sessionId]._id = ownerTab.sessionId; }
   var ownerCache = state.historyCache[ownerTab.sessionId];
   ownerCache.push(entry);
@@ -424,7 +448,7 @@ function _flushAppends() {
       line.setAttribute('data-sys-raw', e.hex || '');
       frag.appendChild(line);
     } else {
-      makeDataRow(frag, e.direction, e.timestamp, e.hex, e.segments || null);
+      makeDataRow(frag, e.direction, e.timestamp, e.hex, e.segments || null, null, e.origin);
     }
   }
   display.appendChild(frag);
@@ -732,7 +756,7 @@ function renderHistoryLines(entries, keepScroll) {
       line.textContent = '── ' + formatSysMsg(entry.hex || '') + ' ──';
       fragment.appendChild(line);
     } else {
-      makeDataRow(fragment, entry.direction, entry.timestamp, entry.hex, entry.segments || null);
+      makeDataRow(fragment, entry.direction, entry.timestamp, entry.hex, entry.segments || null, null, entry.origin);
     }
   }
   display.appendChild(fragment);
@@ -850,7 +874,7 @@ function expandHistory(entries) {
       line.setAttribute('data-sys-raw', entry.hex || '');
       frag.appendChild(line);
     } else {
-      makeDataRow(frag, entry.direction, entry.timestamp, entry.hex, entry.segments || null);
+      makeDataRow(frag, entry.direction, entry.timestamp, entry.hex, entry.segments || null, null, entry.origin);
     }
   }
   // 去掉旧的「更多」提示后插到最前

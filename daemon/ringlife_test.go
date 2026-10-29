@@ -65,7 +65,7 @@ func TestRingLifetimeRace(t *testing.T) {
 					_ = pm.GetHistory(id)
 					_ = pm.ClearHistory(id)
 					_, _ = pm.MultistrReadEntries(id)
-					_ = pm.SendTrigger(id, true)
+					_ = pm.SendTrigger(id, true, "")
 				}
 			}
 		}()

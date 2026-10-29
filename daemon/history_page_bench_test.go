@@ -31,7 +31,7 @@ func BenchmarkHistoryRead(b *testing.B) {
 	const frames = 200000
 	for i := 0; i < frames; i++ {
 		// 每 50 帧共用一毫秒，制造真实的时间戳撞车
-		proc.recordHistoryAt(1700000000000+int64(i/50), payload, "rx")
+		proc.recordHistoryAt(1700000000000+int64(i/50), payload, "rx", "")
 	}
 
 	packets := proc.historyRing.Snapshot()

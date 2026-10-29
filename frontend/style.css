@@ -974,6 +974,20 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .ts-2  { color: var(--dc-ts2); background: var(--dc-ts2-bg, transparent); font-weight: var(--dc-ts2-bold, normal); font-style: var(--dc-ts2-italic, normal); }
 .ts-stat  { color: var(--dc-stat); background: var(--dc-stat-bg, transparent); font-weight: var(--dc-stat-bold, normal); font-style: var(--dc-stat-italic, normal); }
 .ts-fstat { color: var(--dc-fstat); background: var(--dc-fstat-bg, transparent); font-weight: var(--dc-fstat-bold, normal); font-style: var(--dc-fstat-italic, normal); }
+/* Tx 来源标记（这一帧是谁发出的）：小号、弱化，只作旁注；完整来源（含会话 id）
+   放在 title 里，同类型有多个客户端时靠它区分。 */
+.t-origin {
+  margin: 0 4px 0 4px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg);
+  opacity: 0.65;
+  font-size: 10px;
+  line-height: 14px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 .hex-rx { color: var(--dc-hexRx); background: var(--dc-hexRx-bg, transparent); font-weight: var(--dc-hexRx-bold, normal); font-style: var(--dc-hexRx-italic, normal); }
 .hex-tx { color: var(--dc-hexTx); background: var(--dc-hexTx-bg, transparent); font-weight: var(--dc-hexTx-bold, normal); font-style: var(--dc-hexTx-italic, normal); }
 .hex-1  { color: var(--dc-hex1); background: var(--dc-hex1-bg, transparent); font-weight: var(--dc-hex1-bold, normal); font-style: var(--dc-hex1-italic, normal); }

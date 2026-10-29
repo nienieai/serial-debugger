@@ -205,6 +205,8 @@
   "newtab.title": "Новый сеанс",
   "offline.hint": "Демон → Запуск/Остановка",
   "offline.title": "Демон не запущен",
+  "origin.auto": "Автоотправка",
+  "origin.multistr": "Мультистрока",
   "placeholder.no_process": "Нет процессов COM",
   "quick_panel.add": "+ Добавить",
   "quick_panel.clear_all": "Очистить всё",

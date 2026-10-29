@@ -205,6 +205,8 @@
   "newtab.title": "جلسة جديدة",
   "offline.hint": "انقر الخادم ← بدء/إيقاف",
   "offline.title": "الخادم غير نشط",
+  "origin.auto": "إرسال تلقائي",
+  "origin.multistr": "سلسلة متعددة",
   "placeholder.no_process": "لا توجد عمليات المنفذ التسلسلي",
   "quick_panel.add": "+ إضافة",
   "quick_panel.clear_all": "مسح الكل",

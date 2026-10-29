@@ -205,6 +205,8 @@
   "newtab.title": "Nueva sesión",
   "offline.hint": "Pulse Demonio → Iniciar/Detener",
   "offline.title": "Demonio no iniciado",
+  "origin.auto": "Envío auto",
+  "origin.multistr": "Multicadena",
   "placeholder.no_process": "Sin proceso serie",
   "quick_panel.add": "+ Añadir",
   "quick_panel.clear_all": "Limpiar todo",
