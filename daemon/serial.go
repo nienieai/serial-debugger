@@ -14,6 +14,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/ringbuf"
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"go.bug.st/serial"
 )
 
@@ -152,8 +153,19 @@ type Process struct {
 	// 所有未单独设置过的进程；显式设置后不再被全局值覆盖。
 	saveHistory    atomic.Bool
 	saveHistorySet atomic.Bool
-	stopCh         chan struct{}
-	stopOnce       sync.Once // ensures stopIO runs only once
+
+	// .stlog 录制（与 history/*.log 并存，见 daemon/stlog.go）。
+	// stlogMu 保护 stlog / stlogName / stlogPending / stlogSince / stlogStop，
+	// 也串行化 Append 与 Flush —— 尾页缓冲跨多次 flush，不能并发写。
+	stlogMu      sync.Mutex
+	stlog        *sessionfile.Writer
+	stlogName    string
+	stlogPending bool      // 有已追加但未刷盘的记录
+	stlogSince   time.Time // 第一条未刷记录到达的时刻（定时 flush 的锚点）
+	stlogStop    chan struct{}
+
+	stopCh   chan struct{}
+	stopOnce sync.Once // ensures stopIO runs only once
 
 	sendCh chan sendJob
 
@@ -338,6 +350,10 @@ func (p *Process) recordHistoryAt(ts int64, hexData, direction, origin string) {
 	if f != nil {
 		appendHistoryPacket(f, pkt)
 	}
+
+	// 同一份数据再镜像一份 .stlog（没有在录时是空操作，见 daemon/stlog.go）。
+	// 放在 .log 之后：.log 是既有功能，别让新路径的失败挡住它。
+	p.appendStlog(ts, hexData, direction, origin)
 }
 
 func dirToByte(d string) byte {
@@ -1385,6 +1401,9 @@ func (p *Process) newHistoryFile() error {
 	p.historyFile = f
 	p.historyFileName = filepath.Base(path)
 	p.histFileMu.Unlock()
+	// 建 .log 的同时建同名 .stlog：两者都是"落盘"，开关也只有一个，
+	// 分开建会漏掉 recordHistoryAt 里那条惰性建文件的路径。
+	p.openStlogFile(filepath.Base(path))
 	return nil
 }
 
@@ -1396,6 +1415,8 @@ func (p *Process) detachHistoryFile() {
 	p.historyFileName = ""
 	p.histFileMu.Unlock()
 	closeHistoryFile(f)
+	// .stlog 与 .log 同步封存：停止保存、进程关闭、daemon 退出都走这里。
+	p.detachStlogFile()
 }
 
 // closeHistory closes the shared memory ring buffer and the history file.
