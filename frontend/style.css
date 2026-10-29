@@ -1561,6 +1561,11 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 }
 .alert-btns button:hover { background: var(--hover); }
 .alert-btns button:active { transform: scale(0.96); }
+/* 等宽 + 保留换行：多行、按列对齐的文本（.stlog 摘要用）。只做排版，不含布局。 */
+.alert-body.t-mono {
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+}
 
 /* ---- 18. Status Bar ---- */
 .statusbar {

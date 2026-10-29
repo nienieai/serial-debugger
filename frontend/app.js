@@ -439,10 +439,13 @@ async function setEncoding(enc) {
 var _alertCallback = null;
 
 // okKey / cancelKey: optional i18n keys for context-specific button labels
-function showAlert(title, message, okKey) {
+// mono: 等宽 + 保留换行，用于多行或按列对齐的文本（如 .stlog 摘要）
+function showAlert(title, message, okKey, mono) {
   _alertCallback = null;
   document.getElementById('alertTitle').textContent = title;
-  document.getElementById('alertBody').textContent = message;
+  var body = document.getElementById('alertBody');
+  body.textContent = message;
+  body.classList.toggle('t-mono', !!mono);
   document.getElementById('alertCancelBtn').classList.add('is-hidden');
   document.getElementById('alertOkBtn').textContent = t(okKey || 'confirm.ok', '确定');
   document.getElementById('alertOverlay').classList.remove('is-hidden');
@@ -451,7 +454,9 @@ function showAlert(title, message, okKey) {
 function showConfirm(title, message, onOk, okKey, cancelKey) {
   _alertCallback = onOk;
   document.getElementById('alertTitle').textContent = title;
-  document.getElementById('alertBody').textContent = message;
+  var body = document.getElementById('alertBody');
+  body.textContent = message;
+  body.classList.remove('t-mono'); // 共用同一个 body 元素，别让上个弹窗的等宽类漏过来
   document.getElementById('alertCancelBtn').classList.remove('is-hidden');
   document.getElementById('alertOkBtn').textContent = t(okKey || 'confirm.ok', '确定');
   document.getElementById('alertCancelBtn').textContent = t(cancelKey || 'confirm.cancel', '取消');
@@ -5632,3 +5637,122 @@ function applySendRatio() {
   displayArea.classList.toggle('is-collapsed', dispH <= reserve + 4);
   if (dc && typeof dc._syncScrollbarInset === 'function') dc._syncScrollbarInset();
 }
+
+
+
+// ---- .stlog 拖入（离线只读摘要） ----
+//
+// 只做到"拖进来能看见内容"：分页/搜索/导出还没接，见
+// 0.8.3-dev/会话文件方案-v1.4.md 的 P1 阶段。刻意不动 tabs 系统。
+//
+// 用 window.runtime / window.go 而不是 import：index.html 是经典 <script>，
+// wailsjs/ 下都是 ES 模块，混用会抛错。
+(function () {
+  var INSTALLED_KEY = '__stlogDropInstalled';
+
+  // (1) 无条件阻止默认拖放。必须在任何 return 之前：否则 WebView2 把拖进来的
+  //     文件当成"下载"，在 Downloads 里生成 "xxx (1).stlog" 这种副本（实锤过）。
+  //     这一步不依赖 window.runtime / window.go。
+  window.addEventListener('dragover', function (e) { e.preventDefault(); }, true);
+  window.addEventListener('drop', function (e) { e.preventDefault(); }, true);
+
+  function diag() {
+    return [
+      'runtime = ' + (typeof window.runtime),
+      'OnFileDrop = ' + (window.runtime ? typeof window.runtime.OnFileDrop : 'n/a'),
+      'go = ' + (typeof window.go),
+      'App = ' + (window.go && window.go.main ? typeof window.go.main.App : 'n/a'),
+      'OpenStlogFile = ' + (window.go && window.go.main && window.go.main.App
+                            ? typeof window.go.main.App.OpenStlogFile : 'n/a'),
+      'enableWailsDragAndDrop = ' + (window.wails && window.wails.flags
+                            ? window.wails.flags.enableWailsDragAndDrop : 'n/a')
+    ].join('\n');
+  }
+
+  // 应用内模态（项目自带）。不能用 window.runtime.MessageDialog：Wails v2 的
+  // 对话框只有 Go 侧 API（pkg/runtime/dialog.go），JS 侧 window.runtime 里没有它
+  // （那是 v1 的 API），调用会抛 TypeError —— 实测拖入文件后控制台报的就是这个。
+  function say(title, msg, mono) {
+    if (typeof showAlert === 'function') {
+      showAlert(title, msg, null, mono);
+      return;
+    }
+    window.alert(title + '\n\n' + msg);
+  }
+
+  function pad(n, w) { var s = String(n); while (s.length < w) s = ' ' + s; return s; }
+
+  var DIR_NAMES = { 0: 'sys', 1: 'rx', 2: 'tx', 3: 'p1', 4: 'p2' };
+  function dirName(d) { return DIR_NAMES[d & 0x7f] || ('?' + (d & 0x7f)); }
+
+  function summaryText(info) {
+    var out = [];
+    out.push('文件: ' + info.path);
+    out.push('大小: ' + info.size + ' B    页: ' + info.pages +
+             '    记录: ' + info.records + '    帧: ' + info.frames);
+    out.push('rx/tx: ' + info.rxTotal + ' / ' + info.txTotal + ' B');
+    if (info.settings) {
+      out.push('设置: ' + (info.settings.label || '') + '  (' + (info.settings.uuid || '') + ')');
+    }
+    if (info.recovered && info.recovered.length) {
+      out.push('已从影子页恢复: ' + info.recovered.join(', '));
+    }
+    if (info.brokenChain) out.push('警告: 续片链在页边界被切断，有一帧不完整');
+    if (info.stoppedAt) {
+      out.push('停止于偏移 ' + info.stoppedAt + (info.stopErr ? '（' + info.stopErr + '）' : ''));
+    }
+    out.push('');
+    (info.preview || []).forEach(function (f, i) {
+      out.push((f.partial ? '!' : ' ') + pad(i, 4) + '  ' +
+               new Date(f.ts).toLocaleTimeString() + '  ' +
+               dirName(f.dir) + '  ' + pad(f.len, 6) + '  ' + f.head);
+    });
+    var shown = (info.preview || []).length;
+    if (info.frames > shown) out.push('... 其余 ' + (info.frames - shown) + ' 帧未显示');
+    return out.join('\n');
+  }
+
+  function baseName(p) { return p.split(/[\\/]/).pop(); }
+
+  function showFile(path) {
+    window.go.main.App.OpenStlogFile(path).then(function (info) {
+      var text = summaryText(info);
+      if (window.console) console.log('[stlog] ' + path + '\n' + text);
+      say('.stlog 摘要 — ' + baseName(path), text, true);
+    }).catch(function (err) {
+      var msg = path + '\n\n' + String(err);
+      if (window.console) console.error('[stlog] ' + msg);
+      say('打不开 .stlog', msg, true);
+    });
+  }
+
+  function onDrop(x, y, paths) {
+    var files = (paths || []).filter(function (p) { return /\.stlog$/i.test(p); });
+    files.forEach(showFile);
+  }
+
+  function install() {
+    if (window[INSTALLED_KEY]) return true;
+    if (!window.runtime || typeof window.runtime.OnFileDrop !== 'function') return false;
+    if (!window.go || !window.go.main || !window.go.main.App) return false;
+    if (typeof window.go.main.App.OpenStlogFile !== 'function') return false;
+    window.runtime.OnFileDrop(onDrop, false); // false = 整窗口接收，不需要 drop-target 元素
+    window[INSTALLED_KEY] = true;
+    if (window.console) console.log('[stlog] drag-and-drop registered');
+    return true;
+  }
+
+  // (2) 注册失败时别装死：用户拖一次就能看到到底缺了哪一环。
+  var diagShown = false;
+  window.addEventListener('drop', function () {
+    if (window[INSTALLED_KEY] || diagShown) return;
+    diagShown = true;
+    say('拖放未启用（诊断）', diag());
+  }, true);
+
+  if (install()) return;
+  var tries = 0;
+  var timer = setInterval(function () {
+    if (install() || ++tries >= 20) clearInterval(timer);
+  }, 100);
+})();

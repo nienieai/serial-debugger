@@ -17,6 +17,7 @@ import (
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/decode"
 	"github.com/nienieai/serial-debugger/pipe"
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -1063,6 +1064,57 @@ func (a *App) SearchHistory(file, keyword string, limit int, offset int64) map[s
 	}
 	result, _ := ec.SearchHistory(file, keyword, limit, offset)
 	return result
+}
+
+// OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
+//
+// 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，
+// 分页/搜索/导出属于后续接入，见 0.8.3-dev/会话文件方案-v1.4.md 的 P1 阶段。
+func (a *App) OpenStlogFile(path string) (map[string]any, error) {
+	info, err := sessionfile.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	preview := make([]map[string]any, 0, 20)
+	for i, f := range info.Frames {
+		if i >= 20 {
+			break
+		}
+		head := f.Payload
+		if len(head) > 8 {
+			head = head[:8]
+		}
+		preview = append(preview, map[string]any{
+			"ts":      f.Ts,
+			"dir":     f.Dir,
+			"len":     len(f.Payload),
+			"partial": f.Partial,
+			"head":    strings.ToUpper(hex.EncodeToString(head)),
+		})
+	}
+
+	out := map[string]any{
+		"path":        info.Path,
+		"size":        info.Size,
+		"pages":       len(info.Pages),
+		"records":     info.Records,
+		"frames":      len(info.Frames),
+		"rxTotal":     info.RxTotal,
+		"txTotal":     info.TxTotal,
+		"truncated":   info.Truncated,
+		"brokenChain": info.BrokenChain,
+		"recovered":   info.Recovered,
+		"stoppedAt":   info.StoppedAt,
+		"preview":     preview,
+	}
+	if info.Settings != nil {
+		out["settings"] = info.Settings
+	}
+	if info.StopErr != nil {
+		out["stopErr"] = info.StopErr.Error()
+	}
+	return out, nil
 }
 
 // SetHistoryEnabled toggles auto-save for history files.

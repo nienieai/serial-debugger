@@ -174,6 +174,10 @@ export function OpenSession(arg1) {
   return window['go']['main']['App']['OpenSession'](arg1);
 }
 
+export function OpenStlogFile(arg1) {
+  return window['go']['main']['App']['OpenStlogFile'](arg1);
+}
+
 export function ReadMultistrEntries(arg1) {
   return window['go']['main']['App']['ReadMultistrEntries'](arg1);
 }

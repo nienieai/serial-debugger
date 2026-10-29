@@ -90,6 +90,8 @@ export function OpenDevTools():Promise<void>;
 
 export function OpenSession(arg1:main.SerialConfig):Promise<string>;
 
+export function OpenStlogFile(arg1:string):Promise<Record<string, any>>;
+
 export function ReadMultistrEntries(arg1:string):Promise<string>;
 
 export function RefreshPorts():Promise<Array<Record<string, any>>>;
