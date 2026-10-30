@@ -673,3 +673,87 @@ func TestOrphanContinuationMarkedPartial(t *testing.T) {
 		t.Fatal("BuildFrames must not guess from the first record alone")
 	}
 }
+
+// 转发录制：文件头要记 mode 与 B 口，A→B / B→A 的字节数只能扫记录得到
+// （统计块只有 rx/tx 两栏，这里也顺带锁住"统计块不累计 p1/p2"这件事）。
+func TestForwardModeSettingsAndDirectionTotals(t *testing.T) {
+	path := newFile(t)
+	w, err := CreateWriter(path, Settings{
+		V: SlotPayloadVer, Port: "COM4", Baud: 115200,
+		Mode: ModeForward, PortB: "COM14",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := []struct {
+		dir  uint8
+		data string
+	}{
+		{DirP1, "A1A2A3"},    // A→B 6 B（Append 收的是原始字节，不是 hex）
+		{DirP2, "B1B2"},      // B→A 4 B
+		{DirP1, "A4"},        // A→B 2 B
+		{DirSystem, "sys.x"}, // 系统帧不计入任何方向
+	}
+	for i, s := range writes {
+		if err := w.Append(uint64(1000+i), s.dir, OriginNone, "", []byte(s.data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Settings == nil {
+		t.Fatal("settings 必须读得回来")
+	}
+	if !info.Settings.IsForward() {
+		t.Fatalf("IsForward = false, Mode = %q", info.Settings.Mode)
+	}
+	if info.Settings.Port != "COM4" || info.Settings.PortB != "COM14" {
+		t.Fatalf("端口快照: A=%q B=%q", info.Settings.Port, info.Settings.PortB)
+	}
+	if info.P1Total != 8 || info.P2Total != 4 {
+		t.Fatalf("方向字节: A→B=%d(期望 8) B→A=%d(期望 4)", info.P1Total, info.P2Total)
+	}
+	if info.RxTotal != 0 || info.TxTotal != 0 {
+		t.Fatalf("统计块不该累计 p1/p2: rx=%d tx=%d", info.RxTotal, info.TxTotal)
+	}
+	if len(info.Frames) != 4 {
+		t.Fatalf("frames = %d, 期望 4", len(info.Frames))
+	}
+}
+
+// 老文件没有 mode 字段：读回来是空串，必须按单端口处理（不能当成转发）。
+func TestMissingModeReadsAsSingle(t *testing.T) {
+	path := newFile(t)
+	w, err := CreateWriter(path, Settings{V: SlotPayloadVer, Port: "COM3", Baud: 9600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Append(1000, DirRx, OriginNone, "", []byte("AA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Settings == nil {
+		t.Fatal("settings 读不到")
+	}
+	if info.Settings.Mode != "" {
+		t.Fatalf("Mode 应为空串, got %q", info.Settings.Mode)
+	}
+	if info.Settings.IsForward() {
+		t.Fatal("空 Mode 必须按单端口处理")
+	}
+	if info.P1Total != 0 || info.P2Total != 0 {
+		t.Fatal("单口文件不该有 p1/p2 累计")
+	}
+}

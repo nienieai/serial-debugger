@@ -36,6 +36,10 @@ type FileInfo struct {
 	BrokenChain bool // a continuation chain was cut at a page boundary
 	RxTotal     uint64
 	TxTotal     uint64
+	// P1Total / P2Total 是转发录制里 A→B / B→A 的字节数。统计块只有 rx/tx
+	// 两个计数（页格式不为此改动），所以这两个数只能在扫描时按 dir 现加。
+	P1Total uint64
+	P2Total uint64
 }
 
 // pageAt holds a raw page plus its decoding.
@@ -191,6 +195,15 @@ func ReadFile(path string) (*FileInfo, error) {
 			info.BrokenChain = true
 		}
 		all = append(all, p.Records...)
+		// 转发录制的字节数只能在这里按方向累加：统计块里没有 p1/p2 两栏。
+		for i := range p.Records {
+			switch DirBase(p.Records[i].Dir) {
+			case DirP1:
+				info.P1Total += uint64(len(p.Records[i].Payload))
+			case DirP2:
+				info.P2Total += uint64(len(p.Records[i].Payload))
+			}
+		}
 		if n := len(p.Records); n > 0 {
 			prevOpen = p.Records[n-1].Dir&DirMore != 0
 		}

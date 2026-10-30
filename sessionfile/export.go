@@ -65,6 +65,14 @@ func WriteText(w io.Writer, info *FileInfo) (int64, error) {
 		info.RxTotal, info.TxTotal, exportLineEnding); err != nil {
 		return int64(n), err
 	}
+	// 转发录制：统计块只有 rx/tx 两栏，方向字节数按记录现加。
+	if info.Settings.IsForward() {
+		if err := write("# 模式: 端口转发 %s ↔ %s   A→B/B→A: %d / %d B%s",
+			info.Settings.Port, info.Settings.PortB,
+			info.P1Total, info.P2Total, exportLineEnding); err != nil {
+			return int64(n), err
+		}
+	}
 	if note := exportNote(info); note != "" {
 		if err := write("# 状态: %s%s", note, exportLineEnding); err != nil {
 			return int64(n), err
@@ -84,6 +92,9 @@ func WriteText(w io.Writer, info *FileInfo) (int64, error) {
 	}
 
 	colNote := "# 列: 时间 dir 长度 十六进制；时间戳为本地时间（毫秒）"
+	if info.Settings.IsForward() {
+		colNote += "；转发录制里 p1 = A→B，p2 = B→A"
+	}
 	if originW > 0 {
 		colNote += "；dir 与长度之间是来源（仅 Tx 有值：gui-… / cli-… / auto / multistr）"
 	}

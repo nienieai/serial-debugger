@@ -3309,9 +3309,16 @@ function _tabPopRenderFile() {
     sizeText = fmtBytes(info.size) + ' · ' + info.pages + ' 页 · ' +
       info.records + ' 记录 · ' + info.total + ' 帧';
   }
-  var ioText = (typeof info.rxTotal === 'number')
-    ? ('rx ' + fmtBytes(info.rxTotal) + ' / tx ' + fmtBytes(info.txTotal))
-    : '—';
+  // 转发录制：两个方向是 A→B / B→A，字节数来自扫记录（统计块里只有 rx/tx）。
+  var fwd = info.forward === true;
+  var ioText;
+  if (fwd) {
+    ioText = 'A→B ' + fmtBytes(info.bytesAB || 0) + ' / B→A ' + fmtBytes(info.bytesBA || 0);
+  } else {
+    ioText = (typeof info.rxTotal === 'number')
+      ? ('rx ' + fmtBytes(info.rxTotal) + ' / tx ' + fmtBytes(info.txTotal))
+      : '—';
+  }
   var rangeText = stlogRangeText(info.firstTs, info.lastTs) || '—';
   var originsText = '无来源';
   if (info.origins && info.origins.length) {
@@ -3335,19 +3342,30 @@ function _tabPopRenderFile() {
     '<span class="c-tabpop__rval" dir="ltr">' + loaded + ' / ' + totalFrames + '</span>' +
   '</div>';
 
-  // 2) 收发比：和会话卡片完全同一套渲染
-  var cRx = 'var(--green)', cTx = 'var(--accent)';
-  var sum = (info.rxTotal || 0) + (info.txTotal || 0);
+  // 2) 比例条：单口是收发比（绿/蓝），转发是分流比（P1/P2 两色）
+  var cRx = fwd ? 'var(--fwd-p1)' : 'var(--green)';
+  var cTx = fwd ? 'var(--fwd-p2)' : 'var(--accent)';
+  var partA = fwd ? (info.bytesAB || 0) : (info.rxTotal || 0);
+  var partB = fwd ? (info.bytesBA || 0) : (info.txTotal || 0);
+  var sum = partA + partB;
   var hasRatio = sum > 0;
-  var rp = hasRatio ? Math.round((info.rxTotal || 0) / sum * 100) : 0;
+  var rp = hasRatio ? Math.round(partA / sum * 100) : 0;
   var ratioHTML = '<div class="c-tabpop__ratio">' +
-    '<span class="c-tabpop__rlbl">' + _tabPopT('tabpop.ratio', '收发比') + '</span>' +
+    '<span class="c-tabpop__rlbl">' +
+      (fwd ? _tabPopT('tabpop.ratio_fwd', '分流比') : _tabPopT('tabpop.ratio', '收发比')) + '</span>' +
     '<span class="c-tabpop__rbar">' +
       '<i style="width:' + rp + '%;background:' + cRx + '"></i>' +
       '<i style="width:' + (hasRatio ? (100 - rp) : 0) + '%;background:' + cTx + '"></i>' +
     '</span>' +
     '<span class="c-tabpop__rval" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
   '</div>';
+
+  // 转发录制多一行「端口 A ↔ B」：文件头记了 mode 与 B 口，这里才分得清
+  var portsText = '';
+  if (fwd) {
+    var setA = (info.settings && info.settings.port) ? info.settings.port : '';
+    portsText = 'A ' + setA + ' · B ' + (info.portB || '') + '（转发）';
+  }
 
   el.innerHTML =
     '<span class="c-tabpop__arrow"></span>' +
@@ -3358,6 +3376,7 @@ function _tabPopRenderFile() {
     '</div>' +
     '<div class="c-tabpop__meta" dir="ltr" title="' + escHtml(path) + '">' + escHtml(path) + '</div>' +
     '<div class="c-tabpop__sep"></div>' +
+    (portsText ? row('端口', portsText) : '') +
     row('大小', sizeText) +
     row('收发', ioText) +
     row('时间', rangeText) +
@@ -5840,7 +5859,14 @@ function stlogBarText(info) {
   parts.push(info.size + ' B');
   parts.push(info.pages + ' 页');
   parts.push(info.records + ' 记录');
-  parts.push('rx/tx ' + info.rxTotal + '/' + info.txTotal + ' B');
+  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
+  if (info.forward) {
+    parts.push('A→B ' + (info.bytesAB || 0) + ' / B→A ' + (info.bytesBA || 0) + ' B');
+    var setA = (info.settings && info.settings.port) ? info.settings.port : '';
+    parts.push('转发 ' + (setA ? setA + ' ↔ ' : '') + (info.portB || ''));
+  } else {
+    parts.push('rx/tx ' + info.rxTotal + '/' + info.txTotal + ' B');
+  }
   if (info.settings && info.settings.label) parts.push('设置 ' + info.settings.label);
   // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
   // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。

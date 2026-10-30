@@ -15,7 +15,7 @@ import (
 //
 // 这一层只做「直接落盘」：不做文件轮转/分卷，不参与 history.attach/new/detach
 // 那套文件流转，读取侧也不改——GUI 仍走 .log + 环形缓冲，.stlog 靠拖进界面或
-// `serial-cli stlog-read` 查看。格式规范见 docs/archive/会话文件方案-v1.4.md。
+// `serial-cli stlog-read` 查看。格式规范见 docs/format/stlog-format.md。
 //
 // 三个入口都挂在既有路径上，不新增钩子点：
 //   - serial.go 的 newHistoryFile()      → openStlogFile()：建 .log 时顺带建 .stlog
@@ -59,11 +59,19 @@ func (p *Process) openStlogFile(logBase string) {
 
 	// Port/Baud 只取建文件这一刻的快照：设置块记的是"开始录制时的配置"，
 	// 之后 SwitchPort 不回写（.log 也不记录配置，两边语义一致）。
+	// 转发录制另外记 B 口：文件名的端口序号看不出模式，光靠记录里的方向
+	// 字节只能知道"这是转发"，不知道哪个口是 A。
+	mode, portB := sessionfile.ModeSingle, ""
+	if p.forwardConfigB.Port != "" {
+		mode, portB = sessionfile.ModeForward, p.forwardConfigB.Port
+	}
 	set := sessionfile.Settings{
 		V:     sessionfile.SlotPayloadVer,
 		Label: p.config.Port,
 		Port:  p.config.Port,
 		Baud:  p.config.Baud,
+		Mode:  mode,
+		PortB: portB,
 	}
 	w, err := sessionfile.CreateWriter(filepath.Join(dir, name), set)
 	if err != nil {

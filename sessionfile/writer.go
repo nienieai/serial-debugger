@@ -15,7 +15,22 @@ type Settings struct {
 	Label   string `json:"label"`
 	Port    string `json:"port,omitempty"`
 	Baud    int    `json:"baud,omitempty"`
+	// Mode 记的是「这次录制是单端口还是端口转发」。空串等价于 ModeSingle：
+	// 早期文件没有这个字段，读回来是空串，不能因此把它们当成转发。
+	Mode string `json:"mode,omitempty"`
+	// PortB 只在转发录制里有值（A 口仍然放在 Port）。
+	PortB string `json:"portB,omitempty"`
 }
+
+// Recording modes stored in Settings.Mode.
+const (
+	ModeSingle  = "single"
+	ModeForward = "forward"
+)
+
+// IsForward reports whether the file was recorded in port-forwarding mode.
+// A missing Mode (older files) reads as single-port.
+func (s *Settings) IsForward() bool { return s != nil && s.Mode == ModeForward }
 
 // Writer appends frames to a .stlog file using the v1.4 page model.
 //

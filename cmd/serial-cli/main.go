@@ -320,7 +320,14 @@ func printStlogSummary(info *sessionfile.FileInfo) {
 		line += "（末帧未结束）"
 	}
 	fmt.Printf("帧      : %s\n", line)
-	fmt.Printf("rx/tx   : %d / %d B\n", info.RxTotal, info.TxTotal)
+	// 转发录制：统计块里只有 rx/tx 两栏，方向字节数得按记录现加。
+	if info.Settings.IsForward() {
+		fmt.Printf("模式    : 端口转发 %s ↔ %s\n", info.Settings.Port, info.Settings.PortB)
+		fmt.Printf("A→B/B→A : %d / %d B（rx/tx 统计 %d / %d B）\n",
+			info.P1Total, info.P2Total, info.RxTotal, info.TxTotal)
+	} else {
+		fmt.Printf("rx/tx   : %d / %d B\n", info.RxTotal, info.TxTotal)
+	}
 	if len(info.Recovered) > 0 {
 		fmt.Printf("恢复    : 从影子页恢复 %v\n", info.Recovered)
 	}

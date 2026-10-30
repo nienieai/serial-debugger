@@ -1069,7 +1069,7 @@ func (a *App) SearchHistory(file, keyword string, limit int, offset int64) map[s
 // OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
 //
 // 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，
-// 分页/搜索/导出属于后续接入，见 docs/archive/会话文件方案-v1.4.md 的 P1 阶段。
+// 分页/搜索/导出属于后续接入，见 docs/format/stlog-format.md 的 P1 阶段。
 func (a *App) OpenStlogFile(path string) (map[string]any, error) {
 	info, err := sessionfile.ReadFile(path)
 	if err != nil {
@@ -1175,6 +1175,8 @@ func (a *App) ReadStlogFrames(path string, offset, limit int) (map[string]any, e
 		"frames":      frames,
 		"rxTotal":     info.RxTotal,
 		"txTotal":     info.TxTotal,
+		"bytesAB":     info.P1Total,
+		"bytesBA":     info.P2Total,
 		"truncated":   info.Truncated,
 		"brokenChain": info.BrokenChain,
 		"recovered":   info.Recovered,
@@ -1203,8 +1205,17 @@ func (a *App) ReadStlogFrames(path string, offset, limit int) (map[string]any, e
 		}
 	}
 	out["origins"] = origins
+	// 录制模式：老文件没有 mode 字段，读回来是空串，一律按单端口处理。
+	out["mode"] = sessionfile.ModeSingle
+	out["portB"] = ""
+	out["forward"] = false
 	if info.Settings != nil {
 		out["settings"] = info.Settings
+		if info.Settings.Mode != "" {
+			out["mode"] = info.Settings.Mode
+		}
+		out["portB"] = info.Settings.PortB
+		out["forward"] = info.Settings.IsForward()
 	}
 	if info.StopErr != nil {
 		out["stopErr"] = info.StopErr.Error()

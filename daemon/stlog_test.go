@@ -238,3 +238,43 @@ func TestStlogFlushTimer(t *testing.T) {
 		t.Errorf("payload = %X，期望 AABBCC", got)
 	}
 }
+
+// 转发录制：文件头记 mode=forward + B 口，记录方向走 p1/p2（3/4），
+// 两个方向的字节数在读取侧按方向累加。
+func TestStlogRecordsForwardMode(t *testing.T) {
+	_, proc, dir := newSaveTestProc(t)
+	proc.config = SerialConfig{Port: "COM4", Baud: 115200}
+	proc.forwardConfigB = SerialConfig{Port: "COM14", Baud: 115200}
+	proc.SetSaveHistory(true)
+
+	proc.recordHistoryAt(1000, "AABB", "1", "")   // A→B 2 B
+	proc.recordHistoryAt(1001, "CCDDEE", "2", "") // B→A 3 B
+	proc.detachHistoryFile()
+
+	info := mustReadStlog(t, onlyStlog(t, dir))
+	if info.Settings == nil {
+		t.Fatal("设置块为空")
+	}
+	if !info.Settings.IsForward() {
+		t.Fatalf("Mode = %q，期望 forward", info.Settings.Mode)
+	}
+	if info.Settings.Port != "COM4" || info.Settings.PortB != "COM14" {
+		t.Fatalf("端口快照 = A:%q B:%q，期望 COM4/COM14", info.Settings.Port, info.Settings.PortB)
+	}
+	if len(info.Frames) != 2 {
+		t.Fatalf("帧数 = %d，期望 2", len(info.Frames))
+	}
+	if d := info.Frames[0].Dir; d != sessionfile.DirP1 {
+		t.Errorf("帧 0 方向 = %d，期望 DirP1", d)
+	}
+	if d := info.Frames[1].Dir; d != sessionfile.DirP2 {
+		t.Errorf("帧 1 方向 = %d，期望 DirP2", d)
+	}
+	if info.P1Total != 2 || info.P2Total != 3 {
+		t.Errorf("方向字节 = A→B:%d B→A:%d，期望 2/3", info.P1Total, info.P2Total)
+	}
+	// 统计块只有 rx/tx 两栏，转发录制不该往里加数。
+	if info.RxTotal != 0 || info.TxTotal != 0 {
+		t.Errorf("统计块 rx/tx = %d/%d，期望 0/0", info.RxTotal, info.TxTotal)
+	}
+}
