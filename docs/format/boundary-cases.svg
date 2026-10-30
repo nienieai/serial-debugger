@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="740" viewBox="0 0 1240 740">
+  <defs>
+    <pattern id="zero" width="9" height="9" patternUnits="userSpaceOnUse">
+      <rect width="9" height="9" fill="#f8fafc"/>
+      <path d="M0 9 L9 0" stroke="#cbd5e1" stroke-width="1"/>
+    </pattern>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="ar2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#dc2626"/>
+    </marker>
+    <style>
+      text { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+      .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+      .h1 { font-size: 24px; font-weight: 700; fill: #0f172a; }
+      .sub { font-size: 13px; fill: #64748b; }
+      .tag { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .cap { font-size: 12.5px; fill: #475569; }
+      .note { font-size: 12px; fill: #64748b; }
+      .bad { font-size: 11.5px; fill: #b91c1c; font-weight: 600; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="740" fill="#ffffff"/>
+
+  <text class="h1" x="60" y="46">.stlog 边界情形（v1.4）</text>
+  <text class="sub" x="60" y="72">页尾准入 · 页尾切帧 · 单帧超页 · 整页无帧头 · 页推进　｜　条带按 4096 B 满宽绘制；头部 = 页头 20 B + 统计块 44 B，记录区 4028 B [64, 4092)，页尾 4 B CRC</text>
+
+  <!-- ① 整条放得下 -->
+  <text class="tag" x="110" y="136">① 整条放得下</text>
+  <rect x="270" y="118" width="3.8" height="34" fill="#1d4ed8"/>
+  <rect x="273.8" y="118" width="8.4" height="34" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="282.2" y="118" width="569.6" height="34" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <rect x="851.8" y="118" width="195.2" height="34" fill="url(#zero)" stroke="#94a3b8" stroke-width="1.2"/>
+  <rect x="1047" y="118" width="3" height="34" fill="#fecaca" stroke="#dc2626" stroke-width="1.2"/>
+  <text class="mono" x="567" y="140" text-anchor="middle" font-size="12" fill="#14532d">记录 3000 B（整条）</text>
+  <text class="cap" x="270" y="172">整条写入本页；剩余 1028 B，后续记录继续往这一页装，直到 4092</text>
+
+  <!-- ② 页尾切帧 -->
+  <text class="tag" x="110" y="216">② 页尾切帧（跨两页）</text>
+
+  <rect x="270" y="198" width="3.8" height="32" fill="#1d4ed8"/>
+  <rect x="273.8" y="198" width="8.4" height="32" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="282.2" y="198" width="571.9" height="32" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <rect x="854.1" y="198" width="192.9" height="32" fill="#fef3c7" stroke="#d97706" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <rect x="1047" y="198" width="3" height="32" fill="#fecaca" stroke="#dc2626" stroke-width="1.2"/>
+  <text class="mono" x="288" y="219" font-size="11" fill="#475569">页 A</text>
+  <text class="mono" x="568" y="219" text-anchor="middle" font-size="11" fill="#14532d">记录1 · 3012 B</text>
+  <text class="mono" x="950" y="219" text-anchor="middle" font-size="10" fill="#92400e">帧2 前段 1016 B（0x80）</text>
+
+  <rect x="270" y="250" width="3.8" height="32" fill="#1d4ed8"/>
+  <rect x="273.8" y="250" width="8.4" height="32" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="282.2" y="250" width="395" height="32" fill="#fef3c7" stroke="#d97706" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <rect x="677.2" y="250" width="72.2" height="32" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <rect x="749.4" y="250" width="297.6" height="32" fill="url(#zero)" stroke="#94a3b8" stroke-width="1.2"/>
+  <rect x="1047" y="250" width="3" height="32" fill="#fecaca" stroke="#dc2626" stroke-width="1.2"/>
+  <text class="mono" x="288" y="271" font-size="11" fill="#92400e">页 B</text>
+  <text class="mono" x="479" y="271" text-anchor="middle" font-size="11" fill="#92400e">帧2 余 2080 B</text>
+  <text class="mono" x="713" y="271" text-anchor="middle" font-size="10" fill="#14532d">记录3</text>
+
+  <line x1="677" y1="282" x2="677" y2="294" stroke="#dc2626" stroke-width="1.4" stroke-dasharray="3 2"/>
+  <text class="mono" x="683" y="292" font-size="11" fill="#b91c1c">firstRecOff = 2144 → 帧2 之后第一条整帧记录</text>
+
+  <text class="cap" x="270" y="310">同一帧被页边界切成两段：前段带 0x80，后段不带。页 A 切满后被封存，页 B 开头是续片</text>
+  <text class="cap" x="270" y="330">页 B 的 firstRecOff 指向帧2 之后第一条整帧记录，只能从这里起帧</text>
+
+  <!-- ③ 单帧超页 -->
+  <text class="tag" x="110" y="366">③ 单帧超页</text>
+  <text class="cap" x="270" y="366">一帧 &gt; 4028 B → 拆成多条记录（每条 ≤ 4028 B），中间页可能整页都是续片</text>
+
+  <!-- ④ 整页无帧头：三页联动 -->
+  <text class="tag" x="110" y="436">④ 整页无帧头</text>
+
+  <!-- 页 P：帧首片在页尾 -->
+  <rect x="270" y="416" width="3.8" height="30" fill="#1d4ed8"/>
+  <rect x="273.8" y="416" width="8.4" height="30" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="282.2" y="416" width="575" height="30" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.2"/>
+  <rect x="857.2" y="416" width="189.8" height="30" fill="#fef3c7" stroke="#d97706" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <rect x="1047" y="416" width="3" height="30" fill="#fecaca" stroke="#dc2626" stroke-width="1.2"/>
+  <text class="mono" x="262" y="435" text-anchor="end" font-size="11" fill="#334155">页 P</text>
+  <text class="mono" x="570" y="435" text-anchor="middle" font-size="10" fill="#64748b">……其它记录……</text>
+  <text class="mono" x="952" y="435" text-anchor="middle" font-size="10" fill="#92400e">帧首 1000 B（0x81）</text>
+
+  <!-- 页 P+1：整页只有一条续片 -->
+  <rect x="270" y="454" width="3.8" height="30" fill="#1d4ed8"/>
+  <rect x="273.8" y="454" width="8.4" height="30" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="282.2" y="454" width="764.8" height="30" fill="#fef3c7" stroke="#d97706" stroke-width="1.8"/>
+  <rect x="1047" y="454" width="3" height="30" fill="#fecaca" stroke="#dc2626" stroke-width="1.2"/>
+  <text class="mono" x="262" y="473" text-anchor="end" font-size="11" fill="#334155">页 P+1</text>
+  <text class="mono" x="664" y="473" text-anchor="middle" font-size="11" fill="#92400e">整页只有这一条：帧尾 4028 B（0x01）</text>
+
+  <!-- 页 P+2：帧结束后的新帧 -->
+  <rect x="270" y="492" width="3.8" height="30" fill="#1d4ed8"/>
+  <rect x="273.8" y="492" width="8.4" height="30" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="282.2" y="492" width="57" height="30" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <rect x="339.2" y="492" width="707.8" height="30" fill="url(#zero)" stroke="#94a3b8" stroke-width="1.2"/>
+  <rect x="1047" y="492" width="3" height="30" fill="#fecaca" stroke="#dc2626" stroke-width="1.2"/>
+  <text class="mono" x="262" y="511" text-anchor="end" font-size="11" fill="#334155">页 P+2</text>
+  <text class="mono" x="368" y="511" font-size="10" fill="#14532d">新帧（0x00）</text>
+
+  <!-- 回溯箭头 -->
+  <line x1="1062" y1="469" x2="1062" y2="433" stroke="#dc2626" stroke-width="1.6" marker-end="url(#ar2)"/>
+  <text class="mono" x="1070" y="455" font-size="10.5" fill="#b91c1c">回溯找帧首</text>
+
+  <text class="bad" x="270" y="540">firstRecOff = 0xFFFF　→　页 P+1 里没有任何一条记录是帧的起点</text>
+  <text class="cap" x="270" y="562">这个帧从页 P 的帧首片开始（1000 B），跨到页 P+1 才结束（4028 B），同一帧合计 5028 B</text>
+  <text class="cap" x="270" y="582">读取方若定位到页 P+1，必须回溯到页 P 的那条 0x81 记录，才能拼出完整帧</text>
+
+  <!-- ⑤ 页推进 -->
+  <text class="tag" x="110" y="620">⑤ 页推进瞬间</text>
+  <rect x="270" y="602" width="96" height="32" rx="4" fill="#ffedd5" stroke="#ea580c" stroke-width="1.4"/>
+  <text class="mono" x="318" y="623" text-anchor="middle" font-size="11" fill="#7c2d12">影子 A</text>
+  <line x1="366" y1="618" x2="404" y2="618" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ar)"/>
+  <rect x="410" y="602" width="130" height="32" rx="4" fill="#ecfccb" stroke="#65a30d" stroke-width="1.4"/>
+  <text class="mono" x="475" y="623" text-anchor="middle" font-size="11" fill="#3f6212">页 P（旧，已满）</text>
+
+  <rect x="270" y="642" width="96" height="32" rx="4" fill="#fff7ed" stroke="#ea580c" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <text class="mono" x="318" y="663" text-anchor="middle" font-size="11" fill="#7c2d12">影子 B</text>
+  <line x1="366" y1="658" x2="404" y2="658" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ar)"/>
+  <rect x="410" y="642" width="130" height="32" rx="4" fill="#ecfccb" stroke="#65a30d" stroke-width="1.4"/>
+  <text class="mono" x="475" y="663" text-anchor="middle" font-size="11" fill="#3f6212">页 P+1（新，尾页）</text>
+
+  <text class="cap" x="560" y="612">两份影子可能指向不同的页</text>
+  <text class="cap" x="560" y="634">→ 先要求该页整页 CRC 通过，再取 pageOffset 与文件尾页一致者</text>
+  <text class="cap" x="560" y="656">→ 再比 committedLen，取大的；只前滚，绝不缩短已验证末尾</text>
+
+  <line x1="60" y1="692" x2="1180" y2="692" stroke="#e2e8f0" stroke-width="1"/>
+  <text class="note" x="60" y="714">图例：绿 = 整帧记录　黄虚 = 续片/帧中段　蓝窄条 = 页头 20 B　橙 = 统计块 44 B（偏移 20）　斜线 = 零填充　红窄条 = 页尾 CRC 4 B（放大绘制）</text>
+</svg>

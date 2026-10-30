@@ -120,6 +120,16 @@
     <div class="o-app-bg" id="appBg" aria-hidden="true"></div>
   </div>
 
+  <!-- 拖入遮罩：盖住「菜单栏下」到「状态栏上」这一整块（含标签栏与内容区），
+       位置由 app.js 按 .header / #statusbar 的实际高度设置，不写死。
+       纯展示，pointer-events:none，不拦截拖放本身。 -->
+  <div class="o-dropmask c-dropmask" id="dropMask" aria-hidden="true">
+    <div class="o-dropmask__box c-dropmask__box">
+      <div class="c-dropmask__title" id="dropMaskTitle">松开以打开会话</div>
+      <div class="c-dropmask__hint" id="dropMaskHint">支持工程目录与 .stlog 文件</div>
+    </div>
+  </div>
+
   <div class="statusbar" id="statusbar"></div>
 </div>
 

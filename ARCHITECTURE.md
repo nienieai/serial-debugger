@@ -1,4 +1,4 @@
-﻿# 串口调试工具 v0.7.4 框架文档
+# 串口调试工具 v0.7.4 框架文档
 
 ## 一、整体框架
 
@@ -454,8 +454,8 @@ var All = []Method{ Register, Subscribe, ..., ProcessCreate, ... }
 | `autosend.interval` | pm.AutoSendSetInterval — 运行中修改间隔 |
 | `history.files` | listHistoryFiles(historyDir()) — 列出 `history/*.log` 文件及元信息 |
 | `history.search` | searchHistoryFile(path, keyword, limit, offset) — 二进制帧顺序扫描，分页返回 |
-| `history.enable` | setHistoryEnabled(bool) — 开关历史自动保存 |
-| `history.status` | isHistoryEnabled() — 查询自动保存状态 |
+| `history.enable` | pm.SetDefaultHistorySave(bool) / pm.SetProcessHistorySave(pid, bool) — 不带 processId 改新进程默认落盘开关（未单独设置过的进程跟着变）；带 processId 只改该进程 |
+| `history.status` | defaultSaveHistory() / pm.ProcessHistorySave(pid) — 查询默认值或指定进程的落盘状态 |
 | `history.attach` | proc.attachHistoryFile(file) — 加载已有文件到环形缓冲区 + 打开追加 |
 | `history.new` | proc.newHistoryFile() — 为进程新建历史文件 |
 | `history.detach` | closeHistoryFile(proc.historyFile) — 分离当前文件（保留在磁盘） |
@@ -469,8 +469,14 @@ recordHistory(hexData, direction)
   ├── 环形缓冲区 Write(pkt)
   └── 若 historyFile != nil → f.Write(pkt)
 
-文件创建：惰性策略——进程创建时不建文件，首次实际数据（非 system 方向）到达时自动创建。
-自动保存开关：history.enable IPC 控制，关闭时仅环形缓冲区不写盘。
+文件创建：**默认不落盘**（`settings/daemon.ini` 的 `[history] auto_save` 默认 false，GUI 设置页的
+「默认自动保存」也默认关）。两个建文件时机：
+  ① 按进程显式开启（`history.enable` 带 `processId`）时立即创建；
+  ② 未显式设置时跟随默认值，在首次实际数据（非 system 方向）到达时惰性创建。
+自动保存开关：两级——默认值（`history.enable` 不带 pid，只影响未单独设置过的进程）
+         与进程级覆盖（带 `processId`，不受默认值变化影响）。关闭时只写环形缓冲区，
+         当前文件关闭、已写入的内容保留。
+GUI：设置页「默认自动保存」→ `gui.ini` 的 `auto_save_history`，连上守护进程后推送默认值。
 文件路径：<daemon.exe>/history/YYYYMMDDhhmm_进程ID.log
 文件格式：与环形缓冲区包格式完全一致 [8B ts | 1B dir | 2B hexLen | N hexData]...
 ```
@@ -975,7 +981,17 @@ stateDiagram-v2
 
 ### 4.11 设置持久化
 
-GUI 设置通过 Go 端 `settings.go` 模块持久化到 INI 文件（`settings.ini`，与 exe 同目录）。Wails 绑定暴露 `LoadAppSettings` / `SaveAppSettings` 到前端。保存项包括：显示模式、分割比例、编码格式、Hex 样式、主题、串口默认参数、自动发送间隔、尾部追加等。用户操作后 500ms 防抖自动保存。文件缺失或损坏时回退硬编码默认值。
+设置按**程序归属**拆到与 exe 同级的 `settings/` 目录，一个文件只有一个写者：
+
+| 文件 | 归属 | 内容 |
+|---|---|---|
+| `settings/gui.ini` | GUI 独占写 | `AppSettings` 全量：显示模式、分割比例、编码、Hex 样式、主题、串口默认参数、自动发送间隔、尾部追加等 |
+| `settings/cli.ini` | CLI 只读 | `[general] language` / `color`；`--lang`、`--color`、`LANG`、`NO_COLOR` 均优先于文件 |
+| `settings/daemon.ini` | 守护进程只读 | `[log] language` / `color`（日志语言与控制台着色） |
+
+MCP 不读也不写任何设置文件（stdio JSON-RPC，仅用 `LANG` 环境变量）。GUI 通过 Wails 绑定 `LoadAppSettings` / `SaveAppSettings` 读写 `gui.ini`，用户操作后 500ms 防抖自动保存，保存前会创建 `settings/` 目录；文件缺失或字段非法时回退硬编码默认值。旧版的单文件 `settings.ini` 不再读取（未稳定阶段，不做迁移）。
+
+之所以分文件：保存是**整文件截断重写**（`os.Create`）。三者共用一份文件时，任何一方保存都会抹掉另外两方的字段。
 
 ### 4.12 编码格式
 
@@ -1088,8 +1104,8 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `history` | `[pid] [--limit n] [--before ms] [--skip n]` | `session.history`（读取共享内存环；`--limit` 只取最新 n 条，`--before`/`--skip` 用上一条响应里最旧一条的 `tsMs` 与同毫秒条数继续往前翻） |
 | `history-files` | — | `history.files`（列出历史记录文件） |
 | `history-search` | `<file> <kw> [limit]` | `history.search`（分页搜索关键字） |
-| `history-enable` | `[true\|false]` | `history.enable`（开关自动保存，默认 true） |
-| `history-status` | — | `history.status`（查询自动保存状态） |
+| `history-enable` | `[true\|false] [pid]` | `history.enable`（不带 pid 改默认落盘开关，**默认 false**；带 pid 只改该进程） |
+| `history-status` | `[pid]` | `history.status`（查询默认值或指定进程的落盘状态） |
 | `history-attach` | `<pid> <file>` | `history.attach`（加载文件到环形缓冲区 + 继续追加） |
 | `history-new` | `[pid]` | `history.new`（为进程新建历史文件） |
 | `history-detach` | `[pid]` | `history.detach`（分离历史文件） |
@@ -1299,7 +1315,7 @@ Go 后端 `CreateExampleFiles(kind)` 根据 kind 创建：
 
 ## 九、图标系统
 
-内置图标位于 `config/resources/icons/system/`（20 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
+内置图标位于 `config/resources/icons/system/`（28 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
 
 `GetBuiltinIcons()` Wails 绑定返回全部内置图标，前端 `_initIcons()` 启动时加载。`applyIconTheme()` 支持 `_fallback` 回退机制。
 
@@ -1312,7 +1328,7 @@ v0.6.2 重构：所有项增加背景色+加粗，`bubble`+`special` 合并为 `
 ### 架构
 
 ```
-settings.ini  →  AppSettings.DisplayColors (JSON string)
+settings/gui.ini  →  AppSettings.DisplayColors (JSON string)
   →  JS state.displayColors (parsed object)
   →  _applyDisplayColors() 注入 <style id="display-colors-style">
   →  CSS 变量 --dc-{key} / --dc-{key}-bg / --dc-{key}-bold 应用到选择器
@@ -1459,7 +1475,7 @@ wails build -devtools
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`const Version = "0.8.2"`），改一处全部同步。
+版本号统一在 `version/version.go`（`var Version = "0.8.3"`，构建时由 `-ldflags -X` 覆盖），改一处全部同步。
 
 Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
 

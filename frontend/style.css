@@ -26,6 +26,13 @@
     --fwd-p1-hover: #2563eb; --fwd-p2-hover: #d97706;
     --hex-escape: #8b8b8b; --badge-cli: #10b981;
     --status-offline: #888; --tab-close: #888;
+    /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
+    --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+    --tabpop-glass-border: rgba(160, 160, 160, 0.28);
+    --tabpop-glass-blur: blur(20px);
+    --tabpop-bg-solid: #2d2d2d;
+    /* 拖入遮罩：半透明 + 模糊，透出下面的标签栏和内容 */
+    --dropmask-bg: rgba(18, 18, 18, 0.55);
   }
 }
 
@@ -39,6 +46,11 @@
     --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
     --hex-escape: #777; --badge-cli: #059669;
     --status-offline: #aaa; --tab-close: #999;
+    --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+    --tabpop-glass-border: rgba(128, 128, 128, 0.28);
+    --tabpop-glass-blur: blur(20px);
+    --tabpop-bg-solid: #e8e8e8;
+    --dropmask-bg: rgba(248, 248, 248, 0.55);
   }
 }
 
@@ -52,6 +64,11 @@
   --fwd-p1-hover: #2563eb; --fwd-p2-hover: #d97706;
   --hex-escape: #8b8b8b; --badge-cli: #10b981;
   --status-offline: #888; --tab-close: #888;
+  --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+  --tabpop-glass-border: rgba(160, 160, 160, 0.28);
+  --tabpop-glass-blur: blur(20px);
+  --tabpop-bg-solid: #2d2d2d;
+  --dropmask-bg: rgba(18, 18, 18, 0.55);
 }
 
 :root[data-theme="light"] {
@@ -63,6 +80,11 @@
   --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
   --hex-escape: #777; --badge-cli: #059669;
   --status-offline: #aaa; --tab-close: #999;
+  --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+  --tabpop-glass-border: rgba(128, 128, 128, 0.28);
+  --tabpop-glass-blur: blur(20px);
+  --tabpop-bg-solid: #e8e8e8;
+  --dropmask-bg: rgba(248, 248, 248, 0.55);
 }
 
 /* ---- 2. Body & App Shell ---- */
@@ -166,7 +188,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .c-mode-card:active:not(:disabled) { transform: translateY(1px); }
 .c-mode-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.c-mode-card:disabled { cursor: default; }
+.c-mode-card:disabled { cursor: default; opacity: 0.45; }
 
 .c-mode-card__head { display: flex; align-items: center; gap: 12px; }
 .c-mode-card__icon {
@@ -176,6 +198,8 @@ button:disabled:active { transform: none; box-shadow: none; }
   transition: background .18s, color .18s;
 }
 .c-mode-card--forward .c-mode-card__icon { color: var(--fwd-p1); }
+/* 文件卡：绿=不依赖守护进程，离线也能用 */
+.c-mode-card--file .c-mode-card__icon { color: var(--green); }
 .c-mode-card:hover:not(:disabled) .c-mode-card__icon { background: var(--hover); }
 .c-mode-card__names { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .c-mode-card__name { font-size: 16px; font-weight: 600; }
@@ -199,6 +223,7 @@ button:disabled:active { transform: none; box-shadow: none; }
   transition: filter .18s;
 }
 .c-mode-card--forward .c-mode-card__cta { background: var(--fwd-p1); }
+.c-mode-card--file .c-mode-card__cta { background: var(--green); }
 .c-mode-card:hover:not(:disabled) .c-mode-card__cta { filter: brightness(1.08); }
 .c-mode-card__cta-arrow { transition: transform .18s; }
 .c-mode-card:hover:not(:disabled) .c-mode-card__cta-arrow { transform: translateX(4px); }
@@ -263,6 +288,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-text { white-space: nowrap; }
 .menu-shortcut { white-space: nowrap; font-size: 11px; color: var(--placeholder); padding-left: 12px; }
 .menu-arrow { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
+/* 标签右键菜单：复用上面的菜单皮肤，但作为独立 fixed 浮层由 JS 跟随鼠标定位。
+   z-index 要高于标签悬停浮窗（4000），否则右键时会被它盖住。 */
+.menu-dropdown.tab-menu {
+  position: fixed; display: block; z-index: 4500;
+  min-width: 176px; padding: 4px;
+}
+.menu-dropdown.tab-menu button { padding: 5px 8px; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 12px; }
 .menu-sub { position: relative; }
 .menu-sub-trigger .arr {
@@ -422,6 +454,145 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   height: 28px; width: 28px; min-width: 28px; border: 1px solid var(--border); background: var(--bg);
   flex-shrink: 0; margin-right: 4px; padding: 0;
 }
+
+/* ---- 8b. 标签信息浮窗（c-tabpop） ----
+   悬停标签时自绘的浮窗，替代原生 title。结构与文案见 app.js 的 _tabPopRender：
+   标题 + 状态徽标 / 串口名 / 参数 / 两条速率（累计·速率·通栏条）/ 收发比 / 页脚。
+   只显示、不接收鼠标：pointer-events:none，避免它盖住标签本身。 */
+.c-tabpop {
+  position: fixed; z-index: 4000;
+  width: 264px; padding: 9px 11px 10px;
+  /* 毛玻璃参数与调色板一致（color-picker.html 的 transparency="glass"）：
+     深色 rgba(255,255,255,.10)、浅色 rgba(0,0,0,.10)，模糊 blur(20px)；
+     不支持 backdrop-filter 时由下面的 @supports 回退成不透明底色。 */
+  background-color: var(--tabpop-glass-bg);
+  backdrop-filter: var(--tabpop-glass-blur);
+  -webkit-backdrop-filter: var(--tabpop-glass-blur);
+  color: var(--fg);
+  border: 1px solid var(--tabpop-glass-border); border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .28);
+  font-size: 12.5px; line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none; user-select: none; -webkit-user-select: none;
+  opacity: 0; transform: translateY(-3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.c-tabpop.is-visible { opacity: 1; transform: none; }
+.c-tabpop.is-hidden  { display: none; }
+:root[data-theme="light"] .c-tabpop {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .18), 0 2px 6px rgba(0, 0, 0, .10);
+}
+
+/* 浮窗不带尖角。
+   曾经用旋转方块画过两条描边的尖角，但它和卡片边框永远对不上：
+   卡片边框下面垫着卡片自己的 10% 底色（background-clip 默认铺到 border-box），
+   尖角在卡片外，下面没有这层；朝下时还压在 card box-shadow 的浓区里。
+   同一条 rgba 叠出来的深浅必然不同（浅色偏亮、深色偏暗，深色更明显），
+   换不透明等效色也只在 2x 以上能对齐，1x 下 45° 斜线还会被抗锯齿稀释一档。
+   浮窗本来就跟标签紧贴，去掉尖角反而干净。 */
+/* 没有 backdrop-filter 的老 WebView2：退回不透明底色 + 实色描边 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .c-tabpop {
+    background-color: var(--tabpop-bg-solid);
+    border-color: var(--border);
+  }
+}
+
+.c-tabpop__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.c-tabpop__title { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
+.c-tabpop__badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; line-height: 1.7; padding: 0 7px; border-radius: 999px;
+  border: 1px solid currentColor; background: transparent;
+  /* 不支持 color-mix 的 WebView2 会丢掉下面两行，只留透明底 + 同色描边，也看得清 */
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  white-space: nowrap;
+}
+.c-tabpop__badge.is-ok   { color: var(--green); }
+.c-tabpop__badge.is-warn { color: var(--yellow); }
+.c-tabpop__badge.is-dim  { color: var(--placeholder); }
+.c-tabpop__dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+/* 串口名：COMx 是口子，后面的设备描述才是用户认设备的东西 */
+.c-tabpop__ports { display: grid; gap: 1px; margin-top: 3px; min-width: 0; }
+.c-tabpop__port { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12px; }
+.c-tabpop__ptag  { flex: none; color: var(--placeholder); font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; }
+.c-tabpop__pname { flex: none; color: var(--fg); font-weight: 600; font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; }
+.c-tabpop__pdev  {
+  min-width: 0; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow-wrap: anywhere;
+}
+.c-tabpop__meta {
+  margin-top: 2px; color: var(--placeholder); font-size: 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+.c-tabpop__sep { height: 1px; background: var(--border); opacity: .7; margin: 7px -11px; }
+
+/* 速率行：一行「方向 · 累计 · 当前速率」，下面一条通栏进度条 */
+.c-tabpop__lane {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px; row-gap: 4px; align-items: center;
+  margin-top: 7px;
+}
+.c-tabpop__sep + .c-tabpop__lane { margin-top: 0; }
+.c-tabpop__tag   { grid-area: 1 / 1 / 2 / 2; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
+.c-tabpop__total {
+  grid-area: 1 / 2 / 2 / 3; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 12px;
+}
+.c-tabpop__rate {
+  grid-area: 1 / 3 / 2 / 4; justify-self: end;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 13px;
+}
+.c-tabpop__bar {
+  grid-area: 2 / 1 / 3 / 4;
+  display: block; height: 4px; border-radius: 999px;
+  background: var(--bg3); overflow: hidden;
+}
+.c-tabpop__bar > i {
+  display: block; height: 100%; border-radius: 999px;
+  transition: width .28s ease, background-color .28s ease;
+}
+
+/* 收发比：和上面两条速率行同构 —— 第一行「标签 + 百分比」，第二行通栏条 */
+.c-tabpop__ratio {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px; row-gap: 4px; align-items: center;
+  margin-top: 7px;
+  font-size: 11px; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+.c-tabpop__rlbl { grid-area: 1 / 1 / 2 / 2; }
+.c-tabpop__rval { grid-area: 1 / 2 / 2 / 3; justify-self: end; }
+.c-tabpop__rbar {
+  grid-area: 2 / 1 / 3 / 3;
+  display: flex; height: 3px; min-width: 40px;
+  border-radius: 999px; overflow: hidden; background: var(--bg3);
+}
+.c-tabpop__rbar > i {
+  display: block; height: 100%;
+  transition: width .28s ease, background-color .28s ease;
+}
+.c-tabpop__rbar > i + i { border-inline-start: 1px solid var(--tabpop-bg-solid); }
+.c-tabpop__rval b { font-weight: 600; }
+.c-tabpop__rval-dim { color: var(--placeholder); }
+
+.c-tabpop__foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  color: var(--placeholder); font-size: 11px;
+}
+.c-tabpop__foot b {
+  color: var(--fg); font-weight: 600;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+.c-tabpop__hint { margin-top: 6px; color: var(--placeholder); font-size: 11px; }
+
 
 /* ---- 9. Components: Config Bar ---- */
 /* Port & Baud wraps (set by JS initCustomSelect) */
@@ -792,16 +963,41 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 }
 .hist-unread:hover { border-color: var(--accent); color: var(--accent); }
 .display-content .placeholder { color: var(--placeholder); font-style: italic; padding: 8px 0; }
-.data-row { margin-bottom: 2px; }
+/* 数据行：屏幕外的行跳过布局与绘制（轻量虚拟化）。
+   窗口本身就只保留 150~400 行，这里再让浏览器别去排版、绘制看不见的那些。
+   contain-intrinsic-size 给一个「时间戳 1 行 + 数据 1 行」的典型高度，`auto`
+   让浏览器记住每行真实高度，回滚到看过的位置不会再估错。 */
+.data-row {
+  margin-bottom: 2px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 46px;
+}
 .ts-line { line-height: 1.4; }
 .ts-rx { color: var(--dc-tsRx); background: var(--dc-tsRx-bg, transparent); font-weight: var(--dc-tsRx-bold, normal); font-style: var(--dc-tsRx-italic, normal); }
 .ts-tx { color: var(--dc-tsTx); background: var(--dc-tsTx-bg, transparent); font-weight: var(--dc-tsTx-bold, normal); font-style: var(--dc-tsTx-italic, normal); }
 .ts-1  { color: var(--dc-ts1); background: var(--dc-ts1-bg, transparent); font-weight: var(--dc-ts1-bold, normal); font-style: var(--dc-ts1-italic, normal); }
 .ts-2  { color: var(--dc-ts2); background: var(--dc-ts2-bg, transparent); font-weight: var(--dc-ts2-bold, normal); font-style: var(--dc-ts2-italic, normal); }
+/* 系统行（sys.* 事件）：没有收发方向，用弱化色 + 斜体，和 Rx/Tx 区分开 */
+.ts-sys { color: var(--placeholder); font-style: italic; }
 .ts-stat  { color: var(--dc-stat); background: var(--dc-stat-bg, transparent); font-weight: var(--dc-stat-bold, normal); font-style: var(--dc-stat-italic, normal); }
 .ts-fstat { color: var(--dc-fstat); background: var(--dc-fstat-bg, transparent); font-weight: var(--dc-fstat-bold, normal); font-style: var(--dc-fstat-italic, normal); }
+/* Tx 来源标记（这一帧是谁发出的）：小号、弱化，只作旁注；完整来源（含会话 id）
+   放在 title 里，同类型有多个客户端时靠它区分。 */
+.t-origin {
+  margin: 0 4px 0 4px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--fg);
+  opacity: 0.65;
+  font-size: 10px;
+  line-height: 14px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 .hex-rx { color: var(--dc-hexRx); background: var(--dc-hexRx-bg, transparent); font-weight: var(--dc-hexRx-bold, normal); font-style: var(--dc-hexRx-italic, normal); }
 .hex-tx { color: var(--dc-hexTx); background: var(--dc-hexTx-bg, transparent); font-weight: var(--dc-hexTx-bold, normal); font-style: var(--dc-hexTx-italic, normal); }
+.hex-sys { color: var(--placeholder); font-style: italic; }
 .hex-1  { color: var(--dc-hex1); background: var(--dc-hex1-bg, transparent); font-weight: var(--dc-hex1-bold, normal); font-style: var(--dc-hex1-italic, normal); }
 .hex-2  { color: var(--dc-hex2); background: var(--dc-hex2-bg, transparent); font-weight: var(--dc-hex2-bold, normal); font-style: var(--dc-hex2-italic, normal); }
 /* Control character rendering: child spans replace ::before pseudo-elements.
@@ -848,6 +1044,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .sys-msg { color: var(--placeholder); margin: 2px 0; }
 .rx-line { color: var(--dc-textRx); font-weight: var(--dc-textRx-bold, 600); font-style: var(--dc-textRx-italic, normal); background: var(--dc-textRx-bg, transparent); }
 .tx-line { color: var(--dc-textTx); font-weight: var(--dc-textTx-bold, 600); font-style: var(--dc-textTx-italic, normal); background: var(--dc-textTx-bg, transparent); }
+.sys-line { color: var(--placeholder); font-weight: var(--dc-textSys-bold, 600); font-style: italic; }
 .hex-data { }
 .hex-escape  { color: var(--dc-hexEsc); background: var(--dc-hexEsc-bg, transparent); font-weight: var(--dc-hexEsc-bold, normal); font-style: var(--dc-hexEsc-italic, normal); }
 .hex-fescape { color: var(--dc-fhexEsc); background: var(--dc-fhexEsc-bg, transparent); font-weight: var(--dc-fhexEsc-bold, normal); font-style: var(--dc-fhexEsc-italic, normal); }
@@ -1366,6 +1563,11 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 }
 .alert-btns button:hover { background: var(--hover); }
 .alert-btns button:active { transform: scale(0.96); }
+/* 等宽 + 保留换行：多行、按列对齐的文本（.stlog 摘要用）。只做排版，不含布局。 */
+.alert-body.t-mono {
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+}
 
 /* ---- 18. Status Bar ---- */
 .statusbar {
@@ -1375,6 +1577,45 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 }
 /* 分隔条收到底、与状态栏上沿重合时，隐掉状态栏这条边框，避免出现"双线" */
 .statusbar.is-flush-bottom { border-top-color: transparent; }
+
+/* ---- 8c. 拖入遮罩 ----
+   范围是「菜单栏下沿 → 状态栏上沿」（标签栏 + 内容区）：top/bottom 由 app.js 按
+   .header / #statusbar 的实际高度写入，不写死像素，改了高度也不会错位。
+   毛玻璃：半透明底 + backdrop-filter，让下面的标签和内容透出来但被模糊掉。 */
+.o-dropmask {
+  position: absolute; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: center;
+  /* 55 = 压过 .o-overlay（「守护进程未启用」的 z-index:50），低于
+     .o-overlay--modal（设置/弹窗，100）——拖入时该盖的盖住，该让的让开。
+     几何上只占菜单栏以下、状态栏以上，不会盖到 .header（z-index:6）。 */
+  z-index: 55; pointer-events: none;
+}
+.c-dropmask {
+  background: var(--dropmask-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  opacity: 0;
+  transition: opacity .14s ease;
+}
+.c-dropmask.is-on { opacity: 1; }
+
+.o-dropmask__box {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 26px 44px;
+}
+.c-dropmask__box {
+  border: 2px dashed var(--accent);
+  /* 不支持 color-mix 的 WebView2 会丢掉下面这行，保留上面的实色描边 */
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 16px;
+}
+.c-dropmask__title { font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+.c-dropmask__hint  { font-size: 13px; color: var(--placeholder); }
+
+/* 老 WebView2 没有 backdrop-filter：退回不透明底，否则遮罩几乎看不见 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .c-dropmask { background: var(--bg); }
+}
 .statusbar-left { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .statusbar-right { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 #statusbar-stats { display: inline-flex; gap: 14px; margin-left: 10px; }
@@ -2007,3 +2248,40 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+/* ---- 22. Components: .stlog 文件标签页 ---- */
+/* 顶栏只做布局，视觉在 t-stlog-bar 上（见 CLAUDE.md 的 o-/t- 职责分离） */
+.o-stlog-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; }
+.o-stlog-bar__info { flex: 1 1 auto; min-width: 0; }
+.o-stlog-bar__actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.o-stlog-more { display: flex; justify-content: center; }
+/* 文件页自己滚：不复用 .display-content，因为它把原生滚动条藏了（改由
+   .hist-scrollbar 自绘），而自绘那套跟会话页的分页/缓存绑在一起。 */
+.o-stlog-rows { flex: 1; min-height: 0; overflow-y: auto; }
+
+.t-stlog-rows {
+  padding: 8px 16px 8px 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 15px; line-height: 1.6;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+}
+
+.t-stlog-bar { padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.t-stlog-name {
+  font-size: 13px; font-weight: 600; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t-stlog-meta {
+  font-size: 11.5px; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t-stlog-btn {
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 12px; font-size: 12px; cursor: pointer;
+}
+.t-stlog-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+/* 开关态（如「年」）：按住不放的按钮要有别于普通按钮 */
+.t-stlog-btn.is-on { color: var(--accent); border-color: var(--accent); }
+.t-stlog-btn:active { transform: scale(0.96); }
+.t-stlog-btn:disabled { opacity: .5; cursor: default; }

@@ -31,15 +31,23 @@ var HISTORY_WINDOW = HISTORY_WINDOW_MIN; // 兼容旧引用；实际用 historyW
 var HISTORY_CACHE_MAX = 10000;
 var HISTORY_CACHE_HARD = 40000;
 var HISTORY_CACHE_SLACK = 512;
+// 缓存里 hex 字符总量上限。只按条数裁不够：4 KB 的包一条就是 8 K 字符，
+// 1 万条 = 80 MB 字符串，再叠上 Go 解码出来的 segments 会更炸。
+var HISTORY_CACHE_MAX_CHARS = 6 * 1024 * 1024;
 
-// 一页回补多少条；首次加载取 MAX（回看深度至少等于稳态缓存）
-var HISTORY_PAGE_SIZE = 5000;
-var HISTORY_INITIAL = HISTORY_CACHE_MAX;
+// 一页回补多少条；首次加载取 INITIAL（回看深度至少等于稳态缓存的量级）
+var HISTORY_PAGE_SIZE = 2000;
+var HISTORY_INITIAL = 3000;
 
 var _renderStart = -1; // DOM 窗口起点（cache 索引）
 var _renderEnd = -1;   // DOM 窗口终点（cache 索引，不含）
 var _atBottom = true;  // 用户是否贴着底部
 var _frozen = false;   // 冻结：锁定滚动，或用户往回翻离开了底部
+// 上一次 scroll 事件看到的 scrollTop。只靠 scrollHeight 判断"是否到底"会被
+// content-visibility 骗：行是屏外估值高度（contain-intrinsic-size），滚进视口后
+// 真实高度替换估值，scrollHeight 会凭空变大而 scrollTop 没动 —— 于是"明明在底部"
+// 被判成"离开底部"，自动跟滚就此停住、未读越攒越多。所以还要看 scrollTop 有没有变小。
+var _lastScrollTop = 0;
 var _healing = false;  // 未读提示自愈重绘时的递归挡板
 var _appendQueue = []; // 待渲染队列
 var _flushScheduled = false;
@@ -103,6 +111,7 @@ function _histReset() {
   _renderStart = -1;
   _renderEnd = -1;
   _atBottom = true;
+  _lastScrollTop = 0;
   _frozen = !!state.scrollLocked;
 }
 
@@ -117,7 +126,7 @@ function _activeCache() {
 // 方向 + 内容。守护进程的广播事件与写进环里的是**同一个** tsMs，因此前端
 // 手上的那条与环里那条指纹必然相同。
 function _fp(e) {
-  return e.tsMs + '|' + e.direction + '|' + e.hex;
+  return e.tsMs + '|' + e.direction + '|' + (e.origin || '') + '|' + e.hex;
 }
 
 // 分页游标：缓存里最旧一条的毫秒时间戳，以及缓存里一共有几条属于这一毫秒。
@@ -149,15 +158,40 @@ function _cursorFrom(entries) {
 //
 // 裁到窗口里时，把对应的 DOM 行也一并去掉 —— 不能留着缓存里已经不存在的行
 // 继续显示（那会让重绘与屏幕对不上）。
+// 缓存里 hex 字符总量：用作「按字节预算裁剪」的依据。
+// 平时靠 push 时累加；批量替换/合并之后把它置 undefined，下一次裁剪时重算。
+function _cacheChars(arr) {
+  if (!arr) return 0;
+  if (typeof arr._hexChars === 'number') return arr._hexChars;
+  var n = 0;
+  for (var i = 0; i < arr.length; i++) {
+    if (arr[i] && arr[i].hex) n += arr[i].hex.length;
+  }
+  arr._hexChars = n;
+  return n;
+}
+
 function _trimCache(arr) {
   if (!arr) return 0;
   var active = (_activeCache() === arr);
   var cap = (active && _frozen) ? HISTORY_CACHE_HARD : HISTORY_CACHE_MAX;
-  var over = arr.length - cap;
-  if (over < HISTORY_CACHE_SLACK) return 0;
+  var drop = Math.max(0, arr.length - cap);
 
-  var drop = over;
+  // 再按字符预算裁：大包场景下 1 万条会撑到几十上百 MB
+  var chars = _cacheChars(arr);
+  var overBudget = chars > HISTORY_CACHE_MAX_CHARS;
+  while (chars > HISTORY_CACHE_MAX_CHARS && arr.length - drop > 200) {
+    var head = arr[drop];
+    chars -= (head && head.hex) ? head.hex.length : 0;
+    drop++;
+  }
+
+  if (drop <= 0) return 0;
+  // 小批裁剪会白付 splice 的代价：攒够一批再裁；但超预算时必须立刻裁
+  if (!overBudget && drop < HISTORY_CACHE_SLACK) return 0;
+
   arr.splice(0, drop);
+  arr._hexChars = chars;
   if (typeof arr._clearedAt === 'number') {
     arr._clearedAt -= drop;
     if (arr._clearedAt < 0) delete arr._clearedAt; // 清空标记本身也被裁掉了，它已经没有意义
@@ -181,31 +215,107 @@ function _dropDomRows(n) {
   }
 }
 
+// ---- 行高估算（配 .data-row 的 content-visibility:auto 用） ----
+//
+// 屏外行没有真实高度，浏览器只能用 contain-intrinsic-size 的估值占位。若统一按
+// 46px 估，4 KB 的大包会被估成一行、实际却是上百行，滚动时整块内容会跳；
+// 所以这里按「时间戳行 + 数据折行行数」逐行算一个贴近真实的占位高度。
+
+var _charWCache = { key: '', w: 0 };
+
+// 等宽字符宽度：用显示区实际字体量一次；字体或字号变了就重测。
+function _monoCharWidth() {
+  var key = (state.displayFontFamily || '') + '|' + (state.displayFontSize || 15);
+  if (_charWCache.key === key && _charWCache.w > 0) return _charWCache.w;
+  var w = 0;
+  try {
+    var display = pageEl('displayContent');
+    var cs = display ? getComputedStyle(display) : null;
+    var font = cs
+      ? (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily)
+      : '15px monospace';
+    var ctx = document.createElement('canvas').getContext('2d');
+    if (ctx) {
+      ctx.font = font;
+      w = ctx.measureText('0'.repeat(64)).width / 64;
+    }
+  } catch (e) { w = 0; }
+  if (!(w > 0)) w = (state.displayFontSize || 15) * 0.6;   // 兜底：等宽约 0.6em
+  _charWCache.key = key;
+  _charWCache.w = w;
+  return w;
+}
+
+function _estRowHeight(dataEl) {
+  var display = pageEl('displayContent');
+  var fs = state.displayFontSize || 15;
+  var width = display ? (display.clientWidth - 28) : 900;   // 左右 padding
+  if (!(width > 40)) width = 900;
+  var cols = Math.max(10, Math.floor(width / _monoCharWidth()));
+  var chars = dataEl ? (dataEl.textContent || '').length : 0;
+  var lines = Math.max(1, Math.ceil(chars / cols));
+  return Math.ceil(fs * 1.4 + lines * fs * 1.5 + 2);        // .ts-line 1.4 / .data-line 1.5 + 行间距
+}
+
 // ---- 单行构造（不再有滚动副作用，贴底统一由批次处理） ----
+
+// Tx 来源的显示名。来源格式见 daemon 侧 RxTxMessage.Origin：
+//   "gui-a1b2c3d4" / "cli-..." / "mcp-..."  —— 客户端会话，取连字符前那段大写
+//   "auto" / "multistr"                     —— 守护进程自己的发送循环，走 i18n
+// 完整来源放在 title 里：同类型有多个客户端时靠它区分。
+function _originLabel(origin) {
+  var s = String(origin);
+  var dash = s.indexOf('-');
+  if (dash < 0) {
+    // 语言包已加载时 t() 对缺键返回空串，必须自己兜底成原始 token，
+    // 否则未来新增的引擎来源会渲染成一个空气泡。
+    var text = (typeof t === 'function') ? t('origin.' + s, '') : '';
+    return text || s;
+  }
+  var src = s.slice(0, dash);
+  return src ? src.toUpperCase() : s;
+}
 
 // opts（可选）：{ displayMode } —— 只给设置页的颜色预览用，让它能在一屏里同时
 // 画「文本」和「Hex」两种渲染，而不必去改全局 state.displayMode。
-function makeDataRow(container, dir, timestamp, hex, segments, opts) {
+function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
   const row = document.createElement('div');
   row.className = 'data-row';
 
   const tsLine = document.createElement('div');
   const isFwd = (dir === '1' || dir === '2');
-  const arrow = isFwd ? '' : (dir === 'tx' ? ' ↾' : ' ⇃');
-  const tagClass = dir === '1' ? 'fwd1-line' : dir === '2' ? 'fwd2-line' : (dir === 'rx' ? 'rx-line' : 'tx-line');
-  const label = isFwd ? 'P' + dir : (dir === 'rx' ? 'Rx' : 'Tx');
+  // 系统行（sys.port_connected / sys.stats_started 这类事件）既不是 Rx 也不是 Tx。
+  // 之前没有这个分支，'system' 落到最后的 tx 分支，被显示成「Tx ⇃」，
+  // 看着像是发出去的数据 —— 实际上它只是本地事件，没有收发方向。
+  const isSys = (dir === 'system' || dir === 'sys');
+  const arrow = (isFwd || isSys) ? '' : (dir === 'tx' ? ' ↾' : ' ⇃');
+  const tagClass = dir === '1' ? 'fwd1-line' : dir === '2' ? 'fwd2-line'
+    : (dir === 'rx' ? 'rx-line' : (isSys ? 'sys-line' : 'tx-line'));
+  const label = isFwd ? 'P' + dir : (dir === 'rx' ? 'Rx' : (isSys ? 'Sys' : 'Tx'));
   var byteLen = hex ? hex.length / 2 : 0;
-  var tsDirClass = dir === '1' ? 'ts-1' : dir === '2' ? 'ts-2' : (dir === 'rx' ? 'ts-rx' : 'ts-tx');
+  var tsDirClass = dir === '1' ? 'ts-1' : dir === '2' ? 'ts-2'
+    : (dir === 'rx' ? 'ts-rx' : (isSys ? 'ts-sys' : 'ts-tx'));
   tsLine.className = 'ts-line ' + tsDirClass;
   var statClass = isFwd ? 'ts-fstat' : 'ts-stat';
-  tsLine.innerHTML = '<span class="ts-text">[' + (timestamp || '') + '] ' + label + arrow + ' </span><span class="' + statClass + '">~' + byteLen + 'B</span>';
+  // 只有 Tx 有来源；老历史（没写来源的包）origin 为空，不渲染任何标记。
+  var originHtml = '';
+  if (dir === 'tx' && origin) {
+    originHtml = '<span class="t-origin" title="' + escHtml(origin) + '">' +
+      escHtml(_originLabel(origin)) + '</span>';
+  }
+  tsLine.innerHTML = '<span class="ts-text">[' + (timestamp || '') + '] ' + label + arrow + ' </span>' +
+    originHtml + '<span class="' + statClass + '">~' + byteLen + 'B</span>';
   row.appendChild(tsLine);
 
   const dataLine = document.createElement('div');
   dataLine.className = 'data-line';
 
   let dm;
-  if (opts && opts.displayMode) {
+  if (isSys) {
+    // 系统行的 payload 是本地事件文本（sys.port_connected|COM16|230400），
+    // 不是串口字节；切到 Hex 视图看它只会是一串 ASCII 码，固定按文本显示。
+    dm = 'text';
+  } else if (opts && opts.displayMode) {
     dm = opts.displayMode;
   } else {
     dm = state.displayMode;
@@ -218,9 +328,13 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts) {
   }
   if (dm === 'hex') {
     const hexSpan = document.createElement('span');
-    var hexDirClass = dir === '1' ? 'hex-1' : dir === '2' ? 'hex-2' : (dir === 'rx' ? 'hex-rx' : 'hex-tx');
+    var hexDirClass = dir === '1' ? 'hex-1' : dir === '2' ? 'hex-2'
+      : (dir === 'rx' ? 'hex-rx' : (isSys ? 'hex-sys' : 'hex-tx'));
     hexSpan.className = 'hex-data ' + hexDirClass;
-    hexSpan.textContent = formatHex(hexToBytes(hex));
+    // 直接从 hex 串格式化（formatHexString 少一次数组分配）
+    hexSpan.textContent = (typeof formatHexString === 'function')
+      ? formatHexString(hex)
+      : formatHex(hexToBytes(hex));
     dataLine.appendChild(hexSpan);
   } else if (segments && segments.length > 0) {
     // Go-decoded segments — zero-innerHTML rendering
@@ -237,6 +351,10 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts) {
   }
 
   row.appendChild(dataLine);
+  // 给屏外行一个贴近真实的占位高度（见 _estRowHeight 的说明）
+  if (window.CSS && CSS.supports && CSS.supports('contain-intrinsic-size', 'auto 46px')) {
+    row.style.setProperty('contain-intrinsic-size', 'auto ' + _estRowHeight(dataLine) + 'px');
+  }
   container.appendChild(row);
   return row;
 }
@@ -268,6 +386,7 @@ function appendSystemMsg(msg) {
     var arr = state.historyCache[tab.sessionId];
     var dup = arr.length > 0 && arr[arr.length - 1].direction === 'system' && arr[arr.length - 1].hex === msg;
     if (!dup) arr.push(entry);
+    arr._hexChars = undefined;   // 批量入口：下次裁剪时重算字符总量
     if (_renderEnd >= 0) _renderEnd = arr.length;
     _trimCache(arr);
   }
@@ -286,10 +405,13 @@ function appendLine(dir, msg) {
   if (!ownerTab) return;
 
   // Always cache the entry for the owning tab, even if not active
-  const entry = { direction: dir, hex: msg.hex, timestamp: msg.timestamp, tsMs: msg.tsMs, segments: msg.segments };
+  const entry = { direction: dir, hex: msg.hex, timestamp: msg.timestamp, tsMs: msg.tsMs, segments: msg.segments, origin: msg.origin };
   if (!state.historyCache[ownerTab.sessionId]) { state.historyCache[ownerTab.sessionId] = []; state.historyCache[ownerTab.sessionId]._id = ownerTab.sessionId; }
   var ownerCache = state.historyCache[ownerTab.sessionId];
   ownerCache.push(entry);
+  if (typeof ownerCache._hexChars === 'number') {
+    ownerCache._hexChars += entry.hex ? entry.hex.length : 0;
+  }
   _trimCache(ownerCache);
 
   // Only render to DOM if this tab is currently active
@@ -343,7 +465,7 @@ function _flushAppends() {
       line.setAttribute('data-sys-raw', e.hex || '');
       frag.appendChild(line);
     } else {
-      makeDataRow(frag, e.direction, e.timestamp, e.hex, e.segments || null);
+      makeDataRow(frag, e.direction, e.timestamp, e.hex, e.segments || null, null, e.origin);
     }
   }
   display.appendChild(frag);
@@ -362,6 +484,7 @@ function _stickToBottom(display) {
   if (!display) return;
   display.scrollTop = 1e9;
   _atBottom = true;
+  _lastScrollTop = display.scrollTop;   // 夹到底之后的真实值
 }
 
 // 只裁剪数据行，不碰提示行与占位块；始终执行（无论是否锁定/冻结）
@@ -559,7 +682,13 @@ function initSendScrollbar(box) {
   _initOverlayScrollbar(box, { className: 'is-send', top: 40 });
 }
 
-function _syncCustomScrollbar(display) {
+// 自绘滚动条同步：每次 flush 都调会读 scrollHeight（强制布局），大流量时
+// 每帧一次很不划算 —— 滑块位置 12 Hz 的更新在肉眼上已经连续。
+var _sbSyncLast = 0;
+function _syncCustomScrollbar(display, force) {
+  var now = performance.now();
+  if (!force && now - _sbSyncLast < 80) return;
+  _sbSyncLast = now;
   if (display && typeof display._syncScrollbar === 'function') display._syncScrollbar();
 }
 
@@ -645,7 +774,7 @@ function renderHistoryLines(entries, keepScroll) {
       line.textContent = '── ' + formatSysMsg(entry.hex || '') + ' ──';
       fragment.appendChild(line);
     } else {
-      makeDataRow(fragment, entry.direction, entry.timestamp, entry.hex, entry.segments || null);
+      makeDataRow(fragment, entry.direction, entry.timestamp, entry.hex, entry.segments || null, null, entry.origin);
     }
   }
   display.appendChild(fragment);
@@ -657,6 +786,7 @@ function renderHistoryLines(entries, keepScroll) {
   if (!keepScroll) {
     display.scrollTop = 1e9;
     _atBottom = true;
+    _lastScrollTop = display.scrollTop;
   }
   display.onscroll = _onDisplayScroll;
   _updateUnreadChrome(display);
@@ -684,9 +814,21 @@ function _onDisplayScroll() {
   if (!display) return;
   // 滚动条只反映真实内容（未读改用右下角胶囊提示），所以到底的判断就是原生语义。
   var atBottom = display.scrollTop + display.clientHeight >= display.scrollHeight - 4;
+  // 只有"scrollTop 变小"才算用户往回翻。内容长高（含 content-visibility 把估值
+  // 换成真实高度）也会触发 scroll 事件，此时 scrollTop 不变或变大，不能冻结——
+  // 否则跟滚会在某一批数据后停住，未读胶囊一路涨。
+  var movedUp = display.scrollTop < _lastScrollTop;
+  _lastScrollTop = display.scrollTop;
   var wasFrozen = _frozen;
   _atBottom = atBottom;
-  var shouldFreeze = !!state.scrollLocked || !atBottom;
+  var shouldFreeze;
+  if (state.scrollLocked) {
+    shouldFreeze = true;                       // 锁定了就不跟
+  } else if (wasFrozen) {
+    shouldFreeze = !atBottom;                  // 已冻结：真的回到底部才解冻
+  } else {
+    shouldFreeze = movedUp && !atBottom;       // 未冻结：只有用户往上滚才冻结
+  }
 
   if (wasFrozen && !shouldFreeze) {
     // 回到底部：解除冻结，把未读补上
@@ -763,7 +905,7 @@ function expandHistory(entries) {
       line.setAttribute('data-sys-raw', entry.hex || '');
       frag.appendChild(line);
     } else {
-      makeDataRow(frag, entry.direction, entry.timestamp, entry.hex, entry.segments || null);
+      makeDataRow(frag, entry.direction, entry.timestamp, entry.hex, entry.segments || null, null, entry.origin);
     }
   }
   // 去掉旧的「更多」提示后插到最前
@@ -870,6 +1012,7 @@ async function _loadOlderFromDaemon(sessionId, entries) {
   if (history.length === 0) return 0;
 
   Array.prototype.unshift.apply(entries, history);
+  entries._hexChars = undefined;
   if (typeof entries._clearedAt === 'number') entries._clearedAt += history.length;
   return history.length;
 }
@@ -911,6 +1054,7 @@ async function _searchDiskHistory(sessionId, entries) {
 
     if (prepend.length > 0) {
       Array.prototype.unshift.apply(entries, prepend);
+      entries._hexChars = undefined;
       if (entries._clearedAt !== undefined) {
         entries._clearedAt += prepend.length;
       }
@@ -976,6 +1120,7 @@ async function mergeRingBuffer(sessionId) {
           if (sysFp) seen.add(sysFp);
         }
       }
+      arr._hexChars = undefined;
     }
     _trimCache(arr);
   } catch {}
@@ -1048,6 +1193,7 @@ function clearDisplay() {
   var ts = new Date().toISOString().slice(11, 23).replace(/\./g, ':').slice(0, 12);
   cache._clearedAt = cache.length;
   cache.push({ direction: 'system', hex: 'sys.history_cleared', timestamp: ts });
+  cache._hexChars = undefined;
 
   // Reset stats display (local counters only).
   state.statsBase[cacheKey] = { tx: 0, rx: 0 };

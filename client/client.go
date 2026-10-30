@@ -938,15 +938,38 @@ func (c *DaemonClient) SearchHistory(file, keyword string, limit int, offset int
 	})
 }
 
-// SetHistoryEnabled toggles auto-save for history files.
+// SetHistoryEnabled 修改「新进程默认是否把历史写入磁盘」。
+//
+// 已有的进程如果没被单独设置过会跟着变（老语义），显式按进程设置过的保持原样。
 func (c *DaemonClient) SetHistoryEnabled(enabled bool) error {
 	_, err := c.Call(contract.HistoryEnable, map[string]any{"enabled": enabled})
 	return err
 }
 
-// GetHistoryStatus returns whether history auto-save is enabled.
+// GetHistoryStatus 返回新进程的默认落盘开关。
 func (c *DaemonClient) GetHistoryStatus() (bool, error) {
 	result, err := c.Call(contract.HistoryStatus, nil)
+	if err != nil {
+		return false, err
+	}
+	v, _ := result["enabled"].(bool)
+	return v, nil
+}
+
+// SetHistoryEnabledFor 按进程（GUI 里就是「这个标签」）开关历史落盘。
+//
+// 开启会立即创建一个新的 history/*.log；关闭会关掉当前文件（已写入的内容保留）。
+func (c *DaemonClient) SetHistoryEnabledFor(processID string, enabled bool) error {
+	_, err := c.Call(contract.HistoryEnable, map[string]any{
+		"enabled":   enabled,
+		"processId": processID,
+	})
+	return err
+}
+
+// GetHistoryStatusFor 返回单个进程实际生效的落盘开关。
+func (c *DaemonClient) GetHistoryStatusFor(processID string) (bool, error) {
+	result, err := c.Call(contract.HistoryStatus, map[string]any{"processId": processID})
 	if err != nil {
 		return false, err
 	}
@@ -1076,6 +1099,13 @@ func waitDaemonExit(timeout time.Duration) {
 	}
 }
 
+// WaitDaemonReady 阻塞到守护进程端点可连接为止（超时返回 false）。
+//
+// GUI 用它代替「每秒试连一次」：守护进程一就绪就能立刻连上，不必等下一次轮询。
+func WaitDaemonReady(timeout time.Duration) bool {
+	return pipe.WaitReady(timeout)
+}
+
 func startDaemonProcess() (string, error) {
 	exePath := findDaemonExe()
 	if exePath == "" {
@@ -1088,14 +1118,19 @@ func startDaemonProcess() (string, error) {
 		return "", fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	for i := 0; i < 60; i++ {
-		time.Sleep(100 * time.Millisecond)
-		_, err := CallOnce(contract.Status, nil, "cli")
-		if err == nil {
+	// 等 OS 级「管道可用」这个就绪信号，而不是每 100ms 盲发一次 Status。
+	// 这也修掉了「进程已经起来、管道还没建好就判失败」的竞态。
+	if !pipe.WaitReady(6 * time.Second) {
+		return "", fmt.Errorf("daemon started but its pipe never became ready (6s)")
+	}
+	// 就绪后再确认一次能真正通信；协议版本不匹配由 StartDaemon 的 DaemonInfo 负责。
+	for i := 0; i < 20; i++ {
+		if _, err := CallOnce(contract.Status, nil, "cli"); err == nil {
 			return "started", nil
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	return "", fmt.Errorf("daemon started but not responsive after 6s")
+	return "", fmt.Errorf("daemon pipe ready but not responsive")
 }
 
 func findDaemonExe() string {

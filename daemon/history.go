@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -13,26 +12,110 @@ import (
 	"time"
 
 	"github.com/nienieai/serial-debugger/ringbuf"
+	"github.com/nienieai/serial-debugger/sessionfile"
 )
 
+// dirByteToName 是 dirToByte 的反向：会话里的方向字节 → 历史包里的方向串。
+func dirByteToName(d uint8) string {
+	switch sessionfile.DirBase(d) {
+	case sessionfile.DirRx:
+		return "rx"
+	case sessionfile.DirTx:
+		return "tx"
+	case sessionfile.DirP1:
+		return "1"
+	case sessionfile.DirP2:
+		return "2"
+	}
+	return "system"
+}
+
+// latestSessionDir 返回 dir 下最近修改的会话目录（含 manifest.json 或 pkg-*.stlog）。
+func latestSessionDir(dir string) string {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var best string
+	var bestT time.Time
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if !sessionfile.IsSessionDir(p) {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().After(bestT) {
+			best, bestT = p, fi.ModTime()
+		}
+	}
+	return best
+}
+
+// loadSessionIntoRing 把一个会话目录里的帧搬进环形缓冲，等价于 loadHistoryIntoRing
+// 对 .log 做的事。v2 起录制只写会话目录，重启后的历史就从这里恢复。
+//
+// 系统帧（dir=0）在历史包里存的是文本而不是 hex，这里按同样规则还原。
+func loadSessionIntoRing(rb *ringbuf.RingBuffer, dir string) (int, error) {
+	info, err := sessionfile.ReadSession(dir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for i := range info.Frames {
+		f := &info.Frames[i]
+		var hexData string
+		if sessionfile.DirBase(f.Dir) == sessionfile.DirSystem {
+			hexData = string(f.Payload)
+		} else {
+			hexData = hex.EncodeToString(f.Payload)
+		}
+		pkt := encodeHistoryPacket(int64(f.Ts), hexData, dirByteToName(f.Dir), f.OriginStr)
+		if !rb.WriteEvict(pkt) {
+			return count, fmt.Errorf("ring buffer 写入失败（第 %d 条）", count)
+		}
+		count++
+	}
+	return count, nil
+}
+
+// 历史落盘的**默认值**：新进程是否把数据写进 history/*.log。
+//
+// 默认关闭：只有用户显式开启才生成历史文件（以前默认开，跑一次就多一个
+// 日志文件）。单个进程还可以被 history.enable{processId} 覆盖，见
+// Process.SetSaveHistory。启动时由 settings/daemon.ini 的 [history] auto_save
+// 覆盖（GUI 连上后还会用自身的「默认自动保存」推一次 history.enable）。
 var (
-	historyEnabled   = true
-	historyEnabledMu sync.RWMutex
+	historyDefaultSave   = false
+	historyDefaultSaveMu sync.RWMutex
 )
 
-func isHistoryEnabled() bool {
-	historyEnabledMu.RLock()
-	defer historyEnabledMu.RUnlock()
-	return historyEnabled
+// defaultSaveHistory 返回新进程的默认落盘开关。
+func defaultSaveHistory() bool {
+	historyDefaultSaveMu.RLock()
+	defer historyDefaultSaveMu.RUnlock()
+	return historyDefaultSave
 }
 
-func setHistoryEnabled(v bool) {
-	historyEnabledMu.Lock()
-	historyEnabled = v
-	historyEnabledMu.Unlock()
+// setDefaultSaveHistory 修改默认值；已经显式设置过（SetSaveHistory）的进程不受影响。
+func setDefaultSaveHistory(v bool) {
+	historyDefaultSaveMu.Lock()
+	historyDefaultSave = v
+	historyDefaultSaveMu.Unlock()
 }
+
+// historyDirOverride 仅测试用：指向临时目录，避免测试往二进制旁写 history/。
+var historyDirOverride string
 
 func historyDir() string {
+	if historyDirOverride != "" {
+		return historyDirOverride
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "history"
@@ -92,16 +175,33 @@ func loadHistoryIntoRing(rb *ringbuf.RingBuffer, filePath string) (int, error) {
 }
 
 // readHistoryRaw reads one raw packet (the exact bytes as stored on disk).
+//
+// 包长由头部 11 字节算出；长度字段最高位为 1 时后面还跟着「来源长度(1B) +
+// 来源字符串」。原样返回（含来源段），这样写入环形缓冲的字节与文件里完全一致。
 func readHistoryRaw(r *bufio.Reader) ([]byte, error) {
 	var header [11]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
 	}
-	hexLen := binary.LittleEndian.Uint16(header[9:11])
-	pkt := make([]byte, 11+hexLen)
+	bodyLen, hasOrigin := historyPacketLen(header[:])
+	pkt := make([]byte, bodyLen)
 	copy(pkt[:11], header[:])
 	if _, err := io.ReadFull(r, pkt[11:]); err != nil {
 		return nil, fmt.Errorf("truncated entry: %w", err)
+	}
+	if hasOrigin {
+		originLen, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("truncated origin length: %w", err)
+		}
+		pkt = append(pkt, originLen)
+		if originLen > 0 {
+			origin := make([]byte, originLen)
+			if _, err := io.ReadFull(r, origin); err != nil {
+				return nil, fmt.Errorf("truncated origin: %w", err)
+			}
+			pkt = append(pkt, origin...)
+		}
 	}
 	return pkt, nil
 }
@@ -211,25 +311,13 @@ func containsDecodedHex(hexText, kwUpper string) bool {
 }
 
 func readHistoryEntry(r *bufio.Reader) (HistoryEntry, int64, error) {
-	var header [11]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
+	pkt, err := readHistoryRaw(r)
+	if err != nil {
 		return HistoryEntry{}, 0, err
 	}
-
-	ts := int64(binary.LittleEndian.Uint64(header[0:8]))
-	dir := header[8]
-	hexLen := binary.LittleEndian.Uint16(header[9:11])
-
-	hexBuf := make([]byte, hexLen)
-	if _, err := io.ReadFull(r, hexBuf); err != nil {
-		return HistoryEntry{}, 0, fmt.Errorf("truncated entry: %w", err)
+	entry, ok := decodeHistoryPacket(pkt)
+	if !ok {
+		return HistoryEntry{}, 0, fmt.Errorf("invalid history packet")
 	}
-
-	consumed := int64(11 + hexLen)
-	return HistoryEntry{
-		Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
-		Hex:       string(hexBuf),
-		Direction: byteToDir(dir),
-		TsMs:      ts,
-	}, consumed, nil
+	return entry, int64(len(pkt)), nil
 }

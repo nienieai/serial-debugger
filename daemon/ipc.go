@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -571,15 +570,12 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 			logOp("连接", "%s:%s 开始通信 (PID: %d)", label, sess.clientId, sess.pid)
 		}
 
-		t0 := time.Now()
 		resp := s.dispatchForSession(sess, r)
-		dt := time.Since(t0)
 
 		if err := sess.writeResp(resp); err != nil {
 			s.removeSession(p.ClientId)
 			return
 		}
-		logIPCForSession(sess, r, resp, dt)
 	}
 }
 
@@ -587,21 +583,9 @@ func (s *IpcServer) handleRegister(daemonConn io.ReadWriteCloser, reader *bufio.
 func (s *IpcServer) handleCallOnce(conn io.ReadWriteCloser, firstData []byte, req *protocol.Request) {
 	defer conn.Close()
 
-	t0 := time.Now()
 	resp := s.dispatchForSession(nil, req)
-	dt := time.Since(t0)
 
 	protocol.WriteMessage(conn, resp)
-
-	src := req.Source
-	if contract.Method(req.Method) != contract.Status && contract.Method(req.Method) != contract.Ping {
-		label := sourceLabel(src)
-		result := "ok"
-		if resp.Error != "" {
-			result = "err: " + resp.Error
-		}
-		logOp("IPC", "%s call-once %s → %s (%v)", label, req.Method, result, dt.Round(time.Microsecond))
-	}
 }
 
 // pushSub 向单个会话投递事件，队列满时按慢客户端处理。
@@ -738,6 +722,22 @@ func sourceLabel(s string) string {
 	}
 }
 
+// originOf 生成 Tx 的来源标识（格式见 RxTxMessage.Origin）。
+//
+// 直接复用 clientId（形如 "gui-a1b2c3d4"，本身带 source 前缀）：客户端显示时
+// 取连字符前那段就是 GUI/CLI/MCP，需要追到具体会话时它又能和 client.list 里的
+// 条目对上，不用另造一套映射。一次性调用没有会话（sess == nil），用
+// "<source>-once" 表示「某个不做会话登记的一次性客户端」。
+func originOf(sess *clientSession, req *protocol.Request) string {
+	if sess != nil && sess.clientId != "" {
+		return sess.clientId
+	}
+	if req != nil && req.Source != "" {
+		return req.Source + "-once"
+	}
+	return ""
+}
+
 func convParams(params map[string]any, v any) error {
 	raw, err := json.Marshal(params)
 	if err != nil {
@@ -802,7 +802,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 
 	case contract.PortsRefresh:
 		s.reloadCache()
-		logOp("操作", "%s 刷新串口列表", label)
 		fallthrough
 	case contract.Ports:
 		s.portsMu.RLock()
@@ -837,14 +836,12 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		return protocol.Response{ID: req.ID, Result: map[string]any{"clients": clients}}
 
 	case contract.Threads:
-		logOp("操作", "%s 查看线程详情", label)
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"goroutines": s.pm.GoroutineCount(),
 			"sessions":   s.pm.ListConnected(),
 		}}
 
 	case contract.Goroutines:
-		logOp("操作", "%s 查看调用栈", label)
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"goroutines": s.pm.GoroutineCount(),
 			"stack":      s.pm.GoroutineStacks(),
@@ -914,7 +911,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			if connected {
 				logOp("串口", "%s 创建转发 %s ↔ %s → #%s", label, p.Port, p.PortB, proc.id)
 			} else {
-				logOp("操作", "%s 声明转发 %s ↔ %s → #%s", label, p.Port, p.PortB, proc.id)
 			}
 			return protocol.Response{ID: req.ID, Result: map[string]any{
 				"processId": proc.id,
@@ -939,10 +935,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			logOp("串口", "%s 打开 %s @ %d baud — 进程 #%s, 当前 %d 个进程 (%d 已连接)",
 				label, cfg.Port, cfg.Baud, proc.id, s.pm.Count(), s.pm.ConnectedCount())
 		} else if cfg.Port != "" {
-			logOp("操作", "%s 声明 %s @ %d baud → #%s, 当前 %d 个进程",
-				label, cfg.Port, cfg.Baud, proc.id, s.pm.Count())
 		} else {
-			logOp("操作", "%s 创建空闲进程 #%s, 当前 %d 个进程", label, proc.id, s.pm.Count())
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"processId": proc.id,
@@ -969,7 +962,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			logOp("串口", "%s 关闭 %s, 剩余 %d 个进程 (%d 已连接)",
 				label, portName, s.pm.Count(), s.pm.ConnectedCount())
 		} else {
-			logOp("操作", "%s 销毁进程 #%s", label, p.ProcessID)
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
@@ -1046,7 +1038,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := s.pm.Disconnect(p.ProcessID); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
-		logOp("操作", "%s 断开进程 #%s", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	case contract.ProcessSwitch:
@@ -1082,7 +1073,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := s.pm.SetMode(p.ProcessID, p.Mode); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
-		logOp("操作", "%s 设置进程 #%s 模式 → %s", label, p.ProcessID, p.Mode)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	case contract.ProcessWatch:
@@ -1189,7 +1179,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		if err := s.pm.Send(p.ProcessID, p.Data, p.Format); err != nil {
+		if err := s.pm.Send(p.ProcessID, p.Data, p.Format, originOf(sess, req)); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		s.trackCallerViewer(sess, p.ProcessID)
@@ -1206,6 +1196,29 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
+
+	case contract.SessionOpen:
+		// 把一个 .stlog 会话推给守护进程：建进程、灌数据，之后按正常会话接口读
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.Path == "" {
+			return protocol.Response{ID: req.ID, Error: "path required"}
+		}
+		proc, frames, err := s.pm.OpenSession(p.Path)
+		if err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"processId": proc.id,
+			"mode":      proc.mode,
+			"port":      proc.config.Port,
+			"portB":     proc.forwardConfigB.Port,
+			"frames":    frames,
+		}}
 
 	case contract.SessionHistory:
 		var p struct {
@@ -1227,8 +1240,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if result == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		logOp("操作", "%s 读取历史记录 (进程 %s, limit=%d before=%d skip=%d → %d 条)",
-			label, p.ProcessID, p.Limit, p.BeforeTsMs, p.SameTsSkip, len(result["history"].([]HistoryEntry)))
 		return protocol.Response{ID: req.ID, Result: result}
 
 	case contract.SessionStats:
@@ -1252,7 +1263,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		if err := s.pm.SendTrigger(p.ProcessID, p.Raw); err != nil {
+		if err := s.pm.SendTrigger(p.ProcessID, p.Raw, originOf(sess, req)); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
@@ -1462,20 +1473,46 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 
 	case contract.HistoryEnable:
 		var p struct {
-			Enabled bool `json:"enabled"`
+			Enabled   bool   `json:"enabled"`
+			ProcessID string `json:"processId"`
 		}
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
-		setHistoryEnabled(p.Enabled)
-		logOp("操作", "%s 历史自动保存: %v", label, p.Enabled)
+		// 带 processId 是按进程（标签）设置；不带是改新进程的默认值。
+		if p.ProcessID != "" {
+			if err := s.pm.SetProcessHistorySave(p.ProcessID, p.Enabled); err != nil {
+				return protocol.Response{ID: req.ID, Error: err.Error()}
+			}
+			logOp("历史", "%s 进程 #%s 历史落盘: %v", label, p.ProcessID, p.Enabled)
+			return protocol.Response{ID: req.ID, Result: map[string]any{
+				"enabled":   p.Enabled,
+				"processId": p.ProcessID,
+			}}
+		}
+		s.pm.SetDefaultHistorySave(p.Enabled)
+		logOp("历史", "%s 历史落盘默认值: %v", label, p.Enabled)
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"enabled": p.Enabled,
 		}}
 
 	case contract.HistoryStatus:
+		var ps struct {
+			ProcessID string `json:"processId"`
+		}
+		_ = convParams(req.Params, &ps)
+		if ps.ProcessID != "" {
+			on, err := s.pm.ProcessHistorySave(ps.ProcessID)
+			if err != nil {
+				return protocol.Response{ID: req.ID, Error: err.Error()}
+			}
+			return protocol.Response{ID: req.ID, Result: map[string]any{
+				"enabled":   on,
+				"processId": ps.ProcessID,
+			}}
+		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{
-			"enabled": isHistoryEnabled(),
+			"enabled": defaultSaveHistory(),
 		}}
 
 	case contract.HistoryAttach:
@@ -1493,7 +1530,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := proc.attachHistoryFile(p.File); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
-		logOp("操作", "%s 进程 #%s 已附加历史文件 %s", label, p.ProcessID, p.File)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	case contract.HistoryNew:
@@ -1507,10 +1543,10 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if proc == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		if err := proc.newHistoryFile(); err != nil {
+		// v2 起「新建历史文件」= 开一个新会话目录，不再建 history/*.log
+		if err := proc.ensureStlogSession(); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
-		logOp("操作", "%s 进程 #%s 新建历史文件", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	case contract.HistoryDetach:
@@ -1525,7 +1561,6 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
 		proc.detachHistoryFile()
-		logOp("操作", "%s 进程 #%s 已分离历史文件", label, p.ProcessID)
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
 	default:
@@ -1574,15 +1609,11 @@ func (s *IpcServer) handlePortsProbe(req *protocol.Request, label string) protoc
 		ports = list
 	}
 
-	logOp("操作", "%s 开始设备探测 (端口: %d, 规则: %s)", label, len(ports), configPath)
-
 	budget := time.Duration(params.BudgetMs) * time.Millisecond
 	outcome := ProbePorts(ports, occupied, cfg, params.BaudRates, params.Rules, budget)
 
 	// 结果里必须带上 skipped / budgetExhausted / busy：
 	// 空 results 曾经既可能是「没设备」也可能是「压根没探成」，两者同形。
-	logOp("操作", "%s 探测结束：命中 %d，跳过 %d，尝试 %d 次，耗时 %dms，预算用尽=%v",
-		label, len(outcome.Results), len(outcome.Skipped), outcome.Attempts, outcome.ElapsedMs, outcome.BudgetExhausted)
 
 	return protocol.Response{ID: req.ID, Result: map[string]any{
 		"results":         outcome.Results,
@@ -1592,71 +1623,4 @@ func (s *IpcServer) handlePortsProbe(req *protocol.Request, label string) protoc
 		"budgetExhausted": outcome.BudgetExhausted,
 		"busy":            outcome.Busy,
 	}}
-}
-
-func logIPCForSession(sess *clientSession, req *protocol.Request, resp protocol.Response, dt time.Duration) {
-	if contract.Method(req.Method) == contract.Status || contract.Method(req.Method) == contract.Ping ||
-		contract.Method(req.Method) == contract.SessionSend || contract.Method(req.Method) == contract.SendTrigger ||
-		contract.Method(req.Method) == contract.AutosendStatus || contract.Method(req.Method) == contract.PortsProbe {
-		return
-	}
-	label := sourceLabel(sess.source)
-	result := "ok"
-	if resp.Error != "" {
-		result = "err: " + resp.Error
-	}
-	summary := req.Method
-	switch contract.Method(req.Method) {
-	case contract.ProcessCreate:
-		port, _ := req.Params["port"].(string)
-		baud, _ := req.Params["baud"].(float64)
-		if port != "" {
-			if resp.Result != nil {
-				if rid, ok := resp.Result.(map[string]any)["processId"]; ok {
-					summary = fmt.Sprintf("create %s@%d → #%s", port, int(baud), rid)
-				}
-			}
-		} else {
-			if resp.Result != nil {
-				if rid, ok := resp.Result.(map[string]any)["processId"]; ok {
-					summary = fmt.Sprintf("create idle → #%s", rid)
-				}
-			}
-		}
-	case contract.ProcessDestroy:
-		if pid, ok := req.Params["processId"]; ok {
-			summary = fmt.Sprintf("destroy #%v", pid)
-		}
-	case contract.ProcessConnect:
-		port, _ := req.Params["port"].(string)
-		pid, _ := req.Params["processId"].(string)
-		summary = fmt.Sprintf("connect #%s → %s", pid, port)
-	case contract.ProcessDisconnect:
-		if pid, ok := req.Params["processId"]; ok {
-			summary = fmt.Sprintf("disconnect #%v", pid)
-		}
-	case contract.ProcessSwitch:
-		if pid, ok := req.Params["processId"]; ok {
-			port, _ := req.Params["port"].(string)
-			summary = fmt.Sprintf("switch #%v → %s", pid, port)
-		}
-	case contract.SessionSend:
-		fmtStr, _ := req.Params["format"].(string)
-		data, _ := req.Params["data"].(string)
-		size := len(data)
-		if fmtStr == "hex" {
-			size = len(data) / 2
-		}
-		pid, _ := req.Params["processId"]
-		summary = fmt.Sprintf("send #%v %s %dB", pid, fmtStr, size)
-	case contract.SessionHistory:
-		pid, _ := req.Params["processId"]
-		summary = fmt.Sprintf("history #%v", pid)
-	case contract.PortsRefresh:
-		summary = "refresh ports"
-	case contract.Shutdown:
-		summary = "shutdown"
-	}
-	logOp("IPC", "%s:%s r%d %s → %s (%v)",
-		label, sess.clientId, sess.reqCount, summary, result, dt.Round(time.Microsecond))
 }

@@ -1,7 +1,10 @@
 // Package pipe provides cross-platform named pipe IPC.
 package pipe
 
-import "io"
+import (
+	"io"
+	"time"
+)
 
 // Addr 是守护进程监听的端点地址。具体取值由各平台文件定义：
 //
@@ -43,6 +46,21 @@ func Listen(addr string) (Listener, error) {
 // Dial connects to a pipe server at the given address.
 func Dial(addr string) (io.ReadWriteCloser, error) {
 	return dialPipe(addr)
+}
+
+// WaitReady 阻塞到守护进程端点「可连接」为止（超时返回 false）。
+//
+// 这是守护进程的「就绪通知」：Windows 上等价于 WaitNamedPipe —— 管道实例一经
+// 创建（守护进程调用 Listen 的那一刻）就能立刻返回，比客户端盲轮询快得多，也
+// 不会出现「进程起来了但管道还没建好」的假阴性。Unix 上是轮询 socket 文件。
+//
+// 之所以不另建命名事件：管道的存在本身就是 OS 级就绪信号，且天然跨会话、随进程
+// 退出一起消失，不会留下「假就绪」的残留状态。
+func WaitReady(timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	return waitReady(timeout)
 }
 
 // ClientPID returns the process ID of the connected peer.

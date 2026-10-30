@@ -1,6 +1,6 @@
 # 第三方依赖许可声明
 
-本项目（serial-debugger）基于 [MIT License](LICENSE) 开源。
+本项目（serial-debugger）基于 [Apache License 2.0](LICENSE) 开源（版权与归属见 [NOTICE](NOTICE)）。
 
 以下为构建所需第三方依赖及其许可证清单。本文件用于满足各许可证的
 "二进制分发时保留版权声明"要求（BSD-3 第 2 条、Apache-2.0 第 4 条、ISC 许可文本等）。

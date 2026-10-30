@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/nienieai/serial-debugger/config"
@@ -13,43 +10,6 @@ import (
 )
 
 var daemonLang = "zh"
-
-func loadDaemonLang() {
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	f, err := os.Open(filepath.Join(filepath.Dir(exe), "settings.ini"))
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	inDisplay := false
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || line[0] == '#' || line[0] == ';' {
-			continue
-		}
-		if line[0] == '[' {
-			inDisplay = strings.EqualFold(line, "[display]")
-			continue
-		}
-		if inDisplay {
-			eq := strings.IndexByte(line, '=')
-			if eq < 0 {
-				continue
-			}
-			key := strings.TrimSpace(line[:eq])
-			val := strings.TrimSpace(line[eq+1:])
-			if key == "language" && config.HasLang(val) {
-				daemonLang = val
-				return
-			}
-		}
-	}
-}
 
 func dt(key string, args ...any) string {
 	return config.T(daemonLang, key, args...)
@@ -60,7 +20,12 @@ func main() {
 	// 必须在任何日志输出之前关掉：控制台一旦被点击进入选择模式，
 	// 之后所有往控制台写日志的操作都会阻塞，进而卡住连接处理。
 	quickEditDisabled := disableQuickEdit()
-	loadDaemonLang()
+	// 设置来自 <exe>/settings/daemon.ini（语言 + 着色 + 历史落盘默认值），
+	// 只由守护进程读。
+	ds := processDaemonSettings()
+	daemonLang = ds.LogLanguage
+	setDefaultSaveHistory(ds.HistoryAutoSave)
+	initColor(os.Args[1:], ds.LogColor)
 
 	// 日志文件要尽早打开：由客户端拉起的守护进程没有控制台（Stdout/Stderr
 	// 被 os/exec 接到空设备），不开文件就等于没有任何日志（TODO #30）。
@@ -137,6 +102,11 @@ func main() {
 func logOp(category string, format string, args ...any) {
 	ts := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
-	fmt.Print(formatLogLine(ts, category, msg))
+	// 控制台可彩色，文件永远纯文本（否则 `serial-cli logs` 读到的是转义串）
+	if colorEnabled {
+		fmt.Print(formatLogLineColor(ts, category, msg))
+	} else {
+		fmt.Print(formatLogLine(ts, category, msg))
+	}
 	writeLogLine(formatLogLine(ts, category, msg))
 }

@@ -12,8 +12,8 @@
   "info": {
     "companyName": "nienieai",
     "productName": "串口调试工具",
-    "productVersion": "0.8.2",
-    "copyright": "Copyright (c) 2026 nienieai (MIT License)",
+    "productVersion": "0.8.3",
+    "copyright": "Copyright (c) 2026 nienieai (Apache License 2.0)",
     "comments": "串口调试工具 图形界面"
   }
 }

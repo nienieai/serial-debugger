@@ -81,8 +81,10 @@ serial-cli multistr save / load / reload / status   # 多字符串持久化与�
 ```bash
 serial-cli history-files                 # 列出 history/*.log
 serial-cli history-search 20260801_1.log "READY"  # 文件内搜索关键字
-serial-cli history-enable false          # 关闭自动保存
-serial-cli history-status                # 查看自动保存状态
+serial-cli history-enable                # 打开「新进程默认落盘」（默认关）
+serial-cli history-enable true 1         # 只让进程 1 落盘（按标签开关）
+serial-cli history-status                # 查看默认落盘开关
+serial-cli history-status 1              # 查看进程 1 的落盘状态
 serial-cli history-attach 1 20260801_1.log  # 为进程附加历史文件
 serial-cli history-new 1                 # 新建历史文件
 serial-cli history-detach 1              # 分离历史文件

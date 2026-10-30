@@ -50,6 +50,10 @@ export function EncodeTextForSend(arg1, arg2) {
   return window['go']['main']['App']['EncodeTextForSend'](arg1, arg2);
 }
 
+export function ExportStlogText(arg1) {
+  return window['go']['main']['App']['ExportStlogText'](arg1);
+}
+
 export function ForwardConnect(arg1, arg2, arg3) {
   return window['go']['main']['App']['ForwardConnect'](arg1, arg2, arg3);
 }
@@ -84,6 +88,10 @@ export function GetGoroutines() {
 
 export function GetHistoryStatus() {
   return window['go']['main']['App']['GetHistoryStatus']();
+}
+
+export function GetHistoryStatusFor(arg1) {
+  return window['go']['main']['App']['GetHistoryStatusFor'](arg1);
 }
 
 export function GetI18n(arg1) {
@@ -170,8 +178,32 @@ export function OpenSession(arg1) {
   return window['go']['main']['App']['OpenSession'](arg1);
 }
 
+export function OpenStlogFile(arg1) {
+  return window['go']['main']['App']['OpenStlogFile'](arg1);
+}
+
+export function OpenStlogSession(arg1) {
+  return window['go']['main']['App']['OpenStlogSession'](arg1);
+}
+
+export function PickStlogDir() {
+  return window['go']['main']['App']['PickStlogDir']();
+}
+
+export function PickStlogFile() {
+  return window['go']['main']['App']['PickStlogFile']();
+}
+
+export function ProbeDroppedPaths(arg1) {
+  return window['go']['main']['App']['ProbeDroppedPaths'](arg1);
+}
+
 export function ReadMultistrEntries(arg1) {
   return window['go']['main']['App']['ReadMultistrEntries'](arg1);
+}
+
+export function ReadStlogFrames(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReadStlogFrames'](arg1, arg2, arg3);
 }
 
 export function RefreshPorts() {
@@ -202,12 +234,20 @@ export function SetHistoryEnabled(arg1) {
   return window['go']['main']['App']['SetHistoryEnabled'](arg1);
 }
 
+export function SetHistoryEnabledFor(arg1, arg2) {
+  return window['go']['main']['App']['SetHistoryEnabledFor'](arg1, arg2);
+}
+
 export function SetProcessMode(arg1, arg2) {
   return window['go']['main']['App']['SetProcessMode'](arg1, arg2);
 }
 
 export function SetTabEncoding(arg1, arg2) {
   return window['go']['main']['App']['SetTabEncoding'](arg1, arg2);
+}
+
+export function SettingsDir() {
+  return window['go']['main']['App']['SettingsDir']();
 }
 
 export function ShowFolderInExplorer(arg1) {

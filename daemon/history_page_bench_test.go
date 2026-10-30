@@ -14,8 +14,8 @@ import (
 //
 // 跑法：go test ./daemon/ -bench BenchmarkHistoryRead -benchmem -run XXX
 func BenchmarkHistoryRead(b *testing.B) {
-	setHistoryEnabled(false)
-	b.Cleanup(func() { setHistoryEnabled(true) })
+	setDefaultSaveHistory(false)
+	b.Cleanup(func() { setDefaultSaveHistory(false) })
 
 	pm := NewProcessManager()
 	b.Cleanup(pm.DestroyAll)
@@ -31,7 +31,7 @@ func BenchmarkHistoryRead(b *testing.B) {
 	const frames = 200000
 	for i := 0; i < frames; i++ {
 		// 每 50 帧共用一毫秒，制造真实的时间戳撞车
-		proc.recordHistoryAt(1700000000000+int64(i/50), payload, "rx")
+		proc.recordHistoryAt(1700000000000+int64(i/50), payload, "rx", "")
 	}
 
 	packets := proc.historyRing.Snapshot()

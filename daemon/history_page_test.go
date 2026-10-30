@@ -10,8 +10,8 @@ import (
 func newHistoryProc(t *testing.T) (*ProcessManager, *Process) {
 	t.Helper()
 	// 不落盘：historyDir() 会指向测试二进制所在目录。
-	setHistoryEnabled(false)
-	t.Cleanup(func() { setHistoryEnabled(true) })
+	setDefaultSaveHistory(false)
+	t.Cleanup(func() { setDefaultSaveHistory(false) })
 
 	pm := NewProcessManager()
 	t.Cleanup(pm.DestroyAll)
@@ -62,7 +62,7 @@ func TestHistoryPagingReconstructsFullRing(t *testing.T) {
 	// 每 7 条同一毫秒，故意让时间戳撞车；7 与页大小 33 互质，
 	// 于是每翻几页就会正好从某一毫秒组中间切开。
 	for i := 0; i < total; i++ {
-		proc.recordHistoryAt(1000+int64(i/7), fmt.Sprintf("%04X", i), "rx")
+		proc.recordHistoryAt(1000+int64(i/7), fmt.Sprintf("%04X", i), "rx", "")
 	}
 
 	full := historyOf(t, pm.GetHistory(proc.id))
@@ -111,7 +111,7 @@ func TestHistoryPagingSingleMsGroup(t *testing.T) {
 
 	const total = 100
 	for i := 0; i < total; i++ {
-		proc.recordHistoryAt(5000, fmt.Sprintf("%04X", i), "rx")
+		proc.recordHistoryAt(5000, fmt.Sprintf("%04X", i), "rx", "")
 	}
 
 	var got []HistoryEntry
@@ -146,7 +146,7 @@ func TestHistoryPagingSingleMsGroup(t *testing.T) {
 func TestHistoryPageUnlimitedKeepsOldBehaviour(t *testing.T) {
 	pm, proc := newHistoryProc(t)
 	for i := 0; i < 20; i++ {
-		proc.recordHistoryAt(int64(1000+i), "AABB", "rx")
+		proc.recordHistoryAt(int64(1000+i), "AABB", "rx", "")
 	}
 
 	res := pm.GetHistory(proc.id)
@@ -183,7 +183,7 @@ func TestHistoryRingDoesNotFreezeWhenFull(t *testing.T) {
 	const total = 2000
 	hexData := strings.Repeat("AB", 4096)
 	for i := 0; i < total; i++ {
-		proc.recordHistoryAt(1000+int64(i), hexData, "rx")
+		proc.recordHistoryAt(1000+int64(i), hexData, "rx", "")
 	}
 	if d := proc.ringDrops.Load(); d != 0 {
 		t.Fatalf("这些包都装得下，不该有丢弃: %d", d)

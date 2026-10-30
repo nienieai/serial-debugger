@@ -1,4 +1,4 @@
-﻿# 构建说明
+# 构建说明
 
 ## 环境要求
 
@@ -125,6 +125,28 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 
 > 4 个可执行文件必须放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`。
 
+### 部署到开发测试目录
+
+```powershell
+.\deploy-dev.ps1            # 只同步产物（改了前端 / 语言包）
+.\deploy-dev.ps1 -Build     # 先重编译再部署（改了 Go 代码）
+```
+
+目标目录默认 `<仓库>\..\串口调试工具\0.8.3-dev`，可用 `-Target` 指定。
+
+之所以要脚本而不是只拷 exe，是因为**只换 exe 会有两处永远读到旧内容**：
+
+| 内容 | 原因 |
+| --- | --- |
+| `frontend\` | GUI 是 hotreload 构建，前端从 `<exe>\frontend\` 读盘，不读内嵌资源 |
+| `resources-system\` | 语言包 / 图标 / 主题的查找顺序是 `resources-system` → `resources` → 内嵌，内置层优先级最高 |
+
+脚本会把 4 个 exe、`frontend\`、`config\resources\`（→ `resources-system\`）一起同步，
+逐文件比对字节数，不一致非 0 退出。外置层 `resources\`（用户自己的语言包 / 主题）不碰。
+
+> 改了语言包记得**重启 GUI**：i18n 只在启动和切换语言时加载，hotreload 不盯
+> `resources-system\`。
+
 ## 源代码目录
 
 ```text
@@ -184,7 +206,7 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 │   ├── i18n.go                #   内置 i18n 翻译加载
 │   ├── i18n/                  #   9 种语言翻译 JSON
 │   ├── icons.go               #   内置图标加载 (embed icons/system/*.svg)
-│   ├── icons/system/          #   内置图标主题（20 个 24×24 SVG + icons.json）
+│   ├── icons/system/          #   内置图标主题（28 个 24×24 SVG + icons.json）
 │   ├── theme.go               #   主题系统 (颜色+图标)
 │   ├── themes/system.json     #   内置颜色主题
 │   └── probe.toml             #   设备探测规则配置
@@ -262,10 +284,10 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 - 状态栏由 `frontend/statusbar.js` 组件化：StatusDaemon / StatusClients / StatusEncoding / StatusStats，通过 `_statusBar` API 更新
 - 设置页通过菜单「设置 → 软件设置」打开（独立标签页），左侧导航（编码与显示/外观/存储与行为/语言/关于），右侧气泡卡片布局
 - 主题/语言气泡底部"创建示例"按键通过 Go 后端 `CreateExampleFiles` 创建示例文件夹和文件
-- 设置页全部文字已 i18n 化（当前 91 个 `settings.*` 翻译键，9 语言全覆盖）
+- 设置页全部文字已 i18n 化（当前 121 个 `settings.*` 翻译键，9 语言全覆盖）
 - 所有可执行文件放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`
 - 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（发布包布局）→ `exe/../../config/`（开发布局：exe 在 `build/bin`，配置在仓库根）→ 工作目录 `probe.toml` / `config/probe.toml`，候选去重。全部未命中时回退**内置规则**（`config/probe.toml` 经 `//go:embed` 嵌入二进制），因此发布包即使不含 `config/` 目录，`probe` 也可直接使用
-- GUI 设置文件 `settings.ini`（INI 格式），与 `serial-gui.exe` 同目录
+- GUI 设置文件 `settings/gui.ini`（INI 格式），与 `serial-gui.exe` 同级的 `settings/` 目录；同目录还有 `cli.ini`（CLI 只读：`[general] language/color`）与 `daemon.ini`（守护进程只读：`[log] language/color`），一个文件只有一个写者。MCP 不落盘
 - 外部 i18n 目录 `build/bin/i18n/` 与 `serial-gui.exe` 同目录，文件名格式 `{lang}.json`，详见 README
 - 外部主题目录 `build/bin/themes/colors/`（颜色主题 .json）和 `build/bin/resources/icons/<包名>/`（图标主题文件夹，含 icons.json + .svg）
 - 图标主题文件夹中 `.svg` 文件名 = 内置图标键名，覆盖对应内置图标

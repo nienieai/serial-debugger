@@ -7,8 +7,8 @@
 **GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
 [![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
-[![Version](https://img.shields.io/badge/version-0.8.2-blue)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.8.3-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -226,7 +226,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [需求文档](REQUIREMENTS.md) | 需求列表与实现状态 |
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
-| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.2 各版本的变更、根因与验收方法 |
+| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.3 各版本的变更、根因与验收方法 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
@@ -234,14 +234,13 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 📜 版本历史 / Changelog
 
-当前版本 **v0.8.2**。最近三版：
+当前版本 **v0.8.3**。最近三版：
 
 | 版本 | 要点 |
 |------|------|
+| **0.8.3** | 会话文件升级成**工程目录**（`manifest.json` + `settings.json` + `index.bin` + 分包的 `pkg-*.stlog`）：录制只写 `.stlog`、拖入工程或文件即可浏览、工程可按键交给守护进程恢复成会话页（单端口 / 转发）；标签悬停浮窗与文件页浮窗定稿（去掉尖角）；历史/实时渲染再降一档内存与 CPU；许可证改为 **Apache 2.0** |
 | **0.8.2** | 资源统一到 `resources/` 并分「内置 / 外置」两层；主题支持图片（全页背景、四条栏、缩略图）；设置页外观卡与新建会话页重画；标签栏与多字符串面板拖动换成 pointer 实现（实时补位、FLIP 动画、边缘自动滚动、推挤「+」） |
 | **0.8.1** | GUI 一轮集中修复：新建页先选模式、前端热重载、端口下拉同步与占用高亮、历史视图空白、自绘滚动条、状态栏统计残留、标签栏滚动提示、主题按钮图标 |
-| **0.8.0** | 把 0.7.5.1 ～ 0.7.5.10 的修复整体收口为稳定基线；不含功能改动（源码与 0.7.5.10 的差别只有版本号） |
-| **0.7.5.10** | 补 `serial-cli sendone [processId] [--raw]`，让「多字符串条目剥头」那条修复可黑盒验收 |
 
 完整历史（0.1.0 起，含每个版本的根因分析、实测数据与验收方法）见 [`CHANGELOG.md`](CHANGELOG.md)。
 
@@ -253,6 +252,6 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 🤝 贡献与许可 / Contributing
 
-- 本项目基于 [MIT License](LICENSE) 开源，欢迎社区贡献——见 [贡献指南](CONTRIBUTING.md)。
+- 本项目基于 [Apache License 2.0](LICENSE) 开源（版权与归属见 [NOTICE](NOTICE)），欢迎社区贡献——见 [贡献指南](CONTRIBUTING.md)。
 - 👋 如果它帮到了您，欢迎 **Star**；遇到问题请提交 **Issue**，有改进想法欢迎 **Pull Request**。
 - **AI 辅助声明**：本项目在开发与文档维护过程中使用了 AI Agent 工具辅助（代码生成与审计、文档润色、多语言翻译等）；文档与翻译内容由 AI 辅助产出，可能存在错误或不准确之处，欢迎指正与贡献修正。

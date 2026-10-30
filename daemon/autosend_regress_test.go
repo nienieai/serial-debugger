@@ -11,8 +11,8 @@ import (
 // 不落盘历史：historyDir() 会指向测试二进制所在目录，开着会往那里堆 *.log。
 func newAutoSendTestProcess(t *testing.T) *Process {
 	t.Helper()
-	setHistoryEnabled(false)
-	t.Cleanup(func() { setHistoryEnabled(true) })
+	setDefaultSaveHistory(false)
+	t.Cleanup(func() { setDefaultSaveHistory(false) })
 
 	pm := NewProcessManager()
 	t.Cleanup(pm.DestroyAll)

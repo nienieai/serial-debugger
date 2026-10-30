@@ -16,10 +16,14 @@ import (
 	"github.com/nienieai/serial-debugger/config"
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/protocol"
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 )
 
 var cliLang = "zh"
+
+// cliCfg 是 settings/cli.ini 的内容，main 里读一次，供语言与着色取默认值。
+var cliCfg = defaultCLISettings()
 
 func detectLang() string {
 	// 1. --lang flag
@@ -37,13 +41,18 @@ func detectLang() string {
 			return s
 		}
 	}
-	// 3. Default
+	// 3. settings/cli.ini
+	if cliCfg.Language != "" {
+		return cliCfg.Language
+	}
+	// 4. Default
 	return "zh"
 }
 
 func main() {
+	cliCfg = processCLISettings()
 	cliLang = detectLang()
-	args := stripLangFlag(os.Args[1:])
+	args := stripColorFlag(stripLangFlag(os.Args[1:]), cliCfg.Color)
 	if len(args) == 0 {
 		interactiveMode()
 		return
@@ -54,6 +63,10 @@ func main() {
 		printHelp()
 	case "check":
 		cmdCheck()
+	case "stlog-read", "stlog-verify", "stlog-dump", "stlog-export":
+		// .stlog 是离线文件格式的工具，不依赖守护进程，必须在
+		// runCommand 之前分流，否则会先尝试连 IPC 而失败。
+		cmdStlog(args)
 	default:
 		runCommand(args)
 	}
@@ -84,8 +97,8 @@ func interactiveMode() {
 
 	dc, err := client.NewDaemonClient("cli")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "无法连接守护进程: %v\n", err)
-		fmt.Fprintln(os.Stderr, "请先运行 serial-cli start 启动守护进程")
+		printErr("无法连接守护进程: %v", err)
+		printErr("请先运行 serial-cli start 启动守护进程")
 		os.Exit(1)
 	}
 	defer dc.Close()
@@ -147,15 +160,20 @@ func parseArgs(line string) []string {
 
 func cmdCheck() {
 	processRunning := client.IsDaemonProcessRunning()
-	fmt.Printf("进程检测 (tasklist): %v\n", processRunning)
+	runColor := ansiGreen
+	if !processRunning {
+		runColor = ansiRed
+	}
+	fmt.Printf("进程检测 (tasklist): %s\n",
+		paintOut(map[bool]string{true: "true", false: "false"}[processRunning], runColor))
 
 	info, err := client.DaemonInfo()
 	if err == nil {
-		fmt.Println("IPC 健康检查: ok")
+		fmt.Println("IPC 健康检查: " + paintOut("ok", ansiGreen))
 		fmt.Printf("守护进程版本: %s (IPC 协议 %d)\n", info.Version, info.ProtocolVersion)
 		fmt.Printf("客户端版本:   %s (IPC 协议 %d)\n", version.Version, protocol.ProtocolVersion)
 		if !info.Compatible() {
-			fmt.Println("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程")
+			fmt.Println(paintOut("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程", ansiYellow))
 		}
 		if !processRunning {
 			fmt.Println("(tasklist 检测失效，但守护进程实际运行中)")
@@ -167,29 +185,324 @@ func cmdCheck() {
 	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
 		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC 协议 %d)\n",
 			version.Version, protocol.ProtocolVersion)
-		fmt.Println("请执行 serial-cli start 重启守护进程")
+		fmt.Println(paintOut("请执行 serial-cli start 重启守护进程", ansiYellow))
 		return
 	}
 	if processRunning {
-		fmt.Printf("管道连接 / IPC 健康检查: 失败 (%v)\n", err)
+		fmt.Println(paintOut(fmt.Sprintf("管道连接 / IPC 健康检查: 失败 (%v)", err), ansiRed))
 	} else {
-		fmt.Printf("守护进程未运行 (%v)\n", err)
+		fmt.Println(paintOut(fmt.Sprintf("守护进程未运行 (%v)", err), ansiRed))
 	}
+}
+
+// cmdStlog 是会话文件的离线命令（工程目录与单个 .stlog 都收）。
+//
+// 这些子命令都不碰守护进程：.stlog 的卖点之一是"文件即真相"，能脱离录制方
+// 独立校验，所以它们必须在 runCommand 之前分流。
+func cmdStlog(args []string) {
+	if len(args) < 2 {
+		printErr("用法: serial-cli stlog-read|stlog-verify|stlog-dump|stlog-export <工程目录|file.stlog>")
+		os.Exit(2)
+	}
+	if args[0] == "stlog-export" {
+		cmdStlogExport(args)
+		return
+	}
+	path := args[1]
+
+	if args[0] == "stlog-verify" {
+		cmdStlogVerify(path)
+		return
+	}
+
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		printErr("读取失败: %v", err)
+		os.Exit(1)
+	}
+	if args[0] == "stlog-dump" {
+		printStlogPages(info)
+		return
+	}
+	limit := 20
+	if len(args) >= 3 {
+		if n, err := strconv.Atoi(args[2]); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	printStlogSummary(info)
+	printStlogFrames(info, limit)
+}
+
+// cmdStlogExport 把 .stlog 导成一行一帧的纯文本。
+//
+// 默认写 stdout，可以直接 `> out.txt`；`-o` 直接落盘（省一次重定向，也方便在
+// Windows 上避开控制台编码）。`--limit N` 只导前 N 帧，用来快速取样。
+//
+// 格式由 sessionfile.WriteText 决定：CRLF 行尾、十六进制每 32 B 换行、
+// 系统帧按文本输出——目标就是"双击能用记事本打开"。
+func cmdStlogExport(args []string) {
+	if len(args) < 2 {
+		printErr("用法: serial-cli stlog-export <file> [--limit N] [-o out.txt]")
+		os.Exit(2)
+	}
+	path := args[1]
+	limit := 0
+	outPath := ""
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--limit":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					limit = n
+				}
+				i++
+			}
+		case "-o", "--out":
+			if i+1 < len(args) {
+				outPath = args[i+1]
+				i++
+			}
+		default:
+			printErr("未知参数: %s", args[i])
+			os.Exit(2)
+		}
+	}
+
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		printErr("读取失败: %v", err)
+		os.Exit(1)
+	}
+	total := len(info.Frames)
+	if limit > 0 && limit < total {
+		info.Frames = info.Frames[:limit]
+	}
+
+	if outPath == "" {
+		if _, err := sessionfile.WriteText(os.Stdout, info); err != nil {
+			printErr("导出失败: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+	f, err := os.Create(outPath)
+	if err != nil {
+		printErr("创建文件失败: %v", err)
+		os.Exit(1)
+	}
+	n, werr := sessionfile.WriteText(f, info)
+	cerr := f.Close()
+	if werr != nil {
+		printErr("导出失败: %v", werr)
+		os.Exit(1)
+	}
+	if cerr != nil {
+		printErr("关闭文件失败: %v", cerr)
+		os.Exit(1)
+	}
+	fmt.Printf("已导出 %d 帧 → %s (%d B)\n", len(info.Frames), outPath, n)
+	if len(info.Frames) < total {
+		fmt.Printf("（--limit 截断：文件共 %d 帧，头部 大小/页/记录 仍是整个文件的）\n", total)
+	}
+}
+
+func printStlogSummary(info *sessionfile.FileInfo) {
+	label := "文件    "
+	if info.IsSession {
+		label = "会话    "
+	}
+	fmt.Printf("%s: %s (%d B)\n", label, info.Path, info.Size)
+	if info.IsSession && len(info.Packages) > 0 {
+		var parts []string
+		for _, p := range info.Packages {
+			if p.Err != nil {
+				parts = append(parts, p.File+"(读失败)")
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s %d B", p.File, p.Bytes))
+		}
+		fmt.Printf("包      : %s\n", strings.Join(parts, " / "))
+	}
+	if s := info.Settings; s != nil {
+		fmt.Printf("设置    : uuid=%s created=%s label=%q\n", s.UUID, s.Created, s.Label)
+	} else {
+		fmt.Printf("设置    : %s\n", paintOut("<无法读取>", ansiYellow))
+	}
+	fmt.Printf("页/记录 : %d 页 / %d 条\n", len(info.Pages), info.Records)
+	line := fmt.Sprintf("%d", len(info.Frames))
+	if info.Truncated {
+		line += "（末帧未结束）"
+	}
+	fmt.Printf("帧      : %s\n", line)
+	// 转发录制：统计块里只有 rx/tx 两栏，方向字节数得按记录现加。
+	if info.Settings.IsForward() {
+		fmt.Printf("模式    : 端口转发 %s ↔ %s\n", info.Settings.Port, info.Settings.PortB)
+		fmt.Printf("A→B/B→A : %d / %d B（rx/tx 统计 %d / %d B）\n",
+			info.P1Total, info.P2Total, info.RxTotal, info.TxTotal)
+	} else {
+		fmt.Printf("rx/tx   : %d / %d B\n", info.RxTotal, info.TxTotal)
+	}
+	if len(info.Recovered) > 0 {
+		fmt.Printf("恢复    : 从影子页恢复 %v\n", info.Recovered)
+	}
+	if info.BrokenChain {
+		fmt.Println(paintOut("警告    : 续片链在页边界被切断，有一帧不完整", ansiYellow))
+	}
+	if info.StoppedAt != 0 {
+		fmt.Printf("停止    : 偏移 %d（%v）\n", info.StoppedAt, info.StopErr)
+		// 撕裂的尾页只有在既没恢复、也没被断链解释时才是"数据真丢了"。
+		if len(info.Recovered) == 0 && !info.BrokenChain {
+			fmt.Println(paintOut("警告    : 撕裂的尾页无法恢复，其中的数据已丢失", ansiYellow))
+		}
+	}
+}
+
+// printStlogFrames 用 ASCII 表头而不是中文表头：Go 的 %-Ns 按**字节**补空格，
+// 中文一列 3 字节却只显示 2 格宽，中英混排的表头必然错位。
+func printStlogFrames(info *sessionfile.FileInfo, limit int) {
+	if len(info.Frames) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Printf("%6s  %-18s  %-4s  %-12s  %6s  %s\n", "#", "time", "dir", "origin", "len", "payload[0:8]")
+	n := len(info.Frames)
+	if n > limit {
+		n = limit
+	}
+	for i := 0; i < n; i++ {
+		f := info.Frames[i]
+		mark := " "
+		if f.Partial {
+			mark = "!"
+		}
+		// 来源列：Rx 恒空；Tx 是发起者（gui-… / cli-… / auto / multistr），
+		// 格式见 daemon/ipc.go 的 originOf。截到 12 字符保表宽，完整值看 dump。
+		origin := f.OriginStr
+		if len(origin) > 12 {
+			origin = origin[:12]
+		}
+		fmt.Printf("%s%5d  %-18s  %-4s  %-12s  %6d  %s\n",
+			mark, i,
+			time.UnixMilli(int64(f.Ts)).Format("01-02 15:04:05.000"),
+			stlogDirName(f.Dir), origin, len(f.Payload), stlogHead(f.Payload, 8))
+	}
+	if rest := len(info.Frames) - n; rest > 0 {
+		fmt.Printf("... 其余 %d 帧省略（第二个参数可指定条数）\n", rest)
+	}
+}
+
+func printStlogPages(info *sessionfile.FileInfo) {
+	fmt.Printf("%4s  %-10s  %-7s  %-12s  %-5s  %s\n",
+		"pg", "offset", "commit", "firstRec", "recs", "rx/tx")
+	for i, p := range info.Pages {
+		first := fmt.Sprintf("%d", p.FirstRecOff)
+		if p.FirstRecOff == sessionfile.NoFrameStart {
+			first = "0xFFFF"
+		}
+		note := ""
+		if p.Recovered {
+			note = "  (从影子恢复)"
+		}
+		fmt.Printf("%4d  %-10d  %-7d  %-12s  %-5d  %d/%d%s\n",
+			i, p.Offset, p.CommittedLen, first, p.Rec, p.RxTotal, p.TxTotal, note)
+	}
+}
+
+func cmdStlogVerify(path string) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		printErr("校验失败: %v", err)
+		os.Exit(1)
+	}
+	if !fi.IsDir() {
+		os.Exit(verifyFile(path, ""))
+	}
+
+	// v2 会话：逐包校验，任一个包有问题就整体失败（但要全部报出来）
+	refs := sessionfile.PackageRefs(path)
+	if len(refs) == 0 {
+		printErr("校验失败: %s 里没有找到任何 pkg-*.stlog", path)
+		os.Exit(1)
+	}
+	fmt.Printf("会话    : %s（%d 个包）\n", path, len(refs))
+	bad := 0
+	for _, ref := range refs {
+		if verifyFile(filepath.Join(path, ref.File), fmt.Sprintf("包 #%d ", ref.Seq)) != 0 {
+			bad++
+		}
+	}
+	if bad == 0 {
+		fmt.Println(paintOut(fmt.Sprintf("OK: %d 个包都无结构问题", len(refs)), ansiGreen))
+		os.Exit(0)
+	}
+	os.Exit(1)
+}
+
+// verifyFile 校验单个包文件，返回退出码。
+func verifyFile(path, prefix string) int {
+	rep, err := sessionfile.Verify(path)
+	if err != nil {
+		printErr("%s校验失败: %v", prefix, err)
+		return 1
+	}
+	fmt.Printf("%s文件    : %s\n", prefix, path)
+	fmt.Printf("%s页/记录 : %d 页 / %d 条\n", prefix, rep.Pages, rep.Records)
+	fmt.Printf("%s帧      : %d\n", prefix, rep.Frames)
+	if len(rep.Recovered) > 0 {
+		fmt.Printf("%s恢复    : %v\n", prefix, rep.Recovered)
+	}
+	fmt.Printf("%s页内浪费: min=%d max=%d（已封印页，上限 27）\n", prefix, rep.WastedMin, rep.WastedMax)
+	fmt.Printf("%s末页剩余: %d B\n", prefix, rep.LastPageFree)
+	for _, w := range rep.Warnings {
+		fmt.Println(paintOut(prefix+"警告: "+w, ansiYellow))
+	}
+	if len(rep.Problems) == 0 {
+		fmt.Println(paintOut(prefix+"OK: 无结构问题", ansiGreen))
+		return 0
+	}
+	for _, p := range rep.Problems {
+		fmt.Println(paintOut(prefix+"问题: "+p, ansiRed))
+	}
+	return 1
+}
+
+func stlogDirName(d uint8) string {
+	switch d {
+	case sessionfile.DirSystem:
+		return "sys"
+	case sessionfile.DirRx:
+		return "rx"
+	case sessionfile.DirTx:
+		return "tx"
+	case sessionfile.DirP1:
+		return "p1"
+	case sessionfile.DirP2:
+		return "p2"
+	}
+	return fmt.Sprintf("?%d", d)
+}
+
+func stlogHead(b []byte, n int) string {
+	if len(b) > n {
+		b = b[:n]
+	}
+	return fmt.Sprintf("% x", b)
 }
 
 func cmdStart() {
 	status, err := client.StartDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
+		printErr(`{"error": "%s"}`, err.Error())
 		os.Exit(1)
 	}
 	switch status {
 	case "already_running":
-		fmt.Println("守护进程已在运行中")
+		fmt.Println(paintOut("守护进程已在运行中", ansiGreen))
 	case "restarted":
-		fmt.Println("检测到守护进程版本不一致，已重启为当前版本")
+		fmt.Println(paintOut("检测到守护进程版本不一致，已重启为当前版本", ansiYellow))
 	default:
-		fmt.Println("守护进程已启动")
+		fmt.Println(paintOut("守护进程已启动", ansiGreen))
 	}
 }
 
@@ -208,15 +521,15 @@ func cmdLogs(args []string) {
 
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "无法确定程序目录:", err)
+		printErr("无法确定程序目录: %v", err)
 		os.Exit(1)
 	}
 	path := filepath.Join(filepath.Dir(exe), "logs", "daemon.log")
 
 	f, err := os.Open(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "无法读取守护进程日志 %s: %v\n", path, err)
-		fmt.Fprintln(os.Stderr, "提示：守护进程启动后才会创建该文件。")
+		printErr("无法读取守护进程日志 %s: %v", path, err)
+		printWarn("提示：守护进程启动后才会创建该文件。")
 		os.Exit(1)
 	}
 	defer f.Close()
@@ -233,7 +546,7 @@ func cmdLogs(args []string) {
 		lines = append(lines, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "读取日志失败: %v\n", err)
+		printErr("读取日志失败: %v", err)
 		os.Exit(1)
 	}
 
@@ -243,7 +556,7 @@ func cmdLogs(args []string) {
 		return
 	}
 	for _, l := range lines {
-		fmt.Println(l)
+		fmt.Println(colorizeLogLine(l))
 	}
 }
 
@@ -258,7 +571,7 @@ func runCommandInteractive(dc *client.DaemonClient, args []string) {
 	case "status":
 		result, err := client.CallOnce(contract.Status, nil, "cli")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "错误:", err)
+			printErr("错误: %v", err)
 			return
 		}
 		printJSON(result)
@@ -274,7 +587,7 @@ func runCommand(args []string) {
 	// 下面 case 里会再解析一次，成本可忽略。
 	if args[0] == "probe" {
 		if _, _, _, perr := parseProbeArgs(args[1:]); perr != nil {
-			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", perr.Error())
+			printErr(`{"error": "%s"}`, perr.Error())
 			os.Exit(1)
 		}
 	}
@@ -294,7 +607,7 @@ func runCommand(args []string) {
 			// 不要在这里断言「daemon not running」：连接失败的原因可能是
 			// 守护进程未运行、版本不匹配、管道握手失败等，硬套一个错误
 			// 结论会把排查方向带偏。让底层错误自己说话。
-			fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
+			printErr(`{"error": "%s"}`, err.Error())
 			os.Exit(1)
 		}
 		defer dc.Close()
@@ -438,6 +751,33 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		printJSON(result)
 
+	case "session-open":
+		// 把工程目录交给守护进程：由它建一个文件会话进程，之后按 processId 读
+		if len(args) < 2 {
+			printErr("用法: serial-cli session-open <工程目录>")
+			errExit(fmt.Errorf("缺少路径"), interactive)
+			return
+		}
+		result, err := dc.Call(contract.SessionOpen, map[string]any{"path": args[1]})
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
+		fmt.Printf("进程    : #%v\n", result["processId"])
+		fmt.Printf("模式    : %v\n", result["mode"])
+		// 工程里没记端口时建成空闲进程，端口就是空的（不拿目录名冒充串口名）
+		portA, _ := result["port"].(string)
+		if portA == "" {
+			portA = "(未记录)"
+		}
+		portB, _ := result["portB"].(string)
+		if portB != "" {
+			fmt.Printf("端口    : %v ↔ %v\n", portA, portB)
+		} else {
+			fmt.Printf("端口    : %v\n", portA)
+		}
+		fmt.Printf("帧      : %v\n", result["frames"])
+
 	case "sessions":
 		result, err := dc.Call(contract.ProcessList, nil)
 		if err != nil {
@@ -541,7 +881,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		}
 		if port == "" {
-			fmt.Fprintln(os.Stderr, "错误: 必须指定端口")
+			printErr("错误: 必须指定端口")
 			if interactive {
 				return
 			}
@@ -558,7 +898,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		if mode == "forward" {
 			if portB == "" {
-				fmt.Fprintln(os.Stderr, "错误: 转发模式需要 --portB")
+				printErr("错误: 转发模式需要 --portB")
 				if interactive {
 					return
 				}
@@ -669,7 +1009,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		pid := args[1]
 		mode := args[2]
 		if mode != "single" && mode != "forward" {
-			fmt.Fprintln(os.Stderr, "错误: mode 必须是 single 或 forward")
+			printErr("错误: mode 必须是 single 或 forward")
 			if interactive {
 				return
 			}
@@ -842,7 +1182,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 			printJSON(result)
 		default:
-			fmt.Fprintf(os.Stderr, "unknown autosend subcommand: %s\n", sub)
+			printErr("unknown autosend subcommand: %s", sub)
 			if interactive {
 				return
 			}
@@ -975,7 +1315,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 				printJSON(result)
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "unknown multistr subcommand: %s\n", sub)
+			printErr("unknown multistr subcommand: %s", sub)
 			if interactive {
 				return
 			}
@@ -1003,7 +1343,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		printJSON(probeOutcomeJSON(outcome))
 		if len(outcome.Results) == 0 {
-			fmt.Fprintln(os.Stderr, "注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
+			printWarn("注意：以上端口本轮没有被真正探测完，不能据此判断「没有设备」。")
 		}
 
 	case "monitor":
@@ -1100,11 +1440,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "history-enable":
-		enabled := true
-		if len(args) >= 2 {
-			enabled, _ = strconv.ParseBool(args[1])
-		}
-		result, err := dc.Call(contract.HistoryEnable, map[string]any{"enabled": enabled})
+		result, err := dc.Call(contract.HistoryEnable, historyEnableParams(args))
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -1112,7 +1448,12 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "history-status":
-		result, err := dc.Call(contract.HistoryStatus, nil)
+		// history-status [processId]
+		params := map[string]any(nil)
+		if len(args) >= 2 {
+			params = map[string]any{"processId": args[1]}
+		}
+		result, err := dc.Call(contract.HistoryStatus, params)
 		if err != nil {
 			errExit(err, interactive)
 			return
@@ -1153,7 +1494,7 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		printErr("unknown command: %s", args[0])
 		fmt.Fprintln(os.Stderr, "run 'serial-cli help' for available commands")
 		if interactive {
 			return
@@ -1178,7 +1519,7 @@ func cmdMonitor(dc *client.DaemonClient, timeout int) {
 			return
 		case msg, ok := <-events:
 			if !ok {
-				fmt.Fprintln(os.Stderr, "connection lost")
+				printErr("connection lost")
 				os.Exit(1)
 			}
 			if timer != nil {
@@ -1188,6 +1529,24 @@ func cmdMonitor(dc *client.DaemonClient, timeout int) {
 			fmt.Printf("[%s] %s\n", msg.Event, string(b))
 		}
 	}
+}
+
+// historyEnableParams 解析 history-enable 的参数：[true|false] [processId]。
+//
+//	不带 pid → 改「新进程默认是否落盘」（旧语义：未单独设置过的进程会跟着变）
+//	带 pid   → 只改这个进程（GUI 里就是某个标签）；开启立即建文件，关闭保留已写内容
+//
+// 参数缺失/解析失败按 true 处理，与旧版本行为一致。
+func historyEnableParams(args []string) map[string]any {
+	enabled := true
+	if len(args) >= 2 {
+		enabled, _ = strconv.ParseBool(args[1])
+	}
+	params := map[string]any{"enabled": enabled}
+	if len(args) >= 3 {
+		params["processId"] = args[2]
+	}
+	return params
 }
 
 func resolveProcessID(dc *client.DaemonClient, args []string, pos int) string {
@@ -1208,7 +1567,7 @@ func firstConnectedIDDC(dc *client.DaemonClient) string {
 			return id
 		}
 	}
-	fmt.Fprintln(os.Stderr, `{"error": "no connected process"}`)
+	printErr(`{"error": "no connected process"}`)
 	os.Exit(1)
 	return ""
 }
@@ -1245,12 +1604,12 @@ func errExit(err error, interactive bool) {
 	if !interactive {
 		exitOnErr(err)
 	}
-	fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+	printErr("错误: %v", err)
 }
 
 func exitOnErr(err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, `{"error": "%s"}`+"\n", err.Error())
+		printErr(`{"error": "%s"}`, err.Error())
 		os.Exit(1)
 	}
 }
@@ -1404,6 +1763,8 @@ func printHelp() {
   switch  <processId> <port> [baud]  切换进程到不同端口（保留进程历史）
   setmode <processId> <single|forward> 切换进程模式（需 idle 状态）
   forward <portA> <portB> [baudA] [baudB] 创建端口转发
+  session-open <工程目录>            把工程交给守护进程（建文件会话进程）
+                                     只接受工程目录；单个 .stlog 用 stlog-* 离线读
 
 数据:
   send    <data> [processId] [--hex] 发送数据 (--hex: 十六进制)
@@ -1431,11 +1792,20 @@ func printHelp() {
 历史记录:
   history-files                      列出所有历史记录文件 (.log)
   history-search <file> <kw> [limit] 在历史文件中搜索关键字
-  history-enable [true|false]        开关自动保存 (默认 true)
-  history-status                     查看自动保存状态
+  history-enable [true|false] [pid]  默认落盘开关（默认 false）；带 pid 只改该进程
+  history-status [pid]               查看默认/指定进程的落盘状态
   history-attach <pid> <file>        为进程附加历史文件 (加载内容+继续追加)
   history-new [pid]                  为进程新建历史文件
   history-detach [pid]               分离进程的当前历史文件
+
+会话文件 (工程目录或 .stlog):
+  stlog-read   <path>                读取会话并打印摘要与前 20 帧
+  stlog-verify <path>                校验结构（干净=0，有问题=1）
+  stlog-dump   <path>                列出每页的页头信息
+  stlog-export <path> [--limit N] [-o out.txt]
+                                     导出成一行一帧的纯文本（CRLF，记事本能开）
+                                     默认写 stdout，也可用 -o 直接落盘
+                                     四条均为离线操作，不需要守护进程
 
 诊断:
   stats   [processId]                查看进程 I/O 统计（速率/字节/错误）

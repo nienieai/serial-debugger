@@ -16,6 +16,8 @@ import (
 	"github.com/nienieai/serial-debugger/config"
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/decode"
+	"github.com/nienieai/serial-debugger/pipe"
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -50,6 +52,22 @@ type rxTxEnvelope struct {
 	params map[string]any
 }
 
+// maxSegmentHexLen 是「还值得逐字符解 segments」的上限（十六进制字符数）。
+//
+// 一条 4 KB 的包解码出来是 ~3300 个 segment 对象、序列化约 70 KB；历史一次取
+// 1 万条时就是 ~700 MB 的 JSON + JS 对象（实测），这是 GUI 内存暴涨与高 CPU 的
+// 主因。大包本来也不需要「控制字符可视化」，超过这个长度就跳过，前端退回纯文本
+// 渲染（live 数据走同一条规则）。
+const maxSegmentHexLen = 256
+
+// decodeSegments 只对足够小的包做逐字符解码；大包返回 nil。
+func decodeSegments(hexStr, enc string) []decode.Segment {
+	if len(hexStr) > maxSegmentHexLen {
+		return nil
+	}
+	return decode.Decode(hexStr, enc)
+}
+
 func (td *tabDecodeUnit) run() {
 	for {
 		select {
@@ -58,7 +76,7 @@ func (td *tabDecodeUnit) run() {
 			td.encMu.RLock()
 			enc := td.encoding
 			td.encMu.RUnlock()
-			env.params["segments"] = decode.Decode(hex, enc)
+			env.params["segments"] = decodeSegments(hex, enc)
 			runtime.EventsEmit(td.a.ctx, env.event, env.params)
 		case <-td.quit:
 			return
@@ -78,6 +96,26 @@ func NewApp() *App {
 
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	// 守护进程就绪通知：阻塞等 OS 级「管道可连接」，就绪后立刻推给前端，
+	// 前端收到就能马上连，不必等 checkOffline 的 1s 轮询。
+	go a.watchDaemonReady(ctx)
+}
+
+// watchDaemonReady 把「守护进程就绪」变成前端可订阅的事件。
+//
+// pipe.WaitReady 在 Windows 上就是 WaitNamedPipe：守护进程一 Listen 就返回，
+// 不存在「进程起来了但管道还没建好」的误判。就绪期间不重复通知，等端点消失
+// （守护进程退出）后回到外层继续等下一次。
+func (a *App) watchDaemonReady(ctx context.Context) {
+	for ctx.Err() == nil {
+		if !pipe.WaitReady(1 * time.Second) {
+			continue
+		}
+		runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
+		for ctx.Err() == nil && pipe.WaitReady(300*time.Millisecond) {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
 }
 
 func (a *App) Shutdown(ctx context.Context) {
@@ -644,6 +682,19 @@ func (a *App) CreateExampleFiles(kind string) map[string]any {
 }
 
 func (a *App) ShowFolderInExplorer(kind string) map[string]any {
+	// 设置目录与资源目录无关（在 exe 同级），单独处理，不去要 resources 路径。
+	if kind == "settings" {
+		dir, err := settingsDir()
+		if err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		_ = openFolder(dir)
+		return map[string]any{"ok": true}
+	}
+
 	base := config.UserResourcesDir()
 	if base == "" {
 		return map[string]any{"ok": false, "error": "resource dir not found"}
@@ -713,7 +764,11 @@ func (a *App) GetSessionHistory(processID string, limit int, beforeTsMs int64, s
 					entry, ok := entryRaw.(map[string]any)
 					if ok {
 						if hexStr, _ := entry["hex"].(string); hexStr != "" {
-							entry["segments"] = decode.Decode(hexStr, enc)
+							// 大包不解码（见 maxSegmentHexLen）：否则 1 万条历史能把
+							// 前端堆撑到几百 MB
+							if segs := decodeSegments(hexStr, enc); segs != nil {
+								entry["segments"] = segs
+							}
 						}
 					}
 					history[i] = entry
@@ -1011,6 +1066,289 @@ func (a *App) SearchHistory(file, keyword string, limit int, offset int64) map[s
 	return result
 }
 
+// DropProbe 是拖放预检的结果。Kind 取 "session" / "file" / "unknown"。
+type DropProbe struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+	Err  string `json:"err,omitempty"`
+}
+
+// ProbeDroppedPaths 判断拖进来的路径能不能当会话打开，**不解析内容**。
+//
+// 前端拿不到 stat，分不清"目录"和"没有扩展名的文件"，所以判定放这里：
+// 工程目录（有 manifest.json 或 pkg-*.stlog）和 .stlog 文件都算能开；
+// 其余返回 unknown 带原因，由前端汇总成一个警告窗。
+func (a *App) ProbeDroppedPaths(paths []string) []DropProbe {
+	out := make([]DropProbe, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, probeDropPath(p))
+	}
+	return out
+}
+
+func probeDropPath(p string) DropProbe {
+	fi, err := os.Stat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DropProbe{Path: p, Kind: "unknown", Err: "路径不存在"}
+		}
+		return DropProbe{Path: p, Kind: "unknown", Err: err.Error()}
+	}
+	if fi.IsDir() {
+		if !sessionfile.IsSessionDir(p) {
+			return DropProbe{Path: p, Kind: "unknown", Err: "目录里没有 manifest.json，也没有 pkg-*.stlog"}
+		}
+		return DropProbe{Path: p, Kind: "session"}
+	}
+	if !strings.HasSuffix(strings.ToLower(fi.Name()), ".stlog") {
+		return DropProbe{Path: p, Kind: "unknown", Err: "不是 .stlog 文件，也不是会话目录"}
+	}
+	if err := sessionfile.CheckHeader(p); err != nil {
+		return DropProbe{Path: p, Kind: "unknown", Err: err.Error()}
+	}
+	return DropProbe{Path: p, Kind: "file"}
+}
+
+// OpenStlogSession 把一个**工程目录**交给守护进程，由它开一个文件会话进程。
+//
+// 单个 .stlog 不行：包文件没有设置文档、没有索引，也不会再追加，守护进程那边
+// 直接拒绝（daemon/serial.go 的 OpenSession）。返回的 processId 之后走常规会话
+// 接口读数据。
+func (a *App) OpenStlogSession(path string) (map[string]any, error) {
+	if path == "" {
+		return nil, fmt.Errorf("路径为空")
+	}
+	result, err := a.call(contract.SessionOpen, map[string]any{"path": path})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("守护进程没有返回会话信息")
+	}
+	return result, nil
+}
+
+// OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
+//
+// 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，
+// 分页/搜索/导出属于后续接入，见 docs/format/stlog-format.md 的 P1 阶段。
+func (a *App) OpenStlogFile(path string) (map[string]any, error) {
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		return nil, err
+	}
+
+	preview := make([]map[string]any, 0, 20)
+	for i, f := range info.Frames {
+		if i >= 20 {
+			break
+		}
+		head := f.Payload
+		if len(head) > 8 {
+			head = head[:8]
+		}
+		preview = append(preview, map[string]any{
+			"ts":      f.Ts,
+			"dir":     f.Dir,
+			"len":     len(f.Payload),
+			"partial": f.Partial,
+			"head":    strings.ToUpper(hex.EncodeToString(head)),
+		})
+	}
+
+	out := map[string]any{
+		"path":        info.Path,
+		"size":        info.Size,
+		"pages":       len(info.Pages),
+		"records":     info.Records,
+		"frames":      len(info.Frames),
+		"rxTotal":     info.RxTotal,
+		"txTotal":     info.TxTotal,
+		"truncated":   info.Truncated,
+		"brokenChain": info.BrokenChain,
+		"recovered":   info.Recovered,
+		"stoppedAt":   info.StoppedAt,
+		"preview":     preview,
+	}
+	if info.Settings != nil {
+		out["settings"] = info.Settings
+	}
+	if info.StopErr != nil {
+		out["stopErr"] = info.StopErr.Error()
+	}
+	return out, nil
+}
+
+// maxStlogOrigins 是「来源汇总」的条数上限。一份录制正常只有几个客户端，
+// 真出现几百个也不该把响应撑大。
+const maxStlogOrigins = 32
+
+// ReadStlogFrames 分页读 .stlog 的帧，给 GUI 的文件标签页渲染。
+//
+// 每次调用都重读整个文件：v1.4 明确不建 sidecar 索引（§2.12），单文件通常几 MB，
+// 重读几十毫秒可以接受；真要读几百 MB 的录制，再上增量索引。
+//
+// limit 上限 1000 帧——一帧最大 4016 B，转成十六进制是 8 KB 字符串，一次给太多
+// 会让过桥的 JSON 和 DOM 都爆掉。标签页首屏 500 帧，其余靠"加载更多"。
+func (a *App) ReadStlogFrames(path string, offset, limit int) (map[string]any, error) {
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		return nil, err
+	}
+	total := len(info.Frames)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	frames := make([]map[string]any, 0, end-offset)
+	for i := offset; i < end; i++ {
+		f := info.Frames[i]
+		frames = append(frames, map[string]any{
+			"index":   i,
+			"ts":      f.Ts,
+			"dir":     f.Dir,
+			"len":     len(f.Payload),
+			"hex":     strings.ToUpper(hex.EncodeToString(f.Payload)),
+			"partial": f.Partial,
+			"origin":  f.OriginStr,
+		})
+	}
+
+	out := map[string]any{
+		"path":        path,
+		"size":        info.Size,
+		"pages":       len(info.Pages),
+		"records":     info.Records,
+		"total":       total,
+		"offset":      offset,
+		"frames":      frames,
+		"rxTotal":     info.RxTotal,
+		"txTotal":     info.TxTotal,
+		"bytesAB":     info.P1Total,
+		"bytesBA":     info.P2Total,
+		"truncated":   info.Truncated,
+		"brokenChain": info.BrokenChain,
+		"recovered":   info.Recovered,
+		"stoppedAt":   info.StoppedAt,
+	}
+	// 首末帧时间：顶栏要显示「2023-11-15 06:13:20.000 ~ 06:13:20.019」。
+	// 文件里存的是绝对毫秒时间戳，年份本来就在数据里，只是逐行显示时刻意省了。
+	if total > 0 {
+		out["firstTs"] = info.Frames[0].Ts
+		out["lastTs"] = info.Frames[total-1].Ts
+	}
+	// 来源汇总：整份文件里出现过的 origin 字符串，按首次出现的顺序去重。
+	// 顶栏拿它显示「来源 GUI · CLI」；没有来源的文件显示「无来源」——
+	// 空着不说话，最容易让人以为来源功能没做（样本文件就是这样）。
+	seen := make(map[string]bool, 8)
+	origins := make([]string, 0, 8)
+	for i := range info.Frames {
+		s := info.Frames[i].OriginStr
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		origins = append(origins, s)
+		if len(origins) >= maxStlogOrigins {
+			break
+		}
+	}
+	out["origins"] = origins
+	// 录制模式：老文件没有 mode 字段，读回来是空串，一律按单端口处理。
+	out["mode"] = sessionfile.ModeSingle
+	out["portB"] = ""
+	out["forward"] = false
+	if info.Settings != nil {
+		out["settings"] = info.Settings
+		if info.Settings.Mode != "" {
+			out["mode"] = info.Settings.Mode
+		}
+		out["portB"] = info.Settings.PortB
+		out["forward"] = info.Settings.IsForward()
+	}
+	if info.StopErr != nil {
+		out["stopErr"] = info.StopErr.Error()
+	}
+	return out, nil
+}
+
+// PickStlogFile 弹系统打开对话框选一个 .stlog，返回绝对路径。
+//
+// 用户取消时返回空串（不是错误）——前端据此静默作罢。单开一个方法而不是并到
+// ReadStlogFrames 里：对话框是用户主动触发的动作，"新建会话 → 从文件打开"
+// 和拖入共用同一条打开路径。
+func (a *App) PickStlogFile() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "打开 .stlog 会话文件",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "会话文件 (*.stlog)", Pattern: "*.stlog"},
+			{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
+		},
+	})
+}
+
+// PickStlogDir 弹系统目录对话框选一个工程目录，返回绝对路径。
+//
+// 工程目录是 v2 的会话单位（manifest.json + pkg-*.stlog）；单个 .stlog 是包文件，
+// 走 PickStlogFile。两个对话框分开是因为 Windows 的文件对话框选不了目录。
+// 用户取消时返回空串（不是错误）。
+func (a *App) PickStlogDir() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "打开工程目录",
+	})
+}
+
+// ExportStlogText 弹保存对话框，把 .stlog 导成"一行一帧"的纯文本。
+//
+// 格式由 sessionfile.WriteText 决定（CRLF、十六进制每 32 B 换行、系统帧按文本），
+// 目标文件双击就能用记事本打开。用户取消时返回 {"canceled": true}，不算错误。
+func (a *App) ExportStlogText(path string) (map[string]any, error) {
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	out, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "导出 .stlog 文本",
+		DefaultFilename: base + ".txt",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "文本文件 (*.txt)", Pattern: "*.txt"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return map[string]any{"canceled": true}, nil
+	}
+	f, err := os.Create(out)
+	if err != nil {
+		return nil, err
+	}
+	n, werr := sessionfile.WriteText(f, info)
+	cerr := f.Close()
+	if werr != nil {
+		return nil, werr
+	}
+	if cerr != nil {
+		return nil, cerr
+	}
+	return map[string]any{"path": out, "bytes": n, "frames": len(info.Frames)}, nil
+}
+
 // SetHistoryEnabled toggles auto-save for history files.
 func (a *App) SetHistoryEnabled(enabled bool) error {
 	a.daemonMu.Lock()
@@ -1031,6 +1369,32 @@ func (a *App) GetHistoryStatus() bool {
 		return false
 	}
 	v, _ := ec.GetHistoryStatus()
+	return v
+}
+
+// SetHistoryEnabledFor 设置单个进程（标签）是否把历史写入磁盘。
+//
+// 标签级开关：同一窗口里可以有的标签落盘、有的不落盘。开启会立即建文件，
+// 关闭会关掉当前文件（已写入内容保留）。
+func (a *App) SetHistoryEnabledFor(processID string, enabled bool) error {
+	a.daemonMu.Lock()
+	ec := a.eventConn
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return fmt.Errorf("not connected")
+	}
+	return ec.SetHistoryEnabledFor(processID, enabled)
+}
+
+// GetHistoryStatusFor 返回单个进程实际生效的落盘开关。
+func (a *App) GetHistoryStatusFor(processID string) bool {
+	a.daemonMu.Lock()
+	ec := a.eventConn
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return false
+	}
+	v, _ := ec.GetHistoryStatusFor(processID)
 	return v
 }
 

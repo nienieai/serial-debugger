@@ -21,8 +21,8 @@ import (
 func TestRingLifetimeRace(t *testing.T) {
 	// 关掉自动落盘：本测试只关心环的生命周期，historyDir() 会指向测试二进制
 	// 所在目录，开着会往那里堆 *.log。
-	setHistoryEnabled(false)
-	defer setHistoryEnabled(true)
+	setDefaultSaveHistory(false)
+	defer setDefaultSaveHistory(false)
 
 	pm := NewProcessManager()
 	defer pm.DestroyAll()
@@ -65,7 +65,7 @@ func TestRingLifetimeRace(t *testing.T) {
 					_ = pm.GetHistory(id)
 					_ = pm.ClearHistory(id)
 					_, _ = pm.MultistrReadEntries(id)
-					_ = pm.SendTrigger(id, true)
+					_ = pm.SendTrigger(id, true, "")
 				}
 			}
 		}()

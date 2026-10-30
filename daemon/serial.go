@@ -14,6 +14,7 @@ import (
 
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/ringbuf"
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"go.bug.st/serial"
 )
 
@@ -38,6 +39,11 @@ type RxTxMessage struct {
 	// 前端拿它做「回补更早历史」的分页游标：时间戳字符串只有时分秒，
 	// 跨天会撞车，而且没法跟环里的 int64 精确比较。
 	TsMs int64 `json:"tsMs"`
+	// Origin 标识这条 Tx 是谁发出的，格式见 daemon/ipc.go 的 originOf：
+	//   "gui-a1b2c3d4" / "cli-..." / "mcp-..."  —— 某个客户端会话（clientId）
+	//   "auto" / "multistr"                    —— 守护进程自己的发送循环
+	// Rx 没有来源（数据来自设备），恒为空。
+	Origin string `json:"origin,omitempty"`
 }
 
 type HistoryEntry struct {
@@ -46,6 +52,8 @@ type HistoryEntry struct {
 	Direction string `json:"direction"`
 	// TsMs 见 RxTxMessage.TsMs。
 	TsMs int64 `json:"tsMs"`
+	// Origin 见 RxTxMessage.Origin；老历史文件里没有这一项（为空）。
+	Origin string `json:"origin,omitempty"`
 }
 
 type SendErrorInfo struct {
@@ -53,6 +61,8 @@ type SendErrorInfo struct {
 	Error     string `json:"error"`
 	Data      string `json:"data"`
 	Timestamp string `json:"timestamp"`
+	// Origin 见 RxTxMessage.Origin：发送失败的那一帧本来由谁发出。
+	Origin string `json:"origin,omitempty"`
 }
 
 type ProcessStats struct {
@@ -72,9 +82,18 @@ type ProcessStats struct {
 
 // ---- send job ----
 
+// 守护进程自己产生的 Tx 没有客户端会话，用固定关键字标识来源
+// （客户端会话的来源是 clientId，如 "gui-a1b2c3d4"，见 RxTxMessage.Origin）。
+const (
+	originAuto     = "auto"     // 自动发送循环
+	originMultistr = "multistr" // 多字符串队列 / 循环发送
+)
+
 type sendJob struct {
 	raw    []byte
 	format string
+	// origin 是这次发送的发起者（见 RxTxMessage.Origin），随 Tx 事件与历史一起落盘。
+	origin string
 }
 
 // ---- stats sample ----
@@ -129,8 +148,24 @@ type Process struct {
 	ringBufMu       sync.Mutex          // 串行化 historyRing 的读写与关闭
 	histFileMu      sync.RWMutex        // 保护 historyFile / historyFileName
 	ringDrops       atomic.Int64        // 环装不下的包数（单包超过整环容量时才会非 0）
-	stopCh          chan struct{}
-	stopOnce        sync.Once // ensures stopIO runs only once
+	// saveHistory / saveHistorySet：该进程是否落盘，以及用户是否显式设置过。
+	// 未显式设置时取全局默认（defaultSaveHistory），因此全局默认变化会作用到
+	// 所有未单独设置过的进程；显式设置后不再被全局值覆盖。
+	saveHistory    atomic.Bool
+	saveHistorySet atomic.Bool
+
+	// .stlog 录制（与 history/*.log 并存，见 daemon/stlog.go）。
+	// stlogMu 保护 stlog / stlogName / stlogPending / stlogSince / stlogStop，
+	// 也串行化 Append 与 Flush —— 尾页缓冲跨多次 flush，不能并发写。
+	stlogMu      sync.Mutex
+	stlog        *sessionfile.Session
+	stlogName    string
+	stlogPending bool      // 有已追加但未刷盘的记录
+	stlogSince   time.Time // 第一条未刷记录到达的时刻（定时 flush 的锚点）
+	stlogStop    chan struct{}
+
+	stopCh   chan struct{}
+	stopOnce sync.Once // ensures stopIO runs only once
 
 	sendCh chan sendJob
 
@@ -179,6 +214,9 @@ type Process struct {
 	forwardStopCh   chan struct{}
 	forwardStopOnce sync.Once
 
+	// sessionPath 非空表示这是一个从 .stlog 打开的只读文件会话（见 OpenSession）
+	sessionPath string
+
 	// per-source viewer counts: {"gui": N, "cli": N, "mcp": N}
 	viewers map[string]int
 
@@ -199,7 +237,86 @@ func (p *Process) viewerSummary() map[string]int {
 }
 
 func (p *Process) recordHistory(hexData, direction string) {
-	p.recordHistoryAt(time.Now().UnixMilli(), hexData, direction)
+	p.recordHistoryAt(time.Now().UnixMilli(), hexData, direction, "")
+}
+
+// historyOriginFlag 是历史包长度字段的最高位，表示「包尾带来源字符串」。
+//
+// 为什么复用长度字段的高位而不是加版本头：历史文件是裸包拼接、没有文件头，
+// 加头会让所有老文件读不出来；把标记放进长度字段后，老包（该位恒为 0）仍按原
+// 格式解析，新老文件可以共存。hex 长度上限 0x7FFF = 32767 个字符，而读缓冲最大
+// 4 KB（8192 个 hex 字符），余量足够。
+const historyOriginFlag = uint16(0x8000)
+
+// maxOriginLen 是来源字符串的长度上限（包内用 1 字节记长度）。
+const maxOriginLen = 255
+
+// historyPacketLen 只读头部 11 字节就算出一个历史包的总字节数（含可选来源段），
+// 供文件顺序读取使用。
+func historyPacketLen(header []byte) (total int, hasOrigin bool) {
+	rawLen := binary.LittleEndian.Uint16(header[9:11])
+	hexLen := int(rawLen &^ historyOriginFlag)
+	return 11 + hexLen, rawLen&historyOriginFlag != 0
+}
+
+func encodeHistoryPacket(ts int64, hexData, direction, origin string) []byte {
+	if len(origin) > maxOriginLen {
+		origin = origin[:maxOriginLen]
+	}
+	// Serialize: | timestamp(8B) | direction(1B) | hexLen(2B, bit15=带来源) |
+	//            | hexData(N) | [originLen(1B) | origin(M)] |
+	total := 11 + len(hexData)
+	if origin != "" {
+		total += 1 + len(origin)
+	}
+	pkt := make([]byte, total)
+	binary.LittleEndian.PutUint64(pkt[0:8], uint64(ts))
+	pkt[8] = dirToByte(direction)
+	hexLen := uint16(len(hexData))
+	if origin != "" {
+		hexLen |= historyOriginFlag
+	}
+	binary.LittleEndian.PutUint16(pkt[9:11], hexLen)
+	copy(pkt[11:], hexData)
+	if origin != "" {
+		off := 11 + len(hexData)
+		pkt[off] = byte(len(origin))
+		copy(pkt[off+1:], origin)
+	}
+	return pkt
+}
+
+// decodeHistoryPacket 解析一个完整历史包。ok=false 表示包损坏（截断、长度字段
+// 越界），调用方应跳过它——历史文件可能被外部工具截断，绝不能因此 panic。
+func decodeHistoryPacket(pkt []byte) (HistoryEntry, bool) {
+	if len(pkt) < 11 {
+		return HistoryEntry{}, false
+	}
+	ts := int64(binary.LittleEndian.Uint64(pkt[0:8]))
+	dir := pkt[8]
+	rawLen := binary.LittleEndian.Uint16(pkt[9:11])
+	hexLen := int(rawLen &^ historyOriginFlag)
+	if 11+hexLen > len(pkt) {
+		return HistoryEntry{}, false
+	}
+	entry := HistoryEntry{
+		Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
+		Hex:       string(pkt[11 : 11+hexLen]),
+		Direction: byteToDir(dir),
+		TsMs:      ts,
+	}
+	if rawLen&historyOriginFlag != 0 {
+		off := 11 + hexLen
+		if off >= len(pkt) {
+			return HistoryEntry{}, false
+		}
+		originLen := int(pkt[off])
+		if off+1+originLen > len(pkt) {
+			return HistoryEntry{}, false
+		}
+		entry.Origin = string(pkt[off+1 : off+1+originLen])
+	}
+	return entry, true
 }
 
 // recordHistoryAt 用调用方给定的毫秒时间戳记一条历史。
@@ -207,14 +324,8 @@ func (p *Process) recordHistory(hexData, direction string) {
 // 广播事件与环形缓冲必须共用**同一个** ts：前端的分页游标是拿事件的 ts 去环里
 // 定位的，两边各取一次 time.Now() 会在毫秒边界上错开，表现为回补时偶发重复行
 // 或漏行（概率约等于两次调用之间跨过毫秒边界的概率）。
-func (p *Process) recordHistoryAt(ts int64, hexData, direction string) {
-	// Serialize: | timestamp(8B) | direction(1B) | hexLen(2B) | hexData(N) |
-	pktLen := 8 + 1 + 2 + len(hexData)
-	pkt := make([]byte, pktLen)
-	binary.LittleEndian.PutUint64(pkt[0:8], uint64(ts))
-	pkt[8] = dirToByte(direction)
-	binary.LittleEndian.PutUint16(pkt[9:11], uint16(len(hexData)))
-	copy(pkt[11:], hexData)
+func (p *Process) recordHistoryAt(ts int64, hexData, direction, origin string) {
+	pkt := encodeHistoryPacket(ts, hexData, direction, origin)
 
 	p.ringBufMu.Lock()
 	if p.historyRing != nil {
@@ -226,22 +337,15 @@ func (p *Process) recordHistoryAt(ts int64, hexData, direction string) {
 	}
 	p.ringBufMu.Unlock()
 
-	// 文件指针与 closeHistory/HistoryDetach 竞争；持读锁期间只读取指针，
-	// 真正的写盘放在锁外，避免把串口读循环卡在磁盘 I/O 上。
-	p.histFileMu.RLock()
-	f := p.historyFile
-	p.histFileMu.RUnlock()
-
-	// Lazy-create history file on first real data (not system events).
-	if f == nil && direction != "system" && isHistoryEnabled() {
-		p.newHistoryFile()
-		p.histFileMu.RLock()
-		f = p.historyFile
-		p.histFileMu.RUnlock()
+	// 落盘只剩这一条路：.stlog 会话（v2）。history/*.log 不再写——
+	// 逐条对照过 16833 条，ts / 方向 / payload / 来源完全一致，而 .log 存的是
+	// hex 字符串，体积是 .stlog 的两倍。
+	//
+	// 惰性建会话：系统事件（连上/断开）不触发，避免只录到一串 sys 行。
+	if direction != "system" && p.shouldSaveHistory() {
+		p.ensureStlogSession()
 	}
-	if f != nil {
-		appendHistoryPacket(f, pkt)
-	}
+	p.appendStlog(ts, hexData, direction, origin)
 }
 
 func dirToByte(d string) byte {
@@ -516,6 +620,7 @@ func (p *Process) autoSendLoop() {
 							Error:     err.Error(),
 							Data:      hexData,
 							Timestamp: time.Now().Format("15:04:05.000"),
+							Origin:    originAuto,
 						},
 					})
 				}
@@ -528,26 +633,19 @@ func (p *Process) autoSendLoop() {
 			p.autoSendMu.Unlock()
 
 			hexData := strings.ToUpper(hex.EncodeToString(data))
+			tsMs := time.Now().UnixMilli()
 			if p.broadcastFn != nil {
 				p.broadcastFn(RxTxMessage{
 					ProcessID: p.id,
 					Data:      string(data),
 					Hex:       hexData,
 					Direction: "tx",
-					Timestamp: time.Now().Format("15:04:05.000"),
+					Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
+					TsMs:      tsMs,
+					Origin:    originAuto,
 				})
 			}
-			p.recordHistory(hexData, "tx")
-			if p.pushEventFn != nil {
-				p.pushEventFn(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-					},
-				})
-			}
+			p.recordHistoryAt(tsMs, hexData, "tx", originAuto)
 
 		case <-p.autoSendStopCh:
 			return
@@ -659,6 +757,7 @@ func (p *Process) sendOneRound() {
 						ProcessID: p.id,
 						Error:     err.Error(),
 						Timestamp: time.Now().Format("15:04:05.000"),
+						Origin:    originMultistr,
 					},
 				})
 			}
@@ -680,6 +779,7 @@ func (p *Process) sendOneRound() {
 						Error:     err.Error(),
 						Data:      hexData,
 						Timestamp: time.Now().Format("15:04:05.000"),
+						Origin:    originMultistr,
 					},
 				})
 			}
@@ -702,20 +802,11 @@ func (p *Process) sendOneRound() {
 				Direction: "tx",
 				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 				TsMs:      tsMs,
+				Origin:    originMultistr,
 			})
-			p.recordHistoryAt(tsMs, hexData, "tx")
+			p.recordHistoryAt(tsMs, hexData, "tx", originMultistr)
 		} else {
-			p.recordHistory(hexData, "tx")
-		}
-		if p.pushEventFn != nil {
-			p.pushEventFn(protocol.Event{
-				Event: "stats-count",
-				Params: map[string]any{
-					"processId":    p.id,
-					"bytesRead":    p.bytesRead.Load(),
-					"bytesWritten": p.bytesWritten.Load(),
-				},
-			})
+			p.recordHistoryAt(time.Now().UnixMilli(), hexData, "tx", originMultistr)
 		}
 
 		// Wait per-entry delay (interruptible).
@@ -866,29 +957,25 @@ func (p *Process) forwardLoop(direction string, src, dst serial.Port, portBytes 
 					Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 					TsMs:      tsMs,
 				})
-				p.recordHistoryAt(tsMs, hexData, direction)
+				p.recordHistoryAt(tsMs, hexData, direction, "")
 			} else {
 				p.recordHistory(hexData, direction)
-			}
-
-			if p.pushEventFn != nil {
-				p.pushEventFn(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-						"bytesPort1":   p.bytesPort1.Load(),
-						"bytesPort2":   p.bytesPort2.Load(),
-					},
-				})
 			}
 		}
 	}
 }
 
+// 合包参数：一次 Read 之后继续收 readCoalesceWindow，单次最多 readBufferSize 字节。
+//   - 16 ms：延迟可忽略，而「小包高频」场景的事件量能降一个量级；
+//   - 2 ms 的轮询超时只让循环在断流时尽快退出，不改变整体延迟。
+const (
+	readCoalesceWindow = 16 * time.Millisecond
+	readPollTimeout    = 2 * time.Millisecond
+	readBufferSize     = 4096
+)
+
 func (p *Process) readLoop(broadcast func(RxTxMessage)) {
-	buf := make([]byte, 4096)
+	buf := make([]byte, readBufferSize)
 	for {
 		select {
 		case <-p.stopCh:
@@ -910,10 +997,14 @@ func (p *Process) readLoop(broadcast func(RxTxMessage)) {
 			continue
 		}
 		if n > 0 {
-			// 短超时累积读取：串口数据到达速度远快于应用层处理，
-			// 首字节触发 Read 返回后立即再读几次，将后续字节合并为单包
-			p.port.SetReadTimeout(5 * time.Millisecond)
-			for {
+			// 合包：首字节触发 Read 返回后继续读，直到攒够 readCoalesceWindow 或缓冲满。
+			//
+			// 旧实现只再读 5 ms，遇到「小包高频」的设备（截图里那种 ~21 B/包、230400 baud）
+			// 会退化成每秒几百个独立事件，每个都要过一遍 IPC + DOM，GUI 直接卡死。
+			// 16 ms 的合并窗把事件数压到 ~60/s，最坏只增加 16 ms 显示延迟。
+			p.port.SetReadTimeout(readPollTimeout)
+			deadline := time.Now().Add(readCoalesceWindow)
+			for time.Now().Before(deadline) {
 				n2, err2 := p.port.Read(buf[n:])
 				if err2 != nil || n2 == 0 {
 					break
@@ -938,18 +1029,7 @@ func (p *Process) readLoop(broadcast func(RxTxMessage)) {
 				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 				TsMs:      tsMs,
 			})
-			p.recordHistoryAt(tsMs, hexData, "rx")
-
-			if p.pushEventFn != nil {
-				p.pushEventFn(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-					},
-				})
-			}
+			p.recordHistoryAt(tsMs, hexData, "rx", "")
 		}
 	}
 }
@@ -983,6 +1063,7 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 						Error:     wr.err.Error(),
 						Data:      hexData,
 						Timestamp: time.Now().Format("15:04:05.000"),
+						Origin:    job.origin,
 					},
 				})
 				p.recordSystemEvent("sys.send_error", wr.err.Error())
@@ -998,19 +1079,10 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 				Direction: "tx",
 				Timestamp: time.UnixMilli(tsMs).Format("15:04:05.000"),
 				TsMs:      tsMs,
+				Origin:    job.origin,
 			}
 			broadcast(msg)
-			p.recordHistoryAt(tsMs, hexData, "tx")
-			if pushEvent != nil {
-				pushEvent(protocol.Event{
-					Event: "stats-count",
-					Params: map[string]any{
-						"processId":    p.id,
-						"bytesRead":    p.bytesRead.Load(),
-						"bytesWritten": p.bytesWritten.Load(),
-					},
-				})
-			}
+			p.recordHistoryAt(tsMs, hexData, "tx", job.origin)
 
 		case <-time.After(3 * time.Second):
 			p.writeErrors.Add(1)
@@ -1022,6 +1094,7 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 					Error:     fmt.Sprintf("write timeout on %s", p.config.Port),
 					Data:      hexData,
 					Timestamp: time.Now().Format("15:04:05.000"),
+					Origin:    job.origin,
 				},
 			})
 			p.recordSystemEvent("sys.write_timeout", p.config.Port)
@@ -1031,6 +1104,17 @@ func (p *Process) writeLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 	}
 }
 
+// statsTickInterval 是计数推送的节拍：stats-count 每拍一次（10 Hz），
+// stats-rate（速率）每 10 拍算一次（仍是 1 s 窗口）。
+//
+// 以前 stats-count 是**每个收/发包推一次**——大流量小包时（230400 baud、21 B/包）
+// 一秒能推几百上千次 IPC 事件，GUI 侧每个事件都要过一遍 JSON 桥 + DOM 更新，
+// 整机就卡住了。计数器本来只需要「看起来实时」，10 Hz 足够。
+const (
+	statsTickInterval = 100 * time.Millisecond
+	statsRateEvery    = 10
+)
+
 func (p *Process) statsLoop(broadcast func(RxTxMessage), pushEvent func(protocol.Event)) {
 	if p.mode == "forward" {
 		p.recordSystemEvent("sys.stats_started", p.config.Port+" ↔ "+p.forwardConfigB.Port)
@@ -1038,27 +1122,45 @@ func (p *Process) statsLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 		p.recordSystemEvent("sys.stats_started", p.config.Port)
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(statsTickInterval)
 	defer ticker.Stop()
 
 	lastBytesRead := int64(0)
 	lastBytesWritten := int64(0)
 	lastBytesPort1 := int64(0)
 	lastBytesPort2 := int64(0)
+	tick := 0
 
 	for {
 		select {
 		case <-ticker.C:
+			tick++
 			now := time.Now()
 			curRead := p.bytesRead.Load()
 			curWritten := p.bytesWritten.Load()
 			curP1 := p.bytesPort1.Load()
 			curP2 := p.bytesPort2.Load()
 
-			readRate := float64(curRead - lastBytesRead)
-			writeRate := float64(curWritten - lastBytesWritten)
-			p1Rate := float64(curP1 - lastBytesPort1)
-			p2Rate := float64(curP2 - lastBytesPort2)
+			// 每拍：累计计数（单端口用 bytesRead/Written，转发用 bytesPort1/2）
+			pushEvent(protocol.Event{
+				Event: "stats-count",
+				Params: map[string]any{
+					"processId":    p.id,
+					"bytesRead":    curRead,
+					"bytesWritten": curWritten,
+					"bytesPort1":   curP1,
+					"bytesPort2":   curP2,
+				},
+			})
+
+			if tick%statsRateEvery != 0 {
+				continue
+			}
+
+			readRate := float64(curRead-lastBytesRead) / (statsTickInterval.Seconds() * statsRateEvery)
+			writeRate := float64(curWritten-lastBytesWritten) / (statsTickInterval.Seconds() * statsRateEvery)
+			p1Rate := float64(curP1-lastBytesPort1) / (statsTickInterval.Seconds() * statsRateEvery)
+			p2Rate := float64(curP2-lastBytesPort2) / (statsTickInterval.Seconds() * statsRateEvery)
 
 			sample := &statsSample{
 				readRateBps:  readRate,
@@ -1199,73 +1301,133 @@ func (p *Process) closeSendRing() {
 	}
 }
 
-func (p *Process) openHistoryFile() {
-	if !isHistoryEnabled() {
-		return
+// shouldSaveHistory 返回该进程实际是否落盘：显式设置优先，否则跟随全局默认。
+func (p *Process) shouldSaveHistory() bool {
+	if p.saveHistorySet.Load() {
+		return p.saveHistory.Load()
 	}
-	f, _, err := newHistoryFile(historyDir(), p.id)
-	if err != nil {
-		logOp("错误", "打开历史文件失败 (进程 #%s): %v", p.id, err)
-		return
-	}
-	p.histFileMu.Lock()
-	p.historyFile = f
-	p.histFileMu.Unlock()
+	return defaultSaveHistory()
 }
 
-func (p *Process) attachHistoryFile(filename string) error {
-	f, path, err := attachHistoryFile(historyDir(), filename)
+// SetSaveHistory 按进程开关历史落盘（GUI/CLI 的「这个标签要不要保存」）。
+//
+// 开启时立即建文件，不等第一条数据——用户能马上看到文件名；关闭时把当前文件
+// 关掉，已写入的内容保留，之后的帧不再追加。环形缓冲与界面显示完全不受影响。
+func (p *Process) SetSaveHistory(enabled bool) {
+	p.saveHistory.Store(enabled)
+	p.saveHistorySet.Store(true)
+	if enabled {
+		p.openHistoryFile()
+		return
+	}
+	p.detachHistoryFile()
+}
+
+// applyDefaultSaveHistory 把全局默认作用到「没有单独设置过」的进程上。
+func (p *Process) applyDefaultSaveHistory() {
+	if p.saveHistorySet.Load() {
+		return
+	}
+	if defaultSaveHistory() {
+		p.openHistoryFile()
+	} else {
+		p.detachHistoryFile()
+	}
+}
+
+func (p *Process) openHistoryFile() {
+	if !p.shouldSaveHistory() {
+		return
+	}
+	p.stlogMu.Lock()
+	has := p.stlog != nil
+	p.stlogMu.Unlock()
+	if has {
+		return
+	}
+	// 先把上一个会话读回环形缓冲：重启后打开「保存历史」还能接着看上次的录制。
+	// 必须在建新会话之前——新建的空目录会成为「最近的会话」，把真数据挡掉。
+	p.restoreLatestSession()
+	if err := p.ensureStlogSession(); err != nil {
+		logOp("错误", "开启录制失败 (进程 #%s): %v", p.id, err)
+	}
+}
+
+// restoreLatestSession 在环形缓冲还是空的时候，把最近一个会话读回来。
+//
+// v2 起不再写 history/*.log，重启后的历史就靠这个恢复；已经开着「保存历史」
+// 又切端口时会新建会话，那时环里已有数据，不重复加载。
+func (p *Process) restoreLatestSession() {
+	dir := latestSessionDir(historyDir())
+	if dir == "" {
+		return
+	}
+	p.ringBufMu.Lock()
+	defer p.ringBufMu.Unlock()
+	if p.historyRing == nil || !p.historyRing.IsEmpty() {
+		return
+	}
+	n, err := loadSessionIntoRing(p.historyRing, dir)
 	if err != nil {
+		logOp("错误", "恢复历史失败 (进程 #%s, %s): %v", p.id, filepath.Base(dir), err)
+		return
+	}
+	if n > 0 {
+		logOp("历史", "进程 #%s 已从 %s 恢复 %d 条", p.id, filepath.Base(dir), n)
+	}
+}
+
+// ensureStlogSession 确保当前进程有一个正在写的会话目录；已有就什么都不做。
+func (p *Process) ensureStlogSession() error {
+	p.stlogMu.Lock()
+	has := p.stlog != nil
+	p.stlogMu.Unlock()
+	if has {
+		return nil
+	}
+	p.openStlogFile()
+	p.stlogMu.Lock()
+	ok := p.stlog != nil
+	p.stlogMu.Unlock()
+	if !ok {
+		return fmt.Errorf("会话目录没建起来")
+	}
+	return nil
+}
+
+// detachHistoryFile 封存当前会话；环形缓冲区不受影响。
+func (p *Process) detachHistoryFile() {
+	p.histFileMu.Lock()
+	p.historyFile = nil
+	p.historyFileName = ""
+	p.histFileMu.Unlock()
+	p.detachStlogFile()
+}
+
+// attachHistoryFile 把一个**已有的 .log** 读进环形缓冲。
+//
+// v2 起不再往 .log 里写，但这个入口保留：history/ 里堆着的老文件仍然能打开查看。
+// 只读不追加——继续录制的数据都进 .stlog 会话。
+func (p *Process) attachHistoryFile(filename string) error {
+	path := filepath.Join(historyDir(), filepath.Base(filename))
+	if _, err := os.Stat(path); err != nil {
 		return err
 	}
-	p.histFileMu.Lock()
-	p.historyFile = f
-	p.historyFileName = filepath.Base(path)
-	p.histFileMu.Unlock()
 	// loadHistoryIntoRing 直接向环内写，必须与 readLoop 的 recordHistory
 	// 串行化；同时也避免拿到已 unmap 的环。
 	p.ringBufMu.Lock()
-	n := 0
+	defer p.ringBufMu.Unlock()
 	if p.historyRing == nil {
-		err = fmt.Errorf("历史环形缓冲区已关闭")
-	} else {
-		n, err = loadHistoryIntoRing(p.historyRing, path)
+		return fmt.Errorf("历史环形缓冲区已关闭")
 	}
-	p.ringBufMu.Unlock()
+	n, err := loadHistoryIntoRing(p.historyRing, path)
 	if err != nil {
-		p.histFileMu.Lock()
-		p.historyFile.Close()
-		p.historyFile = nil
-		p.historyFileName = ""
-		p.histFileMu.Unlock()
 		return fmt.Errorf("加载历史文件失败: %w", err)
 	}
 	if n > 0 {
 		logOp("历史", "进程 #%s 已加载 %s (%d 条)", p.id, filepath.Base(path), n)
 	}
 	return nil
-}
-
-func (p *Process) newHistoryFile() error {
-	f, path, err := newHistoryFile(historyDir(), p.id)
-	if err != nil {
-		return err
-	}
-	p.histFileMu.Lock()
-	p.historyFile = f
-	p.historyFileName = filepath.Base(path)
-	p.histFileMu.Unlock()
-	return nil
-}
-
-// detachHistoryFile 关闭当前历史文件但不触碰环形缓冲区。
-func (p *Process) detachHistoryFile() {
-	p.histFileMu.Lock()
-	f := p.historyFile
-	p.historyFile = nil
-	p.historyFileName = ""
-	p.histFileMu.Unlock()
-	closeHistoryFile(f)
 }
 
 // closeHistory closes the shared memory ring buffer and the history file.
@@ -1356,57 +1518,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	if port != "" {
 		// Declare-only: store config but don't open ports
 		if !connect {
-			if mode == "forward" {
-				if cfgB == nil || cfgB.Port == "" {
-					return nil, fmt.Errorf("forward mode requires both portA and portB")
-				}
-				if port == cfgB.Port {
-					return nil, fmt.Errorf("cannot forward between the same port")
-				}
-			}
-
-			id := fmt.Sprintf("%d", pm.counter.Add(1))
-			sharedName, sendName := newRingNames(id)
-			ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024)
-			if err != nil {
-				return nil, fmt.Errorf("create shared memory: %w", err)
-			}
-
-			sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024)
-			if err != nil {
-				ring.Close()
-				return nil, fmt.Errorf("create send queue shared memory: %w", err)
-			}
-
-			proc := &Process{
-				id:           id,
-				status:       "idle",
-				mode:         mode,
-				config:       cfg,
-				historyRing:  ring,
-				historyName:  sharedName,
-				sendRing:     sendQ,
-				sendRingName: sendName,
-				startTime:    time.Now(),
-			}
-
-			if mode == "forward" {
-				proc.forwardConfigB = *cfgB
-			}
-
-			pm.mu.Lock()
-			pm.processes[id] = proc
-			pm.mu.Unlock()
-
-			if mode == "forward" {
-				proc.recordSystemEvent("sys.forward_declared", port, cfgB.Port)
-			} else {
-				proc.recordSystemEvent("sys.port_declared", port, cfg.Baud)
-			}
-			if pm.onProcessChanged != nil {
-				pm.onProcessChanged()
-			}
-			return proc, nil
+			return pm.createDeclared(mode, port, cfg, cfgB, "")
 		}
 
 		// connect == true: open ports immediately (existing behaviour)
@@ -1550,6 +1662,14 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	}
 
 	// Idle process (no port specified – mode is stored but no ports opened)
+	return pm.createIdle(mode, "")
+}
+
+// createIdle 建一个「没有端口」的空闲进程，是 Create 的最后一条分支。
+//
+// sessionPath 只有 OpenSession 会传（工程里没记端口时走这条），语义与
+// createDeclared 的同名参数一致：让第一条 process-changed 广播就带上是哪个工程。
+func (pm *ProcessManager) createIdle(mode, sessionPath string) (*Process, error) {
 	id := fmt.Sprintf("%d", pm.counter.Add(1))
 	sharedName, sendName := newRingNames(id)
 	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024) // 5 MB
@@ -1572,6 +1692,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 		sendRing:     sendQ,
 		sendRingName: sendName,
 		startTime:    time.Now(),
+		sessionPath:  sessionPath,
 	}
 
 	pm.mu.Lock()
@@ -1585,9 +1706,143 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	return proc, nil
 }
 
+// createDeclared 建一个「声明了配置但不打开端口」的进程，是 Create 的
+// connect=false 分支。
+//
+// sessionPath 只有 OpenSession 会传：它标志这个进程是文件会话（读工程目录用的），
+// 前端据此不给它另建标签页（文件页自己就是它的视图）。必须写在构造里而不是
+// 创建完再补 —— 第一条 process-changed 广播就得带上它，否则前端会先建出一个
+// 多余的空标签页。
+func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cfgB *SerialConfig, sessionPath string) (*Process, error) {
+	if mode == "forward" {
+		if cfgB == nil || cfgB.Port == "" {
+			return nil, fmt.Errorf("forward mode requires both portA and portB")
+		}
+		if port == cfgB.Port {
+			return nil, fmt.Errorf("cannot forward between the same port")
+		}
+	}
+
+	id := fmt.Sprintf("%d", pm.counter.Add(1))
+	sharedName, sendName := newRingNames(id)
+	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024)
+	if err != nil {
+		return nil, fmt.Errorf("create shared memory: %w", err)
+	}
+
+	sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024)
+	if err != nil {
+		ring.Close()
+		return nil, fmt.Errorf("create send queue shared memory: %w", err)
+	}
+
+	proc := &Process{
+		id:           id,
+		status:       "idle",
+		mode:         mode,
+		config:       cfg,
+		historyRing:  ring,
+		historyName:  sharedName,
+		sendRing:     sendQ,
+		sendRingName: sendName,
+		startTime:    time.Now(),
+		sessionPath:  sessionPath,
+	}
+
+	if mode == "forward" {
+		proc.forwardConfigB = *cfgB
+	}
+
+	pm.mu.Lock()
+	pm.processes[id] = proc
+	pm.mu.Unlock()
+
+	if mode == "forward" {
+		proc.recordSystemEvent("sys.forward_declared", port, cfgB.Port)
+	} else {
+		proc.recordSystemEvent("sys.port_declared", port, cfg.Baud)
+	}
+	if pm.onProcessChanged != nil {
+		pm.onProcessChanged()
+	}
+	return proc, nil
+}
+
 // ForwardCreate is a backward-compatible wrapper that creates a forward process.
 func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, error) {
 	return pm.Create("forward", cfgA.Port, cfgA, &cfgB, true)
+}
+
+// OpenSession 把一个**工程目录**变成守护进程里的一个进程。
+//
+// 只接受工程目录（manifest.json + pkg-*.stlog）：单个 .stlog 是包文件，没有设置
+// 文档、没有索引、也不会再追加，交给守护进程没有意义，前端那边一律本地读
+// （见 app.js 的 _stlogOpen）。这里再拦一道，免得别的客户端绕过去。
+//
+// 不连串口：Create 走 declare-only 分支，只建进程和共享环。随后清掉它顺手写的
+// 「端口已声明」系统事件，再把文件里的帧灌进环。之后上层用 processId 走正常的
+// 会话接口（session.history / stats / …），与真实串口会话没有区别。
+//
+// 模式取自文件头的设置：转发录制建出来的就是 forward，P1/P2 配色、分流比这些
+// 不需要额外告诉前端，自然就对了。
+func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !fi.IsDir() {
+		return nil, 0, fmt.Errorf("守护进程只接受工程目录；单个 .stlog 请用「从文件打开」本地浏览")
+	}
+	if !sessionfile.IsSessionDir(path) {
+		return nil, 0, fmt.Errorf("不是工程目录（缺 %s 或 pkg-*.stlog）", sessionfile.ManifestName)
+	}
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	mode, port, portB, baud := "single", "", "", 0
+	if s := info.Settings; s != nil {
+		if s.Mode == sessionfile.ModeForward {
+			mode = "forward"
+		}
+		port, portB, baud = s.Port, s.PortB, s.Baud
+	}
+	// 工程里记了端口就按「已声明」建（会话页显示 COMx @ baud，用户点一下就能真连）；
+	// 没记就建空闲进程让用户自己选 —— 不要拿目录名冒充串口名。
+	cfg := SerialConfig{Port: port, Baud: baud}
+	var cfgB *SerialConfig
+	if mode == "forward" {
+		if portB == "" {
+			mode = "single" // 文件说转发却没有 B 口：按单口处理，别让 Create 报错
+		} else {
+			cfgB = &SerialConfig{Port: portB, Baud: baud}
+		}
+	}
+
+	var proc *Process
+	if port != "" {
+		proc, err = pm.createDeclared(mode, port, cfg, cfgB, path)
+	} else {
+		proc, err = pm.createIdle(mode, path)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 清掉 Create 写的那条「端口已声明」：文件里本来就有自己的系统帧，
+	// 不清掉会在最前面多出一条假的声明事件。
+	proc.ringBufMu.Lock()
+	if proc.historyRing != nil {
+		proc.historyRing.Reset()
+	}
+	n, err := loadSessionIntoRing(proc.historyRing, path)
+	proc.ringBufMu.Unlock()
+	if err != nil {
+		pm.Destroy(proc.id)
+		return nil, 0, err
+	}
+	logOp("历史", "进程 #%s 已打开文件会话 %s (%d 条)", proc.id, filepath.Base(path), n)
+	return proc, n, nil
 }
 
 // Destroy destroys a process. If connected, disconnects first.
@@ -2029,6 +2284,9 @@ func (pm *ProcessManager) List() []map[string]any {
 			"viewers":      p.viewerSummary(),
 			"autoSend":     p.getAutoSendStatus(),
 			"sendRingName": p.sendRingName,
+			// 文件会话进程（session.open 建出来的）带工程目录路径；普通进程是空串。
+			// 前端据此不给它另建标签页 —— 文件页本身就是它的视图。
+			"sessionPath": p.sessionPath,
 		}
 		// Include config for connected processes and idle processes that have stored config
 		hasConfig := p.status == "connected" || p.config.Port != ""
@@ -2100,7 +2358,41 @@ func (pm *ProcessManager) FirstConnectedID() string {
 	return ""
 }
 
-func (pm *ProcessManager) Send(id string, data string, format string) error {
+// SetDefaultHistorySave 修改新进程的默认落盘开关，并作用到所有未单独设置过的
+// 进程——老行为是全局开关立即生效，这里保持兼容；显式设置过的进程不被覆盖。
+func (pm *ProcessManager) SetDefaultHistorySave(v bool) {
+	setDefaultSaveHistory(v)
+	pm.mu.RLock()
+	procs := make([]*Process, 0, len(pm.processes))
+	for _, p := range pm.processes {
+		procs = append(procs, p)
+	}
+	pm.mu.RUnlock()
+	for _, p := range procs {
+		p.applyDefaultSaveHistory()
+	}
+}
+
+// SetProcessHistorySave 设置单个进程的落盘开关（GUI/CLI 的「按标签保存」）。
+func (pm *ProcessManager) SetProcessHistorySave(id string, enabled bool) error {
+	proc := pm.Get(id)
+	if proc == nil {
+		return fmt.Errorf("process not found: %s", id)
+	}
+	proc.SetSaveHistory(enabled)
+	return nil
+}
+
+// ProcessHistorySave 返回单个进程实际生效的落盘开关。
+func (pm *ProcessManager) ProcessHistorySave(id string) (bool, error) {
+	proc := pm.Get(id)
+	if proc == nil {
+		return false, fmt.Errorf("process not found: %s", id)
+	}
+	return proc.shouldSaveHistory(), nil
+}
+
+func (pm *ProcessManager) Send(id string, data string, format string, origin string) error {
 	proc := pm.Get(id)
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", id)
@@ -2121,7 +2413,7 @@ func (pm *ProcessManager) Send(id string, data string, format string) error {
 	}
 
 	select {
-	case proc.sendCh <- sendJob{raw: raw, format: format}:
+	case proc.sendCh <- sendJob{raw: raw, format: format, origin: origin}:
 		return nil
 	default:
 		return fmt.Errorf("send buffer full (max 32 pending)")
@@ -2209,21 +2501,9 @@ func (pm *ProcessManager) GetHistoryPage(id string, limit int, beforeMs int64, s
 func parseHistoryPackets(packets [][]byte) []HistoryEntry {
 	entries := make([]HistoryEntry, 0, len(packets))
 	for _, pkt := range packets {
-		if len(pkt) < 11 {
-			continue
+		if entry, ok := decodeHistoryPacket(pkt); ok {
+			entries = append(entries, entry)
 		}
-		ts := int64(binary.LittleEndian.Uint64(pkt[0:8]))
-		dir := pkt[8]
-		hexLen := binary.LittleEndian.Uint16(pkt[9:11])
-		if int(hexLen)+11 > len(pkt) {
-			continue
-		}
-		entries = append(entries, HistoryEntry{
-			Timestamp: time.UnixMilli(ts).Format("15:04:05.000"),
-			Hex:       string(pkt[11 : 11+int(hexLen)]),
-			Direction: byteToDir(dir),
-			TsMs:      ts,
-		})
 	}
 	return entries
 }
@@ -2327,7 +2607,7 @@ func (pm *ProcessManager) GoroutineStacks() string {
 // SendTrigger reads one entry from the send queue ring buffer and pushes it
 // through sendCh. When raw is true, the bytes are sent as-is (direct send);
 // otherwise multistr binary header decoding is applied (quick-panel / queue mode).
-func (pm *ProcessManager) SendTrigger(id string, raw bool) error {
+func (pm *ProcessManager) SendTrigger(id string, raw bool, origin string) error {
 	proc := pm.Get(id)
 	if proc == nil {
 		return fmt.Errorf("process not found: %s", id)
@@ -2363,7 +2643,7 @@ func (pm *ProcessManager) SendTrigger(id string, raw bool) error {
 	}
 
 	select {
-	case proc.sendCh <- sendJob{raw: payload, format: "trigger"}:
+	case proc.sendCh <- sendJob{raw: payload, format: "trigger", origin: origin}:
 		return nil
 	default:
 		proc.sendRingMu.Lock()

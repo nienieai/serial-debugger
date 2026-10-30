@@ -10,3 +10,5 @@ multistr/
 # 系统文件
 Thumbs.db
 Desktop.ini
+
+# 格式规范已并入版本控制：docs/format/（见 docs/format/CHANGES.md）

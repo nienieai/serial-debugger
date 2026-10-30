@@ -28,6 +28,8 @@ export function DisconnectSession(arg1:string):Promise<void>;
 
 export function EncodeTextForSend(arg1:string,arg2:string):Promise<string>;
 
+export function ExportStlogText(arg1:string):Promise<Record<string, any>>;
+
 export function ForwardConnect(arg1:string,arg2:main.SerialConfig,arg3:main.SerialConfig):Promise<void>;
 
 export function ForwardCreate(arg1:string,arg2:number,arg3:string,arg4:number):Promise<Record<string, any>>;
@@ -45,6 +47,8 @@ export function GetExternalIconTheme(arg1:string):Promise<Record<string, any>>;
 export function GetGoroutines():Promise<Record<string, any>>;
 
 export function GetHistoryStatus():Promise<boolean>;
+
+export function GetHistoryStatusFor(arg1:string):Promise<boolean>;
 
 export function GetI18n(arg1:string):Promise<Record<string, string>>;
 
@@ -88,7 +92,19 @@ export function OpenDevTools():Promise<void>;
 
 export function OpenSession(arg1:main.SerialConfig):Promise<string>;
 
+export function OpenStlogFile(arg1:string):Promise<Record<string, any>>;
+
+export function OpenStlogSession(arg1:string):Promise<Record<string, any>>;
+
+export function PickStlogDir():Promise<string>;
+
+export function PickStlogFile():Promise<string>;
+
+export function ProbeDroppedPaths(arg1:Array<string>):Promise<Array<main.DropProbe>>;
+
 export function ReadMultistrEntries(arg1:string):Promise<string>;
+
+export function ReadStlogFrames(arg1:string,arg2:number,arg3:number):Promise<Record<string, any>>;
 
 export function RefreshPorts():Promise<Array<Record<string, any>>>;
 
@@ -104,9 +120,13 @@ export function SetAutoSendInterval(arg1:string,arg2:number):Promise<void>;
 
 export function SetHistoryEnabled(arg1:boolean):Promise<void>;
 
+export function SetHistoryEnabledFor(arg1:string,arg2:boolean):Promise<void>;
+
 export function SetProcessMode(arg1:string,arg2:string):Promise<void>;
 
 export function SetTabEncoding(arg1:string,arg2:string):Promise<void>;
+
+export function SettingsDir():Promise<string>;
 
 export function ShowFolderInExplorer(arg1:string):Promise<Record<string, any>>;
 

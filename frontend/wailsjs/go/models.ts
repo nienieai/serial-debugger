@@ -104,7 +104,9 @@ export namespace main {
 	    iconThemeId: string;
 	    language: string;
 	    autoCreateSession: boolean;
+	    autoSaveHistory: boolean;
 	    displayColors: string;
+	    stlogShowYear: boolean;
 	    serial: SerialDefaults;
 	    autoSend: AutoSendDefaults;
 	    append: AppendDefaults;
@@ -135,7 +137,9 @@ export namespace main {
 	        this.iconThemeId = source["iconThemeId"];
 	        this.language = source["language"];
 	        this.autoCreateSession = source["autoCreateSession"];
+	        this.autoSaveHistory = source["autoSaveHistory"];
 	        this.displayColors = source["displayColors"];
+	        this.stlogShowYear = source["stlogShowYear"];
 	        this.serial = this.convertValues(source["serial"], SerialDefaults);
 	        this.autoSend = this.convertValues(source["autoSend"], AutoSendDefaults);
 	        this.append = this.convertValues(source["append"], AppendDefaults);
@@ -161,6 +165,22 @@ export namespace main {
 	}
 	
 	
+	export class DropProbe {
+	    path: string;
+	    kind: string;
+	    err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DropProbe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.kind = source["kind"];
+	        this.err = source["err"];
+	    }
+	}
 	export class ExternalI18nInfo {
 	    filename: string;
 	    lang: string;
