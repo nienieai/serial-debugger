@@ -27,7 +27,9 @@ function createStatusDaemon(container) {
 				btn.title = t('btn.stop_daemon', '停止守护进程');
 			} else {
 				dot.className = 'status-dot is-offline';
-				text.textContent = t('status.detecting', '检测中...');
+				// 「未运行」而不是「检测中」：离线态没有任何轮询在跑，写「检测中」
+				// 会让人以为程序卡在探测里。
+				text.textContent = t('status.offline', '未运行');
 				btn.title = t('btn.start_daemon', '启动守护进程');
 			}
 		},

@@ -164,6 +164,10 @@ func (a *App) onDaemonDisconnected(ec *client.DaemonClient) {
 		a.daemonMu.Unlock()
 		go a.pollDaemonEvents(nec)
 		go nec.Subscribe(nil)
+		// 告诉前端「又连上了」。这次重连是 Go 侧发起的，前端并不知道连接对象换了；
+		// 而 daemon 重启前的 daemon-shutdown 广播已经让前端进了离线态（还清掉了
+		// 会话页），不通知的话界面会一直停在离线，等下一次 daemon-ready 重发才醒。
+		runtime.EventsEmit(a.ctx, "daemon-ready", map[string]any{})
 		return
 	}
 
