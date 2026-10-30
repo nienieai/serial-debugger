@@ -2024,6 +2024,9 @@ async function tryConnect() {
       // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
       window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
       updateAutoSaveCheck(state.autoSaveHistory === true);
+      // 保存开关是按进程的，守护进程换了一轮之后必须重问一遍，否则标签上那枚
+      // 「保存中」标记会一直沿用上一轮的答案。清掉缓存，渲染时会重新取。
+      _resetTabHistState();
       const t = getActiveTab();
       state.currentMode = (t && t.mode) ? t.mode : 'single';
       updateModeUI();
@@ -2093,6 +2096,8 @@ function _applyDaemonSessionToTab(tab, ds) {
   tab.portOpen = isConnected;
   tab.mode = ds.mode || 'single';
   tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
+  // 工程会话才有值：标签上要显示工程目录名（而不是「单端口空闲」）
+  tab.sessionPath = ds.sessionPath || '';
   if (isConnected || hasDeclared) {
     tab.syncedParams = {
       portName: ds.portName, baud: ds.baud,
@@ -3854,12 +3859,16 @@ function _tabMenuOpen(clientX, clientY, idx) {
       checked: false,
       onClick: function () {
         saveOn = !saveOn;
+        // 标签上的保存标记跟着这个开关走，不要等下一次 renderTabs 才变
+        tab.histOn = saveOn;
+        renderTabs();
         window.go.main.App.SetHistoryEnabledFor(tab.sessionId, saveOn).catch(function () {});
       }
     });
     menu.appendChild(saveItem);
     window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
       saveOn = !!on;
+      tab.histOn = saveOn;
       var chk = saveItem.querySelector('.menu-chk');
       if (chk) chk.classList.toggle('on', saveOn);
     }).catch(function () {});
@@ -3901,6 +3910,146 @@ function _tabMenuOpen(clientX, clientY, idx) {
   window.addEventListener('resize', _tabMenuClose);
 }
 
+// ---- 标签栏内容：类型图标 + 状态点 + 信息槽 ----
+//
+// 设计稿 0.8.4-dev/tab-icon-preview-v2.html 的 P4 方案。要解决的是「六套信号说三件事」：
+// 以前一个标签上同时有 ●圆点、类型图标颜色、空闲斜体、转发绿加粗、未激活压暗、
+// viewers 数字，可它们只表达「已连接 / 空闲 / 转发」。现在分工是：
+//
+//   类型   → 左侧 14px 图标，中性灰，靠形状（terminal / swap / file / folder / settings / plus）
+//   状态   → 图标右下角 5px 点（绿=已连、紫=转发、半透明灰=空闲、空心环=只读）
+//   信息   → 参数、保存、速率；不拥挤才显示，按速率→保存→参数顺序退让
+//
+// 唯一的例外是只读标签：文件（.stlog）和没推给守护进程的工程，状态点画成空心环，
+// 另外整枚标签用虚线边框 —— 它们不是「会话状态」，不该占用彩色语义。
+
+// 类型图标：只有这六种
+function _tabIconKey(tb) {
+  if (tb.type === 'settings') return 'settings';
+  if (tb.type === 'new') return 'plus';
+  if (tb.type === 'stlog') return (tb._stlog && tb._stlog.isDir) ? 'folder' : 'file';
+  return tb.mode === 'forward' ? 'swap' : 'terminal';
+}
+
+// 状态：'' 表示不给点（设置页、新建页不是会话）
+function _tabStateClass(tb) {
+  if (tb.type === 'settings' || tb.type === 'new') return '';
+  if (tb.type === 'stlog') return 'is-ro';
+  if (!tb.portOpen) return 'is-idle';
+  return tb.mode === 'forward' ? 'is-fwd' : 'is-live';
+}
+
+// 标签文字拆成三段：名字 / 参数 / 标记。以前是一整串 "COM4 ↔ COM14 @ 115200 [已声明]"，
+// 同粗细同颜色，扫一眼抓不到重点；拆开之后参数是灰色小字，标记只在宽裕时出现。
+function _tabLabelParts(tb) {
+  if (tb.type === 'settings' || tb.type === 'new') {
+    return { name: tb.label || '', param: '', flag: '' };
+  }
+  var sp = tb.syncedParams;
+  if (sp && sp.portName) {
+    return {
+      name: sp.portName,
+      param: sp.baud ? String(sp.baud) : '',
+      // 声明了端口但没连：以前靠后缀 "[已声明]"，现在点本身已经说明「没连」，
+      // 后缀降级成小字标记，拥挤时第一个让位
+      flag: tb.portOpen ? '' : t('tab.declared', '已声明'),
+    };
+  }
+  if (tb.sessionPath) {
+    return { name: stlogBaseName(tb.sessionPath), param: '', flag: t('tab.project', '工程') };
+  }
+  if (tb.type === 'stlog') {
+    return {
+      name: tb.label || stlogBaseName(tb.path || ''),
+      param: '',
+      flag: (tb._stlog && tb._stlog.isDir) ? t('tab.project', '工程') : '',
+    };
+  }
+  return {
+    name: tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲'),
+    param: '',
+    flag: '',
+  };
+}
+
+// 速率：suffix 只有一个字母，标签上放不下 "kB/s"；悬浮卡里才有完整单位
+function _tabRateText(bps) {
+  bps = Number(bps) || 0;
+  if (bps <= 0) return '';
+  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
+  if (bps >= 1024) return (bps / 1024).toFixed(bps < 10240 ? 1 : 0) + 'k';
+  return Math.round(bps) + 'B';
+}
+
+// 只有「端口开着」的会话才有速率；统计缓存是按 processId 存的（见 onStatsRate）
+function _tabRateOf(tb) {
+  if (!tb || tb.type || !tb.sessionId || !tb.portOpen) return '';
+  var b = state.statsBase && state.statsBase[tb.sessionId];
+  if (!b) return '';
+  return _tabRateText((b.rxRate || 0) + (b.txRate || 0));
+}
+
+// 「保存」状态是按进程的开关，只有右键菜单里能看到。这里在渲染时懒加载一次，
+// 拿到后写回 tab.histOn 再重画 —— 不能同步等 IPC，否则标签栏会被拖住。
+var _tabHistFetching = {};
+// 守护进程换了一轮：所有会话的保存状态都不作数了，清掉让渲染时重新取
+function _resetTabHistState() {
+  _tabHistFetching = {};
+  (state.tabs || []).forEach(function (tb) { if (tb && !tb.type) tb.histOn = undefined; });
+}
+function _ensureTabHist(tb) {
+  if (!tb || tb.type || !tb.sessionId || !state.daemonOnline) return;
+  if (tb.histOn !== undefined || _tabHistFetching[tb.sessionId]) return;
+  _tabHistFetching[tb.sessionId] = true;
+  var sid = tb.sessionId;
+  window.go.main.App.GetHistoryStatusFor(sid).then(function (on) {
+    delete _tabHistFetching[sid];
+    tb.histOn = !!on;
+    if (state.tabs.indexOf(tb) >= 0) renderTabs();
+  }).catch(function () {
+    delete _tabHistFetching[sid];
+    tb.histOn = false;
+  });
+}
+
+// 每秒刷一次速率：只改文本，不重建标签（重建会闪、会打断悬停/拖动）。
+function _updateTabRateTexts() {
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+  var btns = scroll.querySelectorAll('.tab-btn[data-tab-idx]');
+  var changed = false;
+  for (var i = 0; i < btns.length; i++) {
+    var idx = parseInt(btns[i].getAttribute('data-tab-idx'), 10);
+    var t = state.tabs[idx];
+    var el = btns[i].querySelector('.tab-rate');
+    if (!t || !el) continue;
+    var txt = _tabRateOf(t);
+    if (el.textContent !== txt) {
+      // 只有字数变了才可能改变标签宽度，才值得重算密度
+      if (el.textContent.length !== txt.length) changed = true;
+      el.textContent = txt;
+    }
+  }
+  if (changed) _updateTabDensity(true);
+}
+
+// 标签栏密度：内容放不下就逐级丢信息（速率 → 保存 → 参数/标记 → 端口名省略）。
+// 尺子和 _updateTabArrows 用的是同一把：scrollWidth vs clientWidth。
+// 级别只写在容器上、靠 CSS 隐藏子元素，所以不重建 DOM。
+var _tabBarWidth = -1;
+function _updateTabDensity(force) {
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+  if (!force && scroll.clientWidth === _tabBarWidth) return;
+  _tabBarWidth = scroll.clientWidth;
+  var lvl = 0;
+  for (; lvl < 4; lvl++) {
+    scroll.setAttribute('data-lvl', String(lvl));
+    if (scroll.scrollWidth <= scroll.clientWidth) return;
+  }
+  scroll.setAttribute('data-lvl', '4');
+}
+
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
@@ -3909,11 +4058,10 @@ function renderTabs() {
   state.tabs.forEach((t, i) => {
     if (t._page && t._page.isWelcome) return;  // skip welcome tab
     const btn = document.createElement('button');
-    // 转发色只在**真的在转发**时加：`.tab-forward` 用 !important 压过 `.tab-idle`，
-    // 之前只要 mode=forward 就一直绿着，于是「端口转发空闲」看起来像在跑。
+    // 状态只体现在图标右下角那枚点上，颜色不再挂在文字上；只读标签另给虚线边框。
+    const stateCls = _tabStateClass(t);
     btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '')
-      + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
-    if (!t.portOpen) btn.className += ' tab-idle';
+      + (stateCls === 'is-ro' ? ' is-ro' : '');
     btn.dataset.tabIdx = i;
     btn.onclick = () => {
       if (window._tabClickSuppress) return;
@@ -3930,7 +4078,6 @@ function renderTabs() {
       e.stopPropagation();
       _tabMenuOpen(e.clientX, e.clientY, i);
     };
-    const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
     // 会话标签：悬停出自绘浮窗（c-tabpop），不再挂原生 title
@@ -3949,27 +4096,46 @@ function renderTabs() {
       });
       btn.addEventListener('blur', function () { _tabPopScheduleClose(); });
     }
-    const tag = (isSettings || isChooser) ? '' : (isFwd ? ' ↔' : '');
-    // Status dot (gear icon for settings, plus icon for the new-session page)
-    const dot = document.createElement('span');
-    if (isSettings || isChooser) {
-      dot.innerHTML = icon(isSettings ? 'settings' : 'plus', 14, 14);
-      dot.style.cssText = 'display:flex;align-items:center;margin-right:2px;';
-    } else {
-      dot.className = 'tab-dot' + (t.portOpen ? ' live' : '');
+    // 类型图标 + 状态点（同一枚元素，点画在 ::after 上）
+    const ico = document.createElement('span');
+    ico.className = 'tab-ico' + (stateCls ? ' ' + stateCls : '');
+    ico.innerHTML = icon(_tabIconKey(t), 14, 14);
+    btn.appendChild(ico);
+
+    // 端口名（主）/ 参数（灰）/ 标记（更弱）—— 分三段，权重不同
+    const parts = _tabLabelParts(t);
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'tab-port';
+    nameSpan.textContent = parts.name;
+    btn.appendChild(nameSpan);
+    if (parts.param) {
+      const paramSpan = document.createElement('span');
+      paramSpan.className = 'tab-param';
+      paramSpan.textContent = parts.param;
+      btn.appendChild(paramSpan);
     }
-    btn.appendChild(dot);
-    // Label text
-    const labelSpan = document.createElement('span');
-    labelSpan.textContent = _tabLabelText(t) + tag;
-    btn.appendChild(labelSpan);
-    const v2 = t.viewers || {gui:0, cli:0, mcp:0};
-    [['gui','#4a9eff'],['cli','#4caf50'],['mcp','#ff9800']].forEach(function(s) {
-      const cnt = v2[s[0]] || 0;
-      if (cnt > 0 && !(s[0] === 'gui' && cnt === 1)) {
-        const vb = document.createElement("span"); vb.style.cssText = "color:"+s[1]+";font-size:11px;font-weight:bold"; vb.textContent = cnt; btn.appendChild(vb);
-      }
-    });
+    // 保存标记：只在「端口开着且确实在落盘」时出现。没连的时候什么也写不进去，
+    // 挂个磁盘图标反而误导（懒加载见 _ensureTabHist）。
+    _ensureTabHist(t);
+    if (t.histOn === true && t.portOpen) {
+      const saveSpan = document.createElement('span');
+      saveSpan.className = 'tab-save';
+      saveSpan.innerHTML = icon('save', 12, 12);
+      btn.appendChild(saveSpan);
+    }
+    if (parts.flag) {
+      const flagSpan = document.createElement('span');
+      flagSpan.className = 'tab-flag';
+      flagSpan.textContent = parts.flag;
+      btn.appendChild(flagSpan);
+    }
+    // 速率槽位常驻：每秒只改文本，靠 :empty 消失（见 style.css 8a）
+    if (!t.type) {
+      const rateSpan = document.createElement('span');
+      rateSpan.className = 'tab-rate';
+      rateSpan.textContent = _tabRateOf(t);
+      btn.appendChild(rateSpan);
+    }
     if (isChooser) {
       btn.title = window.t('newtab.hint', '选择一种模式开始');
     } else if (isSettings) {
@@ -4007,8 +4173,9 @@ function renderTabs() {
     }
   }
 
-  // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
-  // 变多而触发）—— 见 bindTabsScroll / TODO #26。
+  // 重绘后标签总宽变了：先按可用宽度定密度级别，再重算左右箭头显隐
+  // （ResizeObserver 不会因为子节点变多而触发）—— 见 bindTabsScroll / TODO #26。
+  _updateTabDensity(true);
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
 }
 
@@ -4531,6 +4698,9 @@ function bindTabsScroll() {
   var right = bar.querySelector('.tabs-scroll-arrow--right');
   if (!left || !right) return;
   function update() {
+    // 窗口宽度变了，标签栏能显示到哪一层也要重算（_updateTabDensity 内部按
+    // clientWidth 做了缓存，滚动时不会反复重排）。
+    if (typeof _updateTabDensity === 'function') _updateTabDensity();
     var max = scroll.scrollWidth - scroll.clientWidth;
     left.classList.toggle('is-hidden', scroll.scrollLeft <= 1);
     right.classList.toggle('is-hidden', scroll.scrollLeft >= max - 1);
@@ -4687,21 +4857,29 @@ function onStatsCount(data) {
 }
 
 function onStatsRate(data) {
-  // 同上：浮窗按自己的 processId 匹配，和活动标签互不影响
+  // 浮窗按自己的 processId 匹配，和活动标签互不影响
   if (_tabPop && data && _tabPop.sessionId && data.processId === _tabPop.sessionId) {
     if (!_tabPop.stats) _tabPop.stats = {};
     _tabPop.stats.readRateBps = data.readRateBps || 0;
     _tabPop.stats.writeRateBps = data.writeRateBps || 0;
     _tabPopUpdate();
   }
+  // 速率按会话缓存：以前只给活动标签记，于是标签栏根本拿不到非活动标签的速率。
+  // 事件本来是按 processId 全量推送的，顺手给所有会话记一份。
+  if (data && data.processId) {
+    if (!state.statsBase) state.statsBase = {};
+    const any = state.statsBase[data.processId]
+      || (state.statsBase[data.processId] = { tx: 0, rx: 0, p1: 0, p2: 0 });
+    any.txRate = data.writeRateBps || 0;
+    any.rxRate = data.readRateBps || 0;
+  }
+  _updateTabRateTexts();
+
   const tab = getActiveTab();
-  if (!tab || !tab.sessionId || data.processId !== tab.sessionId) return;
+  if (!tab || !tab.sessionId || !data || data.processId !== tab.sessionId) return;
   const sid = tab.sessionId;
   if (!state.statsBase[sid]) { state.statsBase[sid] = { tx: 0, rx: 0, p1: 0, p2: 0 }; }
   const b = state.statsBase[sid];
-  // 速率也按会话缓存：此前只写进 DOM，切标签/重连后停在别人的最后一个速率上
-  b.txRate = data.writeRateBps || 0;
-  b.rxRate = data.readRateBps || 0;
   const isFwd = activeMode() === 'forward';
   if (_statusBar) {
     _statusBar.setStatsMode(isFwd);

@@ -418,16 +418,82 @@ button:disabled:active { transform: none; box-shadow: none; }
 .statusbar::before { background-image: var(--statusbar-bg-overlay, none), var(--statusbar-bg-image, none); }
 .header > *, .tabs-bar > *, .statusbar > * { position: relative; z-index: 1; }
 
-.tab-dot { width: 8px; height: 8px; min-width: 8px; flex-shrink: 0; border-radius: 50%; transition: background 0.25s, box-shadow 0.25s; background: transparent; align-self: center; }
-.tab-dot.live { background: var(--green); box-shadow: 0 0 5px rgba(22,198,12,0.55); }
+/* ---- 8a. 标签内容：类型图标 + 状态点 ----
+   设计见 0.8.4-dev/tab-icon-preview-v2.html 的 P4 方案：
+     类型（单端口/转发/设置/新建/文件）→ 左侧 14px 图标，中性灰，靠形状区分
+     状态（已连/转发/空闲/只读）      → 图标右下角 5px 点，整条标签唯一的着色处
+     参数 / 保存 / 速率               → 是「信息」不是状态，不拥挤才显示
+   以前一个标签上同时有圆点、图标颜色、斜体、绿字加粗、压暗五套信号，只表达三种语义；
+   现在状态只有一枚点，其余信息按拥挤程度退让（.tabs-scroll[data-lvl]，见 _updateTabDensity）。 */
+.tab-ico {
+  position: relative; display: inline-flex; align-self: center;
+  width: 14px; height: 14px; flex: 0 0 14px;
+  color: var(--placeholder);
+}
+.tab-ico > svg { display: block; width: 14px; height: 14px; }
+/* 点压在图标自身的右下角（不外挂）：图标笔画只画到 22/24，挂出去会像「掉下来的一粒」。
+   1.5px 底色描边让点和图标笔画分开，深浅主题都靠这一条。 */
+.tab-ico::after {
+  content: ''; position: absolute; right: 0; bottom: 0;
+  width: 5px; height: 5px; border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--input-bg);
+}
+.tab-ico.is-live::after { background: var(--green); }
+.tab-ico.is-fwd::after  { background: var(--fwd-p1); }
+.tab-ico.is-idle::after { background: var(--placeholder); opacity: .75; }
+.tab-ico.is-ro::after   { background: transparent; box-shadow: none; border: 1px solid var(--placeholder); }
+
+/* 只读标签（单个 .stlog 文件、还没推给守护进程的工程）：虚线边框，不参与彩色语义 */
+.tab-btn.is-ro { border-style: dashed; }
+
+/* 端口名/文件名最长 170px：一个 30 字符的 .stlog 文件名能让整条标签栏被它一个人吃掉
+   （实测 240px），先在这里截断，比等到 4 级降级才省略更早生效 */
+.tab-port {
+  font-variant-numeric: tabular-nums;
+  max-width: 170px; overflow: hidden; text-overflow: ellipsis;
+  display: inline-block; vertical-align: bottom;
+}
+.tab-param { font-size: 11.5px; color: var(--placeholder); font-variant-numeric: tabular-nums; }
+.tab-flag  { font-size: 10.5px; color: var(--placeholder); }
+.tab-rate  {
+  font-size: 11.5px; color: var(--placeholder); font-variant-numeric: tabular-nums;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+/* 保存是「信息」不是「状态」：用前景色压到 72%，既不上色抢状态点，也不会糊成灰块 */
+.tab-save { display: inline-flex; align-items: center; color: var(--fg); opacity: .72; }
+.tab-save > svg { display: block; width: 12px; height: 12px; }
+
+/* 没有内容的槽位不留空隙（否则每个标签白占一个 gap） */
+.tab-param:empty, .tab-flag:empty, .tab-rate:empty { display: none; }
+
+/* 拥挤降级：速率 → 保存 → 参数/标记 → 端口名省略。级别写在容器上，靠 CSS 隐藏，
+   不重建 DOM —— 每秒刷速率时标签不会闪。 */
+.tabs-scroll[data-lvl="1"] .tab-rate,
+.tabs-scroll[data-lvl="1"] .tab-flag { display: none; }
+
+.tabs-scroll[data-lvl="2"] .tab-rate,
+.tabs-scroll[data-lvl="2"] .tab-flag,
+.tabs-scroll[data-lvl="2"] .tab-save { display: none; }
+
+.tabs-scroll[data-lvl="3"] .tab-rate,
+.tabs-scroll[data-lvl="3"] .tab-flag,
+.tabs-scroll[data-lvl="3"] .tab-save,
+.tabs-scroll[data-lvl="3"] .tab-param { display: none; }
+
+.tabs-scroll[data-lvl="4"] .tab-rate,
+.tabs-scroll[data-lvl="4"] .tab-flag,
+.tabs-scroll[data-lvl="4"] .tab-save,
+.tabs-scroll[data-lvl="4"] .tab-param { display: none; }
+.tabs-scroll[data-lvl="4"] .tab-port {
+  max-width: 62px; overflow: hidden; text-overflow: ellipsis;
+  display: inline-block; vertical-align: bottom;
+}
 
 .tab-btn .close-tab {
   color: var(--tab-close); width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 6px; flex-shrink: 0; transition: background 0.15s, color 0.15s;
 }
 .tab-btn .close-tab:hover { background: var(--red); color: #fff; }
-.tab-idle { font-style: italic; color: var(--placeholder); }
-.tab-forward { color: var(--green) !important; font-weight: 600; }
 /* 拖动排序中：原标签自己改成固定定位、压暗，在标签栏这一行里左右滑；
    原位由 .tab-placeholder 占着 —— 其余标签因此会实时让位。
    不用投影/浮起效果：它要看起来就是「原来那个标签被按暗了正在挪」。 */
