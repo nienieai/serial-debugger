@@ -3189,16 +3189,10 @@ function _relabelIdleTabs() {
   }
 }
 
-// 标签页标题：tab.label 在标签页创建时就算好了，如果那一刻语言包还没装好，
-// 算出来就是空串，之后再渲染也补不回来。这里按标签页自身状态兜一个。
-function _tabLabelText(tb) {  if (tb.label) return tb.label;
-  var sp = tb.syncedParams;
-  if (sp && sp.portName) {
-    if (tb.mode === 'forward') return sp.portName;
-    return sp.baud ? (sp.portName + ' @ ' + sp.baud) : sp.portName;
-  }
-  return tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
-}
+// 标签页标题的「兜底版」原来在这里（_tabLabelText）：标签页创建时语言包可能还没装好，
+// tab.label 会是空串。0.8.4 起标签文字改由 _tabLabelParts() 从会话状态现算
+// （端口 / 参数 / 标记分段），不再读 tab.label，这个兜底也就没有调用方了。
+// tab.label 仍然保留：右键菜单、窗口标题这类地方还要用完整标题。
 
 // ---- 标签高级信息浮窗（设计稿 A：c-tabpop） ----
 //
