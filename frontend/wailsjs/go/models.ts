@@ -107,6 +107,13 @@ export namespace main {
 	    autoSaveHistory: boolean;
 	    displayColors: string;
 	    stlogShowYear: boolean;
+	    tabTwoLines: boolean;
+	    tabSubLine: string;
+	    tabShowClients: boolean;
+	    tabClientStyle: string;
+	    tabShowDot: boolean;
+	    tabNameMax: number;
+	    tabCollapse: string;
 	    serial: SerialDefaults;
 	    autoSend: AutoSendDefaults;
 	    append: AppendDefaults;
@@ -140,6 +147,13 @@ export namespace main {
 	        this.autoSaveHistory = source["autoSaveHistory"];
 	        this.displayColors = source["displayColors"];
 	        this.stlogShowYear = source["stlogShowYear"];
+	        this.tabTwoLines = source["tabTwoLines"];
+	        this.tabSubLine = source["tabSubLine"];
+	        this.tabShowClients = source["tabShowClients"];
+	        this.tabClientStyle = source["tabClientStyle"];
+	        this.tabShowDot = source["tabShowDot"];
+	        this.tabNameMax = source["tabNameMax"];
+	        this.tabCollapse = source["tabCollapse"];
 	        this.serial = this.convertValues(source["serial"], SerialDefaults);
 	        this.autoSend = this.convertValues(source["autoSend"], AutoSendDefaults);
 	        this.append = this.convertValues(source["append"], AppendDefaults);

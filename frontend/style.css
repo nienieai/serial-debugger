@@ -418,13 +418,19 @@ button:disabled:active { transform: none; box-shadow: none; }
 .statusbar::before { background-image: var(--statusbar-bg-overlay, none), var(--statusbar-bg-image, none); }
 .header > *, .tabs-bar > *, .statusbar > * { position: relative; z-index: 1; }
 
-/* ---- 8a. 标签内容：类型图标 + 状态点 + 线程名 ----
-   标签上只允许三样东西（其余状态全部由悬浮卡 c-tabpop 承担）：
-     类型（单端口/转发/设置/新建/文件）→ 左侧 14px 图标，中性灰，靠形状区分
-     开关（已连/空闲/只读）            → 图标右下角 5px 点，整条标签唯一的着色处
-     线程名                            → 唯一的一段文字，长名字截断
-   名字归守护进程所有（process.list 的 name），GUI 不再自己拼「COM3 @ 115200」
-   「端口转发空闲」这类文案 —— 否则 CLI / MCP / GUI 各拼一份必然对不上。 */
+/* ---- 8a. 标签内容：类型图标 + 状态点 + 线程名（+ 可选第二行） ----
+   标签上只允许这几样东西（其余状态全部由悬浮卡 c-tabpop 承担）：
+     类型（单端口/转发/设置/新建/文件）→ 左侧图标（单行 14px / 双行 21px），中性灰
+     开关（已连/空闲/只读）            → 图标右下角小点，整条标签唯一的着色处
+     线程名                            → 0.8.3 起归守护进程所有（process.list 的 name）
+     第二行（仅双行）                  → 端口与参数 / 参数与速率 / 保存与客户端
+     客户端数字                        → 单行挂名字右边、双行挂第二行末尾
+   这些都能在「设置 → 标签页」里单独开关，统一写在 body 的 data-tab-* 上：
+     data-tab-lines=1|2  单行/双行（双行整体高度 ×1.5）
+     data-tab-dot=on|off 状态点
+     data-tab-cli=on|off 客户端数字
+     data-tab-collapse=sub|clients  拥挤时先牺牲谁
+     --tab-name-max      名字最大宽度（px） */
 .tab-ico {
   position: relative; display: inline-flex; align-self: center;
   width: 14px; height: 14px; flex: 0 0 14px;
@@ -432,7 +438,8 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .tab-ico > svg { display: block; width: 14px; height: 14px; }
 /* 点压在图标自身的右下角（不外挂）：图标笔画只画到 22/24，挂出去会像「掉下来的一粒」。
-   1.5px 底色描边让点和图标笔画分开，深浅主题都靠这一条。 */
+   1.5px 底色描边让点和图标笔画分开，深浅主题都靠这一条。
+   注意生成条件写在状态类里：设置/新建没有状态，也就不该有那枚点。 */
 .tab-ico.is-live::after, .tab-ico.is-fwd::after, .tab-ico.is-idle::after, .tab-ico.is-ro::after {
   content: ''; position: absolute; right: 0; bottom: 0;
   width: 5px; height: 5px; border-radius: 50%;
@@ -442,20 +449,92 @@ button:disabled:active { transform: none; box-shadow: none; }
 .tab-ico.is-fwd::after  { background: var(--fwd-p1); }
 .tab-ico.is-idle::after { background: var(--placeholder); opacity: .75; }
 .tab-ico.is-ro::after   { background: transparent; box-shadow: none; border: 1px solid var(--placeholder); }
+body[data-tab-dot="off"] .tab-ico::after { display: none; }
 
 /* 只读标签（单个 .stlog 文件、还没推给守护进程的工程）：虚线边框，不参与彩色语义 */
 .tab-btn.is-ro { border-style: dashed; }
 
-/* 线程名最长 170px：自定义名字可能很长，一个名字不该把整条标签栏吃掉 */
+/* 文字块：单行时只有名字，双行时名字 + 明细 */
+/* text-align: start 是必须的：标签本体是 <button>，浏览器默认 text-align:center，
+   双行时名字会被居中、而第二行（flex）靠左，两行就对不齐了 */
+.tab-txt { display: flex; flex-direction: column; justify-content: center; min-width: 0; gap: 3px; text-align: start; }
+body[data-tab-lines="1"] .tab-txt { gap: 0; }
+
+/* 线程名：宽度跟随「名字最大宽度」设置；自定义名字可能很长，一个名字不该吃掉整条标签栏 */
 .tab-port {
   font-variant-numeric: tabular-nums;
-  max-width: 170px; overflow: hidden; text-overflow: ellipsis;
+  max-width: var(--tab-name-max, 170px);
+  overflow: hidden; text-overflow: ellipsis;
   display: inline-block; vertical-align: bottom;
 }
 
+/* 第二行：只在双行模式出现（单行时 DOM 里就没有它，这条是兜底） */
+.tab-sub {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 11.5px; font-weight: 400; line-height: 1.15; color: var(--placeholder);
+  max-width: 220px; overflow: hidden; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+body[data-tab-lines="1"] .tab-sub { display: none; }
+.tab-sub__txt { overflow: hidden; text-overflow: ellipsis; }
+.tab-sub__txt:empty { display: none; }
+
+/* 客户端数字：0.8.3 原样分来源彩色（GUI 蓝 / CLI 绿 / MCP 橙），
+   或设置里选「总数」只显示一个数字。 */
+.tab-cli {
+  display: inline-flex; align-items: baseline; gap: 2px; flex: none;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+body[data-tab-cli="off"] .tab-cli { display: none; }
+.tab-cli--src i { font-style: normal; }
+.tab-cli__g { color: #4a9eff; }
+.tab-cli__c { color: #4caf50; }
+.tab-cli__m { color: #ff9800; }
+:root[data-theme="light"] .tab-cli__g { color: #1d4ed8; }
+:root[data-theme="light"] .tab-cli__c { color: #15803d; }
+:root[data-theme="light"] .tab-cli__m { color: #b45309; }
+
+/* ---- 8a-2. 双行标签：整体高度 ×1.5 ----
+   栏 36→54、标签 30→45、激活 33→50、图标 14→21、点 5→7、关闭 22→26、
+   名字 13→14。字号只加 1px：真按 1.5 乘会变成 19.5px，比内容区标题还大。 */
+body[data-tab-lines="2"] .tabs-bar { height: 54px; }
+body[data-tab-lines="2"] .tab-btn { height: 45px; gap: 7px; padding: 0 6px 0 9px; }
+body[data-tab-lines="2"] .tab-btn.is-active { height: 50px; padding-bottom: 6px; }
+body[data-tab-lines="2"] .tab-btn:not(.is-active) { border-radius: 8px; }
+body[data-tab-lines="2"] .tab-ico { width: 21px; height: 21px; flex: 0 0 21px; }
+body[data-tab-lines="2"] .tab-ico > svg { width: 21px; height: 21px; }
+body[data-tab-lines="2"] .tab-ico.is-live::after,
+body[data-tab-lines="2"] .tab-ico.is-fwd::after,
+body[data-tab-lines="2"] .tab-ico.is-idle::after,
+body[data-tab-lines="2"] .tab-ico.is-ro::after { width: 7px; height: 7px; box-shadow: 0 0 0 2px var(--input-bg); }
+body[data-tab-lines="2"] .tab-port { font-size: 14px; }
+body[data-tab-lines="2"] .tab-btn .close-tab { width: 26px; height: 26px; }
+body[data-tab-lines="2"] .tab-placeholder { height: 45px; }
+
+/* ---- 8a-3. 拥挤降级 ----
+   顺序由 data-tab-collapse 决定：
+     sub（默认）  第二行收窄 → 第二行隐藏 → 数字隐藏 + 名字收窄 → 名字省略
+     clients      数字隐藏 → 第二行收窄 → 第二行隐藏 + 名字收窄 → 名字省略
+   第 2 级之后标签高度不变，只收内容 —— 高度突变会让内容区上下跳。 */
+.tabs-scroll[data-lvl="1"] .tab-sub { max-width: 130px; }
+.tabs-scroll[data-lvl="2"] .tab-sub { display: none; }
+.tabs-scroll[data-lvl="3"] .tab-sub,
+.tabs-scroll[data-lvl="4"] .tab-sub { display: none; }
+.tabs-scroll[data-lvl="3"] .tab-cli,
+.tabs-scroll[data-lvl="4"] .tab-cli { display: none; }
+.tabs-scroll[data-lvl="3"] .tab-port { max-width: 110px; }
+.tabs-scroll[data-lvl="4"] .tab-port { max-width: 62px; }
+
+/* 数字优先：一上来就先去掉客户端数字 */
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="1"] .tab-cli { display: none; }
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="1"] .tab-sub { max-width: 150px; }
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="2"] .tab-sub { max-width: 96px; }
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="2"] .tab-cli { display: none; }
+
 /* 就地改名的输入框：宽度跟着标签走，不改变标签高度 */
 .tab-rename {
-  flex: 0 1 auto; min-width: 60px; max-width: 170px;
+  flex: 0 1 auto; min-width: 60px; max-width: var(--tab-name-max, 170px);
   height: 20px; padding: 0 3px;
   background: var(--input-bg); color: var(--fg);
   border: 1px solid var(--accent); border-radius: 4px;

@@ -53,6 +53,15 @@ const state = {
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
   // 标签浮窗要显示它，所以在 updatePortList 里留一份。
   portDescs: {},
+
+  // ── 标签栏外观（设置 → 标签页；全部持久化到 gui.ini）──
+  tabTwoLines: false,        // 双行标签：高度 ×1.5
+  tabSubLine: 'a',           // 第二行内容：a 端口·参数 / b 参数·速率 / c 保存·客户端
+  tabShowClients: true,      // 显示客户端数量
+  tabClientStyle: 'source',  // source 分来源彩色（0.8.3 原样）/ total 只显示总数
+  tabShowDot: true,          // 图标右下角的状态点
+  tabNameMax: 170,           // 线程名最大宽度（px）
+  tabCollapse: 'sub',        // 拥挤时先牺牲谁：sub 先收第二行 / clients 先收数字
 };
 
 function newTabSendState() {
@@ -110,6 +119,13 @@ function saveSettings() {
       language: state.language,
       autoCreateSession: state.autoCreateSession,
       autoSaveHistory: state.autoSaveHistory === true,
+      tabTwoLines: state.tabTwoLines === true,
+      tabSubLine: state.tabSubLine || 'a',
+      tabShowClients: state.tabShowClients !== false,
+      tabClientStyle: state.tabClientStyle || 'source',
+      tabShowDot: state.tabShowDot !== false,
+      tabNameMax: state.tabNameMax || 170,
+      tabCollapse: state.tabCollapse || 'sub',
       historyWindowRows: state.historyWindowRows,
       autoRefillHistory: state.autoRefillHistory,
       displayColors: JSON.stringify(state.displayColors || _defaultDisplayColors()),
@@ -198,6 +214,16 @@ async function loadSettings() {
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
       if (typeof s.stlogShowYear === 'boolean') state.stlogShowYear = s.stlogShowYear;
+      // ── 标签栏外观（设置 → 标签页）──
+      // 每一项都先判断类型：gui.ini 可能是旧版本写的，缺键时保持默认值。
+      if (typeof s.tabTwoLines === 'boolean') state.tabTwoLines = s.tabTwoLines;
+      if (s.tabSubLine === 'a' || s.tabSubLine === 'b' || s.tabSubLine === 'c') state.tabSubLine = s.tabSubLine;
+      if (typeof s.tabShowClients === 'boolean') state.tabShowClients = s.tabShowClients;
+      if (s.tabClientStyle === 'source' || s.tabClientStyle === 'total') state.tabClientStyle = s.tabClientStyle;
+      if (typeof s.tabShowDot === 'boolean') state.tabShowDot = s.tabShowDot;
+      if (typeof s.tabNameMax === 'number' && s.tabNameMax >= 120 && s.tabNameMax <= 280) state.tabNameMax = s.tabNameMax;
+      if (s.tabCollapse === 'sub' || s.tabCollapse === 'clients') state.tabCollapse = s.tabCollapse;
+      if (typeof _applyTabDisplaySettings === 'function') _applyTabDisplaySettings();
       if (s.language && typeof s.language === 'string') state.language = s.language;
       if (typeof s.displayFontFamily === 'string') state.displayFontFamily = s.displayFontFamily;
       if (typeof s.displayFontSize === 'number') state.displayFontSize = s.displayFontSize;
@@ -4074,6 +4100,183 @@ function _tabNameOf(tb) {
   // 别再显示「单端口空闲」那种状态文案 —— 状态由图标右下角那枚点负责。
   return '#' + tb.id;
 }
+
+// ---- 标签栏外观设置（设置 → 标签页）----
+//
+// 全部是 GUI 本地偏好（gui.ini），只影响标签栏怎么画。开关一变就调
+// _applyTabDisplaySettings() 把状态写到 body 的属性上（CSS 负责画），
+// 再重画标签 —— 第二行与客户端数字是 JS 拼出来的，必须重来一遍。
+
+function _applyTabDisplaySettings() {
+  var b = document.body;
+  if (!b) return;
+  b.setAttribute('data-tab-lines', state.tabTwoLines === true ? '2' : '1');
+  b.setAttribute('data-tab-dot', state.tabShowDot === false ? 'off' : 'on');
+  b.setAttribute('data-tab-cli', state.tabShowClients === false ? 'off' : 'on');
+  b.setAttribute('data-tab-collapse', state.tabCollapse === 'clients' ? 'clients' : 'sub');
+  b.style.setProperty('--tab-name-max', (state.tabNameMax || 170) + 'px');
+}
+
+// 客户端数字：0.8.3 原样是分来源彩色（GUI 蓝 / CLI 绿 / MCP 橙）。
+// 只有 GUI 自己一个时整块省略 —— 那是「我在看自己的会话」，写个 1 只是噪声。
+function _tabClientsNode(tb) {
+  if (state.tabShowClients === false) return null;
+  if (tb.type === 'settings' || tb.type === 'new') return null;
+  var v = tb.viewers || {};
+  var gui = v.gui || 0, cli = v.cli || 0, mcp = v.mcp || 0;
+  var total = gui + cli + mcp;
+  if (total <= 0) return null;
+  if (total === 1 && gui === 1) return null;
+
+  var el = document.createElement('span');
+  el.className = 'tab-cli';
+  el.setAttribute('dir', 'ltr');   // 阿拉伯语界面下数字顺序不能被翻转
+  if (state.tabClientStyle === 'total') {
+    el.textContent = String(total);
+    return el;
+  }
+  el.classList.add('tab-cli--src');
+  [['g', gui], ['c', cli], ['m', mcp]].forEach(function (pair) {
+    if (!pair[1]) return;
+    var i = document.createElement('i');
+    i.className = 'tab-cli__' + pair[0];
+    i.textContent = String(pair[1]);
+    el.appendChild(i);
+  });
+  return el;
+}
+
+// 第二行明细（仅双行标签）。三种组合由「第二行内容」设置决定：
+//   a 端口 · 参数    b 参数 · 速率    c 保存 · 客户端
+function _tabSubText(tb) {
+  if (state.tabTwoLines !== true) return '';
+  if (tb.type === 'settings' || tb.type === 'new') return '';
+
+  if (tb.type === 'stlog') {
+    var st = tb._stlog || {};
+    var info = st.info || {};
+    if (st.isDir) {
+      if (state.tabSubLine === 'b') {
+        var set = info.settings || {};
+        return set.port ? (set.port + (set.baud ? ' · ' + set.baud : '')) : _tabPopT('tab.sub_project', '工程');
+      }
+      if (state.tabSubLine === 'c') return _tabPopT('tab.sub_readonly', '只读') + ' · ' + _tabPopT('tab.sub_not_taken', '未接管');
+      return _tabPopT('tab.sub_project', '工程') + ' · ' + _tabPopT('tab.sub_not_taken', '未接管');
+    }
+    // 单个 .stlog：帧数 + 时长（都在已读到的索引里，不额外读盘）
+    var frames = st.total || 0;
+    var dur = '';
+    if (info.firstTs && info.lastTs && info.lastTs > info.firstTs) {
+      dur = _tabPopDuration((info.lastTs - info.firstTs) / 1000);
+    }
+    if (state.tabSubLine === 'b') {
+      var s2 = info.settings || {};
+      return (s2.port || '') + (dur ? (s2.port ? ' · ' : '') + dur : '');
+    }
+    if (state.tabSubLine === 'c') return _tabPopT('tab.sub_readonly', '只读') + ' · ' + frames + ' ' + _tabPopT('tabpop.frames', '帧');
+    return frames + ' ' + _tabPopT('tabpop.frames', '帧') + (dur ? ' · ' + dur : '');
+  }
+
+  var sp = tb.syncedParams;
+  if (!sp || !sp.portName) {
+    return state.tabSubLine === 'c'
+      ? (_tabPopT('tabpop.save', '保存') + ' ' + _tabPopT('tab.sub_unset', '未配置'))
+      : _tabPopT('tab.sub_unset', '未配置');
+  }
+  var name = _tabNameOf(tb);
+  var port = sp.portName;
+  var baud = sp.baud ? String(sp.baud) : '';
+  var fmt = (sp.dataBits || 8) + _tabPopParityLetter(sp.parity) + (sp.stopBits || 1);
+  var rate = '';
+  var base = state.statsBase && tb.sessionId ? state.statsBase[tb.sessionId] : null;
+  if (base) rate = _tabRateText((base.rxRate || 0) + (base.txRate || 0));
+  var saveTxt = tb.histOn === true ? _tabPopT('tabpop.on', '开') : (tb.histOn === false ? _tabPopT('tabpop.off', '关') : '—');
+  var cliTotal = 0;
+  var vw = tb.viewers || {};
+  cliTotal = (vw.gui || 0) + (vw.cli || 0) + (vw.mcp || 0);
+
+  if (state.tabSubLine === 'b') {
+    var parts2 = [baud ? (baud + (fmt ? ' ' + fmt : '')) : ''];
+    if (rate) parts2.push(rate);
+    return parts2.filter(Boolean).join(' · ');
+  }
+  if (state.tabSubLine === 'c') {
+    // 「保存 · 客户端」：客户端数已经在这行里，就不再单独挂数字
+    var parts3 = [_tabPopT('tabpop.save', '保存') + ' ' + saveTxt];
+    if (state.tabShowClients !== false && cliTotal > 0) parts3.push(_tabPopT('tabpop.clients', '客户端') + ' ' + cliTotal);
+    return parts3.join(' · ');
+  }
+  // a：端口 · 参数。名字本身就是端口时不重复
+  var parts = [];
+  if (port && port !== name) parts.push(port);
+  if (baud) parts.push(baud + (fmt ? ' ' + fmt : ''));
+  return parts.join(' · ');
+}
+
+// 紧凑速率：标签上一行放不下 "kB/s"，只留单位首字母
+function _tabRateText(bps) {
+  bps = Number(bps) || 0;
+  if (bps <= 0) return '';
+  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
+  if (bps >= 1024) return (bps / 1024).toFixed(bps < 10240 ? 1 : 0) + 'k';
+  return Math.round(bps) + 'B';
+}
+
+// 第二行是「参数 · 速率」时，速率每秒变：只改文本，不重建标签
+function _updateTabSubTexts() {
+  if (state.tabTwoLines !== true || state.tabSubLine !== 'b') return;
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+  var nodes = scroll.querySelectorAll('[data-role="sub"]');
+  for (var i = 0; i < nodes.length; i++) {
+    var btn = nodes[i].closest('.tab-btn');
+    if (!btn) continue;
+    var idx = parseInt(btn.getAttribute('data-tab-idx'), 10);
+    var tb = state.tabs[idx];
+    if (!tb) continue;
+    var txt = _tabSubText(tb);
+    if (nodes[i].textContent !== txt) nodes[i].textContent = txt;
+  }
+}
+
+// 「保存」开关是按进程的，只有右键菜单里能改。第二行选「保存 · 客户端」时要在标签上
+// 显示它，所以渲染后懒加载一次：拿到就写回 tab.histOn，签名变了自然会重画。
+// 只在真的要用时才问 —— 否则每次 renderTabs 都发一批 IPC。
+var _tabHistFetching = {};
+function _ensureTabsHist() {
+  if (state.tabTwoLines !== true || state.tabSubLine !== 'c') return;
+  if (!state.daemonOnline) return;
+  state.tabs.forEach(function (tb) {
+    if (!tb || tb.type || !tb.sessionId) return;
+    if (tb.histOn !== undefined || _tabHistFetching[tb.sessionId]) return;
+    _tabHistFetching[tb.sessionId] = true;
+    var sid = tb.sessionId;
+    window.go.main.App.GetHistoryStatusFor(sid).then(function (on) {
+      delete _tabHistFetching[sid];
+      tb.histOn = !!on;
+      if (state.tabs.indexOf(tb) >= 0) renderTabs();
+    }).catch(function () {
+      delete _tabHistFetching[sid];
+      tb.histOn = false;
+    });
+  });
+}
+
+// 标签栏密度：放不下就逐级收内容（顺序由「拥挤时先收起」决定）。
+// 尺子和 _updateTabArrows 同一把：scrollWidth vs clientWidth。
+var _tabBarWidth = -1;
+function _updateTabDensity(force) {
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+  if (!force && scroll.clientWidth === _tabBarWidth) return;
+  _tabBarWidth = scroll.clientWidth;
+  for (var lvl = 0; lvl < 4; lvl++) {
+    scroll.setAttribute('data-lvl', String(lvl));
+    if (scroll.scrollWidth <= scroll.clientWidth) return;
+  }
+  scroll.setAttribute('data-lvl', '4');
+}
+
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
@@ -4126,11 +4329,34 @@ function renderTabs() {
     ico.innerHTML = icon(_tabIconKey(t), 14, 14);
     btn.appendChild(ico);
 
-    // 线程名（唯一的一段文字）。其余状态（参数/保存/速率/累计…）全在悬浮卡里。
+    // 文字块：单行时只有名字；双行时名字 + 明细（客户端数字挂在明细末尾）。
+    // 单行的客户端数字挂在名字右边（和 0.8.3 一样），所以它在 .tab-txt 外面。
+    const txt = document.createElement('span');
+    txt.className = 'tab-txt';
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-port';
     nameSpan.textContent = _tabNameOf(t);
-    btn.appendChild(nameSpan);
+    txt.appendChild(nameSpan);
+
+    const twoLines = state.tabTwoLines === true;
+    if (twoLines) {
+      const subEl = document.createElement('span');
+      subEl.className = 'tab-sub';
+      const subTxt = document.createElement('span');
+      subTxt.className = 'tab-sub__txt';
+      subTxt.setAttribute('data-role', 'sub');
+      subTxt.textContent = _tabSubText(t);
+      subEl.appendChild(subTxt);
+      const cliInSub = _tabClientsNode(t);
+      // 「保存 · 客户端」这一档已经写了数字，别重复
+      if (cliInSub && !(state.tabSubLine === 'c' && !t.type)) subEl.appendChild(cliInSub);
+      txt.appendChild(subEl);
+    }
+    btn.appendChild(txt);
+    if (!twoLines) {
+      const cli = _tabClientsNode(t);
+      if (cli) btn.appendChild(cli);
+    }
     // 双击改名：会话改守护进程里的线程名，文件标签改磁盘文件名
     btn.addEventListener('dblclick', function (e) {
       e.preventDefault();
@@ -4174,7 +4400,11 @@ function renderTabs() {
     }
   }
 
-  // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点变多而触发）
+  // 重绘后：把外观设置写到 body（CSS 负责画），再按可用宽度定密度级别，
+  // 最后重算左右箭头（ResizeObserver 不会因为子节点变多而触发）
+  _applyTabDisplaySettings();
+  _ensureTabsHist();
+  _updateTabDensity(true);
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
 }
 
@@ -4697,7 +4927,9 @@ function bindTabsScroll() {
   var right = bar.querySelector('.tabs-scroll-arrow--right');
   if (!left || !right) return;
   function update() {
-
+    // 标签栏宽度变了，能显示到哪一级也要重算（内部按 clientWidth 做了缓存，
+    // 滚动时不会反复重排）
+    if (typeof _updateTabDensity === 'function') _updateTabDensity();
     var max = scroll.scrollWidth - scroll.clientWidth;
     left.classList.toggle('is-hidden', scroll.scrollLeft <= 1);
     right.classList.toggle('is-hidden', scroll.scrollLeft >= max - 1);
@@ -4870,6 +5102,9 @@ function onStatsRate(data) {
     any.txRate = data.writeRateBps || 0;
     any.rxRate = data.readRateBps || 0;
   }
+
+  // 双行标签的第二行选了「参数 · 速率」时，速率每秒变：只改文本，不重建标签
+  if (typeof _updateTabSubTexts === 'function') _updateTabSubTexts();
 
   const tab = getActiveTab();
   if (!tab || !tab.sessionId || !data || data.processId !== tab.sessionId) return;

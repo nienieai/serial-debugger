@@ -47,6 +47,22 @@ type AppSettings struct {
 	// 紧凑优先的人可以关掉。默认开。
 	StlogShowYear bool `json:"stlogShowYear" ini:"stlog_show_year"`
 
+	// ── 标签栏外观（设置 → 标签页）──
+	// 这一组只影响标签栏怎么画，不改变任何会话状态；全部是 GUI 本地偏好。
+	TabTwoLines bool `json:"tabTwoLines" ini:"tab_two_lines"`
+	// TabSubLine 是双行标签第二行的内容组合：a 端口·参数 / b 参数·速率 / c 保存·客户端
+	TabSubLine string `json:"tabSubLine" ini:"tab_sub_line"`
+	// TabShowClients 控制标签上是否显示客户端数量（0.8.3 有，0.8.4 一度移进悬浮卡）
+	TabShowClients bool `json:"tabShowClients" ini:"tab_show_clients"`
+	// TabClientStyle 数字画法：source 分来源彩色（GUI 蓝/CLI 绿/MCP 橙）/ total 只显示总数
+	TabClientStyle string `json:"tabClientStyle" ini:"tab_client_style"`
+	// TabShowDot 控制图标右下角那枚状态点（关掉后状态只能去悬浮卡看）
+	TabShowDot bool `json:"tabShowDot" ini:"tab_show_dot"`
+	// TabNameMax 是线程名的最大显示宽度（px），超过就省略
+	TabNameMax int `json:"tabNameMax" ini:"tab_name_max"`
+	// TabCollapse 是拥挤时先牺牲谁：sub 先收第二行 / clients 先去掉客户端数字
+	TabCollapse string `json:"tabCollapse" ini:"tab_collapse"`
+
 	Serial   SerialDefaults   `json:"serial" ini:"serial"`
 	AutoSend AutoSendDefaults `json:"autoSend" ini:"autosend"`
 	Append   AppendDefaults   `json:"append" ini:"append"`
@@ -93,6 +109,14 @@ func defaultSettings() *AppSettings {
 		Language:          "zh",
 		AutoCreateSession: true,
 		StlogShowYear:     true,
+		// 标签栏：默认单行（保持 0.8.4 现状），客户端数字按 0.8.3 原样分来源彩色
+		TabTwoLines:    false,
+		TabSubLine:     "a",
+		TabShowClients: true,
+		TabClientStyle: "source",
+		TabShowDot:     true,
+		TabNameMax:     170,
+		TabCollapse:    "sub",
 		Serial: SerialDefaults{
 			Baud:        115200,
 			DataBits:    8,

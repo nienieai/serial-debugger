@@ -43,6 +43,14 @@ func TestSettingsINIRoundTrip(t *testing.T) {
 	cfg.AutoSend.IntervalMs = 250
 	cfg.Append.Suffix = "\\r\\n"
 	cfg.AutoSaveHistory = true
+	// 标签栏外观（0.8.4）：全部设成非默认值。ini tag 写错时往返会露馅。
+	cfg.TabTwoLines = true
+	cfg.TabSubLine = "c"
+	cfg.TabShowClients = false
+	cfg.TabClientStyle = "total"
+	cfg.TabShowDot = false
+	cfg.TabNameMax = 220
+	cfg.TabCollapse = "clients"
 
 	f, err := os.CreateTemp(t.TempDir(), "gui-*.ini")
 	if err != nil {
