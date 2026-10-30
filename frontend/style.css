@@ -1591,7 +1591,10 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 .o-dropmask {
   position: absolute; left: 0; right: 0;
   display: flex; align-items: center; justify-content: center;
-  z-index: 5; pointer-events: none;
+  /* 55 = 压过 .o-overlay（「守护进程未启用」的 z-index:50），低于
+     .o-overlay--modal（设置/弹窗，100）——拖入时该盖的盖住，该让的让开。
+     几何上只占菜单栏以下、状态栏以上，不会盖到 .header（z-index:6）。 */
+  z-index: 55; pointer-events: none;
 }
 .c-dropmask {
   background: var(--dropmask-bg);

@@ -2564,6 +2564,8 @@ function updateDaemonUI() {
     }
   });
   _updateStatsVisible();
+  // 引导页的显隐也依赖 daemonOnline，这里跟着刷一次，别等 updateEmptyState 的调用方
+  _syncWelcome();
 }
 
 async function toggleDaemon() {
@@ -5580,17 +5582,25 @@ function updateAutoCreateCheck(on) {
 function updateEmptyState() {
   // Count real (non-welcome) tabs
   var realTabs = state.tabs.filter(function(t) { return !(t._page && t._page.isWelcome); });
-  var hasRealTabs = realTabs.length > 0;
   if (_statusBar) _statusBar.updateDaemon({online: state.daemonOnline, tabsCount: realTabs.length});
-  // Show/hide welcome page
-  if (state._welcomePage) {
-    if (hasRealTabs) {
-      state._welcomePage.hide();
-    } else {
-      state._welcomePage.show();
-    }
-  }
+  _syncWelcome();
   _updateStatsVisible();
+}
+
+// _syncWelcome 决定「尚无串口会话」这张引导页要不要显示。
+//
+// 它和 offlineOverlay（「守护进程未启用」）共用同一块区域，两个都显示就会叠字
+// ——一段黑字压在另一段上，谁都读不清（这个 bug 存在很久了）。
+// 规则：只有「守护进程在线 且 没有真实标签」才显示引导页；离线时让位给
+// offlineOverlay，由它告诉用户去启动守护进程。
+//
+// 两处 update 都调它，避免依赖调用顺序：谁后跑都不会留下不一致的状态。
+function _syncWelcome() {
+  if (!state._welcomePage) return;
+  var realTabs = state.tabs.filter(function(t) { return !(t._page && t._page.isWelcome); });
+  var show = realTabs.length === 0 && !!state.daemonOnline;
+  if (show) state._welcomePage.show();
+  else state._welcomePage.hide();
 }
 
 function quitApp() {
