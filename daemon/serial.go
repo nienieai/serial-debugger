@@ -1662,6 +1662,14 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	}
 
 	// Idle process (no port specified – mode is stored but no ports opened)
+	return pm.createIdle(mode, "")
+}
+
+// createIdle 建一个「没有端口」的空闲进程，是 Create 的最后一条分支。
+//
+// sessionPath 只有 OpenSession 会传（工程里没记端口时走这条），语义与
+// createDeclared 的同名参数一致：让第一条 process-changed 广播就带上是哪个工程。
+func (pm *ProcessManager) createIdle(mode, sessionPath string) (*Process, error) {
 	id := fmt.Sprintf("%d", pm.counter.Add(1))
 	sharedName, sendName := newRingNames(id)
 	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024) // 5 MB
@@ -1684,6 +1692,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 		sendRing:     sendQ,
 		sendRingName: sendName,
 		startTime:    time.Now(),
+		sessionPath:  sessionPath,
 	}
 
 	pm.mu.Lock()
@@ -1798,13 +1807,9 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		}
 		port, portB, baud = s.Port, s.PortB, s.Baud
 	}
-	// Create 只有 port 非空时才走 declare-only 分支；文件里没记端口时拿目录名顶上，
-	// 它只用于界面显示。工程目录名本身就是会话名（yyyyMMdd_HHmmss_id），没有扩展名。
-	displayPort := port
-	if displayPort == "" {
-		displayPort = filepath.Base(path)
-	}
-	cfg := SerialConfig{Port: displayPort, Baud: baud}
+	// 工程里记了端口就按「已声明」建（会话页显示 COMx @ baud，用户点一下就能真连）；
+	// 没记就建空闲进程让用户自己选 —— 不要拿目录名冒充串口名。
+	cfg := SerialConfig{Port: port, Baud: baud}
 	var cfgB *SerialConfig
 	if mode == "forward" {
 		if portB == "" {
@@ -1814,7 +1819,12 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		}
 	}
 
-	proc, err := pm.createDeclared(mode, displayPort, cfg, cfgB, path)
+	var proc *Process
+	if port != "" {
+		proc, err = pm.createDeclared(mode, port, cfg, cfgB, path)
+	} else {
+		proc, err = pm.createIdle(mode, path)
+	}
 	if err != nil {
 		return nil, 0, err
 	}

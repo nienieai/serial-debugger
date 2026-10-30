@@ -15,6 +15,8 @@ const state = {
   statusInterval: null,
   lastPorts: '',
   knownDaemonSessions: {},
+  // 正在等会话页的工程路径（session.open 之后、syncDaemonSessions 建页之前）
+  _pendingProjectPaths: {},
   historyCache: {},
   sendRatio: 0.3,
   quickPanelRatio: 0,
@@ -2067,16 +2069,37 @@ function _normalizeSessions(list) {
   });
 }
 
+// _daemonTabLabel 算会话标签的文案。
+//
+// 工程会话（sessionPath 非空）单独处理：记了端口就显示端口，没记端口就显示工程
+// 目录名 —— 否则一个「单端口空闲」根本看不出打开的是哪个工程。
+function _daemonTabLabel(ds) {
+  const isConnected = ds.status === 'connected';
+  const isForward = ds.mode === 'forward';
+  const hasDeclared = !!ds.portName;
+  if (ds.sessionPath) {
+    if (isConnected) {
+      return isForward ? ds.portName : `${ds.portName} @ ${ds.baud}`;
+    }
+    if (hasDeclared) {
+      return isForward
+        ? `${ds.portName} [` + t('tab.declared', '已声明') + `]`
+        : `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]`;
+    }
+    return stlogBaseName(ds.sessionPath) + ' [' + t('tab.project', '工程') + ']';
+  }
+  return isForward
+    ? (isConnected ? ds.portName : (hasDeclared ? `${ds.portName} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_forward', '端口转发空闲')))
+    : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
+}
+
 // 把守护进程会话的当前状态写到一个标签页上（标签、在线状态、参数、查看者）。
 // 「找回原有标签页」与「新建标签页」两条路共用，避免两处判断漂移。
 // （第 2 步「更新已有标签页」是它的增量版本：只在实际变化时打 tabsChanged。）
 function _applyDaemonSessionToTab(tab, ds) {
   const isConnected = ds.status === 'connected';
-  const isForward = ds.mode === 'forward';
   const hasDeclared = !!ds.portName;
-  tab.label = isForward
-    ? (isConnected ? ds.portName : (hasDeclared ? `${ds.portName} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_forward', '端口转发空闲')))
-    : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
+  tab.label = _daemonTabLabel(ds);
   tab.portOpen = isConnected;
   tab.mode = ds.mode || 'single';
   tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
@@ -2162,9 +2185,12 @@ async function syncDaemonSessions(procData) {
 
   // 1. Create tabs for new daemon sessions not tracked in any GUI tab
   daemonSessions.forEach(ds => {
-    // 文件会话进程（session.open 建出来的）不是串口会话，它自己有文件页当视图；
-    // 这里再给它建一个标签页，界面上就会多出「工程目录名 @0 [已声明]」这种空页。
-    if (ds.sessionPath) return;
+    if (ds.sessionPath) {
+      // 文件会话进程（session.open 建出来的）默认不建标签页 —— 有人正在等它的
+      // 会话页（_pendingProjectPaths 里有这条路径）才往下建，建完把待办划掉。
+      if (!state._pendingProjectPaths || !state._pendingProjectPaths[ds.sessionPath]) return;
+      delete state._pendingProjectPaths[ds.sessionPath];
+    }
     if (!guiSessionIds.has(ds.id)) {
           // 先看有没有「本来就是这个会话」的标签页：第 3 步在守护进程列表一时
           // 不含该会话时会把 sessionId 清掉（连接/重建的窗口期）。等它回到列表里
@@ -2187,15 +2213,14 @@ async function syncDaemonSessions(procData) {
           // Skip unmatched idle processes while GUI is creating one (addTab in flight)
           if (_creatingTab && ds.status !== 'connected') return;
 	      const isConnected = ds.status === 'connected';
-	      const isForward = ds.mode === 'forward';
         const hasDeclared = !!ds.portName;
-        const label = isForward
-          ? (isConnected ? ds.portName : (hasDeclared ? `${ds.portName} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_forward', '端口转发空闲')))
-          : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
+        const label = _daemonTabLabel(ds);
       var newTab = {
         id: state.tabCounter++,
         label: label,
         sessionId: ds.id,
+        // 工程会话记下工程路径：同一个工程再点一次要能切回这一页，而不是再建一个
+        _projectPath: ds.sessionPath || null,
         portOpen: isConnected,
         mode: ds.mode || 'single',
         source: 'gui',
@@ -2233,7 +2258,7 @@ async function syncDaemonSessions(procData) {
       const ds = dsMap[tab.sessionId];
       const isConnected = ds.status === 'connected';
         const hasDeclared2 = !!ds.portName;
-        const newLabel = (ds.mode === 'forward') ? (isConnected ? ds.portName : (hasDeclared2 ? `${ds.portName} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_forward', '端口转发空闲'))) : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared2 ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
+        const newLabel = _daemonTabLabel(ds);
       const newMode = ds.mode || 'single';
       const newViewers = ds.viewers || {gui:0, cli:0, mcp:0};
       const oldViewers = tab.viewers || {gui:0, cli:0, mcp:0};
@@ -2516,26 +2541,7 @@ function handleDaemonOffline() {
     if (t.type === 'settings') continue;
     if (t._page && t._page.isWelcome) continue;
     // .stlog 文件页读的是本地磁盘，跟守护进程没关系：别跟着一起销毁。
-    // 已经接管到守护进程的那些要退回本地（那个 processId 已经失效了），
-    // 否则「加载更多」永远等不到数据。
-    if (t.type === 'stlog') {
-      if (t._stlog && t._stlog.source === 'daemon') {
-        t._stlog.source = 'local';
-        t._stlog.processId = '';
-        t._stlog.frames = [];
-        t._stlog.offset = 0;
-        t._stlog.loaded = false;
-        t._stlog.loading = false;
-        t._stlog.exhausted = false;
-        t._stlog.rendered = false;
-        t._stlog.firstLoadDone = false;
-        if (typeof stlogSyncPushBtn === 'function') stlogSyncPushBtn(t);
-        // 活动页立即重读；其它页等切过去时由 _page.show 触发 —— 同时读好几份
-        // 工程目录没有意义，反而会把界面卡一下。
-        if (state.activeTab === i && typeof stlogLoad === 'function') stlogLoad(t);
-      }
-      continue;
-    }
+    if (t.type === 'stlog') continue;
     if (t.sessionId) {
       delete state.historyCache[t.sessionId];
       delete state.statsBase[t.sessionId];
@@ -2551,6 +2557,7 @@ function handleDaemonOffline() {
     state._welcomePage.show();
   }
   state.knownDaemonSessions = {};
+  state._pendingProjectPaths = {};
   state.currentMode = 'single';
   updateEmptyState();
   renderTabs();
@@ -2629,10 +2636,6 @@ function updateDaemonUI() {
   state.tabs.forEach(function (t) {
     if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
       _syncChooserAvailability(t._page.root);
-    }
-    // 文件页的「交给守护进程」按钮跟着守护进程状态亮/灭
-    if (t.type === 'stlog' && t._stlog && typeof stlogSyncPushBtn === 'function') {
-      stlogSyncPushBtn(t);
     }
   });
   _updateStatsVisible();
@@ -3138,12 +3141,6 @@ function closeTab(idx) {
   state._suppressAutoCreate = (Date.now() + 2000);
   if (tab.sessionId && state.daemonOnline) {
     window.go.main.App.CloseSession(tab.sessionId).catch(() => {});
-  }
-  // 文件页的会话进程由 session.open 建出来，关标签时要一并销毁，否则守护进程里
-  // 会累积一堆没人用的文件会话
-  if (tab.type === 'stlog' && tab._stlog && tab._stlog.processId && state.daemonOnline) {
-    window.go.main.App.CloseSession(tab._stlog.processId).catch(() => {});
-    tab._stlog.processId = '';
   }
   if (tab.sessionId) {
     delete state.historyCache[tab.sessionId];
@@ -5992,70 +5989,15 @@ function stlogUpdateChrome(tab) {
   }
 }
 
-// stlogLoad 从守护进程取一批帧。
+// stlogLoad 加载下一批帧。
 //
-// v2 起文件页的数据源是守护进程里的文件会话（session.open 建出来的进程），
-// 所以分页方式与实时会话一致：**从最新往前翻**。已载入的帧按时间正序显示，
-// 更早的一批 unshift 到数组前面再整体重画。
+// 文件页只有一个数据源——本地文件，分页从第一帧往后翻（_stlogLoadLocal）。
+// 工程目录不走这里：它被恢复成真正的会话页，历史由会话那套接口提供。
 function stlogLoad(tab) {
-  var st = tab._stlog;
-  if (st.source === 'local') { _stlogLoadLocal(tab); return; }
-  if (!st.processId || st.loading || st.exhausted) return;
-  st.loading = true;
-  st.moreBtn.disabled = true;
-
-  // 游标 = 当前最旧一条的 tsMs + 这一毫秒里已经拿了几条
-  var beforeMs = 0, sameTsSkip = 0;
-  if (st.frames.length) {
-    beforeMs = st.frames[0].tsMs || 0;
-    for (var i = 0; i < st.frames.length; i++) {
-      if ((st.frames[i].tsMs || 0) !== beforeMs) break;
-      sameTsSkip++;
-    }
-  }
-
-  window.go.main.App.GetSessionHistory(st.processId, STLOG_PAGE_SIZE, beforeMs, sameTsSkip).then(function (data) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    st.loaded = true;
-    if (!data) {
-      st.exhausted = true;
-      stlogSysRow(tab, '读取失败（进程可能已销毁）');
-      return;
-    }
-    var hist = (data.history || []).map(function (e) {
-      return { ts: e.tsMs, tsMs: e.tsMs, dir: e.direction, hex: e.hex, origin: e.origin };
-    });
-    if (hist.length === 0) {
-      st.exhausted = true;
-      if (!st.rendered) {
-        st.rendered = true;
-        stlogSysRow(tab, '文件里没有帧');
-      }
-      stlogUpdateChrome(tab);
-      return;
-    }
-    st.frames = hist.concat(st.frames);
-    st.rendered = true;
-    st.exhausted = !data.hasMore;
-    stlogRerender(tab);
-    stlogUpdateChrome(tab);
-    if (!st.firstLoadDone) {
-      st.firstLoadDone = true;
-      st.content.scrollTop = st.content.scrollHeight; // 最新一条在最下面
-    }
-  }).catch(function (err) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    if (window.console) console.error('[stlog] ' + tab.path, err);
-    stlogSysRow(tab, '读取失败: ' + String(err));
-  });
+  _stlogLoadLocal(tab);
 }
 
-// _stlogLoadLocal 离线路径：直接读文件，从第一帧往后翻。
-//
-// 与在线路径的分页方向相反（这里正序），所以帧是 concat 到末尾而不是 unshift
-// 到前面；渲染层只认 st.frames 的顺序，两边共用同一套。
+// _stlogLoadLocal 直接读本地文件，从第一帧往后翻。
 function _stlogLoadLocal(tab) {
   var st = tab._stlog;
   if (st.loading || (st.loaded && st.offset >= st.total)) return;
@@ -6126,12 +6068,11 @@ function stlogExport(path, btn) {
   });
 }
 
-// openStlogTab 开一个文件标签页。
+// openStlogTab 开一个「文件浏览」标签页：只读本地单个 .stlog。
 //
-// kind 决定数据源：'session' 是工程目录（守护进程在线时交给它），'file' 是单个
-// .stlog 包文件（守护进程不收，永远本地读）。三个入口都拿得到 kind：拖入来自
-// ProbeDroppedPaths，文件对话框和目录对话框各自已知。
-function openStlogTab(path, kind) {
+// 工程目录不走这里 —— 它带着连接方式和业务设置，打开就该是一页能继续用的会话
+// （见 openProjectTab）。这条路上没有任何守护进程成分，离线也能用。
+function openStlogTab(path) {
   for (var i = 0; i < state.tabs.length; i++) {
     if (state.tabs[i].type === 'stlog' && state.tabs[i].path === path) {
       switchTab(i);
@@ -6183,18 +6124,10 @@ function openStlogTab(path, kind) {
   exportBtn.className = 't-stlog-btn';
   exportBtn.textContent = '导出文本';
   exportBtn.addEventListener('click', function () { stlogExport(path, exportBtn); });
-  // 「交给守护进程」：只有工程目录有这个能力。单个 .stlog 是包文件，守护进程
-  // 直接拒绝（daemon/serial.go 的 OpenSession），所以那一类页面根本不显示。
-  var pushBtn = document.createElement('button');
-  pushBtn.className = 't-stlog-btn';
-  pushBtn.textContent = '交给守护进程';
-  pushBtn.style.display = 'none';
-  pushBtn.addEventListener('click', function () { stlogPushToDaemon(tab); });
   actions.appendChild(countEl);
   actions.appendChild(yearBtn);
   actions.appendChild(modeBtn);
   actions.appendChild(exportBtn);
-  actions.appendChild(pushBtn);
 
   bar.appendChild(infoBox);
   bar.appendChild(actions);
@@ -6227,9 +6160,7 @@ function openStlogTab(path, kind) {
     source: 'gui',
     _stlog: {
       offset: 0, total: 0, loaded: false, loading: false, rendered: false,
-      // isDir：工程目录才有资格交给守护进程；单个 .stlog 一律本地读
-      isDir: kind === 'session',
-      mode: 'hex', frames: [], modeBtn: modeBtn, pushBtn: pushBtn,
+      mode: 'hex', frames: [], modeBtn: modeBtn,
       content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
     },
     _page: {
@@ -6255,151 +6186,122 @@ function openStlogTab(path, kind) {
   // 关键：遮罩是按「当前活动标签」判定的，直接改 state.activeTab 不会触发重算。
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
-  _stlogOpen(tab);
+  stlogLoad(tab);
   return tab;
 }
 
-// _stlogOpen 决定这个文件页从哪儿取数据。
+// _projectNeedsDaemon 提示「工程要守护进程」，两个入口共用一段文案。
+function _projectNeedsDaemon() {
+  showAlert('需要守护进程',
+    '工程目录要恢复成一个能继续用的会话，得先把守护进程起来。\n\n' +
+    '菜单 → 守护进程 → 启动守护进程\n\n' +
+    '只想看看记录？用「从文件打开 → .stlog 文件」，那个不需要守护进程。', null, true);
+}
+
+// openProjectTab 把一个工程目录恢复成守护进程里的会话页（单端口 / 转发）。
 //
-//   单个 .stlog        → 永远本地读（ReadStlogFrames，从第一帧往后翻）。守护进程
-//                        不收包文件：没有设置文档、没有索引、也不会再追加
-//   工程目录 + 在线    → session.open 建文件会话进程，帧走它的共享环
-//                        （GetSessionHistory，从最新往前翻）
-//   工程目录 + 离线    → 本地读；顶栏「交给守护进程」等它上线再点
+// 工程不是"只读文件"：它带着连接方式和业务设置，打开就该是一页能继续用的会话
+// —— 串口面板、发送区、统计、历史都在。所以这条路必须有守护进程；离线时明确
+// 拒绝，而不是退化成文件浏览页（只读浏览的入口是单个 .stlog）。
 //
-// 两条路径的数据形状统一成 {ts, tsMs, dir, hex, origin}，渲染层不用分叉；
-// 只有分页方向与拼装方式不同（见 stlogLoad / _stlogLoadLocal）。
-function _stlogOpen(tab) {
-  var st = tab._stlog;
-  if (!st.isDir || !state.daemonOnline) {
-    st.source = 'local';
-    stlogSyncPushBtn(tab);
-    stlogLoad(tab);
+// 实现上不自己拼标签页：在 _pendingProjectPaths 里登记，让 syncDaemonSessions
+// 认出这个进程并按普通会话建页（那套建页逻辑很长，复制一份必然漂移）。
+function openProjectTab(path) {
+  if (!state.daemonOnline) {
+    _projectNeedsDaemon();
     return;
   }
-  st.source = 'daemon';
-  stlogSyncPushBtn(tab);
-  window.go.main.App.OpenStlogSession(tab.path).then(function (res) {
-    st.processId = res.processId;
-    // 摘要：只取 1 帧，够拼顶栏和浮窗
-    return window.go.main.App.ReadStlogFrames(tab.path, 0, 1);
-  }).then(function (info) {
-    st.info = info || {};
-    // processId 到手，按钮才能从「交给守护进程」切成「已接管」
-    stlogSyncPushBtn(tab);
-    stlogUpdateChrome(tab);
-    stlogLoad(tab);
+  // 同一个工程已经开着：切过去，别为它再建一个进程
+  for (var i = 0; i < state.tabs.length; i++) {
+    if (state.tabs[i]._projectPath === path) { switchTab(i); return; }
+  }
+
+  state._pendingProjectPaths[path] = true;
+  window.go.main.App.OpenStlogSession(path).then(function () {
+    return _waitProjectTab(path);
   }).catch(function (err) {
-    // 守护进程那边开不起来时别让页面空着：退回本地读，
-    // 功能上退化成「离线浏览」，比报错好。
-    if (window.console) console.error('[stlog] daemon open failed, fallback to local', err);
-    st.source = 'local';
-    st.processId = '';
-    stlogSyncPushBtn(tab);
-    stlogLoad(tab);
+    delete state._pendingProjectPaths[path];
+    showAlert('打开工程失败', String(err), null, true);
   });
 }
 
-// stlogSyncPushBtn 按「页面类型 + 守护进程状态 + 是否已接管」刷新顶栏按钮。
+// _waitProjectTab 等 syncDaemonSessions 把工程建成标签页，然后切过去。
 //
-// 单文件页没有这个能力（守护进程只收工程目录），直接隐藏 —— 留一个永远点不动
-// 的灰按钮只会让人以为功能坏了。
-function stlogSyncPushBtn(tab) {
-  var st = tab._stlog;
-  var btn = st.pushBtn;
-  if (!btn) return;
-  if (!st.isDir) { btn.style.display = 'none'; return; }
-  btn.style.display = '';
-  if (st.source === 'daemon' && st.processId) {
-    btn.disabled = true;
-    btn.textContent = '已接管';
-    btn.classList.add('is-on');
-    btn.title = '这一页的数据来自守护进程的文件会话进程 #' + st.processId;
-    return;
-  }
-  btn.classList.remove('is-on');
-  btn.textContent = '交给守护进程';
-  if (!state.daemonOnline) {
-    btn.disabled = true;
-    btn.title = '守护进程未启动（菜单 守护进程 → 启停）；现在按本地文件读';
-    return;
-  }
-  btn.disabled = false;
-  btn.title = '把整个工程交给守护进程：它建一个文件会话进程，之后从最新帧往前翻';
-}
-
-// stlogPushToDaemon 把当前工程页从「本地读」切成「守护进程里的文件会话」。
-//
-// 两条路的分页方向相反（本地正序、守护进程倒序），所以已载入的帧必须清空重读，
-// 否则新旧两批会在同一屏里首尾颠倒。失败时保持本地不动 —— 数据还在，报个错就行。
-function stlogPushToDaemon(tab) {
-  var st = tab._stlog;
-  if (!st.isDir || st.source === 'daemon' || st.pushing || !state.daemonOnline) return;
-  st.pushing = true;
-  if (st.pushBtn) { st.pushBtn.disabled = true; st.pushBtn.textContent = '接管中…'; }
-  window.go.main.App.OpenStlogSession(tab.path).then(function (res) {
-    st.pushing = false;
-    st.processId = res.processId;
-    st.source = 'daemon';
-    // 换数据源 = 换分页方向：已载入的帧作废，从最新一批重新开始
-    st.frames = [];
-    st.offset = 0;
-    st.loaded = false;
-    st.loading = false;
-    st.exhausted = false;
-    st.rendered = false;
-    st.firstLoadDone = false;
-    st.content.innerHTML = '';
-    st.content.appendChild(st.more);
-    stlogSyncPushBtn(tab);
-    stlogLoad(tab);
-  }).catch(function (err) {
-    st.pushing = false;
-    stlogSyncPushBtn(tab);
-    showAlert('交给守护进程失败', String(err) + '\n\n这一页仍然按本地文件读。', null, true);
+// 不能只等一次：process-changed 可能比 OpenStlogSession 的响应先到，而
+// syncDaemonSessions 有 syncPending 守卫（正在同步时直接返回），所以这里边等边催。
+function _waitProjectTab(path) {
+  var tries = 0;
+  return new Promise(function (resolve, reject) {
+    (function tick() {
+      for (var i = 0; i < state.tabs.length; i++) {
+        if (state.tabs[i]._projectPath === path) { switchTab(i); resolve(state.tabs[i]); return; }
+      }
+      if (++tries > 50) {
+        delete state._pendingProjectPaths[path];
+        reject(new Error('守护进程没有把这个工程挂上来（进程可能创建失败）'));
+        return;
+      }
+      syncDaemonSessions();
+      setTimeout(tick, 100);
+    })();
   });
 }
 
 // chooseOpenFile 「新建会话 → 从文件打开」的入口：先问开哪种，再弹对应的系统对话框。
 //
-// 两个对话框分开是 Windows 的限制：文件对话框选不了目录，目录对话框选不了文件。
-// 工程目录在线时会被交给守护进程，单文件永远本地读（见 _stlogOpen）。
-// 选择页离线时这条路照样可用 —— 两个对话框都是本地操作。
+// 两条路性质完全不同：工程目录会被恢复成会话（需要守护进程），.stlog 文件只是
+// 只读浏览（离线也能用）。Windows 一个对话框选不了两种，所以先问一句。
 function chooseOpenFile() {
   showChoice('打开会话',
-    '要打开的是哪种？\n\n· 工程目录：一整个录制工程（manifest.json + pkg-*.stlog），守护进程在线时交给它\n· .stlog 文件：单个包文件，只在本地浏览',
+    '要打开的是哪种？\n\n· 工程目录：恢复成一个能继续用的会话（单端口 / 转发），需要守护进程\n· .stlog 文件：单个包文件，只读浏览，不需要守护进程',
     [
-      { label: '工程目录', onPick: function () { pickStlogPath('session'); } },
-      { label: '.stlog 文件', onPick: function () { pickStlogPath('file'); } }
+      { label: '工程目录', onPick: pickProjectDir },
+      { label: '.stlog 文件', onPick: pickStlogFile }
     ]);
 }
 
-// pickStlogPath 弹对应的系统对话框 → 预检 → 开标签页。
+// _pickPath 弹对话框 → 预检 → 交给打开函数。
 //
-// 目录要先过一遍 ProbeDroppedPaths：用户完全可能选中一个不相干的文件夹，
-// 那种路径打开只会得到空页面，不如当场说"这里面没有工程"。
-function pickStlogPath(kind) {
+// 预检复用拖放那套（ProbeDroppedPaths）：用户完全可能选中一个不相干的目录，或者
+// 扩展名对、内容却不是会话的文件；那种路径打开只会得到空页面，不如当场说清楚。
+function _pickPath(dlg, kind, open) {
   var App = window.go.main.App;
-  var dlg = (kind === 'session') ? App.PickStlogDir() : App.PickStlogFile();
   dlg.then(function (path) {
     if (!path) return; // 用户取消
-    var probe = (typeof App.ProbeDroppedPaths === 'function')
-      ? App.ProbeDroppedPaths([path])
-      : Promise.resolve(null);
-    return probe.then(function (probes) {
+    var idx = state.tabs.findIndex(function (t) { return t.type === 'new'; });
+    // 先关选择页再开新页：反过来的话 closeTab 可能把焦点从新标签挪走
+    function go() {
+      if (idx >= 0) closeTab(idx);
+      open(path);
+    }
+    if (typeof App.ProbeDroppedPaths !== 'function') { go(); return; }
+    return App.ProbeDroppedPaths([path]).then(function (probes) {
       var pr = probes && probes[0];
-      if (pr && pr.kind !== 'session' && pr.kind !== 'file') {
-        showAlert('无法解析', pr.path + '\n  ' + (pr.err || '无法识别的类型'), null, true);
+      if (pr && pr.kind !== kind) {
+        showAlert('无法解析',
+          pr.path + '\n  ' + (pr.err || (kind === 'session' ? '这里没有工程' : '这不是 .stlog 文件')), null, true);
         return;
       }
-      // 先关选择页再开文件页：反过来的话 closeTab 可能把焦点从新标签挪走
-      var idx = state.tabs.findIndex(function (t) { return t.type === 'new'; });
-      if (idx >= 0) closeTab(idx);
-      openStlogTab(path, pr ? pr.kind : kind);
+      go();
     });
   }).catch(function (err) {
     showAlert('打开失败', String(err), null, true);
   });
+}
+
+// pickProjectDir 选一个工程目录，交给守护进程恢复成会话。
+function pickProjectDir() {
+  if (!state.daemonOnline) {
+    // 早点说，别让用户挑完目录才被告知要守护进程
+    _projectNeedsDaemon();
+    return;
+  }
+  _pickPath(window.go.main.App.PickStlogDir(), 'session', openProjectTab);
+}
+
+// pickStlogFile 选一个 .stlog，开成只读文件页。
+function pickStlogFile() {
+  _pickPath(window.go.main.App.PickStlogFile(), 'file', openStlogTab);
 }
 
 // ---- 拖入注册 ----
@@ -6502,7 +6404,7 @@ function pickStlogPath(kind) {
     if (typeof App.ProbeDroppedPaths !== 'function') {
       // 老 exe 没有预检：退回「只看扩展名」，至少 .stlog 还能开
       list.filter(function (p) { return /\.stlog$/i.test(p); }).forEach(function (p) {
-        openStlogTab(p, 'file');
+        openStlogTab(p);
       });
       return;
     }
@@ -6511,7 +6413,9 @@ function pickStlogPath(kind) {
       (probes || []).forEach(function (pr) {
         if (pr.kind === 'session' || pr.kind === 'file') {
           try {
-            openStlogTab(pr.path, pr.kind);
+            // 工程目录 → 恢复成会话页；单个 .stlog → 只读文件页
+            if (pr.kind === 'session') openProjectTab(pr.path);
+            else openStlogTab(pr.path);
           } catch (err) {
             if (window.console) console.error('[stlog] ' + pr.path, err);
             bad.push(pr.path + '\n  ' + String(err));

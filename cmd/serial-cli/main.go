@@ -765,11 +765,16 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		fmt.Printf("进程    : #%v\n", result["processId"])
 		fmt.Printf("模式    : %v\n", result["mode"])
+		// 工程里没记端口时建成空闲进程，端口就是空的（不拿目录名冒充串口名）
+		portA, _ := result["port"].(string)
+		if portA == "" {
+			portA = "(未记录)"
+		}
 		portB, _ := result["portB"].(string)
 		if portB != "" {
-			fmt.Printf("端口    : %v ↔ %v\n", result["port"], portB)
+			fmt.Printf("端口    : %v ↔ %v\n", portA, portB)
 		} else {
-			fmt.Printf("端口    : %v\n", result["port"])
+			fmt.Printf("端口    : %v\n", portA)
 		}
 		fmt.Printf("帧      : %v\n", result["frames"])
 

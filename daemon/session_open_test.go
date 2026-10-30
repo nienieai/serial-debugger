@@ -89,8 +89,11 @@ func TestOpenSessionAsProcess(t *testing.T) {
 	}
 }
 
-// 单口文件：mode 保持 single，没记端口时用文件名兜底（只影响显示）。
-func TestOpenSessionSingleWithoutPort(t *testing.T) {
+// 没记端口的工程：建成空闲进程，端口留空让用户自己选。
+//
+// 不拿目录名冒充串口名 —— 会话页显示「单端口空闲」比显示一个假端口诚实，
+// 而且点「打开串口」时不会拿目录名去开设备。
+func TestOpenSessionWithoutPort(t *testing.T) {
 	root := t.TempDir()
 	sess := filepath.Join(root, "s1")
 	s, err := sessionfile.CreateSession(sess, sessionfile.Settings{})
@@ -110,8 +113,11 @@ func TestOpenSessionSingleWithoutPort(t *testing.T) {
 	if proc.mode != "single" || n != 1 {
 		t.Fatalf("mode=%q n=%d，期望 single/1", proc.mode, n)
 	}
-	if proc.config.Port == "" {
-		t.Fatal("端口兜底名不该为空")
+	if proc.config.Port != "" {
+		t.Fatalf("端口 = %q，期望留空（工程里没记端口）", proc.config.Port)
+	}
+	if proc.status != "idle" {
+		t.Fatalf("status = %q，期望 idle", proc.status)
 	}
 }
 
