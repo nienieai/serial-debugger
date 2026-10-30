@@ -134,9 +134,9 @@ function createSettingsOverlay() {
 // 分类栏图标：用 icons.js 里已有的键，保证浅色/深色主题下都跟随 currentColor
 var SETTINGS_NAV_ICONS = {
 	display: 'terminal',
-	colors: 'theme_palette',
-	appearance: 'theme_light',
-	tabs: 'menu',
+	colors: 'highlighter',    // 数据高亮：给各类数据指定颜色，一支高亮笔
+	appearance: 'theme_palette', // 外观：调色板（原来在「数据高亮」上，18px 下像水滴）
+	tabs: 'tabs',             // 标签页：窗口顶上的标签栏（原来是 menu 的三条横线，纯占位）
 	storage: 'devices',
 	language: 'globe',
 	about: 'info'
