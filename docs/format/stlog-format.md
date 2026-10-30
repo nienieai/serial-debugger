@@ -2,6 +2,7 @@
 
 > 这是 `.stlog` 的**唯一正文**，实现与它不一致时以本文件为准（不一致本身就是 bug）。
 > 版本演进见 [CHANGES.md](CHANGES.md)；本文件自身的历史用 `git log -- docs/format/stlog-format.md` 查。
+> 多文件（manifest + 包 + 索引）的下一版方案见 [stlog-v2.md](stlog-v2.md)——**设计稿，未实现**。
 > 布局图：[file-layout.png](file-layout.png)（[svg](file-layout.svg)）；边界情形：[boundary-cases.png](boundary-cases.png)（[svg](boundary-cases.svg)）。
 >
 > 目的：把"历史"从守护进程顺手写的日志，改成**每个开启了记录的标签/会话一个二进制文件**，
