@@ -433,7 +433,7 @@ button:disabled:active { transform: none; box-shadow: none; }
 .tab-ico > svg { display: block; width: 14px; height: 14px; }
 /* 点压在图标自身的右下角（不外挂）：图标笔画只画到 22/24，挂出去会像「掉下来的一粒」。
    1.5px 底色描边让点和图标笔画分开，深浅主题都靠这一条。 */
-.tab-ico::after {
+.tab-ico.is-live::after, .tab-ico.is-fwd::after, .tab-ico.is-idle::after, .tab-ico.is-ro::after {
   content: ''; position: absolute; right: 0; bottom: 0;
   width: 5px; height: 5px; border-radius: 50%;
   box-shadow: 0 0 0 1.5px var(--input-bg);
