@@ -505,7 +505,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   font-size: 11px; line-height: 1.7; padding: 0 7px; border-radius: 999px;
   border: 1px solid currentColor; background: transparent;
   /* 不支持 color-mix 的 WebView2 会丢掉下面两行，只留透明底 + 同色描边，也看得清 */
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
   border-color: color-mix(in srgb, currentColor 38%, transparent);
   white-space: nowrap;
 }
