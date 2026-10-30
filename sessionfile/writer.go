@@ -296,6 +296,15 @@ func (w *Writer) Close() error {
 // TailOffset reports the offset of the current tail page.
 func (w *Writer) TailOffset() int64 { return w.tailOff }
 
+// AllocatedBytes 返回这个文件当前占用。尾页只要装过数据就算整页，
+// 与切包时"按页向上取整"的口径一致。
+func (w *Writer) AllocatedBytes() int64 {
+	if w.committedLen > RecordsStart || w.pageTouched {
+		return w.tailOff + PageSize
+	}
+	return w.tailOff
+}
+
 // CommittedLen reports how full the current page is.
 func (w *Writer) CommittedLen() int { return w.committedLen }
 

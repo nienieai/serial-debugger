@@ -1071,7 +1071,7 @@ func (a *App) SearchHistory(file, keyword string, limit int, offset int64) map[s
 // 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，
 // 分页/搜索/导出属于后续接入，见 docs/format/stlog-format.md 的 P1 阶段。
 func (a *App) OpenStlogFile(path string) (map[string]any, error) {
-	info, err := sessionfile.ReadFile(path)
+	info, err := sessionfile.ReadSession(path)
 	if err != nil {
 		return nil, err
 	}
@@ -1129,7 +1129,7 @@ const maxStlogOrigins = 32
 // limit 上限 1000 帧——一帧最大 4016 B，转成十六进制是 8 KB 字符串，一次给太多
 // 会让过桥的 JSON 和 DOM 都爆掉。标签页首屏 500 帧，其余靠"加载更多"。
 func (a *App) ReadStlogFrames(path string, offset, limit int) (map[string]any, error) {
-	info, err := sessionfile.ReadFile(path)
+	info, err := sessionfile.ReadSession(path)
 	if err != nil {
 		return nil, err
 	}
@@ -1243,7 +1243,7 @@ func (a *App) PickStlogFile() (string, error) {
 // 格式由 sessionfile.WriteText 决定（CRLF、十六进制每 32 B 换行、系统帧按文本），
 // 目标文件双击就能用记事本打开。用户取消时返回 {"canceled": true}，不算错误。
 func (a *App) ExportStlogText(path string) (map[string]any, error) {
-	info, err := sessionfile.ReadFile(path)
+	info, err := sessionfile.ReadSession(path)
 	if err != nil {
 		return nil, err
 	}

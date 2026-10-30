@@ -19,6 +19,9 @@ type PageSummary struct {
 	FirstTs      uint64
 	LastTs       uint64
 	Recovered    bool
+	// Package 是这一页所属的包序号（v2 会话里从 1 起）。v1.4 单文件恒为 0：
+	// 多包合并后包内偏移会重复，靠这个字段才能定位到具体的包。
+	Package int
 }
 
 // FileInfo is the full decoded view of a .stlog file.
@@ -40,6 +43,13 @@ type FileInfo struct {
 	// 两个计数（页格式不为此改动），所以这两个数只能在扫描时按 dir 现加。
 	P1Total uint64
 	P2Total uint64
+
+	// ---- 以下是 v2 会话目录专属；v1.4 单文件时 IsSession=false，其余为空 ----
+	IsSession   bool
+	SessionID   string
+	Created     string
+	SettingsDoc *SettingsDoc
+	Packages    []PackageInfo // 每个包一条，含读失败的错误
 }
 
 // pageAt holds a raw page plus its decoding.

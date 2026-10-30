@@ -11,8 +11,9 @@ import (
 	"github.com/nienieai/serial-debugger/sessionfile"
 )
 
-// findStlogs 返回 dir 下所有 .stlog 文件（按名字排序，便于断言"只有一个"）。
-func findStlogs(t *testing.T, dir string) []string {
+// findSessions 返回 dir 下所有会话目录（含 manifest.json 的子目录）。
+// v2 起一次录制是一个文件夹，不再是单个 .stlog 文件。
+func findSessions(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -23,8 +24,12 @@ func findStlogs(t *testing.T, dir string) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".stlog" {
-			out = append(out, filepath.Join(dir, e.Name()))
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if _, err := os.Stat(filepath.Join(p, sessionfile.ManifestName)); err == nil {
+			out = append(out, p)
 		}
 	}
 	return out
@@ -32,21 +37,21 @@ func findStlogs(t *testing.T, dir string) []string {
 
 func mustReadStlog(t *testing.T, path string) *sessionfile.FileInfo {
 	t.Helper()
-	info, err := sessionfile.ReadFile(path)
+	info, err := sessionfile.ReadSession(path)
 	if err != nil {
-		t.Fatalf("读 .stlog 失败 (%s): %v", path, err)
+		t.Fatalf("读会话失败 (%s): %v", path, err)
 	}
 	return info
 }
 
-// onlyStlog 断言目录下恰好一个 .stlog，并返回它。
-func onlyStlog(t *testing.T, dir string) string {
+// onlySession 断言目录下恰好一个会话，并返回它。
+func onlySession(t *testing.T, dir string) string {
 	t.Helper()
-	files := findStlogs(t, dir)
-	if len(files) != 1 {
-		t.Fatalf(".stlog 文件数 = %d，期望 1 个: %v", len(files), files)
+	dirs := findSessions(t, dir)
+	if len(dirs) != 1 {
+		t.Fatalf("会话数 = %d，期望 1 个: %v", len(dirs), dirs)
 	}
-	return files[0]
+	return dirs[0]
 }
 
 // 端到端：打开「保存历史」→ 写几条 rx/tx/system → 关闭 → 用格式包读回来，
@@ -62,15 +67,19 @@ func TestStlogMirrorsHistory(t *testing.T) {
 	proc.recordHistoryAt(1003, "0102", "tx", "")
 	proc.detachHistoryFile() // 封存：Close 内部 Flush + Sync
 
-	files := findStlogs(t, dir)
+	files := findSessions(t, dir)
 	if len(files) != 1 {
-		t.Fatalf(".stlog 文件数 = %d，期望 1 个: %v", len(files), files)
+		t.Fatalf("会话数 = %d，期望 1 个: %v", len(files), files)
 	}
-	// 与 .log 同名同时间戳，只换扩展名。
-	if base := filepath.Base(files[0]); !strings.HasSuffix(base, "_"+proc.id+".stlog") {
-		t.Fatalf("文件名不像 %s 的录制文件: %s", proc.id, base)
+	// 目录名按 v2 规则自动生成（时间戳 + id8 = 24 字符），不再和 .log 同名；
+	// 与 .log 的配对关系记在 settings.json 的 log 字段里。
+	if base := filepath.Base(files[0]); len(base) != 24 {
+		t.Fatalf("目录名不像 v2 会话目录: %s", base)
 	}
 	info := mustReadStlog(t, files[0])
+	if info.SettingsDoc == nil || !strings.HasSuffix(info.SettingsDoc.Log, "_"+proc.id+".log") {
+		t.Fatalf("settings.json 的 log 字段对不上 .log: %+v", info.SettingsDoc)
+	}
 	if len(info.Pages) != 1 {
 		t.Errorf("页数 = %d，期望 1", len(info.Pages))
 	}
@@ -133,7 +142,7 @@ func TestStlogMirrorsHistory(t *testing.T) {
 	}
 }
 
-// 关闭「保存历史」之后不再追加，且不会另建一个 .stlog。
+// 关闭「保存历史」之后不再追加，且不会另建一个会话目录。
 func TestStlogStopsAfterDisable(t *testing.T) {
 	_, proc, dir := newSaveTestProc(t)
 	proc.SetSaveHistory(true)
@@ -143,9 +152,9 @@ func TestStlogStopsAfterDisable(t *testing.T) {
 	proc.recordHistoryAt(2001, "CCDD", "rx", "")
 	proc.recordHistoryAt(2002, "EEFF", "tx", "")
 
-	files := findStlogs(t, dir)
+	files := findSessions(t, dir)
 	if len(files) != 1 {
-		t.Fatalf(".stlog 文件数 = %d，期望 1 个: %v", len(files), files)
+		t.Fatalf("会话数 = %d，期望 1 个: %v", len(files), files)
 	}
 	info := mustReadStlog(t, files[0])
 	if info.Records != 1 {
@@ -160,8 +169,8 @@ func TestStlogStopsAfterDisable(t *testing.T) {
 func TestStlogNotCreatedWhenSaveOff(t *testing.T) {
 	_, proc, dir := newSaveTestProc(t)
 	proc.recordHistoryAt(3000, "AABB", "rx", "")
-	if files := findStlogs(t, dir); len(files) != 0 {
-		t.Fatalf("默认关时不该有 .stlog，实际: %v", files)
+	if files := findSessions(t, dir); len(files) != 0 {
+		t.Fatalf("默认关时不该有会话，实际: %v", files)
 	}
 }
 
@@ -184,7 +193,7 @@ func TestStlogSplitsLargeFrame(t *testing.T) {
 	proc.recordHistoryAt(4000, sb.String(), "rx", "")
 	proc.detachHistoryFile()
 
-	info := mustReadStlog(t, onlyStlog(t, dir))
+	info := mustReadStlog(t, onlySession(t, dir))
 	if len(info.Frames) != 1 {
 		t.Fatalf("帧数 = %d，期望 1（分片不该拆成多帧）", len(info.Frames))
 	}
@@ -218,13 +227,13 @@ func TestStlogFlushTimer(t *testing.T) {
 	proc.SetSaveHistory(true)
 	proc.recordHistoryAt(5000, "AABBCC", "rx", "")
 
-	path := onlyStlog(t, dir)
+	path := onlySession(t, dir)
 	// 定时 flush 之前磁盘上只有 16 KB 头，读不出记录；到点之后应当能读到。
 	// 这期间 writer 还开着，读到的可能是"正在被整页写"的尾页，读失败就重试。
 	deadline := time.Now().Add(2 * time.Second)
 	var info *sessionfile.FileInfo
 	for time.Now().Before(deadline) {
-		got, err := sessionfile.ReadFile(path)
+		got, err := sessionfile.ReadSession(path)
 		if err == nil && got.Records == 1 {
 			info = got
 			break
@@ -251,7 +260,7 @@ func TestStlogRecordsForwardMode(t *testing.T) {
 	proc.recordHistoryAt(1001, "CCDDEE", "2", "") // B→A 3 B
 	proc.detachHistoryFile()
 
-	info := mustReadStlog(t, onlyStlog(t, dir))
+	info := mustReadStlog(t, onlySession(t, dir))
 	if info.Settings == nil {
 		t.Fatal("设置块为空")
 	}

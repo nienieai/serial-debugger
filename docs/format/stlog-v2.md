@@ -1,9 +1,9 @@
-# .stlog v2：多文件规则（设计稿）
+# .stlog v2：多文件规则
 
-> **状态：设计稿，未实现。** v1.4 是当前实现基线，见 [stlog-format.md](stlog-format.md)；
-> 版本演进见 [CHANGES.md](CHANGES.md)。
+> **状态：已实现（0.8.3）；绘图部分未实现。** v1.4 单文件仍是合法输入，见
+> [stlog-format.md](stlog-format.md)；版本演进见 [CHANGES.md](CHANGES.md)。
 >
-> v2 只改**物理组织**——一个会话从"一个文件"变成"一个目录：manifest + 若干包 + 索引"。
+> v2 只改**物理组织**——一个会话从"一个文件"变成"一个目录：入口 + 设置 + 索引 + 若干包"。
 > **不改记录格式与页格式**：每个包内部仍然是 v1.4 的 16 KB 头 + 4 KB 定长页 + 整页 CRC。
 
 ---
@@ -30,7 +30,8 @@
 |---|---|
 | 会话 | 用户视角的一段录制；v2 里等于一个目录 |
 | 包（package） | 一个 `pkg-NNNN.stlog`，是**完整合法的 v1.4 文件**，有大小上限 |
-| 入口（manifest） | `manifest.json`，只做项目管理：会话身份、模式、包清单 |
+| 入口（manifest） | `manifest.json`，只做连接：会话身份 + 目录内文件清单 |
+| 设置（settings） | `settings.json`，端口 / 模式 / 标签 / 绘图等所有会变的设置 |
 | 索引（index） | `index.bin`，纯缓存，可删可重建 |
 | 帧 | 一条逻辑数据（一次收/发事件）；包内可跨页，**不可跨包** |
 
@@ -38,10 +39,11 @@
 
 ```text
 20261030_104512_ab12cd34/        ← 会话目录，命名规则见 §2.1
-  manifest.json                  ← §7 入口，只做项目管理
-  pkg-0001.stlog                 ← §3 包，完整 v1.4 文件
-  pkg-0002.stlog
+  manifest.json                  ← §7.1 工程入口，仅做连接
+  settings.json                  ← §7.2 业务设置（端口 / 模式 / 标签 / 绘图…）
   index.bin                      ← §8 索引缓存，可删
+  pkg-0001.stlog                 ← §3 数据包，完整 v1.4 文件
+  pkg-0002.stlog
 ```
 
 ### 2.1 目录名
@@ -56,7 +58,7 @@ yyyyMMdd_HHmmss_<id8>            例：20261030_104512_ab12cd34
 | `id8` | `sessionId`（uuid）前 8 位 | **身份**。进程号会随 daemon 重启重排，跨天恢复或换机器都会撞；uuid 不会 |
 | 连接符 | `_`，全 ASCII | 无空格无中文，各平台都能直接引用，脚本里免转义 |
 
-- 长度 23 字符，离 260 路径限制很远；撞号（`id8` 相同，概率约 4e-9）追加 `-2`、`-3`，
+- 长度 24 字符，离 260 路径限制很远；撞号（`id8` 相同，概率约 4e-9）追加 `-2`、`-3`，
   **不改时间戳**——改了就和"创建于什么时候"对不上
 - **不带端口 / 模式**：转发模式有两个口、录到一半 `SwitchPort` 会换口、`COM4` 换台机器
   就没有意义。这些信息放 `manifest.label`，只用于界面显示
@@ -69,9 +71,9 @@ yyyyMMdd_HHmmss_<id8>            例：20261030_104512_ab12cd34
 ### 2.2 目录内容约束
 
 - 包名固定 `pkg-%04d.stlog`，从 `0001` 起连续；**跳号即缺包**（§11）
-- 目录里只应有上述三类文件；发现陌生文件**不删、不猜、不参与解析**，只记日志
-- 将来若有第四类文件（如绘图配置）要进目录，**先在本规范里定义清楚再加**，
-  否则会被当成陌生文件
+- 目录里只应有这四类文件：`manifest.json`、`settings.json`、`index.bin`、`pkg-*.stlog`；
+  发现陌生文件**不删、不猜、不参与解析**，只记日志
+- 将来若要再加一类文件，**先在本规范里定义清楚再加**，否则会被当成陌生文件
 
 ## 3. 包
 
@@ -134,7 +136,7 @@ if entryCost > pkgMaxBytes:          // 软上限：帧比包还大
 建包    写 16 KiB 头（槽里带 sessionId + seq）  → fsync
 追加    每 flush 写一页（整页 4096 B；首次写不写影子，重写才写）
 封包    尾页整页写 + 整页 CRC（+ 影子）          → fsync
-登记    更新 manifest（tmp + rename）——**只在切包/关包时**
+登记    更新 manifest + index（tmp + rename）——**只在切包/关包/关会话时**
 ```
 
 崩溃点：
@@ -157,33 +159,32 @@ manifest 缺失 → 用磁盘包重建（label / notes 丢失，其余不丢）
 seq 重复     → 保留 created 较新者，另一个改名 pkg-NNNN.stlog.dup，**不删**
 ```
 
-**不变量**：manifest 里的一切都能从包重建，**除了 `label` / `notes` / 人工标记**。
+**不变量**：`manifest.json` 和 `index.bin` 里的一切都能从包重建，
+**除了 `settings.json` 里的 `label` / `notes` / 绘图配置这些人工内容**。
 
-## 7. manifest 格式
+## 7. 入口（manifest.json）与设置（settings.json）
+
+两个文件刻意分开：
+
+- **`manifest.json` 仅做连接**：只放会话身份和「目录里有哪些文件」。改设置永远不会
+  碰它，将来加一类新设置也不会让它变大。
+- **`settings.json` 放所有会变的业务设置**。加绘图配置直接往 `plot` 里塞，不动入口。
+
+### 7.1 manifest.json
 
 ```json
 {
   "v": 1,
   "sessionId": "ab12cd34e5f60718293a4b5c6d7e8f90",
   "created": "2026-10-30T10:45:12+08:00",
-  "mode": "forward",
-  "ports": { "a": "COM4", "b": "COM14", "baud": 115200 },
-  "label": "COM4 ↔ COM14",
-  "notes": "",
-  "pkgMaxBytes": 67108864,
-  "packages": [
-    {
-      "seq": 1, "file": "pkg-0001.stlog", "bytes": 67108864,
-      "frames": 168000, "records": 172345,
-      "firstTs": 1793300000000, "lastTs": 1793303600000, "sealed": true
-    },
-    {
-      "seq": 2, "file": "pkg-0002.stlog", "bytes": 12349440,
-      "frames": 31000, "records": 31500,
-      "firstTs": 1793303600001, "lastTs": 1793304200000, "sealed": false
-    }
-  ],
-  "updated": "2026-10-30T11:30:00+08:00"
+  "files": {
+    "settings": "settings.json",
+    "index": "index.bin",
+    "packages": [
+      { "seq": 1, "file": "pkg-0001.stlog", "bytes": 67108864, "sealed": true },
+      { "seq": 2, "file": "pkg-0002.stlog", "bytes": 12349440, "sealed": false }
+    ]
+  }
 }
 ```
 
@@ -192,15 +193,49 @@ seq 重复     → 保留 created 较新者，另一个改名 pkg-NNNN.stlog.dup
 - **只在切包 / 关包 / 关会话时写**，不随 flush 写
 - 原子写：同目录 `manifest.json.tmp` → `rename`
 - `sealed=false` 只允许出现在**最后一个包**
-- `frames` / `records` / `firstTs` / `lastTs` 是**缓存**：与包内统计块冲突时以包为准
+- 包级的 `frames` / `records` / `firstTs` / `lastTs` **不放这里**：那是缓存，
+  放 `index.bin`（§8），坏了能重建
+- `seq` 从 1 起连续；跳号即缺包（§11）
+
+### 7.2 settings.json
+
+```json
+{
+  "v": 1,
+  "label": "COM4 ↔ COM14",
+  "notes": "",
+  "mode": "forward",
+  "ports": { "a": "COM4", "b": "COM14", "baud": 115200 },
+  "log": "202610301045_3.log",
+  "plot": {}
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `label` | 界面显示名，可空 |
+| `notes` | 自由备注 |
+| `mode` | `single` / `forward`；缺省按 `single`（早期文件没有这个字段） |
+| `ports` | 录制开始时的端口快照；`baud` 为 0 表示未知 |
+| `log` | 与之同时录制的那份 `history/*.log` 文件名，便于成对查找 |
+| `plot` | 预留给绘图：选中通道、量程、坐标轴、区域、标注。当前只保留结构，不解释内容 |
+
+规则：
+
+- 原子写，同上
+- 只在设置变化时写（开始录制、改 label / notes、以后改绘图配置）
+- 与包头槽里的 `Settings` 的关系：槽是**冗余自描述**（保证单个 pkg 拎出去也能读），
+  `settings.json` 是**权威**；两者冲突以 `settings.json` 为准
 
 ## 8. 索引（可重建的缓存）
 
-- 文件：`index.bin`；**删掉或损坏 = 变慢，不是错误**，任何情况下不因索引拒绝打开会话
-- 内容：
-  - 包级摘要：每个包的 `seq / file / bytes / frames / records / firstTs / lastTs`
-  - 页级索引：每页 `offset / firstTs / lastTs / rec`（直接取包内统计块，不解析记录）
-- 失效判定（任一命中即丢弃重建）：magic/ver 不符、包文件大小变化、包 mtime 变化、`manifest.updated` 变化
+- 文件：`index.bin`；**删掉或损坏 = 变慢，不是错误**，任何情况下不因为索引拒绝打开会话
+- 内容（当前实现到包级，页级留到需要时再加）：
+  - 头部 16 B：magic `SLIX` / ver / 条目数
+  - 每包 64 B：`seq / bytes / frames / records / firstTs / lastTs / mtime / sealed`
+- 失效判定（任一命中即整份丢弃重建）：magic/ver 不符、条目数与 manifest 不符、
+  包文件大小与 `bytes` 不符、包 mtime 与 `mtime` 不符
+- 写入时机：关包 / 关会话时，与 manifest 同批
 - 构建：全扫一遍（64 MiB 约 50–80 ms，含每页 CRC）；也可后台构建，先读后到
 
 ## 9. 读取顺序
@@ -253,7 +288,7 @@ seq 重复     → 保留 created 较新者，另一个改名 pkg-NNNN.stlog.dup
 | 3 | 记录区起点 | `0x4000` | 不变（每包都有 16 KB 头） |
 | 4 | 跨页 | 允许（`dir` bit7 续片链） | 不变 |
 | 5 | 跨包 | 不存在 | **禁止**（§4.3） |
-| 6 | 元数据 | 文件头槽 A/B | manifest 权威，槽冗余自描述 |
+| 6 | 元数据 | 文件头槽 A/B | `settings.json` 权威，槽冗余自描述 |
 | 7 | 打开成本 | O(整个文件) | O(manifest + 需要的包) |
 | 8 | 索引 | 无（全扫） | 可重建的 `index.bin` |
 | 9 | 删除旧数据 | 重写大文件或不删 | 删整包 |
@@ -264,8 +299,8 @@ seq 重复     → 保留 created 较新者，另一个改名 pkg-NNNN.stlog.dup
 - `pkgMaxBytes` 默认 64 MiB 是否合适（包数 vs 单包打开时间）
 - 索引放会话目录，还是塞进包的尾部（少一个文件，但会让包不再"只追加"）
 - 空包（`rec=0`）是自动删除还是保留待查
-- 绘图配置是跟着会话走（目录里加 `views/`，见 §2.2），还是做成能引用多个会话的
-  独立文档（如 `.stplot` + 外部引用）
+- 绘图配置已定为 `settings.json` 的 `plot` 字段（跟随会话，见 §7.2）。若将来要做
+  「一篇图引用多个会话」，再另立独立文档格式（如 `.stplot` + 外部引用）
 - v1.4 单文件的自动命名是 `yyyyMMddHHmm_<进程号>.stlog`（见 `daemon/history.go`），
   与本规范的目录名格式不一致——是否统一到 `yyyyMMdd_HHmmss_<id8>`，还是各管各的
 

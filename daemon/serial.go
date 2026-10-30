@@ -158,7 +158,7 @@ type Process struct {
 	// stlogMu 保护 stlog / stlogName / stlogPending / stlogSince / stlogStop，
 	// 也串行化 Append 与 Flush —— 尾页缓冲跨多次 flush，不能并发写。
 	stlogMu      sync.Mutex
-	stlog        *sessionfile.Writer
+	stlog        *sessionfile.Session
 	stlogName    string
 	stlogPending bool      // 有已追加但未刷盘的记录
 	stlogSince   time.Time // 第一条未刷记录到达的时刻（定时 flush 的锚点）

@@ -215,7 +215,7 @@ func cmdStlog(args []string) {
 		return
 	}
 
-	info, err := sessionfile.ReadFile(path)
+	info, err := sessionfile.ReadSession(path)
 	if err != nil {
 		printErr("读取失败: %v", err)
 		os.Exit(1)
@@ -269,7 +269,7 @@ func cmdStlogExport(args []string) {
 		}
 	}
 
-	info, err := sessionfile.ReadFile(path)
+	info, err := sessionfile.ReadSession(path)
 	if err != nil {
 		printErr("读取失败: %v", err)
 		os.Exit(1)
@@ -308,7 +308,22 @@ func cmdStlogExport(args []string) {
 }
 
 func printStlogSummary(info *sessionfile.FileInfo) {
-	fmt.Printf("文件    : %s (%d B)\n", info.Path, info.Size)
+	label := "文件    "
+	if info.IsSession {
+		label = "会话    "
+	}
+	fmt.Printf("%s: %s (%d B)\n", label, info.Path, info.Size)
+	if info.IsSession && len(info.Packages) > 0 {
+		var parts []string
+		for _, p := range info.Packages {
+			if p.Err != nil {
+				parts = append(parts, p.File+"(读失败)")
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s %d B", p.File, p.Bytes))
+		}
+		fmt.Printf("包      : %s\n", strings.Join(parts, " / "))
+	}
 	if s := info.Settings; s != nil {
 		fmt.Printf("设置    : uuid=%s created=%s label=%q\n", s.UUID, s.Created, s.Label)
 	} else {
@@ -395,30 +410,61 @@ func printStlogPages(info *sessionfile.FileInfo) {
 }
 
 func cmdStlogVerify(path string) {
-	rep, err := sessionfile.Verify(path)
+	fi, err := os.Stat(path)
 	if err != nil {
 		printErr("校验失败: %v", err)
 		os.Exit(1)
 	}
-	fmt.Printf("文件    : %s\n", path)
-	fmt.Printf("页/记录 : %d 页 / %d 条\n", rep.Pages, rep.Records)
-	fmt.Printf("帧      : %d\n", rep.Frames)
-	if len(rep.Recovered) > 0 {
-		fmt.Printf("恢复    : %v\n", rep.Recovered)
+	if !fi.IsDir() {
+		os.Exit(verifyFile(path, ""))
 	}
-	fmt.Printf("页内浪费: min=%d max=%d（已封印页，上限 27）\n", rep.WastedMin, rep.WastedMax)
-	fmt.Printf("末页剩余: %d B\n", rep.LastPageFree)
-	for _, w := range rep.Warnings {
-		fmt.Println(paintOut("警告: "+w, ansiYellow))
+
+	// v2 会话：逐包校验，任一个包有问题就整体失败（但要全部报出来）
+	refs := sessionfile.PackageRefs(path)
+	if len(refs) == 0 {
+		printErr("校验失败: %s 里没有找到任何 pkg-*.stlog", path)
+		os.Exit(1)
 	}
-	if len(rep.Problems) == 0 {
-		fmt.Println(paintOut("OK: 无结构问题", ansiGreen))
-		return
+	fmt.Printf("会话    : %s（%d 个包）\n", path, len(refs))
+	bad := 0
+	for _, ref := range refs {
+		if verifyFile(filepath.Join(path, ref.File), fmt.Sprintf("包 #%d ", ref.Seq)) != 0 {
+			bad++
+		}
 	}
-	for _, p := range rep.Problems {
-		fmt.Println(paintOut("问题: "+p, ansiRed))
+	if bad == 0 {
+		fmt.Println(paintOut(fmt.Sprintf("OK: %d 个包都无结构问题", len(refs)), ansiGreen))
+		os.Exit(0)
 	}
 	os.Exit(1)
+}
+
+// verifyFile 校验单个包文件，返回退出码。
+func verifyFile(path, prefix string) int {
+	rep, err := sessionfile.Verify(path)
+	if err != nil {
+		printErr("%s校验失败: %v", prefix, err)
+		return 1
+	}
+	fmt.Printf("%s文件    : %s\n", prefix, path)
+	fmt.Printf("%s页/记录 : %d 页 / %d 条\n", prefix, rep.Pages, rep.Records)
+	fmt.Printf("%s帧      : %d\n", prefix, rep.Frames)
+	if len(rep.Recovered) > 0 {
+		fmt.Printf("%s恢复    : %v\n", prefix, rep.Recovered)
+	}
+	fmt.Printf("%s页内浪费: min=%d max=%d（已封印页，上限 27）\n", prefix, rep.WastedMin, rep.WastedMax)
+	fmt.Printf("%s末页剩余: %d B\n", prefix, rep.LastPageFree)
+	for _, w := range rep.Warnings {
+		fmt.Println(paintOut(prefix+"警告: "+w, ansiYellow))
+	}
+	if len(rep.Problems) == 0 {
+		fmt.Println(paintOut(prefix+"OK: 无结构问题", ansiGreen))
+		return 0
+	}
+	for _, p := range rep.Problems {
+		fmt.Println(paintOut(prefix+"问题: "+p, ansiRed))
+	}
+	return 1
 }
 
 func stlogDirName(d uint8) string {

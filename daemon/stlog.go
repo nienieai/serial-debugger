@@ -10,12 +10,16 @@ import (
 	"github.com/nienieai/serial-debugger/sessionfile"
 )
 
-// .stlog 录制（v1.4）。与 history/*.log 写的是同一份数据：同一个 ts、同一个
-// 方向、同一个来源，只是编码换成会话文件格式。
+// 会话录制（v2：一次录制 = 一个目录）。与 history/*.log 写的是同一份数据：
+// 同一个 ts、同一个方向、同一个来源，只是编码换成会话文件格式。
 //
-// 这一层只做「直接落盘」：不做文件轮转/分卷，不参与 history.attach/new/detach
-// 那套文件流转，读取侧也不改——GUI 仍走 .log + 环形缓冲，.stlog 靠拖进界面或
-// `serial-cli stlog-read` 查看。格式规范见 docs/format/stlog-format.md。
+// 目录里 manifest.json 仅做连接，settings.json 放端口/模式等设置，index.bin 是
+// 可删的缓存，数据落在 pkg-NNNN.stlog —— 每个包本身仍是完整合法的 v1.4 文件，
+// 写满 pkgMaxBytes 自动切下一个包（帧绝不跨包）。
+//
+// 这一层只做「直接落盘」：不参与 history.attach/new/detach 那套文件流转，
+// 读取侧也不改——GUI 仍走 .log + 环形缓冲，会话目录靠拖进界面或
+// `serial-cli stlog-read` 查看。格式规范见 docs/format/stlog-v2.md。
 //
 // 三个入口都挂在既有路径上，不新增钩子点：
 //   - serial.go 的 newHistoryFile()      → openStlogFile()：建 .log 时顺带建 .stlog
@@ -35,15 +39,20 @@ var (
 	stlogTickMS = 200
 )
 
-// openStlogFile 按 .log 的文件名建同名 .stlog（只换扩展名），便于成对查找。
+// openStlogFile 建一个会话目录（v2：一次录制 = 一个文件夹）。
+//
+// 目录里是 manifest.json（仅做连接）、settings.json（端口/模式等设置）、
+// index.bin（缓存）和 pkg-0001.stlog（数据，本身仍是完整合法的 v1.4 文件）。
+//
+// .log 的文件名不再用来拼目录名（目录名按 v2 规则自动生成），而是记进
+// settings.json 的 log 字段，两边仍然能成对找到。
 //
 // 幂等：已经在录就直接返回。全局默认被反复切换、或用户重复点"开始保存"时，
-// 不会堆出一串空文件。
+// 不会堆出一串空目录。
 func (p *Process) openStlogFile(logBase string) {
 	if !strings.HasSuffix(logBase, ".log") {
 		return
 	}
-	name := strings.TrimSuffix(logBase, ".log") + ".stlog"
 
 	p.stlogMu.Lock()
 	defer p.stlogMu.Unlock()
@@ -53,14 +62,14 @@ func (p *Process) openStlogFile(logBase string) {
 
 	dir := historyDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		logOp("错误", "建 .stlog 失败 (进程 #%s): %v", p.id, err)
+		logOp("错误", "建会话目录失败 (进程 #%s): %v", p.id, err)
 		return
 	}
 
-	// Port/Baud 只取建文件这一刻的快照：设置块记的是"开始录制时的配置"，
+	// Port/Baud 只取建会话这一刻的快照：设置记的是"开始录制时的配置"，
 	// 之后 SwitchPort 不回写（.log 也不记录配置，两边语义一致）。
-	// 转发录制另外记 B 口：文件名的端口序号看不出模式，光靠记录里的方向
-	// 字节只能知道"这是转发"，不知道哪个口是 A。
+	// 转发录制另外记 B 口：光靠记录里的方向字节只能知道"这是转发"，
+	// 不知道哪个口是 A。
 	mode, portB := sessionfile.ModeSingle, ""
 	if p.forwardConfigB.Port != "" {
 		mode, portB = sessionfile.ModeForward, p.forwardConfigB.Port
@@ -73,17 +82,21 @@ func (p *Process) openStlogFile(logBase string) {
 		Mode:  mode,
 		PortB: portB,
 	}
-	w, err := sessionfile.CreateWriter(filepath.Join(dir, name), set)
+	sess, err := sessionfile.CreateSessionIn(dir, set)
 	if err != nil {
-		logOp("错误", "建 .stlog 失败 (进程 #%s): %v", p.id, err)
+		logOp("错误", "建会话目录失败 (进程 #%s): %v", p.id, err)
 		return
 	}
-	p.stlog = w
-	p.stlogName = name
+	sess.SettingsDoc().Log = logBase
+	if err := sess.SaveSettings(); err != nil {
+		logOp("错误", "写 settings.json 失败 (进程 #%s): %v", p.id, err)
+	}
+	p.stlog = sess
+	p.stlogName = filepath.Base(sess.Dir())
 	p.stlogPending = false
 	p.stlogStop = make(chan struct{})
 	p.startStlogTicker(p.stlogStop)
-	logOp("历史", "进程 #%s 开始录制 %s", p.id, name)
+	logOp("历史", "进程 #%s 开始录制 %s", p.id, sess.Dir())
 }
 
 // startStlogTicker 起定时 flush 协程；stlogFlushMS <= 0 时不启动（省盘模式）。
