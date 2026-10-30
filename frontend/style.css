@@ -29,11 +29,15 @@
     /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
     --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
     --tabpop-glass-border: rgba(160, 160, 160, 0.28);
-    /* 浮窗描边的「当前生效值」：卡片与尖角都只引用这一个。
+    /* 浮窗描边的「当前生效值」：卡片边框用它。
        默认=毛玻璃描边；@supports 回退时改成实色 --border。
        用变量而不是直接改 border-color，是因为 .c-tabpop.is-above 那条规则
        特定性更高（0,3,0），回退块里的 border-color 压不动它。 */
     --tabpop-edge: var(--tabpop-glass-border);
+    /* 尖角不能和卡片共用半透明色，必须给不透明等效值，原因见 .c-tabpop__arrow。
+       这个值 = 28% 灰叠在「卡片底色（10% 白）」上的结果，即卡片边框实际看起来的颜色。
+       卡片底色一变它就得跟着重算；@supports 回退时改成 var(--border)。 */
+    --tabpop-arrow-edge: rgb(82, 82, 82);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
   }
@@ -52,6 +56,7 @@
     --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-edge: var(--tabpop-glass-border);
+    --tabpop-arrow-edge: rgb(194, 194, 194);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
   }
@@ -70,6 +75,7 @@
   --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
   --tabpop-glass-border: rgba(160, 160, 160, 0.28);
   --tabpop-edge: var(--tabpop-glass-border);
+  --tabpop-arrow-edge: rgb(82, 82, 82);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
 }
@@ -86,6 +92,7 @@
   --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-edge: var(--tabpop-glass-border);
+  --tabpop-arrow-edge: rgb(194, 194, 194);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
 }
@@ -496,28 +503,34 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   width: 9px; height: 9px; border-radius: 2px;
   background: none;
   border: 0;
-  /* 与卡片同一条描边（共用 --tabpop-edge），别用实色 --border：
-     两者颜色不一致时，尖角看起来像贴上去的一小块，和卡片的毛玻璃描边断开 */
-  border-left: 1px solid var(--tabpop-edge);
-  border-top: 1px solid var(--tabpop-edge);
+  /* 尖角**不能**用卡片那条半透明描边（--tabpop-edge），这是踩过的坑：
+     卡片边框下面垫着卡片自己的 10% 底色（background-clip 默认铺到 border-box），
+     尖角在卡片外，下面没有这层；朝下时还压在卡片 box-shadow 的浓区里。
+     同一个 rgba 叠出来必然不一样深 —— 浅色下尖角偏亮、深色下偏暗（深色更明显，
+     因为那里的卡片底色是 10% 白，把边框提亮了，尖角没有）。
+     所以尖角改用不透明等效值 --tabpop-arrow-edge = 卡片边框实际看起来的颜色。 */
+  border-left: 1px solid var(--tabpop-arrow-edge);
+  border-top: 1px solid var(--tabpop-arrow-edge);
   transform: rotate(45deg);
 }
 /* 没有 backdrop-filter 的老 WebView2：卡片与箭头一起退回纯色（此时箭头填色才是对的）。
-   描边颜色改的是 --tabpop-edge 而不是 border-color —— 下面 .is-above 那条规则
-   特定性是 0,3,0，回退块里的 .c-tabpop__arrow 只有 0,1,0，直接写 border-color
-   只能改到朝上的那条尖角，朝下（bottom/right）的会漏掉。变量在元素自身声明，
-   低特定性的规则也能影响高特定性的引用。 */
+   描边颜色改的是变量而不是 border-color —— 下面 .is-above 那条规则特定性是 0,3,0，
+   回退块里的 .c-tabpop__arrow 只有 0,1,0，直接写 border-color 只能改到朝上的那条尖角，
+   朝下（bottom/right）的会漏掉。变量在元素自身声明，低特定性的规则也能影响高特定性的引用。
+   回退时卡片底色是不透明的 --tabpop-bg-solid、描边是实色 --border，
+   尖角只要也用同一个实色 --border 就能对上，不需要等效值。 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .c-tabpop,
   .c-tabpop__arrow {
     --tabpop-edge: var(--border);
+    --tabpop-arrow-edge: var(--border);
     background-color: var(--tabpop-bg-solid);
   }
 }
 .c-tabpop.is-above .c-tabpop__arrow {
   top: auto; bottom: -5px; border-left: 0; border-top: 0;
-  border-right: 1px solid var(--tabpop-edge);
-  border-bottom: 1px solid var(--tabpop-edge);
+  border-right: 1px solid var(--tabpop-arrow-edge);
+  border-bottom: 1px solid var(--tabpop-arrow-edge);
 }
 
 .c-tabpop__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
