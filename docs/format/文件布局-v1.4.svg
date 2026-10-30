@@ -1,0 +1,219 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1230" viewBox="0 0 1240 1230">
+  <defs>
+    <pattern id="zero" width="9" height="9" patternUnits="userSpaceOnUse">
+      <rect width="9" height="9" fill="#f8fafc"/>
+      <path d="M0 9 L9 0" stroke="#cbd5e1" stroke-width="1"/>
+    </pattern>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      text { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+      .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+      .h1 { font-size: 26px; font-weight: 700; fill: #0f172a; }
+      .sub { font-size: 13.5px; fill: #64748b; }
+      .sec { font-size: 15px; font-weight: 700; fill: #0f172a; }
+      .blk { font-size: 14px; font-weight: 600; fill: #0f172a; }
+      .blks { font-size: 11px; fill: #475569; }
+      .sz { font-size: 11px; fill: #64748b; }
+      .off { font-size: 12px; fill: #64748b; }
+      .ann { font-size: 13px; fill: #334155; }
+      .annb { font-size: 13px; font-weight: 600; fill: #0f172a; }
+      .ruler { font-size: 11px; fill: #64748b; }
+      .note { font-size: 12.5px; fill: #475569; }
+      .tag { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .cap { font-size: 12.5px; fill: #475569; }
+      .bad { font-size: 12.5px; fill: #b91c1c; font-weight: 600; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="1230" fill="#ffffff"/>
+
+  <text class="h1" x="60" y="52">.stlog 文件布局（v1.4）</text>
+  <text class="sub" x="60" y="82">固定头 16 KB（双槽 8 KB + 双影 8 KB）　·　记录区起点 0x4000　·　页 4096 B = 20 B 页头 + 44 B 统计块 + 记录 + 零 + 4 B 页尾 CRC</text>
+
+  <!-- ============ 文件主体 ============ -->
+  <rect x="110" y="118" width="330" height="44" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text class="blk" x="275" y="138" text-anchor="middle">槽 A</text>
+  <text class="blks" x="275" y="154" text-anchor="middle">设置快照 #1 · 4 KB</text>
+
+  <rect x="110" y="166" width="330" height="44" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text class="blk" x="275" y="186" text-anchor="middle">槽 B</text>
+  <text class="blks" x="275" y="202" text-anchor="middle">设置快照 #2 · 4 KB</text>
+
+  <rect x="110" y="214" width="330" height="46" rx="6" fill="#ffedd5" stroke="#ea580c" stroke-width="1.8"/>
+  <text class="blk" x="275" y="236" text-anchor="middle">影子 A</text>
+  <text class="blks" x="275" y="252" text-anchor="middle">尾页镜像（重写时）· 4 KB</text>
+
+  <rect x="110" y="264" width="330" height="46" rx="6" fill="#fff7ed" stroke="#ea580c" stroke-width="1.4" stroke-dasharray="6 3"/>
+  <text class="blk" x="275" y="286" text-anchor="middle">影子 B</text>
+  <text class="blks" x="275" y="302" text-anchor="middle">尾页镜像（上一轮重写）· 4 KB</text>
+
+  <line x1="110" y1="322" x2="440" y2="322" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text class="mono" x="110" y="338" font-size="12" fill="#64748b">记录区起点 0x4000（4 KB 对齐）</text>
+
+  <rect x="110" y="350" width="330" height="34" rx="5" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text class="blk" x="275" y="372" text-anchor="middle">满页（已封存，不可变）</text>
+  <rect x="110" y="388" width="330" height="34" rx="5" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text class="blk" x="275" y="410" text-anchor="middle">满页（已封存，不可变）</text>
+  <rect x="110" y="426" width="330" height="34" rx="5" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text class="blk" x="275" y="448" text-anchor="middle">满页（已封存，不可变）</text>
+  <text class="ann" x="275" y="476" text-anchor="middle" fill="#94a3b8">⋮　满页 × n</text>
+
+  <rect x="110" y="488" width="190" height="88" rx="5" fill="#ecfccb" stroke="#65a30d" stroke-width="1.8"/>
+  <text class="blk" x="205" y="512" text-anchor="middle">尾页</text>
+  <text class="blks" x="205" y="532" text-anchor="middle">每次 flush 整页重写</text>
+  <text class="blks" x="205" y="550" text-anchor="middle">页头 + 统计块 + 记录</text>
+  <text class="blks" x="205" y="568" text-anchor="middle">+ 零填充 + 页尾 CRC</text>
+
+  <rect x="300" y="488" width="140" height="88" rx="5" fill="url(#zero)" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="blk" x="370" y="526" text-anchor="middle">零填充</text>
+  <text class="blks" x="370" y="544" text-anchor="middle">（CRC 一并覆盖）</text>
+
+  <line x1="110" y1="596" x2="440" y2="596" stroke="#0f172a" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="mono" x="450" y="600" font-size="12" fill="#0f172a">EOF</text>
+
+  <text class="off mono" x="100" y="144" text-anchor="end">0x0000</text>
+  <text class="off mono" x="100" y="192" text-anchor="end">0x1000</text>
+  <text class="off mono" x="100" y="240" text-anchor="end">0x2000</text>
+  <text class="off mono" x="100" y="290" text-anchor="end">0x3000</text>
+  <text class="off mono" x="100" y="371" text-anchor="end">0x4000</text>
+  <text class="off mono" x="100" y="409" text-anchor="end">0x5000</text>
+  <text class="off mono" x="100" y="447" text-anchor="end">0x6000</text>
+  <text class="off mono" x="100" y="532" text-anchor="end">0xN000</text>
+
+  <!-- ============ 右侧注释 ============ -->
+  <line x1="440" y1="166" x2="466" y2="166" stroke="#94a3b8" stroke-width="1.5"/>
+  <circle cx="440" cy="166" r="3" fill="#94a3b8"/>
+  <text class="annb" x="474" y="158">两槽 = 两份完整设置快照</text>
+  <text class="ann" x="474" y="178">seq · ts · payload(JSON) · crc32 · endMagic；交替写，取 seq 大且校验通过者</text>
+
+  <line x1="440" y1="264" x2="466" y2="264" stroke="#ea580c" stroke-width="1.8"/>
+  <circle cx="440" cy="264" r="3" fill="#ea580c"/>
+  <text class="annb" x="474" y="246">双影交替：仅在重写页时写一个</text>
+  <text class="ann" x="474" y="266">A = 本次镜像，B = 上次镜像；下一次反过来。新页首次写不写影子</text>
+  <text class="ann" x="474" y="286">主页与本次影子都坏时，退回上一次 → 整页永不彻底丢</text>
+  <text class="ann" x="474" y="306">恢复仍只前滚：影子只能补，不能缩短已验证的末尾</text>
+
+  <line x1="440" y1="367" x2="466" y2="367" stroke="#16a34a" stroke-width="1.5"/>
+  <circle cx="440" cy="367" r="3" fill="#16a34a"/>
+  <text class="annb" x="474" y="359">页写满即封存</text>
+  <text class="ann" x="474" y="379">一次 4 KB 写，CRC 覆盖整页；此后永不改写、只追加</text>
+
+  <line x1="440" y1="516" x2="466" y2="516" stroke="#65a30d" stroke-width="1.5"/>
+  <circle cx="440" cy="516" r="3" fill="#65a30d"/>
+  <text class="annb" x="474" y="508">唯一会被重写的页</text>
+  <text class="ann" x="474" y="528">整页重写：页头 + 统计块 + 记录 + 补零 + 页尾 CRC</text>
+  <text class="ann" x="474" y="548">任何时刻只有一页可变；封存不产生写入</text>
+
+  <line x1="400" y1="566" x2="466" y2="566" stroke="#94a3b8" stroke-width="1.5"/>
+  <circle cx="400" cy="566" r="3" fill="#94a3b8"/>
+  <text class="ann" x="474" y="588">读侧：统计块固定在 [20, 64)；committedLen 给出记录终点</text>
+
+  <!-- ============ 页格式 ============ -->
+  <text class="sec" x="110" y="632">页格式（4096 B，整页 CRC 不可关闭）</text>
+
+  <rect x="110" y="650" width="4.6" height="64" fill="#1d4ed8"/>
+  <rect x="114.6" y="650" width="10.1" height="64" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+  <rect x="124.7" y="650" width="690.3" height="64" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <text class="mono" x="470" y="687" text-anchor="middle" font-size="13" fill="#14532d">记录区　[64, committedLen)</text>
+  <rect x="815" y="650" width="227" height="64" fill="url(#zero)" stroke="#94a3b8" stroke-width="1.2"/>
+  <text class="mono" x="928" y="687" text-anchor="middle" font-size="13" fill="#475569">零填充</text>
+  <rect x="1042" y="650" width="8" height="64" fill="#fecaca" stroke="#dc2626" stroke-width="1.4"/>
+
+  <text class="ruler" x="110" y="732">页头 20 B</text>
+  <text class="ruler" x="190" y="732">统计块 44 B @ 20</text>
+  <text class="ruler" x="928" y="732" text-anchor="middle">零填充 [committedLen, 4092)</text>
+  <text class="ruler" x="1050" y="748" text-anchor="end">页尾 crc32 4 B　[4092, 4096)</text>
+
+  <!-- 页头放大：6 个字段，按顺序绘制（非等比） -->
+  <text class="ruler" x="110" y="772">页头放大（20 B，按字段顺序绘制，非等比）</text>
+  <rect x="110" y="786" width="156.7" height="52" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="188.3" y="808" text-anchor="middle" font-size="11" fill="#1e3a8a">magic</text>
+  <text class="mono" x="188.3" y="824" text-anchor="middle" font-size="9" fill="#64748b">u32 · 4 B</text>
+
+  <rect x="266.7" y="786" width="156.7" height="52" fill="#e0e7ff" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="345" y="808" text-anchor="middle" font-size="11" fill="#1e3a8a">ver</text>
+  <text class="mono" x="345" y="824" text-anchor="middle" font-size="9" fill="#64748b">u16 · 2 B</text>
+
+  <rect x="423.4" y="786" width="156.7" height="52" fill="#e0e7ff" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="501.7" y="808" text-anchor="middle" font-size="11" fill="#1e3a8a">flags</text>
+  <text class="mono" x="501.7" y="824" text-anchor="middle" font-size="9" fill="#64748b">u16 · 2 B</text>
+
+  <rect x="580.1" y="786" width="156.7" height="52" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="658.3" y="808" text-anchor="middle" font-size="11" fill="#1e3a8a">pageOffset</text>
+  <text class="mono" x="658.3" y="824" text-anchor="middle" font-size="9" fill="#64748b">u64 · 8 B</text>
+
+  <rect x="736.8" y="786" width="156.7" height="52" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="815" y="808" text-anchor="middle" font-size="10" fill="#1e3a8a">committedLen</text>
+  <text class="mono" x="815" y="824" text-anchor="middle" font-size="9" fill="#64748b">u16 · 2 B</text>
+
+  <rect x="893.5" y="786" width="156.5" height="52" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="971.7" y="808" text-anchor="middle" font-size="10" fill="#1e3a8a">firstRecOff</text>
+  <text class="mono" x="971.7" y="824" text-anchor="middle" font-size="9" fill="#64748b">u16 · 2 B</text>
+
+  <text class="note" x="110" y="860">crc32 在页尾 [4092, 4096)，覆盖 [0, 4092)（页头 + 统计块 + 记录 + 零填充）。校验即 crc32(page[:4092]) == page[4092:]，本字段不在覆盖范围内，无需置零参与计算。</text>
+
+  <!-- ============ 统计块 ============ -->
+  <text class="sec" x="110" y="898">统计块（44 B，页内偏移 20，紧随页头）</text>
+
+  <rect x="110" y="912" width="85.5" height="56" fill="#ffedd5" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="152.8" y="945" text-anchor="middle" font-size="10" fill="#7c2d12">magic</text>
+  <rect x="195.5" y="912" width="42.7" height="56" fill="#ffedd5" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="216.9" y="945" text-anchor="middle" font-size="10" fill="#7c2d12">ver</text>
+  <rect x="238.2" y="912" width="42.7" height="56" fill="#fff7ed" stroke="#fdba74" stroke-width="1.2"/>
+  <text class="mono" x="259.6" y="945" text-anchor="middle" font-size="10" fill="#7c2d12">rsv</text>
+  <rect x="280.9" y="912" width="170.9" height="56" fill="#fed7aa" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="366.4" y="945" text-anchor="middle" font-size="11" fill="#7c2d12">rxTotal</text>
+  <rect x="451.8" y="912" width="170.9" height="56" fill="#fed7aa" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="537.3" y="945" text-anchor="middle" font-size="11" fill="#7c2d12">txTotal</text>
+  <rect x="622.7" y="912" width="170.9" height="56" fill="#ffe4c7" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="708.2" y="945" text-anchor="middle" font-size="11" fill="#7c2d12">firstTs</text>
+  <rect x="793.6" y="912" width="170.9" height="56" fill="#ffe4c7" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="879.1" y="945" text-anchor="middle" font-size="11" fill="#7c2d12">lastTs</text>
+  <rect x="964.5" y="912" width="85.5" height="56" fill="#ffedd5" stroke="#ea580c" stroke-width="1.2"/>
+  <text class="mono" x="1007.3" y="945" text-anchor="middle" font-size="10" fill="#7c2d12">rec</text>
+
+  <g stroke="#94a3b8" stroke-width="1">
+    <line x1="110" y1="968" x2="110" y2="976"/>
+    <line x1="195.5" y1="968" x2="195.5" y2="976"/>
+    <line x1="238.2" y1="968" x2="238.2" y2="976"/>
+    <line x1="280.9" y1="968" x2="280.9" y2="976"/>
+    <line x1="451.8" y1="968" x2="451.8" y2="976"/>
+    <line x1="622.7" y1="968" x2="622.7" y2="976"/>
+    <line x1="793.6" y1="968" x2="793.6" y2="976"/>
+    <line x1="964.5" y1="968" x2="964.5" y2="976"/>
+    <line x1="1050" y1="968" x2="1050" y2="976"/>
+  </g>
+  <text class="ruler mono" x="110" y="992" text-anchor="middle">0</text>
+  <text class="ruler mono" x="195.5" y="992" text-anchor="middle">4</text>
+  <text class="ruler mono" x="238.2" y="992" text-anchor="middle">6</text>
+  <text class="ruler mono" x="280.9" y="992" text-anchor="middle">8</text>
+  <text class="ruler mono" x="451.8" y="992" text-anchor="middle">16</text>
+  <text class="ruler mono" x="622.7" y="992" text-anchor="middle">24</text>
+  <text class="ruler mono" x="793.6" y="992" text-anchor="middle">32</text>
+  <text class="ruler mono" x="964.5" y="992" text-anchor="middle">40</text>
+  <text class="ruler mono" x="1050" y="992" text-anchor="middle">44</text>
+
+  <text class="note" x="110" y="1014">统计块固定在 [20, 64)，长度恒 44 B。它没有独立 CRC——只随整页写出、绝不单独写，因此由整页 CRC 覆盖即可；读取也必须以整页校验通过为前提。</text>
+
+  <!-- ============ 记录格式 ============ -->
+  <text class="sec" x="110" y="1054">记录格式（12 B 固定头，单条载荷 ≤ 4016 B）</text>
+
+  <rect x="110" y="1070" width="208.9" height="54" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+  <text class="mono" x="214" y="1102" text-anchor="middle" font-size="13" fill="#1e3a8a">ts · 8 B</text>
+  <rect x="318.9" y="1070" width="26.1" height="54" fill="#fde68a" stroke="#d97706" stroke-width="1.2"/>
+  <rect x="345" y="1070" width="52.2" height="54" fill="#fcd34d" stroke="#d97706" stroke-width="1.2"/>
+  <text class="mono" x="371" y="1102" text-anchor="middle" font-size="11" fill="#92400e">len</text>
+  <rect x="397.2" y="1070" width="26.1" height="54" fill="#fde68a" stroke="#d97706" stroke-width="1.2"/>
+  <text class="mono" x="331" y="1111" text-anchor="middle" font-size="10" fill="#92400e" transform="rotate(-90 331 1111)">dir</text>
+  <text class="mono" x="410" y="1109" text-anchor="middle" font-size="10" fill="#92400e" transform="rotate(-90 410 1109)">origin</text>
+  <rect x="423.3" y="1070" width="626.7" height="54" fill="#dcfce7" stroke="#16a34a" stroke-width="1.2"/>
+  <text class="mono" x="736" y="1102" text-anchor="middle" font-size="13" fill="#14532d">payload · len 字节（raw）</text>
+
+  <text class="note" x="110" y="1150">dir 的 bit7 = 分片未完（0x80）；origin：0 = 无来源　1..254 = 字典 id　255 = 内联（originLen u8 ≤ 64 + 字符串）。记录区 [64, 4092) 共 4028 B，单条记录 ≤ 4028 B。</text>
+
+  <line x1="60" y1="1168" x2="1180" y2="1168" stroke="#e2e8f0" stroke-width="1"/>
+  <text class="note" x="60" y="1190">写顺序：① 重写页时先写影子 ← 整页镜像　② 主尾页 ← 同一份镜像。新页首次写只写主页。读侧先整页校验，再信页头与统计块。</text>
+  <text class="note" x="60" y="1210">页内边界情形（切帧 / 超页 / 整页无帧头 / 页推进）见《边界情形-v1.4》。</text>
+</svg>
