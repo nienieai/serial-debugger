@@ -3368,7 +3368,6 @@ function _tabPopRenderFile() {
   }
 
   el.innerHTML =
-    '<span class="c-tabpop__arrow"></span>' +
     '<div class="c-tabpop__head">' +
       '<span class="c-tabpop__title">' + escHtml(stlogBaseName(path)) + '</span>' +
       '<span class="c-tabpop__badge is-dim"><i class="c-tabpop__dot"></i>' +
@@ -3458,7 +3457,6 @@ function _tabPopRender() {
   var clients = (viewers.gui || 0) + (viewers.cli || 0) + (viewers.mcp || 0);
 
   el.innerHTML =
-    '<span class="c-tabpop__arrow"></span>' +
     '<div class="c-tabpop__head">' +
       '<span class="c-tabpop__title">' + _tabPopT('tabpop.title', '会话') + ' <span dir="ltr">#' + tab.id + '</span></span>' +
       '<span class="c-tabpop__badge ' + badgeCls + '"><i class="c-tabpop__dot"></i>' + badgeTxt + '</span>' +
@@ -3565,16 +3563,11 @@ function _tabPopPlace(tabEl) {
   }
   left = Math.max(10, Math.min(Math.max(10, window.innerWidth - w - 10), left));
   var top = r.bottom + 8;
-  var above = false;
   if (top + h > window.innerHeight - 10) {
     top = Math.max(10, r.top - h - 8);
-    above = true;
   }
   el.style.left = left + 'px';
   el.style.top = top + 'px';
-  el.classList.toggle('is-above', above);
-  var arrow = el.querySelector('.c-tabpop__arrow');
-  if (arrow) arrow.style.left = Math.max(10, Math.min(w - 20, r.left + r.width / 2 - left - 4.5)) + 'px';
 }
 
 function _tabPopOpen(tabEl, idx) {

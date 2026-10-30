@@ -29,15 +29,6 @@
     /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
     --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
     --tabpop-glass-border: rgba(160, 160, 160, 0.28);
-    /* 浮窗描边的「当前生效值」：卡片边框用它。
-       默认=毛玻璃描边；@supports 回退时改成实色 --border。
-       用变量而不是直接改 border-color，是因为 .c-tabpop.is-above 那条规则
-       特定性更高（0,3,0），回退块里的 border-color 压不动它。 */
-    --tabpop-edge: var(--tabpop-glass-border);
-    /* 尖角不能和卡片共用半透明色，必须给不透明等效值，原因见 .c-tabpop__arrow。
-       这个值 = 28% 灰叠在「卡片底色（10% 白）」上的结果，即卡片边框实际看起来的颜色。
-       卡片底色一变它就得跟着重算；@supports 回退时改成 var(--border)。 */
-    --tabpop-arrow-edge: rgb(82, 82, 82);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
   }
@@ -55,8 +46,6 @@
     --status-offline: #aaa; --tab-close: #999;
     --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
-    --tabpop-edge: var(--tabpop-glass-border);
-    --tabpop-arrow-edge: rgb(194, 194, 194);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
   }
@@ -74,8 +63,6 @@
   --status-offline: #888; --tab-close: #888;
   --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
   --tabpop-glass-border: rgba(160, 160, 160, 0.28);
-  --tabpop-edge: var(--tabpop-glass-border);
-  --tabpop-arrow-edge: rgb(82, 82, 82);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
 }
@@ -91,8 +78,6 @@
   --status-offline: #aaa; --tab-close: #999;
   --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
-  --tabpop-edge: var(--tabpop-glass-border);
-  --tabpop-arrow-edge: rgb(194, 194, 194);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
 }
@@ -479,7 +464,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   backdrop-filter: var(--tabpop-glass-blur);
   -webkit-backdrop-filter: var(--tabpop-glass-blur);
   color: var(--fg);
-  border: 1px solid var(--tabpop-edge); border-radius: 10px;
+  border: 1px solid var(--tabpop-glass-border); border-radius: 10px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .28);
   font-size: 12.5px; line-height: 1.45;
   font-variant-numeric: tabular-nums;
@@ -493,44 +478,19 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   box-shadow: 0 12px 30px rgba(0, 0, 0, .18), 0 2px 6px rgba(0, 0, 0, .10);
 }
 
-/* 箭头：旋转方块，只画两条描边，**不填色**。
-   原因：浮窗是毛玻璃（10% 透明底 + 外层阴影），填色的箭头会把它背后的阴影也叠进来
-   ——上半截压在卡片阴影上、下半截压在卡片自身上，两处底色都比卡片深，
-   于是看起来像一个深色小方块。去掉填充后它变成一个小尖角，两种主题下都只显示描边。
-   （回退成不透明底色的场合见下面的 @supports 块，那里会重新填色，因为此时不存在透射。） */
-.c-tabpop__arrow {
-  position: absolute; top: -5px; left: 18px;
-  width: 9px; height: 9px; border-radius: 2px;
-  background: none;
-  border: 0;
-  /* 尖角**不能**用卡片那条半透明描边（--tabpop-edge），这是踩过的坑：
-     卡片边框下面垫着卡片自己的 10% 底色（background-clip 默认铺到 border-box），
-     尖角在卡片外，下面没有这层；朝下时还压在卡片 box-shadow 的浓区里。
-     同一个 rgba 叠出来必然不一样深 —— 浅色下尖角偏亮、深色下偏暗（深色更明显，
-     因为那里的卡片底色是 10% 白，把边框提亮了，尖角没有）。
-     所以尖角改用不透明等效值 --tabpop-arrow-edge = 卡片边框实际看起来的颜色。 */
-  border-left: 1px solid var(--tabpop-arrow-edge);
-  border-top: 1px solid var(--tabpop-arrow-edge);
-  transform: rotate(45deg);
-}
-/* 没有 backdrop-filter 的老 WebView2：卡片与箭头一起退回纯色（此时箭头填色才是对的）。
-   描边颜色改的是变量而不是 border-color —— 下面 .is-above 那条规则特定性是 0,3,0，
-   回退块里的 .c-tabpop__arrow 只有 0,1,0，直接写 border-color 只能改到朝上的那条尖角，
-   朝下（bottom/right）的会漏掉。变量在元素自身声明，低特定性的规则也能影响高特定性的引用。
-   回退时卡片底色是不透明的 --tabpop-bg-solid、描边是实色 --border，
-   尖角只要也用同一个实色 --border 就能对上，不需要等效值。 */
+/* 浮窗不带尖角。
+   曾经用旋转方块画过两条描边的尖角，但它和卡片边框永远对不上：
+   卡片边框下面垫着卡片自己的 10% 底色（background-clip 默认铺到 border-box），
+   尖角在卡片外，下面没有这层；朝下时还压在 card box-shadow 的浓区里。
+   同一条 rgba 叠出来的深浅必然不同（浅色偏亮、深色偏暗，深色更明显），
+   换不透明等效色也只在 2x 以上能对齐，1x 下 45° 斜线还会被抗锯齿稀释一档。
+   浮窗本来就跟标签紧贴，去掉尖角反而干净。 */
+/* 没有 backdrop-filter 的老 WebView2：退回不透明底色 + 实色描边 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .c-tabpop,
-  .c-tabpop__arrow {
-    --tabpop-edge: var(--border);
-    --tabpop-arrow-edge: var(--border);
+  .c-tabpop {
     background-color: var(--tabpop-bg-solid);
+    border-color: var(--border);
   }
-}
-.c-tabpop.is-above .c-tabpop__arrow {
-  top: auto; bottom: -5px; border-left: 0; border-top: 0;
-  border-right: 1px solid var(--tabpop-arrow-edge);
-  border-bottom: 1px solid var(--tabpop-arrow-edge);
 }
 
 .c-tabpop__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
