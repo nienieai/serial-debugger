@@ -284,11 +284,17 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
 
   const tsLine = document.createElement('div');
   const isFwd = (dir === '1' || dir === '2');
-  const arrow = isFwd ? '' : (dir === 'tx' ? ' ↾' : ' ⇃');
-  const tagClass = dir === '1' ? 'fwd1-line' : dir === '2' ? 'fwd2-line' : (dir === 'rx' ? 'rx-line' : 'tx-line');
-  const label = isFwd ? 'P' + dir : (dir === 'rx' ? 'Rx' : 'Tx');
+  // 系统行（sys.port_connected / sys.stats_started 这类事件）既不是 Rx 也不是 Tx。
+  // 之前没有这个分支，'system' 落到最后的 tx 分支，被显示成「Tx ⇃」，
+  // 看着像是发出去的数据 —— 实际上它只是本地事件，没有收发方向。
+  const isSys = (dir === 'system' || dir === 'sys');
+  const arrow = (isFwd || isSys) ? '' : (dir === 'tx' ? ' ↾' : ' ⇃');
+  const tagClass = dir === '1' ? 'fwd1-line' : dir === '2' ? 'fwd2-line'
+    : (dir === 'rx' ? 'rx-line' : (isSys ? 'sys-line' : 'tx-line'));
+  const label = isFwd ? 'P' + dir : (dir === 'rx' ? 'Rx' : (isSys ? 'Sys' : 'Tx'));
   var byteLen = hex ? hex.length / 2 : 0;
-  var tsDirClass = dir === '1' ? 'ts-1' : dir === '2' ? 'ts-2' : (dir === 'rx' ? 'ts-rx' : 'ts-tx');
+  var tsDirClass = dir === '1' ? 'ts-1' : dir === '2' ? 'ts-2'
+    : (dir === 'rx' ? 'ts-rx' : (isSys ? 'ts-sys' : 'ts-tx'));
   tsLine.className = 'ts-line ' + tsDirClass;
   var statClass = isFwd ? 'ts-fstat' : 'ts-stat';
   // 只有 Tx 有来源；老历史（没写来源的包）origin 为空，不渲染任何标记。
@@ -305,7 +311,11 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
   dataLine.className = 'data-line';
 
   let dm;
-  if (opts && opts.displayMode) {
+  if (isSys) {
+    // 系统行的 payload 是本地事件文本（sys.port_connected|COM16|230400），
+    // 不是串口字节；切到 Hex 视图看它只会是一串 ASCII 码，固定按文本显示。
+    dm = 'text';
+  } else if (opts && opts.displayMode) {
     dm = opts.displayMode;
   } else {
     dm = state.displayMode;
@@ -318,7 +328,8 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
   }
   if (dm === 'hex') {
     const hexSpan = document.createElement('span');
-    var hexDirClass = dir === '1' ? 'hex-1' : dir === '2' ? 'hex-2' : (dir === 'rx' ? 'hex-rx' : 'hex-tx');
+    var hexDirClass = dir === '1' ? 'hex-1' : dir === '2' ? 'hex-2'
+      : (dir === 'rx' ? 'hex-rx' : (isSys ? 'hex-sys' : 'hex-tx'));
     hexSpan.className = 'hex-data ' + hexDirClass;
     // 直接从 hex 串格式化（formatHexString 少一次数组分配）
     hexSpan.textContent = (typeof formatHexString === 'function')

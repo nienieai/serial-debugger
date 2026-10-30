@@ -977,6 +977,8 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .ts-tx { color: var(--dc-tsTx); background: var(--dc-tsTx-bg, transparent); font-weight: var(--dc-tsTx-bold, normal); font-style: var(--dc-tsTx-italic, normal); }
 .ts-1  { color: var(--dc-ts1); background: var(--dc-ts1-bg, transparent); font-weight: var(--dc-ts1-bold, normal); font-style: var(--dc-ts1-italic, normal); }
 .ts-2  { color: var(--dc-ts2); background: var(--dc-ts2-bg, transparent); font-weight: var(--dc-ts2-bold, normal); font-style: var(--dc-ts2-italic, normal); }
+/* 系统行（sys.* 事件）：没有收发方向，用弱化色 + 斜体，和 Rx/Tx 区分开 */
+.ts-sys { color: var(--placeholder); font-style: italic; }
 .ts-stat  { color: var(--dc-stat); background: var(--dc-stat-bg, transparent); font-weight: var(--dc-stat-bold, normal); font-style: var(--dc-stat-italic, normal); }
 .ts-fstat { color: var(--dc-fstat); background: var(--dc-fstat-bg, transparent); font-weight: var(--dc-fstat-bold, normal); font-style: var(--dc-fstat-italic, normal); }
 /* Tx 来源标记（这一帧是谁发出的）：小号、弱化，只作旁注；完整来源（含会话 id）
@@ -995,6 +997,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 }
 .hex-rx { color: var(--dc-hexRx); background: var(--dc-hexRx-bg, transparent); font-weight: var(--dc-hexRx-bold, normal); font-style: var(--dc-hexRx-italic, normal); }
 .hex-tx { color: var(--dc-hexTx); background: var(--dc-hexTx-bg, transparent); font-weight: var(--dc-hexTx-bold, normal); font-style: var(--dc-hexTx-italic, normal); }
+.hex-sys { color: var(--placeholder); font-style: italic; }
 .hex-1  { color: var(--dc-hex1); background: var(--dc-hex1-bg, transparent); font-weight: var(--dc-hex1-bold, normal); font-style: var(--dc-hex1-italic, normal); }
 .hex-2  { color: var(--dc-hex2); background: var(--dc-hex2-bg, transparent); font-weight: var(--dc-hex2-bold, normal); font-style: var(--dc-hex2-italic, normal); }
 /* Control character rendering: child spans replace ::before pseudo-elements.
@@ -1041,6 +1044,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .sys-msg { color: var(--placeholder); margin: 2px 0; }
 .rx-line { color: var(--dc-textRx); font-weight: var(--dc-textRx-bold, 600); font-style: var(--dc-textRx-italic, normal); background: var(--dc-textRx-bg, transparent); }
 .tx-line { color: var(--dc-textTx); font-weight: var(--dc-textTx-bold, 600); font-style: var(--dc-textTx-italic, normal); background: var(--dc-textTx-bg, transparent); }
+.sys-line { color: var(--placeholder); font-weight: var(--dc-textSys-bold, 600); font-style: italic; }
 .hex-data { }
 .hex-escape  { color: var(--dc-hexEsc); background: var(--dc-hexEsc-bg, transparent); font-weight: var(--dc-hexEsc-bold, normal); font-style: var(--dc-hexEsc-italic, normal); }
 .hex-fescape { color: var(--dc-fhexEsc); background: var(--dc-fhexEsc-bg, transparent); font-weight: var(--dc-fhexEsc-bold, normal); font-style: var(--dc-fhexEsc-italic, normal); }
