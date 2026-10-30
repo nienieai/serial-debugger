@@ -5927,6 +5927,7 @@ function stlogUpdateChrome(tab) {
 // 更早的一批 unshift 到数组前面再整体重画。
 function stlogLoad(tab) {
   var st = tab._stlog;
+  if (st.source === 'local') { _stlogLoadLocal(tab); return; }
   if (!st.processId || st.loading || st.exhausted) return;
   st.loading = true;
   st.moreBtn.disabled = true;
@@ -5971,6 +5972,43 @@ function stlogLoad(tab) {
       st.firstLoadDone = true;
       st.content.scrollTop = st.content.scrollHeight; // 最新一条在最下面
     }
+  }).catch(function (err) {
+    st.loading = false;
+    st.moreBtn.disabled = false;
+    if (window.console) console.error('[stlog] ' + tab.path, err);
+    stlogSysRow(tab, '读取失败: ' + String(err));
+  });
+}
+
+// _stlogLoadLocal 离线路径：直接读文件，从第一帧往后翻。
+//
+// 与在线路径的分页方向相反（这里正序），所以帧是 concat 到末尾而不是 unshift
+// 到前面；渲染层只认 st.frames 的顺序，两边共用同一套。
+function _stlogLoadLocal(tab) {
+  var st = tab._stlog;
+  if (st.loading || (st.loaded && st.offset >= st.total)) return;
+  st.loading = true;
+  st.moreBtn.disabled = true;
+  window.go.main.App.ReadStlogFrames(tab.path, st.offset, STLOG_PAGE_SIZE).then(function (info) {
+    st.loading = false;
+    st.moreBtn.disabled = false;
+    st.loaded = true;
+    st.info = info || {};
+    st.total = info.total || 0;
+    var frames = (info.frames || []).map(function (f) {
+      return { ts: f.ts, tsMs: f.ts, dir: f.dir, hex: f.hex, origin: f.origin };
+    });
+    st.offset = (info.offset || 0) + frames.length;
+    st.frames = st.frames.concat(frames);
+    st.rendered = true;
+    st.exhausted = st.offset >= st.total;
+    stlogRerender(tab);
+    stlogUpdateChrome(tab);
+    if (!st.firstLoadDone) {
+      st.firstLoadDone = true;
+      st.content.scrollTop = 0; // 离线正序：从第一帧开始看
+    }
+    if (st.total === 0) stlogSysRow(tab, '文件里没有帧');
   }).catch(function (err) {
     st.loading = false;
     st.moreBtn.disabled = false;
@@ -6130,22 +6168,26 @@ function openStlogTab(path) {
   // 关键：遮罩是按「当前活动标签」判定的，直接改 state.activeTab 不会触发重算。
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
-  _stlogOpenInDaemon(tab);
+  _stlogOpen(tab);
   return tab;
 }
 
-// _stlogOpenInDaemon 把文件推给守护进程，由它开一个文件会话进程，再从那里取数据。
+// _stlogOpen 决定这个文件页从哪儿取数据。
 //
-// 帧走进程的共享环（分页用 GetSessionHistory）；摘要（大小/页/记录/来源）仍由本地
-// 读一次文件拿到——它只用于顶栏和浮窗，不参与分页。
+//   守护进程在线 → session.open 建一个文件会话进程，帧走它的共享环
+//                  （GetSessionHistory，从最新往前翻）
+//   守护进程离线 → 本地直接读文件（ReadStlogFrames，从第一帧往后翻）
 //
-// 离线时打不开：这条链路必须经过守护进程，和「完全切到 daemon」的选择一致。
-function _stlogOpenInDaemon(tab) {
+// 两条路径的数据形状统一成 {ts, tsMs, dir, hex, origin}，渲染层不用分叉；
+// 只有分页方向与拼装方式不同（见 stlogLoad / _stlogLoadLocal）。
+function _stlogOpen(tab) {
   var st = tab._stlog;
   if (!state.daemonOnline) {
-    stlogSysRow(tab, '守护进程未运行，无法打开文件会话');
+    st.source = 'local';
+    stlogLoad(tab);
     return;
   }
+  st.source = 'daemon';
   window.go.main.App.OpenStlogSession(tab.path).then(function (res) {
     st.processId = res.processId;
     // 摘要：只取 1 帧，够拼顶栏和浮窗
@@ -6155,8 +6197,12 @@ function _stlogOpenInDaemon(tab) {
     stlogUpdateChrome(tab);
     stlogLoad(tab);
   }).catch(function (err) {
-    if (window.console) console.error('[stlog] open ' + tab.path, err);
-    stlogSysRow(tab, '打开文件会话失败: ' + String(err));
+    // 守护进程那边开不起来时别让页面空着：退回本地读，
+    // 功能上退化成「离线浏览」，比报错好。
+    if (window.console) console.error('[stlog] daemon open failed, fallback to local', err);
+    st.source = 'local';
+    st.processId = '';
+    stlogLoad(tab);
   });
 }
 
