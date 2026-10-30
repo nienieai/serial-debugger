@@ -478,18 +478,21 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   box-shadow: 0 12px 30px rgba(0, 0, 0, .18), 0 2px 6px rgba(0, 0, 0, .10);
 }
 
-/* 箭头：旋转方块，和浮窗同色同边框；翻到标签上方时改指下方 */
+/* 箭头：旋转方块，只画两条描边，**不填色**。
+   原因：浮窗是毛玻璃（10% 透明底 + 外层阴影），填色的箭头会把它背后的阴影也叠进来
+   ——上半截压在卡片阴影上、下半截压在卡片自身上，两处底色都比卡片深，
+   于是看起来像一个深色小方块。去掉填充后它变成一个小尖角，两种主题下都只显示描边。
+   （回退成不透明底色的场合见下面的 @supports 块，那里会重新填色，因为此时不存在透射。） */
 .c-tabpop__arrow {
   position: absolute; top: -5px; left: 18px;
   width: 9px; height: 9px; border-radius: 2px;
-  background-color: var(--tabpop-glass-bg);
-  backdrop-filter: var(--tabpop-glass-blur);
-  -webkit-backdrop-filter: var(--tabpop-glass-blur);
-  border-left: 1px solid var(--tabpop-glass-border);
-  border-top: 1px solid var(--tabpop-glass-border);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   transform: rotate(45deg);
 }
-/* 没有 backdrop-filter 的老 WebView2：退回纯色，否则半透明底会糊成一片 */
+/* 没有 backdrop-filter 的老 WebView2：卡片与箭头一起退回纯色（此时箭头填色才是对的） */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .c-tabpop,
   .c-tabpop__arrow {
@@ -499,8 +502,8 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 }
 .c-tabpop.is-above .c-tabpop__arrow {
   top: auto; bottom: -5px; border-left: 0; border-top: 0;
-  border-right: 1px solid var(--tabpop-glass-border);
-  border-bottom: 1px solid var(--tabpop-glass-border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .c-tabpop__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
