@@ -195,13 +195,13 @@ func cmdCheck() {
 	}
 }
 
-// cmdStlog 是 .stlog（v1.4 会话文件）的离线命令。
+// cmdStlog 是会话文件的离线命令（工程目录与单个 .stlog 都收）。
 //
 // 这些子命令都不碰守护进程：.stlog 的卖点之一是"文件即真相"，能脱离录制方
 // 独立校验，所以它们必须在 runCommand 之前分流。
 func cmdStlog(args []string) {
 	if len(args) < 2 {
-		printErr("用法: serial-cli stlog-read|stlog-verify|stlog-dump|stlog-export <file.stlog>")
+		printErr("用法: serial-cli stlog-read|stlog-verify|stlog-dump|stlog-export <工程目录|file.stlog>")
 		os.Exit(2)
 	}
 	if args[0] == "stlog-export" {
@@ -752,9 +752,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		printJSON(result)
 
 	case "session-open":
-		// 把一个 .stlog 会话（目录或单文件）推给守护进程，由它开一个文件会话进程
+		// 把工程目录交给守护进程：由它建一个文件会话进程，之后按 processId 读
 		if len(args) < 2 {
-			printErr("用法: serial-cli session-open <会话目录|.stlog>")
+			printErr("用法: serial-cli session-open <工程目录>")
 			errExit(fmt.Errorf("缺少路径"), interactive)
 			return
 		}
@@ -1758,6 +1758,8 @@ func printHelp() {
   switch  <processId> <port> [baud]  切换进程到不同端口（保留进程历史）
   setmode <processId> <single|forward> 切换进程模式（需 idle 状态）
   forward <portA> <portB> [baudA] [baudB] 创建端口转发
+  session-open <工程目录>            把工程交给守护进程（建文件会话进程）
+                                     只接受工程目录；单个 .stlog 用 stlog-* 离线读
 
 数据:
   send    <data> [processId] [--hex] 发送数据 (--hex: 十六进制)
@@ -1791,11 +1793,11 @@ func printHelp() {
   history-new [pid]                  为进程新建历史文件
   history-detach [pid]               分离进程的当前历史文件
 
-会话文件 (.stlog, v1.4 格式):
-  stlog-read   <file>                读取 .stlog 并打印摘要与前 20 帧
-  stlog-verify <file>                校验 .stlog 结构（干净=0，有问题=1）
-  stlog-dump   <file>                列出 .stlog 每页的页头信息
-  stlog-export <file> [--limit N] [-o out.txt]
+会话文件 (工程目录或 .stlog):
+  stlog-read   <path>                读取会话并打印摘要与前 20 帧
+  stlog-verify <path>                校验结构（干净=0，有问题=1）
+  stlog-dump   <path>                列出每页的页头信息
+  stlog-export <path> [--limit N] [-o out.txt]
                                      导出成一行一帧的纯文本（CRLF，记事本能开）
                                      默认写 stdout，也可用 -o 直接落盘
                                      四条均为离线操作，不需要守护进程

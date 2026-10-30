@@ -1518,57 +1518,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	if port != "" {
 		// Declare-only: store config but don't open ports
 		if !connect {
-			if mode == "forward" {
-				if cfgB == nil || cfgB.Port == "" {
-					return nil, fmt.Errorf("forward mode requires both portA and portB")
-				}
-				if port == cfgB.Port {
-					return nil, fmt.Errorf("cannot forward between the same port")
-				}
-			}
-
-			id := fmt.Sprintf("%d", pm.counter.Add(1))
-			sharedName, sendName := newRingNames(id)
-			ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024)
-			if err != nil {
-				return nil, fmt.Errorf("create shared memory: %w", err)
-			}
-
-			sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024)
-			if err != nil {
-				ring.Close()
-				return nil, fmt.Errorf("create send queue shared memory: %w", err)
-			}
-
-			proc := &Process{
-				id:           id,
-				status:       "idle",
-				mode:         mode,
-				config:       cfg,
-				historyRing:  ring,
-				historyName:  sharedName,
-				sendRing:     sendQ,
-				sendRingName: sendName,
-				startTime:    time.Now(),
-			}
-
-			if mode == "forward" {
-				proc.forwardConfigB = *cfgB
-			}
-
-			pm.mu.Lock()
-			pm.processes[id] = proc
-			pm.mu.Unlock()
-
-			if mode == "forward" {
-				proc.recordSystemEvent("sys.forward_declared", port, cfgB.Port)
-			} else {
-				proc.recordSystemEvent("sys.port_declared", port, cfg.Baud)
-			}
-			if pm.onProcessChanged != nil {
-				pm.onProcessChanged()
-			}
-			return proc, nil
+			return pm.createDeclared(mode, port, cfg, cfgB, "")
 		}
 
 		// connect == true: open ports immediately (existing behaviour)
@@ -1747,14 +1697,78 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	return proc, nil
 }
 
+// createDeclared 建一个「声明了配置但不打开端口」的进程，是 Create 的
+// connect=false 分支。
+//
+// sessionPath 只有 OpenSession 会传：它标志这个进程是文件会话（读工程目录用的），
+// 前端据此不给它另建标签页（文件页自己就是它的视图）。必须写在构造里而不是
+// 创建完再补 —— 第一条 process-changed 广播就得带上它，否则前端会先建出一个
+// 多余的空标签页。
+func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cfgB *SerialConfig, sessionPath string) (*Process, error) {
+	if mode == "forward" {
+		if cfgB == nil || cfgB.Port == "" {
+			return nil, fmt.Errorf("forward mode requires both portA and portB")
+		}
+		if port == cfgB.Port {
+			return nil, fmt.Errorf("cannot forward between the same port")
+		}
+	}
+
+	id := fmt.Sprintf("%d", pm.counter.Add(1))
+	sharedName, sendName := newRingNames(id)
+	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024)
+	if err != nil {
+		return nil, fmt.Errorf("create shared memory: %w", err)
+	}
+
+	sendQ, err := ringbuf.CreateSharedRing(sendName, 1*1024*1024)
+	if err != nil {
+		ring.Close()
+		return nil, fmt.Errorf("create send queue shared memory: %w", err)
+	}
+
+	proc := &Process{
+		id:           id,
+		status:       "idle",
+		mode:         mode,
+		config:       cfg,
+		historyRing:  ring,
+		historyName:  sharedName,
+		sendRing:     sendQ,
+		sendRingName: sendName,
+		startTime:    time.Now(),
+		sessionPath:  sessionPath,
+	}
+
+	if mode == "forward" {
+		proc.forwardConfigB = *cfgB
+	}
+
+	pm.mu.Lock()
+	pm.processes[id] = proc
+	pm.mu.Unlock()
+
+	if mode == "forward" {
+		proc.recordSystemEvent("sys.forward_declared", port, cfgB.Port)
+	} else {
+		proc.recordSystemEvent("sys.port_declared", port, cfg.Baud)
+	}
+	if pm.onProcessChanged != nil {
+		pm.onProcessChanged()
+	}
+	return proc, nil
+}
+
 // ForwardCreate is a backward-compatible wrapper that creates a forward process.
 func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, error) {
 	return pm.Create("forward", cfgA.Port, cfgA, &cfgB, true)
 }
 
-// Destroy destroys a process. If connected, disconnects first.
-// Saves multistr entries before destroying.
-// OpenSession 把一个 .stlog 会话（目录或 v1.4 单文件）变成守护进程里的一个进程。
+// OpenSession 把一个**工程目录**变成守护进程里的一个进程。
+//
+// 只接受工程目录（manifest.json + pkg-*.stlog）：单个 .stlog 是包文件，没有设置
+// 文档、没有索引、也不会再追加，交给守护进程没有意义，前端那边一律本地读
+// （见 app.js 的 _stlogOpen）。这里再拦一道，免得别的客户端绕过去。
 //
 // 不连串口：Create 走 declare-only 分支，只建进程和共享环。随后清掉它顺手写的
 // 「端口已声明」系统事件，再把文件里的帧灌进环。之后上层用 processId 走正常的
@@ -1763,6 +1777,16 @@ func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, erro
 // 模式取自文件头的设置：转发录制建出来的就是 forward，P1/P2 配色、分流比这些
 // 不需要额外告诉前端，自然就对了。
 func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !fi.IsDir() {
+		return nil, 0, fmt.Errorf("守护进程只接受工程目录；单个 .stlog 请用「从文件打开」本地浏览")
+	}
+	if !sessionfile.IsSessionDir(path) {
+		return nil, 0, fmt.Errorf("不是工程目录（缺 %s 或 pkg-*.stlog）", sessionfile.ManifestName)
+	}
 	info, err := sessionfile.ReadSession(path)
 	if err != nil {
 		return nil, 0, err
@@ -1774,11 +1798,11 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		}
 		port, portB, baud = s.Port, s.PortB, s.Baud
 	}
-	// Create 只有 port 非空时才走 declare-only 分支；文件里没记端口时拿文件名顶上，
-	// 它只用于界面显示。
+	// Create 只有 port 非空时才走 declare-only 分支；文件里没记端口时拿目录名顶上，
+	// 它只用于界面显示。工程目录名本身就是会话名（yyyyMMdd_HHmmss_id），没有扩展名。
 	displayPort := port
 	if displayPort == "" {
-		displayPort = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		displayPort = filepath.Base(path)
 	}
 	cfg := SerialConfig{Port: displayPort, Baud: baud}
 	var cfgB *SerialConfig
@@ -1790,11 +1814,10 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		}
 	}
 
-	proc, err := pm.Create(mode, displayPort, cfg, cfgB, false)
+	proc, err := pm.createDeclared(mode, displayPort, cfg, cfgB, path)
 	if err != nil {
 		return nil, 0, err
 	}
-	proc.sessionPath = path
 
 	// 清掉 Create 写的那条「端口已声明」：文件里本来就有自己的系统帧，
 	// 不清掉会在最前面多出一条假的声明事件。
@@ -1812,6 +1835,8 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 	return proc, n, nil
 }
 
+// Destroy destroys a process. If connected, disconnects first.
+// Saves multistr entries before destroying.
 func (pm *ProcessManager) Destroy(id string) error {
 	pm.mu.Lock()
 	proc, ok := pm.processes[id]
@@ -2249,6 +2274,9 @@ func (pm *ProcessManager) List() []map[string]any {
 			"viewers":      p.viewerSummary(),
 			"autoSend":     p.getAutoSendStatus(),
 			"sendRingName": p.sendRingName,
+			// 文件会话进程（session.open 建出来的）带工程目录路径；普通进程是空串。
+			// 前端据此不给它另建标签页 —— 文件页本身就是它的视图。
+			"sessionPath": p.sessionPath,
 		}
 		// Include config for connected processes and idle processes that have stored config
 		hasConfig := p.status == "connected" || p.config.Port != ""

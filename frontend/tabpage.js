@@ -586,10 +586,10 @@ function createModeChooserPage() {
 			['newtab.forward_f2', '两端各自独立的波特率与串口参数'],
 			['newtab.forward_f3', '适合联调、透传与协议抓包']
 		]);
-	// 第三张卡：不碰串口，只读磁盘上的 .stlog —— 守护进程没起来也永远可用。
+	// 第三张卡：不碰串口，只读磁盘上的工程目录 / .stlog —— 守护进程没起来也永远可用。
 	makeCard('file', icon('import', 20, 20), 'newtab.file', '从文件打开',
-		'newtab.file_desc', '浏览已录制的 .stlog 会话文件', [
-			['newtab.file_f1', '按帧浏览，可分页加载'],
+		'newtab.file_desc', '打开工程目录或单个 .stlog 文件', [
+			['newtab.file_f1', '工程目录可交给守护进程接管'],
 			['newtab.file_f2', 'Hex / 文本 两套视图'],
 			['newtab.file_f3', '一键导出成纯文本']
 		]);

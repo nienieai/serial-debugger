@@ -71,6 +71,22 @@ func TestOpenSessionAsProcess(t *testing.T) {
 	if res == nil {
 		t.Fatal("GetHistoryPage 返回 nil")
 	}
+
+	// List 里必须带 sessionPath：前端靠它区分「文件会话」和普通串口会话，
+	// 否则会给这个进程再建一个多余标签页（GUI 侧 syncDaemonSessions 直接跳过）。
+	var listed bool
+	for _, e := range pm.List() {
+		if e["processId"] != proc.id {
+			continue
+		}
+		listed = true
+		if got, _ := e["sessionPath"].(string); got != sess {
+			t.Fatalf("List 的 sessionPath = %q，期望 %q", got, sess)
+		}
+	}
+	if !listed {
+		t.Fatal("List 里找不到刚建的文件会话进程")
+	}
 }
 
 // 单口文件：mode 保持 single，没记端口时用文件名兜底（只影响显示）。
@@ -96,5 +112,52 @@ func TestOpenSessionSingleWithoutPort(t *testing.T) {
 	}
 	if proc.config.Port == "" {
 		t.Fatal("端口兜底名不该为空")
+	}
+}
+
+// 单个 .stlog 是包文件、不是工程：守护进程必须拒绝，而且不能留下半个进程。
+//
+// 前端的 _stlogOpen 已经不会把它推过来（单文件一律本地读），这里守的是别的
+// 客户端（CLI / MCP）绕过去的情况。
+func TestOpenSessionRejectsSingleFile(t *testing.T) {
+	root := t.TempDir()
+	pkg := filepath.Join(root, "pkg-0001.stlog")
+	w, err := sessionfile.CreateWriter(pkg, sessionfile.Settings{Port: "COM7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Append(1000, sessionfile.DirRx, sessionfile.OriginNone, "", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := NewProcessManager()
+	t.Cleanup(pm.DestroyAll)
+
+	proc, n, err := pm.OpenSession(pkg)
+	if err == nil {
+		t.Fatalf("单文件应当被拒绝，却建出了进程（%d 条）", n)
+	}
+	if proc != nil {
+		t.Fatal("拒绝时不该返回进程")
+	}
+	if got := len(pm.List()); got != 0 {
+		t.Fatalf("拒绝后进程表应当为空，实际 %d 个", got)
+	}
+}
+
+// 空目录 / 普通目录也不是工程：同样拒绝，理由要能说清缺什么。
+func TestOpenSessionRejectsPlainDir(t *testing.T) {
+	pm := NewProcessManager()
+	t.Cleanup(pm.DestroyAll)
+
+	dir := t.TempDir()
+	if _, _, err := pm.OpenSession(dir); err == nil {
+		t.Fatal("普通目录应当被拒绝")
+	}
+	if got := len(pm.List()); got != 0 {
+		t.Fatalf("拒绝后进程表应当为空，实际 %d 个", got)
 	}
 }

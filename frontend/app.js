@@ -441,9 +441,24 @@ async function setEncoding(enc) {
 // ---- alert helper ----
 var _alertCallback = null;
 
+// _resetAlertButtons 把弹窗底部的按钮区恢复成「取消 + 确定」。
+//
+// showChoice 会临时藏起这两个、塞进几个并列选项；下一个弹窗如果不复原，
+// 就会只剩「确定」或者残留上一次的选项按钮。
+function _resetAlertButtons() {
+  var ov = document.getElementById('alertOverlay');
+  if (!ov) return;
+  var ok = document.getElementById('alertOkBtn');
+  if (ok) ok.classList.remove('is-hidden');
+  var btns = ov.querySelector('.alert-btns');
+  if (!btns) return;
+  Array.prototype.slice.call(btns.querySelectorAll('.alert-choice')).forEach(function (b) { b.remove(); });
+}
+
 // okKey / cancelKey: optional i18n keys for context-specific button labels
 // mono: 等宽 + 保留换行，用于多行或按列对齐的文本（如 .stlog 摘要）
 function showAlert(title, message, okKey, mono) {
+  _resetAlertButtons();
   _alertCallback = null;
   document.getElementById('alertTitle').textContent = title;
   var body = document.getElementById('alertBody');
@@ -455,6 +470,7 @@ function showAlert(title, message, okKey, mono) {
 }
 
 function showConfirm(title, message, onOk, okKey, cancelKey) {
+  _resetAlertButtons();
   _alertCallback = onOk;
   document.getElementById('alertTitle').textContent = title;
   var body = document.getElementById('alertBody');
@@ -464,6 +480,34 @@ function showConfirm(title, message, onOk, okKey, cancelKey) {
   document.getElementById('alertOkBtn').textContent = t(okKey || 'confirm.ok', '确定');
   document.getElementById('alertCancelBtn').textContent = t(cancelKey || 'confirm.cancel', '取消');
   document.getElementById('alertOverlay').classList.remove('is-hidden');
+}
+
+// showChoice 用同一个弹窗摆两个并列选项（不是「确定/取消」）。
+//
+// 只有「打开工程目录 / 打开 .stlog 文件」用它：拿确认框做二选一的话，取消键
+// 就变成了第二个选项，语义是歪的。
+function showChoice(title, message, options) {
+  _resetAlertButtons();
+  _alertCallback = null;
+  document.getElementById('alertTitle').textContent = title;
+  var body = document.getElementById('alertBody');
+  body.textContent = message;
+  body.classList.remove('t-mono');
+  document.getElementById('alertCancelBtn').classList.add('is-hidden');
+  document.getElementById('alertOkBtn').classList.add('is-hidden');
+  var ov = document.getElementById('alertOverlay');
+  var btns = ov.querySelector('.alert-btns');
+  (options || []).forEach(function (opt) {
+    var b = document.createElement('button');
+    b.className = 'alert-choice';
+    b.textContent = opt.label;
+    b.addEventListener('click', function () {
+      closeAlert(null);
+      if (opt.onPick) opt.onPick();
+    });
+    btns.appendChild(b);
+  });
+  ov.classList.remove('is-hidden');
 }
 
 function closeAlert(ok) {
@@ -2118,6 +2162,9 @@ async function syncDaemonSessions(procData) {
 
   // 1. Create tabs for new daemon sessions not tracked in any GUI tab
   daemonSessions.forEach(ds => {
+    // 文件会话进程（session.open 建出来的）不是串口会话，它自己有文件页当视图；
+    // 这里再给它建一个标签页，界面上就会多出「工程目录名 @0 [已声明]」这种空页。
+    if (ds.sessionPath) return;
     if (!guiSessionIds.has(ds.id)) {
           // 先看有没有「本来就是这个会话」的标签页：第 3 步在守护进程列表一时
           // 不含该会话时会把 sessionId 清掉（连接/重建的窗口期）。等它回到列表里
@@ -2468,6 +2515,27 @@ function handleDaemonOffline() {
     const t = state.tabs[i];
     if (t.type === 'settings') continue;
     if (t._page && t._page.isWelcome) continue;
+    // .stlog 文件页读的是本地磁盘，跟守护进程没关系：别跟着一起销毁。
+    // 已经接管到守护进程的那些要退回本地（那个 processId 已经失效了），
+    // 否则「加载更多」永远等不到数据。
+    if (t.type === 'stlog') {
+      if (t._stlog && t._stlog.source === 'daemon') {
+        t._stlog.source = 'local';
+        t._stlog.processId = '';
+        t._stlog.frames = [];
+        t._stlog.offset = 0;
+        t._stlog.loaded = false;
+        t._stlog.loading = false;
+        t._stlog.exhausted = false;
+        t._stlog.rendered = false;
+        t._stlog.firstLoadDone = false;
+        if (typeof stlogSyncPushBtn === 'function') stlogSyncPushBtn(t);
+        // 活动页立即重读；其它页等切过去时由 _page.show 触发 —— 同时读好几份
+        // 工程目录没有意义，反而会把界面卡一下。
+        if (state.activeTab === i && typeof stlogLoad === 'function') stlogLoad(t);
+      }
+      continue;
+    }
     if (t.sessionId) {
       delete state.historyCache[t.sessionId];
       delete state.statsBase[t.sessionId];
@@ -2561,6 +2629,10 @@ function updateDaemonUI() {
   state.tabs.forEach(function (t) {
     if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
       _syncChooserAvailability(t._page.root);
+    }
+    // 文件页的「交给守护进程」按钮跟着守护进程状态亮/灭
+    if (t.type === 'stlog' && t._stlog && typeof stlogSyncPushBtn === 'function') {
+      stlogSyncPushBtn(t);
     }
   });
   _updateStatsVisible();
@@ -6054,7 +6126,12 @@ function stlogExport(path, btn) {
   });
 }
 
-function openStlogTab(path) {
+// openStlogTab 开一个文件标签页。
+//
+// kind 决定数据源：'session' 是工程目录（守护进程在线时交给它），'file' 是单个
+// .stlog 包文件（守护进程不收，永远本地读）。三个入口都拿得到 kind：拖入来自
+// ProbeDroppedPaths，文件对话框和目录对话框各自已知。
+function openStlogTab(path, kind) {
   for (var i = 0; i < state.tabs.length; i++) {
     if (state.tabs[i].type === 'stlog' && state.tabs[i].path === path) {
       switchTab(i);
@@ -6106,10 +6183,18 @@ function openStlogTab(path) {
   exportBtn.className = 't-stlog-btn';
   exportBtn.textContent = '导出文本';
   exportBtn.addEventListener('click', function () { stlogExport(path, exportBtn); });
+  // 「交给守护进程」：只有工程目录有这个能力。单个 .stlog 是包文件，守护进程
+  // 直接拒绝（daemon/serial.go 的 OpenSession），所以那一类页面根本不显示。
+  var pushBtn = document.createElement('button');
+  pushBtn.className = 't-stlog-btn';
+  pushBtn.textContent = '交给守护进程';
+  pushBtn.style.display = 'none';
+  pushBtn.addEventListener('click', function () { stlogPushToDaemon(tab); });
   actions.appendChild(countEl);
   actions.appendChild(yearBtn);
   actions.appendChild(modeBtn);
   actions.appendChild(exportBtn);
+  actions.appendChild(pushBtn);
 
   bar.appendChild(infoBox);
   bar.appendChild(actions);
@@ -6142,7 +6227,9 @@ function openStlogTab(path) {
     source: 'gui',
     _stlog: {
       offset: 0, total: 0, loaded: false, loading: false, rendered: false,
-      mode: 'hex', frames: [], modeBtn: modeBtn,
+      // isDir：工程目录才有资格交给守护进程；单个 .stlog 一律本地读
+      isDir: kind === 'session',
+      mode: 'hex', frames: [], modeBtn: modeBtn, pushBtn: pushBtn,
       content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
     },
     _page: {
@@ -6174,26 +6261,32 @@ function openStlogTab(path) {
 
 // _stlogOpen 决定这个文件页从哪儿取数据。
 //
-//   守护进程在线 → session.open 建一个文件会话进程，帧走它的共享环
-//                  （GetSessionHistory，从最新往前翻）
-//   守护进程离线 → 本地直接读文件（ReadStlogFrames，从第一帧往后翻）
+//   单个 .stlog        → 永远本地读（ReadStlogFrames，从第一帧往后翻）。守护进程
+//                        不收包文件：没有设置文档、没有索引、也不会再追加
+//   工程目录 + 在线    → session.open 建文件会话进程，帧走它的共享环
+//                        （GetSessionHistory，从最新往前翻）
+//   工程目录 + 离线    → 本地读；顶栏「交给守护进程」等它上线再点
 //
 // 两条路径的数据形状统一成 {ts, tsMs, dir, hex, origin}，渲染层不用分叉；
 // 只有分页方向与拼装方式不同（见 stlogLoad / _stlogLoadLocal）。
 function _stlogOpen(tab) {
   var st = tab._stlog;
-  if (!state.daemonOnline) {
+  if (!st.isDir || !state.daemonOnline) {
     st.source = 'local';
+    stlogSyncPushBtn(tab);
     stlogLoad(tab);
     return;
   }
   st.source = 'daemon';
+  stlogSyncPushBtn(tab);
   window.go.main.App.OpenStlogSession(tab.path).then(function (res) {
     st.processId = res.processId;
     // 摘要：只取 1 帧，够拼顶栏和浮窗
     return window.go.main.App.ReadStlogFrames(tab.path, 0, 1);
   }).then(function (info) {
     st.info = info || {};
+    // processId 到手，按钮才能从「交给守护进程」切成「已接管」
+    stlogSyncPushBtn(tab);
     stlogUpdateChrome(tab);
     stlogLoad(tab);
   }).catch(function (err) {
@@ -6202,20 +6295,108 @@ function _stlogOpen(tab) {
     if (window.console) console.error('[stlog] daemon open failed, fallback to local', err);
     st.source = 'local';
     st.processId = '';
+    stlogSyncPushBtn(tab);
     stlogLoad(tab);
   });
 }
 
-// chooseOpenFile 弹系统文件对话框选一个 .stlog，再开成文件标签页。
+// stlogSyncPushBtn 按「页面类型 + 守护进程状态 + 是否已接管」刷新顶栏按钮。
 //
-// 「新建会话 → 从文件打开」这条路不碰守护进程，所以选择页离线时只放行它。
+// 单文件页没有这个能力（守护进程只收工程目录），直接隐藏 —— 留一个永远点不动
+// 的灰按钮只会让人以为功能坏了。
+function stlogSyncPushBtn(tab) {
+  var st = tab._stlog;
+  var btn = st.pushBtn;
+  if (!btn) return;
+  if (!st.isDir) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  if (st.source === 'daemon' && st.processId) {
+    btn.disabled = true;
+    btn.textContent = '已接管';
+    btn.classList.add('is-on');
+    btn.title = '这一页的数据来自守护进程的文件会话进程 #' + st.processId;
+    return;
+  }
+  btn.classList.remove('is-on');
+  btn.textContent = '交给守护进程';
+  if (!state.daemonOnline) {
+    btn.disabled = true;
+    btn.title = '守护进程未启动（菜单 守护进程 → 启停）；现在按本地文件读';
+    return;
+  }
+  btn.disabled = false;
+  btn.title = '把整个工程交给守护进程：它建一个文件会话进程，之后从最新帧往前翻';
+}
+
+// stlogPushToDaemon 把当前工程页从「本地读」切成「守护进程里的文件会话」。
+//
+// 两条路的分页方向相反（本地正序、守护进程倒序），所以已载入的帧必须清空重读，
+// 否则新旧两批会在同一屏里首尾颠倒。失败时保持本地不动 —— 数据还在，报个错就行。
+function stlogPushToDaemon(tab) {
+  var st = tab._stlog;
+  if (!st.isDir || st.source === 'daemon' || st.pushing || !state.daemonOnline) return;
+  st.pushing = true;
+  if (st.pushBtn) { st.pushBtn.disabled = true; st.pushBtn.textContent = '接管中…'; }
+  window.go.main.App.OpenStlogSession(tab.path).then(function (res) {
+    st.pushing = false;
+    st.processId = res.processId;
+    st.source = 'daemon';
+    // 换数据源 = 换分页方向：已载入的帧作废，从最新一批重新开始
+    st.frames = [];
+    st.offset = 0;
+    st.loaded = false;
+    st.loading = false;
+    st.exhausted = false;
+    st.rendered = false;
+    st.firstLoadDone = false;
+    st.content.innerHTML = '';
+    st.content.appendChild(st.more);
+    stlogSyncPushBtn(tab);
+    stlogLoad(tab);
+  }).catch(function (err) {
+    st.pushing = false;
+    stlogSyncPushBtn(tab);
+    showAlert('交给守护进程失败', String(err) + '\n\n这一页仍然按本地文件读。', null, true);
+  });
+}
+
+// chooseOpenFile 「新建会话 → 从文件打开」的入口：先问开哪种，再弹对应的系统对话框。
+//
+// 两个对话框分开是 Windows 的限制：文件对话框选不了目录，目录对话框选不了文件。
+// 工程目录在线时会被交给守护进程，单文件永远本地读（见 _stlogOpen）。
+// 选择页离线时这条路照样可用 —— 两个对话框都是本地操作。
 function chooseOpenFile() {
-  window.go.main.App.PickStlogFile().then(function (path) {
+  showChoice('打开会话',
+    '要打开的是哪种？\n\n· 工程目录：一整个录制工程（manifest.json + pkg-*.stlog），守护进程在线时交给它\n· .stlog 文件：单个包文件，只在本地浏览',
+    [
+      { label: '工程目录', onPick: function () { pickStlogPath('session'); } },
+      { label: '.stlog 文件', onPick: function () { pickStlogPath('file'); } }
+    ]);
+}
+
+// pickStlogPath 弹对应的系统对话框 → 预检 → 开标签页。
+//
+// 目录要先过一遍 ProbeDroppedPaths：用户完全可能选中一个不相干的文件夹，
+// 那种路径打开只会得到空页面，不如当场说"这里面没有工程"。
+function pickStlogPath(kind) {
+  var App = window.go.main.App;
+  var dlg = (kind === 'session') ? App.PickStlogDir() : App.PickStlogFile();
+  dlg.then(function (path) {
     if (!path) return; // 用户取消
-    // 先关选择页再开文件页：反过来的话 closeTab 可能把焦点从新标签挪走
-    var idx = state.tabs.findIndex(function (t) { return t.type === 'new'; });
-    if (idx >= 0) closeTab(idx);
-    openStlogTab(path);
+    var probe = (typeof App.ProbeDroppedPaths === 'function')
+      ? App.ProbeDroppedPaths([path])
+      : Promise.resolve(null);
+    return probe.then(function (probes) {
+      var pr = probes && probes[0];
+      if (pr && pr.kind !== 'session' && pr.kind !== 'file') {
+        showAlert('无法解析', pr.path + '\n  ' + (pr.err || '无法识别的类型'), null, true);
+        return;
+      }
+      // 先关选择页再开文件页：反过来的话 closeTab 可能把焦点从新标签挪走
+      var idx = state.tabs.findIndex(function (t) { return t.type === 'new'; });
+      if (idx >= 0) closeTab(idx);
+      openStlogTab(path, pr ? pr.kind : kind);
+    });
   }).catch(function (err) {
     showAlert('打开失败', String(err), null, true);
   });
@@ -6321,7 +6502,7 @@ function chooseOpenFile() {
     if (typeof App.ProbeDroppedPaths !== 'function') {
       // 老 exe 没有预检：退回「只看扩展名」，至少 .stlog 还能开
       list.filter(function (p) { return /\.stlog$/i.test(p); }).forEach(function (p) {
-        openStlogTab(p);
+        openStlogTab(p, 'file');
       });
       return;
     }
@@ -6330,7 +6511,7 @@ function chooseOpenFile() {
       (probes || []).forEach(function (pr) {
         if (pr.kind === 'session' || pr.kind === 'file') {
           try {
-            openStlogTab(pr.path);
+            openStlogTab(pr.path, pr.kind);
           } catch (err) {
             if (window.console) console.error('[stlog] ' + pr.path, err);
             bad.push(pr.path + '\n  ' + String(err));

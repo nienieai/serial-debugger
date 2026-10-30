@@ -1109,8 +1109,11 @@ func probeDropPath(p string) DropProbe {
 	return DropProbe{Path: p, Kind: "file"}
 }
 
-// OpenStlogSession 把一个 .stlog 会话（目录或 v1.4 单文件）推给守护进程，
-// 由它开一个文件会话进程。返回的 processId 之后走常规会话接口读数据。
+// OpenStlogSession 把一个**工程目录**交给守护进程，由它开一个文件会话进程。
+//
+// 单个 .stlog 不行：包文件没有设置文档、没有索引，也不会再追加，守护进程那边
+// 直接拒绝（daemon/serial.go 的 OpenSession）。返回的 processId 之后走常规会话
+// 接口读数据。
 func (a *App) OpenStlogSession(path string) (map[string]any, error) {
 	if path == "" {
 		return nil, fmt.Errorf("路径为空")
@@ -1294,6 +1297,17 @@ func (a *App) PickStlogFile() (string, error) {
 			{DisplayName: "会话文件 (*.stlog)", Pattern: "*.stlog"},
 			{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
 		},
+	})
+}
+
+// PickStlogDir 弹系统目录对话框选一个工程目录，返回绝对路径。
+//
+// 工程目录是 v2 的会话单位（manifest.json + pkg-*.stlog）；单个 .stlog 是包文件，
+// 走 PickStlogFile。两个对话框分开是因为 Windows 的文件对话框选不了目录。
+// 用户取消时返回空串（不是错误）。
+func (a *App) PickStlogDir() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "打开工程目录",
 	})
 }
 

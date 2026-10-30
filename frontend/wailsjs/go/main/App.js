@@ -186,6 +186,10 @@ export function OpenStlogSession(arg1) {
   return window['go']['main']['App']['OpenStlogSession'](arg1);
 }
 
+export function PickStlogDir() {
+  return window['go']['main']['App']['PickStlogDir']();
+}
+
 export function PickStlogFile() {
   return window['go']['main']['App']['PickStlogFile']();
 }
