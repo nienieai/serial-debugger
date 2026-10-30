@@ -101,7 +101,12 @@ func interactiveMode() {
 		printErr("请先运行 serial-cli start 启动守护进程")
 		os.Exit(1)
 	}
-	defer dc.Close()
+	// 闭包里用变量 dc：重连后它指向新连接，旧连接已在重连处关掉
+	defer func() {
+		if dc != nil {
+			dc.Close()
+		}
+	}()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -130,6 +135,22 @@ func interactiveMode() {
 		case "check":
 			cmdCheck()
 		default:
+			// daemon 重启过就把连接换掉，不用退出 shell 重进。
+			// 一次本地 ping 约 1ms；连接已被 Close 时会立刻返回，不会卡 10s。
+			if dc == nil || !dc.Alive(1500*time.Millisecond) {
+				if dc != nil {
+					dc.Close()
+					dc = nil
+				}
+				nd, derr := client.NewDaemonClient("cli")
+				if derr != nil {
+					printErr("守护进程已断开: %v", derr)
+					printErr("可用 serial-cli start 重新启动，或稍后重试")
+					continue
+				}
+				dc = nd
+				printErr("已重新连接守护进程")
+			}
 			runCommandInteractive(dc, args)
 		}
 	}

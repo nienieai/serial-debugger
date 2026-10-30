@@ -547,6 +547,14 @@ func (c *DaemonClient) callWithTimeout(method contract.Method, params map[string
 		delete(c.pending, id)
 		c.pendMu.Unlock()
 		return nil, fmt.Errorf("request timeout: %s", method)
+	case <-c.done:
+		// 连接已经被 Close（心跳判死、StopDaemon、shutdown）。不在这里立刻返回
+		// 的话，调用方要白等满整个超时 —— GUI 清理会话页、CLI 交互模式重连都会
+		// 各卡 10 秒。
+		c.pendMu.Lock()
+		delete(c.pending, id)
+		c.pendMu.Unlock()
+		return nil, fmt.Errorf("connection closed")
 	}
 }
 
@@ -576,6 +584,20 @@ func (c *DaemonClient) ReadEvent() <-chan *protocol.RawMsg {
 
 // ClientId returns the unique client identifier.
 func (c *DaemonClient) ClientId() string { return c.clientId }
+
+// Alive 用一次短 ping 判断这条连接还活着没有。
+//
+// CLI 交互模式用它决定要不要重连：整个 shell 会话只建一次连接，daemon 重启后
+// 旧连接会死（心跳判死或对端关闭），靠这个判断自动恢复，不用退出重进。
+// 超时给 1.5s（与心跳一致）：daemon 处理大 history 请求时会有百毫秒级停顿，
+// 太短会误判；误判只是多建一次连接，代价很低但没必要。
+func (c *DaemonClient) Alive(timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+	_, err := c.callWithTimeout(contract.Ping, nil, timeout)
+	return err == nil
+}
 
 // Close shuts down all 3 pipes.
 func (c *DaemonClient) Close() error {
