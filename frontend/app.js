@@ -3296,55 +3296,45 @@ function _tabPopRenderFile() {
   var st = tab._stlog || {};
   var info = st.info || {};
   var path = tab.path || '';
+  var fwd = info.forward === true;
+  var set = info.settings || {};
+  var portA = set.port || '';
+  var portB = info.portB || '';
 
-  function row(tag, val) {
-    // 文件卡的行比会话卡长（路径、时间范围、页/记录/帧串一起），用可换行的
-    // 一行一字段，别让长值把卡片撑破或被裁掉。
-    return '<div class="c-tabpop__frow">' +
-      '<span class="c-tabpop__ptag">' + tag + '</span>' +
-      '<span class="c-tabpop__fval" dir="ltr">' + val + '</span>' +
+  // 端口：文件头只存口名（不存设备描述），转发录制 A/B 各一行
+  var portsHTML = '';
+  if (fwd && portB) {
+    portsHTML = '<div class="c-tabpop__ports">' +
+      '<div class="c-tabpop__port"><span class="c-tabpop__ptag">A</span>' +
+        '<span class="c-tabpop__pname" dir="ltr">' + escHtml(portA) + '</span></div>' +
+      '<div class="c-tabpop__port"><span class="c-tabpop__ptag">B</span>' +
+        '<span class="c-tabpop__pname" dir="ltr">' + escHtml(portB) + '</span></div>' +
+    '</div>';
+  } else if (portA) {
+    portsHTML = '<div class="c-tabpop__ports">' +
+      '<div class="c-tabpop__port"><span class="c-tabpop__pname" dir="ltr">' + escHtml(portA) + '</span></div>' +
     '</div>';
   }
 
-  var sizeText = '—';
-  if (typeof info.size === 'number') {
-    sizeText = fmtBytes(info.size) + ' · ' + info.pages + ' 页 · ' +
-      info.records + ' 记录 · ' + info.total + ' 帧';
+  // 参数：文件头只记了波特率。帧格式（数据位/停止位/校验）没有入档，
+  // 所以这里只写波特率，不编造「8N1」——设计稿假设它有，实际没有。
+  var paramsHTML = '';
+  if (set.baud > 0) {
+    paramsHTML = '<div class="c-tabpop__meta" dir="ltr">' + set.baud + '</div>';
   }
-  // 转发录制：两个方向是 A→B / B→A，字节数来自扫记录（统计块里只有 rx/tx）。
-  var fwd = info.forward === true;
-  var ioText;
-  if (fwd) {
-    ioText = 'A→B ' + fmtBytes(info.bytesAB || 0) + ' / B→A ' + fmtBytes(info.bytesBA || 0);
-  } else {
-    ioText = (typeof info.rxTotal === 'number')
-      ? ('rx ' + fmtBytes(info.rxTotal) + ' / tx ' + fmtBytes(info.txTotal))
-      : '—';
-  }
-  var rangeText = stlogRangeText(info.firstTs, info.lastTs) || '—';
-  var originsText = '无来源';
-  if (info.origins && info.origins.length) {
-    var kinds = [];
-    info.origins.forEach(function (o) {
-      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
-      if (kinds.indexOf(label) < 0) kinds.push(label);
-    });
-    originsText = kinds.join(' · ');
-  }
-  // —— 两条进度条：与会话卡片同一套结构和类名，两种浮窗看起来才是一家人 ——
-  // 1) 已载入：文件是分批读的，这条说明"看到多少了"
-  var loaded = (typeof st.offset === 'number') ? st.offset : 0;
-  var totalFrames = (typeof info.total === 'number') ? info.total : 0;
-  var pctLoaded = totalFrames > 0 ? Math.min(100, Math.round(loaded / totalFrames * 100)) : 0;
-  var loadHTML = '<div class="c-tabpop__ratio">' +
-    '<span class="c-tabpop__rlbl">' + _tabPopT('tabpop.loaded', '已载入') + '</span>' +
-    '<span class="c-tabpop__rbar">' +
-      '<i data-role="file-load" style="width:' + pctLoaded + '%;background:var(--accent)"></i>' +
-    '</span>' +
-    '<span class="c-tabpop__rval" dir="ltr">' + loaded + ' / ' + totalFrames + '</span>' +
-  '</div>';
 
-  // 2) 比例条：单口是收发比（绿/蓝），转发是分流比（P1/P2 两色）
+  // 收发两行：与会话卡同构。文件没有「当前速率」这一列，右列直接放累计字节。
+  function lane(tag, color, bytes) {
+    return '<div class="c-tabpop__lane">' +
+      '<span class="c-tabpop__tag" style="color:' + color + '" dir="ltr">' + tag + '</span>' +
+      '<span class="c-tabpop__rate" dir="ltr">' + fmtBytes(bytes || 0) + '</span>' +
+    '</div>';
+  }
+  var lanesHTML = fwd
+    ? lane('A→B', 'var(--fwd-p1)', info.bytesAB) + lane('B→A', 'var(--fwd-p2)', info.bytesBA)
+    : lane('⇃ RX', 'var(--green)', info.rxTotal) + lane('↾ TX', 'var(--accent)', info.txTotal);
+
+  // 比例条：单口是收发比（绿/蓝），转发是分流比（P1/P2 两色）
   var cRx = fwd ? 'var(--fwd-p1)' : 'var(--green)';
   var cTx = fwd ? 'var(--fwd-p2)' : 'var(--accent)';
   var partA = fwd ? (info.bytesAB || 0) : (info.rxTotal || 0);
@@ -3362,31 +3352,41 @@ function _tabPopRenderFile() {
     '<span class="c-tabpop__rval" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
   '</div>';
 
-  // 转发录制多一行「端口 A ↔ B」：文件头记了 mode 与 B 口，这里才分得清
-  var portsText = '';
-  if (fwd) {
-    var setA = (info.settings && info.settings.port) ? info.settings.port : '';
-    portsText = 'A ' + setA + ' · B ' + (info.portB || '') + '（转发）';
-  }
+  // 页脚三项：帧（已载入/总数）、时长、来源数。绝对时间范围退到 title。
+  var loaded = (typeof st.offset === 'number') ? st.offset : 0;
+  var totalFrames = (typeof info.total === 'number') ? info.total : 0;
+  var srcCount = (info.origins && info.origins.length) ? info.origins.length : 0;
+  var range = stlogRangeText(info.firstTs, info.lastTs) || '';
 
   el.innerHTML =
     '<div class="c-tabpop__head">' +
       '<span class="c-tabpop__title">' + escHtml(stlogBaseName(path)) + '</span>' +
       '<span class="c-tabpop__badge is-dim"><i class="c-tabpop__dot"></i>' +
-        _tabPopT('tabpop.file', '文件') + '</span>' +
+        _tabPopT('tabpop.readonly', '只读') + '</span>' +
     '</div>' +
-    '<div class="c-tabpop__meta" dir="ltr" title="' + escHtml(path) + '">' + escHtml(path) + '</div>' +
+    portsHTML +
+    paramsHTML +
     '<div class="c-tabpop__sep"></div>' +
-    (portsText ? row('端口', portsText) : '') +
-    row('大小', sizeText) +
-    row('收发', ioText) +
-    row('时间', rangeText) +
-    row('来源', originsText) +
+    lanesHTML +
+    ratioHTML +
     '<div class="c-tabpop__sep"></div>' +
-    loadHTML +
-    ratioHTML;
+    '<div class="c-tabpop__foot"' + (range ? ' title="' + escHtml(range) + '"' : '') + '>' +
+      '<span>' + _tabPopT('tabpop.frames', '帧') + ' <b>' + loaded + '/' + totalFrames + '</b></span>' +
+      '<span>' + _tabPopT('tabpop.span', '时长') + ' <b>' + _tabPopSpanText(info.firstTs, info.lastTs) + '</b></span>' +
+      '<span>' + _tabPopT('tabpop.sources', '来源') + ' <b>' +
+        (srcCount ? srcCount : _tabPopT('tabpop.none', '无')) + '</b></span>' +
+    '</div>';
   _tabPop.fileSig = _tabPopFileSig();
   _tabPop.lastH = el.offsetHeight;
+}
+
+// 时长：lastTs − firstTs → H:MM:SS（文件卡页脚用）
+function _tabPopSpanText(firstTs, lastTs) {
+  if (typeof firstTs !== 'number' || typeof lastTs !== 'number' || lastTs < firstTs) return '—';
+  var s = Math.round((lastTs - firstTs) / 1000);
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  function p2(n) { return n < 10 ? '0' + n : '' + n; }
+  return h + ':' + p2(m) + ':' + p2(sec);
 }
 
 // 文件浮窗只需要在"已载入帧数"变化时重画（其余字段是静态的）

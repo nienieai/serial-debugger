@@ -592,16 +592,6 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 .c-tabpop__hint { margin-top: 6px; color: var(--placeholder); font-size: 11px; }
-/* 文件浮窗的一行一字段：布局放在 frow 上，长值（路径 / 时间范围 / 页记录帧串）
-   允许换行、右对齐，别把卡片撑破。排版在 fval 上。 */
-.c-tabpop__frow { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.c-tabpop__frow + .c-tabpop__frow { margin-top: 2px; }
-.c-tabpop__frow > :last-child { min-width: 0; text-align: right; }
-.c-tabpop__fval {
-  color: var(--fg); font-weight: 600; font-size: 12px;
-  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
-  overflow-wrap: anywhere;
-}
 
 
 /* ---- 9. Components: Config Bar ---- */
