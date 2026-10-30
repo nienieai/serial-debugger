@@ -31,6 +31,8 @@
     --tabpop-glass-border: rgba(160, 160, 160, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
+    /* 拖入遮罩：半透明 + 模糊，透出下面的标签栏和内容 */
+    --dropmask-bg: rgba(18, 18, 18, 0.55);
   }
 }
 
@@ -48,6 +50,7 @@
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
+    --dropmask-bg: rgba(248, 248, 248, 0.55);
   }
 }
 
@@ -65,6 +68,7 @@
   --tabpop-glass-border: rgba(160, 160, 160, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
+  --dropmask-bg: rgba(18, 18, 18, 0.55);
 }
 
 :root[data-theme="light"] {
@@ -80,6 +84,7 @@
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
+  --dropmask-bg: rgba(248, 248, 248, 0.55);
 }
 
 /* ---- 2. Body & App Shell ---- */
@@ -1578,6 +1583,42 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 }
 /* 分隔条收到底、与状态栏上沿重合时，隐掉状态栏这条边框，避免出现"双线" */
 .statusbar.is-flush-bottom { border-top-color: transparent; }
+
+/* ---- 8c. 拖入遮罩 ----
+   范围是「菜单栏下沿 → 状态栏上沿」（标签栏 + 内容区）：top/bottom 由 app.js 按
+   .header / #statusbar 的实际高度写入，不写死像素，改了高度也不会错位。
+   毛玻璃：半透明底 + backdrop-filter，让下面的标签和内容透出来但被模糊掉。 */
+.o-dropmask {
+  position: absolute; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 5; pointer-events: none;
+}
+.c-dropmask {
+  background: var(--dropmask-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  opacity: 0;
+  transition: opacity .14s ease;
+}
+.c-dropmask.is-on { opacity: 1; }
+
+.o-dropmask__box {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 26px 44px;
+}
+.c-dropmask__box {
+  border: 2px dashed var(--accent);
+  /* 不支持 color-mix 的 WebView2 会丢掉下面这行，保留上面的实色描边 */
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 16px;
+}
+.c-dropmask__title { font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+.c-dropmask__hint  { font-size: 13px; color: var(--placeholder); }
+
+/* 老 WebView2 没有 backdrop-filter：退回不透明底，否则遮罩几乎看不见 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .c-dropmask { background: var(--bg); }
+}
 .statusbar-left { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .statusbar-right { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 #statusbar-stats { display: inline-flex; gap: 14px; margin-left: 10px; }

@@ -120,6 +120,36 @@ func scanTail(f *os.File, size int64) (*pageAt, int64, error) {
 	return last, skipped, nil
 }
 
+// CheckHeader 只读 16 KiB 头，判断这个文件能不能当会话文件打开。
+//
+// 拖放预检用：为了判断"这是什么"不值得把整个文件解析一遍（可能是上百 MB）。
+// 只校验槽 magic，不做任何记录扫描。
+func CheckHeader(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if fi.Size() < HeaderSize {
+		return fmt.Errorf("文件只有 %d B，不够一个会话文件头", fi.Size())
+	}
+	buf := make([]byte, HeaderSize)
+	if _, err := f.ReadAt(buf, 0); err != nil {
+		return err
+	}
+	if _, err := DecodeSlot(buf[SlotAOffset : SlotAOffset+SlotSize]); err == nil {
+		return nil
+	}
+	if _, err := DecodeSlot(buf[SlotBOffset : SlotBOffset+SlotSize]); err == nil {
+		return nil
+	}
+	return fmt.Errorf("文件头不像是 .stlog 会话文件")
+}
+
 // ReadFile decodes every page, restores damaged tail pages from the shadows,
 // and reassembles frames.
 func ReadFile(path string) (*FileInfo, error) {

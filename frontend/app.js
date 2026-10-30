@@ -5797,7 +5797,8 @@ function applySendRatio() {
 var STLOG_PAGE_SIZE = 500;
 
 function stlogBaseName(p) {
-  return String(p).split(/[\\/]/).pop();
+  // 去掉尾部分隔符：拖放给的目录路径可能带 '\'，否则取到的是空串
+  return String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 }
 
 // 与 Go 侧 stlogDirName / 导出一致：1/2/3/4 是 rx/tx/P1/P2，其它算系统事件。
@@ -6109,11 +6110,57 @@ function chooseOpenFile() {
 (function () {
   var INSTALLED_KEY = '__stlogDropInstalled';
 
+  // ---- 拖入遮罩 ----
+  // 范围：菜单栏下沿 → 状态栏上沿。不写死像素——每次拖动按实际高度重算，
+  // 将来改 header / statusbar 的高度也不用回来改这里。
+  var _dropDepth = 0;
+
+  function _hasFiles(e) {
+    var dt = e.dataTransfer;
+    if (!dt || !dt.types) return false;
+    for (var i = 0; i < dt.types.length; i++) {
+      if (dt.types[i] === 'Files') return true;
+    }
+    return false;
+  }
+
+  function _dropMaskSync() {
+    var el = document.getElementById('dropMask');
+    if (!el) return;
+    var head = document.querySelector('.header');
+    var status = document.getElementById('statusbar');
+    el.style.top = (head ? head.offsetHeight : 26) + 'px';
+    el.style.bottom = (status ? status.offsetHeight : 24) + 'px';
+    var on = _dropDepth > 0;
+    el.classList.toggle('is-on', on);
+    el.setAttribute('aria-hidden', on ? 'false' : 'true');
+  }
+
+  // dragenter/dragleave 在子元素之间来回触发，必须计数，否则遮罩会闪。
+  window.addEventListener('dragenter', function (e) {
+    if (!_hasFiles(e)) return;
+    _dropDepth++;
+    _dropMaskSync();
+  }, true);
+  window.addEventListener('dragleave', function () {
+    // 离开窗口时 dataTransfer.types 可能已经空了，这里不能再判 _hasFiles
+    if (_dropDepth > 0) { _dropDepth--; _dropMaskSync(); }
+  }, true);
+  // 拖到窗口外松手 / 切走窗口时计数会残留，统一清零
+  window.addEventListener('blur', function () { _dropDepth = 0; _dropMaskSync(); });
+
   // (1) 无条件阻止默认拖放。必须在任何 return 之前：否则 WebView2 把拖进来的
   //     文件当成"下载"，在 Downloads 里生成 "xxx (1).stlog" 这种副本（实锤过）。
   //     这一步不依赖 window.runtime / window.go。
-  window.addEventListener('dragover', function (e) { e.preventDefault(); }, true);
-  window.addEventListener('drop', function (e) { e.preventDefault(); }, true);
+  window.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    if (_hasFiles(e) && e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }, true);
+  window.addEventListener('drop', function (e) {
+    e.preventDefault();
+    _dropDepth = 0;
+    _dropMaskSync();
+  }, true);
 
   function diag() {
     return [
@@ -6143,15 +6190,40 @@ function chooseOpenFile() {
     window.alert(title + '\n\n' + msg);
   }
 
-  // 拖进来的 .stlog 一律开成标签页；打不开才弹错误框（见 openStlogTab）。
+  // 拖进来的东西统一交给 Go 侧预检：工程目录和 .stlog 文件都能开，
+  // 其余类型汇总成一个警告窗。前端拿不到 stat，分不清"目录"和"无扩展名文件"，
+  // 所以这个判断只能放 Go（见 App.ProbeDroppedPaths）。
   function onDrop(x, y, paths) {
-    (paths || []).filter(function (p) { return /\.stlog$/i.test(p); }).forEach(function (p) {
-      try {
+    var list = (paths || []).filter(Boolean);
+    if (!list.length) {
+      say('无法解析', '没有拿到拖入的路径。', true);
+      return;
+    }
+    var App = (window.go && window.go.main && window.go.main.App) || {};
+    if (typeof App.ProbeDroppedPaths !== 'function') {
+      // 老 exe 没有预检：退回「只看扩展名」，至少 .stlog 还能开
+      list.filter(function (p) { return /\.stlog$/i.test(p); }).forEach(function (p) {
         openStlogTab(p);
-      } catch (err) {
-        if (window.console) console.error('[stlog] ' + p, err);
-        say('打不开 .stlog', p + '\n\n' + String(err), true);
-      }
+      });
+      return;
+    }
+    App.ProbeDroppedPaths(list).then(function (probes) {
+      var bad = [];
+      (probes || []).forEach(function (pr) {
+        if (pr.kind === 'session' || pr.kind === 'file') {
+          try {
+            openStlogTab(pr.path);
+          } catch (err) {
+            if (window.console) console.error('[stlog] ' + pr.path, err);
+            bad.push(pr.path + '\n  ' + String(err));
+          }
+          return;
+        }
+        bad.push(pr.path + '\n  ' + (pr.err || '无法识别的类型'));
+      });
+      if (bad.length) say('无法解析', bad.join('\n\n'), true);
+    }).catch(function (err) {
+      say('无法解析', String(err), true);
     });
   }
 

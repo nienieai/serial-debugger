@@ -311,6 +311,15 @@ func ReadSession(path string) (*FileInfo, error) {
 	return readSessionDir(path)
 }
 
+// IsSessionDir 判断一个目录像不像会话目录：有 manifest.json，
+// 或者至少有包文件（manifest 丢了的会话也算）。
+func IsSessionDir(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, ManifestName)); err == nil {
+		return true
+	}
+	return len(scanPackages(dir)) > 0
+}
+
 // PackageRefs 返回会话目录里参与本次会话的包：manifest 登记优先，
 // manifest 缺失或为空时按文件名认领。
 func PackageRefs(dir string) []PkgRef {

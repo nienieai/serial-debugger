@@ -165,6 +165,22 @@ export namespace main {
 	}
 	
 	
+	export class DropProbe {
+	    path: string;
+	    kind: string;
+	    err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DropProbe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.kind = source["kind"];
+	        this.err = source["err"];
+	    }
+	}
 	export class ExternalI18nInfo {
 	    filename: string;
 	    lang: string;

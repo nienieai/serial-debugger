@@ -1066,6 +1066,49 @@ func (a *App) SearchHistory(file, keyword string, limit int, offset int64) map[s
 	return result
 }
 
+// DropProbe 是拖放预检的结果。Kind 取 "session" / "file" / "unknown"。
+type DropProbe struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+	Err  string `json:"err,omitempty"`
+}
+
+// ProbeDroppedPaths 判断拖进来的路径能不能当会话打开，**不解析内容**。
+//
+// 前端拿不到 stat，分不清"目录"和"没有扩展名的文件"，所以判定放这里：
+// 工程目录（有 manifest.json 或 pkg-*.stlog）和 .stlog 文件都算能开；
+// 其余返回 unknown 带原因，由前端汇总成一个警告窗。
+func (a *App) ProbeDroppedPaths(paths []string) []DropProbe {
+	out := make([]DropProbe, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, probeDropPath(p))
+	}
+	return out
+}
+
+func probeDropPath(p string) DropProbe {
+	fi, err := os.Stat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DropProbe{Path: p, Kind: "unknown", Err: "路径不存在"}
+		}
+		return DropProbe{Path: p, Kind: "unknown", Err: err.Error()}
+	}
+	if fi.IsDir() {
+		if !sessionfile.IsSessionDir(p) {
+			return DropProbe{Path: p, Kind: "unknown", Err: "目录里没有 manifest.json，也没有 pkg-*.stlog"}
+		}
+		return DropProbe{Path: p, Kind: "session"}
+	}
+	if !strings.HasSuffix(strings.ToLower(fi.Name()), ".stlog") {
+		return DropProbe{Path: p, Kind: "unknown", Err: "不是 .stlog 文件，也不是会话目录"}
+	}
+	if err := sessionfile.CheckHeader(p); err != nil {
+		return DropProbe{Path: p, Kind: "unknown", Err: err.Error()}
+	}
+	return DropProbe{Path: p, Kind: "file"}
+}
+
 // OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
 //
 // 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，

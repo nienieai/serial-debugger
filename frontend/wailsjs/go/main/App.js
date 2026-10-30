@@ -186,6 +186,10 @@ export function PickStlogFile() {
   return window['go']['main']['App']['PickStlogFile']();
 }
 
+export function ProbeDroppedPaths(arg1) {
+  return window['go']['main']['App']['ProbeDroppedPaths'](arg1);
+}
+
 export function ReadMultistrEntries(arg1) {
   return window['go']['main']['App']['ReadMultistrEntries'](arg1);
 }
