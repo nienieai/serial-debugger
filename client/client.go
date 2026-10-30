@@ -1120,6 +1120,12 @@ func StartDaemon() (string, error) {
 	return startDaemonProcess()
 }
 
+// RenameSession 改一个会话进程的线程名（空串 = 退回自动名）。
+func (c *DaemonClient) RenameSession(processID, name string) error {
+	_, err := c.Call(contract.ProcessRename, map[string]any{"processId": processID, "name": name})
+	return err
+}
+
 // DaemonInfo 通过一次性连接读取守护进程的身份与协议版本。
 func DaemonInfo() (protocol.DaemonInfo, error) {
 	res, err := CallOnce(contract.DaemonInfo, nil, "cli")

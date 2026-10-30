@@ -25,7 +25,7 @@ import (
 //
 // 兼容判定见 Compatible：只看 MAJOR.MINOR，PATCH 可不同 —— 打补丁不必把
 // 所有人的守护进程踢下线。
-const ProtocolVersion = "0.2.0"
+const ProtocolVersion = "0.3.0"
 
 // protoMajorMinor 取 "MAJOR.MINOR" 前缀；不合法（少于两段或任一段为空）返回 false。
 func protoMajorMinor(v string) (string, bool) {

@@ -110,6 +110,10 @@ export function ReadStlogFrames(arg1:string,arg2:number,arg3:number):Promise<Rec
 
 export function RefreshPorts():Promise<Array<Record<string, any>>>;
 
+export function RenameSession(arg1:string,arg2:string):Promise<void>;
+
+export function RenameStlogFile(arg1:string,arg2:string):Promise<string>;
+
 export function SaveAppSettings(arg1:main.AppSettings):Promise<void>;
 
 export function SearchHistory(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Record<string, any>>;

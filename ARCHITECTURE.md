@@ -23,7 +23,7 @@ Go + Wails 跨平台串口调试工具，3 管道 IPC 架构 + 共享内存环�
 - **守护进程**: 单实例（Windows 互斥体 `Global\serial-tool-daemon`），ProcessManager 管理 idle/connected 双状态 + mode(single/forward)，端口双向映射去重，日志跟随语言设置
 - **GUI**: Wails v2，3 管道持久连接 + 双重断连检测，纯事件驱动无轮询，转发模式双端口行+分栏设置，自定义下拉组件（圆角弹出窗+动态高度+箭头旋转），9 语言 UI（中/英/繁/法/西/俄/阿/日/韩）
 - **CLI**: 交互模式用 3 管道，命令行模式用 CallOnce 临时管道，34 条命令（含 declare、multistr、history-* 命令族）
-- **MCP**: Model Context Protocol over stdio，28 个工具覆盖全部功能（含 serial_declare、serial_multistr_save/load/status）
+- **MCP**: Model Context Protocol over stdio，29 个工具覆盖全部功能（含 serial_declare、serial_rename、serial_multistr_save/load/status）
 
 ### 系统架构图
 
@@ -224,7 +224,7 @@ sequenceDiagram
 | `ports` | — | `{"ports":[...]}` |
 | `ports.refresh` | — | `{"ports":[...]}` + 变化时广播 |
 | `ports.probe` | `ports? baudRates? rules? configPath?` | `{"results":[{port,baud,rule,description}]}` |
-| `process.create` | `mode? port? baud? ... portB? baudB? ... connect?` | `{"processId","connected","success"}` — `connect: false` 声明配置不打开端口 |
+| `process.create` | `mode? port? baud? ... portB? baudB? ... connect? name?` | `{"processId","name","connected","success"}` — `connect: false` 声明配置不打开端口；`name` 是线程名（留空用自动名） |
 | `process.destroy` | `processId` | `{"success"}` |
 | `process.connect` | `processId port baud? ...` | `{"success"}` |
 | `process.disconnect` | `processId` | `{"success"}` |
@@ -234,7 +234,8 @@ sequenceDiagram
 | `process.unwatch` | `processId` | `{"success"}` — 主动停止观察指定进程，移除查看计数 |
 | `process.watched` | — | `{"processIds":[...]}` — 查询当前 session 正在查看的进程 ID 列表 |
 | `forward.create` | `portA baudA portB baudB ...` | `{"processId","success"}`（向后兼容，内部转 process.create） |
-| `process.list` | — | `{"processes":[{processId,status,mode,...}]}` |
+| `process.rename` | `processId name` | `{"success","name"}` — 改线程名；`name` 空串退回自动名（端口名 / `会话 #N`）；工程会话会写回 `settings.json` 的 `label`（v0.8.4） |
+| `process.list` | — | `{"processes":[{processId,name,nameCustom,status,mode,...}]}` |
 | `session.send` | `processId data format` | `{"success"}`（异步入队） |
 | `session.history` | `processId limit? beforeTsMs? sameTsSkip?` | `{"history":[...],"sharedName","hasMore","older","oldestTsMs","oldestTs","historyFile"?,"ringDrops"?}` — `limit<=0` 整取（老行为）；`limit>0` 只回最后一页，`beforeTsMs`+`sameTsSkip` 是往更早翻的游标（v0.7.5.5） |
 | `session.stats` | `processId` | `{"stats":{...}}` |
@@ -444,8 +445,9 @@ var All = []Method{ Register, Subscribe, ..., ProcessCreate, ... }
 | `process.switch` | pm.SwitchPort — 关闭旧端口→打开新端口，保留进程 |
 | `process.setmode` | pm.SetMode — idle 状态下切换 single ↔ forward |
 | `process.watch` | pm.AddViewer — 记录客户端查看进程，切换/断开自动清理 |
-| `forward.create` | pm.ForwardCreate — 向后兼容，内部转 Create("forward", ...) |
-| `process.list` | pm.List() — 返回 mode 字段 |
+| `forward.create` | pm.CreateNamed("forward", ...) — 与 process.create 的 forward 分支同一条路 |
+| `process.list` | pm.List() — 返回 mode 与线程名 name / nameCustom |
+| `process.rename` | pm.Rename(id, name) — 名字按进程存；工程会话写回 settings.json 的 label |
 | `session.send` | pm.Send → sendCh 异步入队 |
 | `session.history` | pm.GetHistoryPage → 返回 sharedName + 一页数据 + hasMore/游标信息（limit<=0 时整取） |
 | `session.stats` | pm.GetStats |
@@ -1093,7 +1095,8 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `ports` | — | `ports`（缓存，不刷新） |
 | `refresh` | — | `ports.refresh` |
 | `probe` | `[ports...] [--config <path>]` | `ports.probe`（设备端口探测） |
-| `create` | `[port] [baud] [--mode forward] [--portB ...]` | `process.create` |
+| `create` | `[port] [baud] [--mode forward] [--portB ...] [--name <名称>]` | `process.create` |
+| `rename` | `<processId> [新名称]` | `process.rename`（名称留空 = 恢复自动名） |
 | `declare` | `<port> [baud] [--mode forward] [--portB ...]` | `process.create`（`connect:false` 声明配置，不打开串口） |
 | `open` | `<port> [baud]` | `process.create`（带 port） |
 | `connect` | `<pid> <port> [baud]` | `process.connect` |
@@ -1115,7 +1118,7 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `history-new` | `[pid]` | `history.new`（为进程新建历史文件） |
 | `history-detach` | `[pid]` | `history.detach`（分离历史文件） |
 | `stats` | `[pid]` | `session.stats` |
-| `sessions` | — | `process.list`（idle+connected） |
+| `sessions` | — | `process.list`（idle+connected，含线程名 name） |
 | `monitor` | `[timeout]` | 持久 DaemonClient 监听事件（3 管道） |
 | `threads` | — | `threads` |
 | `goroutines` | — | `goroutines` |
@@ -1184,7 +1187,7 @@ IPC 摘要：`来源:clientId rN 方法 → 结果 (耗时)`，`status` 和 `pin
 }
 ```
 
-### 6.3 28 个工具
+### 6.3 29 个工具
 
 | 工具 | 说明 |
 |------|------|

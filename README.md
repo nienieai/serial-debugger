@@ -73,8 +73,8 @@ serial-cli shutdown             # 关闭守护进程
 | --- | --- |
 | `serial-daemon.exe` | 守护进程，单实例（互斥体），ProcessManager 管理 idle/connected 双状态 + single/forward 双模式 |
 | `serial-gui.exe` | Wails v2 桌面客户端，多标签页，3 管道持久连接，纯事件驱动 |
-| `serial-cli.exe` | 命令行工具，交互 REPL + 一次性命令，34 条命令（含 help） |
-| `serial-mcp.exe` | MCP 协议工具，JSON-RPC 2.0 over stdio，28 个工具 |
+| `serial-cli.exe` | 命令行工具，交互 REPL + 一次性命令，35 条命令（含 help、rename） |
+| `serial-mcp.exe` | MCP 协议工具，JSON-RPC 2.0 over stdio，29 个工具 |
 
 ## ⚡ 架构 / Architecture
 

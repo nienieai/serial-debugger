@@ -807,12 +807,33 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		printJSON(result)
 
+	case "rename":
+		// rename <进程号> [新名称...]：名称留空 = 退回自动名（端口名 / 会话号）
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "用法: rename <processId> [新名称]（留空则恢复自动名）")
+			if interactive {
+				return
+			}
+			os.Exit(1)
+		}
+		newName := strings.Join(args[2:], " ")
+		result, err := dc.Call(contract.ProcessRename, map[string]any{
+			"processId": args[1],
+			"name":      newName,
+		})
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
+		printJSON(result)
+
 	case "create":
 		port := ""
 		baud := 115200
 		mode := "single"
 		portB := ""
 		baudB := 115200
+		name := ""
 		for i := 1; i < len(args); i++ {
 			if args[i] == "--mode" && i+1 < len(args) {
 				mode = args[i+1]
@@ -823,6 +844,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			} else if args[i] == "--baudB" && i+1 < len(args) {
 				baudB, _ = strconv.Atoi(args[i+1])
 				i++
+			} else if args[i] == "--name" && i+1 < len(args) {
+				name = args[i+1]
+				i++
 			} else if port == "" {
 				port = args[i]
 			} else if baud == 115200 {
@@ -830,6 +854,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		}
 		params := map[string]any{"mode": mode}
+		if name != "" {
+			params["name"] = name
+		}
 		if port != "" {
 			params["port"] = port
 			params["baud"] = baud
@@ -1775,7 +1802,9 @@ func printHelp() {
   probe  [ports...] [--config <path>] [--budget <ms>]  设备端口探测（发送探针帧识别设备类型）
 
 进程:
-  create  [port] [baud] [--mode forward] [--portB <portB>]  创建进程（默认立即连接）
+  create  [port] [baud] [--mode forward] [--portB <portB>] [--name <名称>]
+                                     创建进程（默认立即连接，--name 指定线程名）
+  rename  <processId> [新名称]        改线程名（留空 = 恢复自动名：端口名 / 会话号）
   declare <port> [baud] [--mode forward] [--portB <p>]    声明端口配置（不打开串口，全客户端可见）
   open    <port> [baud]              打开串口（等同于 create <port> [baud]）
   connect <processId> <port> [baud]  将空闲进程连接到串口

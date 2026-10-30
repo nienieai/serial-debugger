@@ -214,6 +214,14 @@ export function RefreshPorts() {
   return window['go']['main']['App']['RefreshPorts']();
 }
 
+export function RenameSession(arg1, arg2) {
+  return window['go']['main']['App']['RenameSession'](arg1, arg2);
+}
+
+export function RenameStlogFile(arg1, arg2) {
+  return window['go']['main']['App']['RenameStlogFile'](arg1, arg2);
+}
+
 export function SaveAppSettings(arg1) {
   return window['go']['main']['App']['SaveAppSettings'](arg1);
 }

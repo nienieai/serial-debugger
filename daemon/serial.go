@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/ringbuf"
@@ -217,6 +218,12 @@ type Process struct {
 	// sessionPath 非空表示这是一个从 .stlog 打开的只读文件会话（见 OpenSession）
 	sessionPath string
 
+	// customName 是用户起的线程名（nameMu 保护）。空串表示「用自动名」：
+	// 自动名按当前模式与端口现算（见 autoName），所以「先建空闲会话、之后才连上
+	// 端口」这种常见流程不需要在 connect/switch 各处挂钩子，名字自己就会变过来。
+	nameMu     sync.RWMutex
+	customName string
+
 	// per-source viewer counts: {"gui": N, "cli": N, "mcp": N}
 	viewers map[string]int
 
@@ -234,6 +241,58 @@ func (p *Process) viewerSummary() map[string]int {
 		out[s] = p.viewers[s]
 	}
 	return out
+}
+
+// ── 线程名 ──
+//
+// 每个会话进程有一个名字，标签栏/CLI/MCP 只显示它，不再由客户端各自拼
+// 「COM3 @ 115200」「端口转发空闲」这类文案。名字有两层：
+//
+//	自动名：按当前模式与端口现算（autoName），改名之后就不再跟着变
+//	自定义名：用户起的（customName），改名时写这里
+//
+// 分层而不是「创建时算一次存下来」，是因为 GUI 的正常流程是「先建空闲会话 →
+// 用户选端口 → 打开」。若名字在创建时定死，标签会一直显示「会话 #3」。
+
+// autoName 是未经用户改名时的线程名：有端口就报端口，没有就报会话号。
+func (p *Process) autoName() string {
+	if p.mode == "forward" {
+		a, b := p.config.Port, p.forwardConfigB.Port
+		switch {
+		case a != "" && b != "":
+			return a + " ↔ " + b
+		case a != "":
+			return a
+		}
+	} else if p.config.Port != "" {
+		return p.config.Port
+	}
+	return "会话 #" + p.id
+}
+
+// Name 返回生效的线程名（自定义优先）。
+func (p *Process) Name() string {
+	p.nameMu.RLock()
+	custom := p.customName
+	p.nameMu.RUnlock()
+	if custom != "" {
+		return custom
+	}
+	return p.autoName()
+}
+
+// SetCustomName 设置用户起的名字；传空串表示退回自动名。
+func (p *Process) SetCustomName(name string) {
+	p.nameMu.Lock()
+	p.customName = name
+	p.nameMu.Unlock()
+}
+
+// HasCustomName 报告当前名字是不是用户起的（决定要不要写回工程文件）。
+func (p *Process) HasCustomName() bool {
+	p.nameMu.RLock()
+	defer p.nameMu.RUnlock()
+	return p.customName != ""
 }
 
 func (p *Process) recordHistory(hexData, direction string) {
@@ -1511,6 +1570,13 @@ func toParity(v string) serial.Parity {
 // If port is non-empty and mode="single", creates + connects with port dedup.
 // If port is non-empty and mode="forward", requires cfgB.Port non-empty, opens both ports.
 func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *SerialConfig, connect bool) (*Process, error) {
+	return pm.CreateNamed(mode, port, "", cfg, cfgB, connect)
+}
+
+// CreateNamed 与 Create 相同，额外接受一个线程名（空串 = 用自动名，见 autoName）。
+// 单独开一个方法而不是给 Create 加参数：Create 在测试里被调用很多次，改签名等于
+// 把那些调用点全改一遍，而它们本来就不关心名字。
+func (pm *ProcessManager) CreateNamed(mode, port, name string, cfg SerialConfig, cfgB *SerialConfig, connect bool) (*Process, error) {
 	if mode == "" {
 		mode = "single"
 	}
@@ -1518,7 +1584,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	if port != "" {
 		// Declare-only: store config but don't open ports
 		if !connect {
-			return pm.createDeclared(mode, port, cfg, cfgB, "")
+			return pm.createDeclared(mode, port, cfg, cfgB, "", name)
 		}
 
 		// connect == true: open ports immediately (existing behaviour)
@@ -1584,6 +1650,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 				startTime:      time.Now(),
 			}
 
+			applyRequestedName(proc, name)
 			pm.mu.Lock()
 			pm.processes[id] = proc
 			pm.portMap[port] = id
@@ -1648,6 +1715,7 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 			sendRingName: sendName,
 		}
 
+		applyRequestedName(proc, name)
 		pm.mu.Lock()
 		pm.processes[id] = proc
 		pm.portMap[port] = id
@@ -1662,14 +1730,22 @@ func (pm *ProcessManager) Create(mode, port string, cfg SerialConfig, cfgB *Seri
 	}
 
 	// Idle process (no port specified – mode is stored but no ports opened)
-	return pm.createIdle(mode, "")
+	return pm.createIdle(mode, "", name)
+}
+
+// applyRequestedName 在建进程时落名：调用方传了就用传的，没传就什么都不做
+// （自动名由 autoName 现算，不需要预先写进结构体）。
+func applyRequestedName(p *Process, name string) {
+	if name = strings.TrimSpace(name); name != "" {
+		p.SetCustomName(name)
+	}
 }
 
 // createIdle 建一个「没有端口」的空闲进程，是 Create 的最后一条分支。
 //
 // sessionPath 只有 OpenSession 会传（工程里没记端口时走这条），语义与
 // createDeclared 的同名参数一致：让第一条 process-changed 广播就带上是哪个工程。
-func (pm *ProcessManager) createIdle(mode, sessionPath string) (*Process, error) {
+func (pm *ProcessManager) createIdle(mode, sessionPath, name string) (*Process, error) {
 	id := fmt.Sprintf("%d", pm.counter.Add(1))
 	sharedName, sendName := newRingNames(id)
 	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024) // 5 MB
@@ -1694,6 +1770,7 @@ func (pm *ProcessManager) createIdle(mode, sessionPath string) (*Process, error)
 		startTime:    time.Now(),
 		sessionPath:  sessionPath,
 	}
+	applyRequestedName(proc, name)
 
 	pm.mu.Lock()
 	pm.processes[id] = proc
@@ -1713,7 +1790,7 @@ func (pm *ProcessManager) createIdle(mode, sessionPath string) (*Process, error)
 // 前端据此不给它另建标签页（文件页自己就是它的视图）。必须写在构造里而不是
 // 创建完再补 —— 第一条 process-changed 广播就得带上它，否则前端会先建出一个
 // 多余的空标签页。
-func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cfgB *SerialConfig, sessionPath string) (*Process, error) {
+func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cfgB *SerialConfig, sessionPath, name string) (*Process, error) {
 	if mode == "forward" {
 		if cfgB == nil || cfgB.Port == "" {
 			return nil, fmt.Errorf("forward mode requires both portA and portB")
@@ -1752,6 +1829,7 @@ func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cf
 	if mode == "forward" {
 		proc.forwardConfigB = *cfgB
 	}
+	applyRequestedName(proc, name)
 
 	pm.mu.Lock()
 	pm.processes[id] = proc
@@ -1771,6 +1849,55 @@ func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cf
 // ForwardCreate is a backward-compatible wrapper that creates a forward process.
 func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, error) {
 	return pm.Create("forward", cfgA.Port, cfgA, &cfgB, true)
+}
+
+// Rename 改一个进程的线程名。传空串表示退回自动名（端口名 / 会话号）。
+//
+// 名字只有两种持久化方式，刻意不做第三种：
+//   - 工程会话（sessionPath 非空）：写回工程目录的 settings.json（label 字段）
+//   - 普通串口会话：只活在进程里，守护进程一重启就没了 —— 一个口下次再说还是不是
+//     「同一个会话」本来就说不清，硬存只会让名字张冠李戴
+//
+// 改名后广播 process-changed：GUI 标签、CLI/MCP 的 sessions 列表都靠它刷新。
+func (pm *ProcessManager) Rename(id, name string) error {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > 64 {
+		return fmt.Errorf("线程名最多 64 个字符")
+	}
+	pm.mu.RLock()
+	proc, ok := pm.processes[id]
+	pm.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("process not found: %s", id)
+	}
+
+	proc.SetCustomName(name)
+	if proc.sessionPath != "" {
+		if err := persistSessionLabel(proc.sessionPath, name); err != nil {
+			// 名字已经在内存里生效了，落盘失败只记日志：改名不该因为文件写不进去
+			// 就整体失败（只读介质、文件被别处占用都可能发生）。
+			logOp("错误", "进程 #%s 的线程名写回工程失败: %v", id, err)
+		}
+	}
+	logOp("线程", "进程 #%s 改名为 %q", id, proc.Name())
+	if pm.onProcessChanged != nil {
+		pm.onProcessChanged()
+	}
+	return nil
+}
+
+// persistSessionLabel 把线程名写进工程目录的 settings.json（label 字段）。
+//
+// 只动设置文档，不碰已封包的字节：包头槽里那份 label 是录制那一刻的快照，
+// 语义是「录制元数据」，和「现在的线程名」是两件事。
+func persistSessionLabel(dir, name string) error {
+	doc, err := sessionfile.LoadSettingsDoc(dir)
+	if err != nil {
+		// 没有 settings.json 的工程也要能改名：补一份最小的设置文档
+		doc = &sessionfile.SettingsDoc{V: sessionfile.SettingsDocVer, Mode: sessionfile.ModeSingle}
+	}
+	doc.Label = name
+	return sessionfile.SaveSettingsDoc(dir, doc)
 }
 
 // OpenSession 把一个**工程目录**变成守护进程里的一个进程。
@@ -1821,12 +1948,19 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 
 	var proc *Process
 	if port != "" {
-		proc, err = pm.createDeclared(mode, port, cfg, cfgB, path)
+		proc, err = pm.createDeclared(mode, port, cfg, cfgB, path, "")
 	} else {
-		proc, err = pm.createIdle(mode, path)
+		proc, err = pm.createIdle(mode, path, "")
 	}
 	if err != nil {
 		return nil, 0, err
+	}
+
+	// 工程里记过名字（settings.json 的 label）就沿用它 —— 线程名只有工程会话
+	// 会持久化，普通串口会话的名字跟着进程走。旧工程里 label 存的是端口名，
+	// 拿来当名字正好，不会显示成「会话 #3」。
+	if s := info.Settings; s != nil && s.Label != "" {
+		proc.SetCustomName(strings.TrimSpace(s.Label))
 	}
 
 	// 清掉 Create 写的那条「端口已声明」：文件里本来就有自己的系统帧，
@@ -2277,7 +2411,11 @@ func (pm *ProcessManager) List() []map[string]any {
 	result := make([]map[string]any, 0, len(pm.processes))
 	for _, p := range pm.processes {
 		entry := map[string]any{
-			"processId":    p.id,
+			"processId": p.id,
+			// 线程名：客户端只显示它，不再各自拼「COM3 @ 115200」「端口转发空闲」
+			"name": p.Name(),
+			// nameCustom 告诉客户端这个名字是用户起的还是自动算的（自动名会随端口变）
+			"nameCustom":   p.HasCustomName(),
 			"status":       p.status,
 			"mode":         p.mode,
 			"connected":    p.status == "connected",

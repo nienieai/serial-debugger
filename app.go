@@ -1448,6 +1448,53 @@ func (a *App) GetHistoryStatusFor(processID string) bool {
 	return v
 }
 
+// RenameSession 改线程名（空串 = 退回自动名：端口名 / 会话号）。
+//
+// 名字归守护进程所有：GUI 不本地存一份，改完等 process-changed 回来重画标签，
+// 这样 CLI / MCP 改的名字在同一块界面上立刻可见，不会出现两份真相。
+func (a *App) RenameSession(processID, name string) error {
+	a.daemonMu.Lock()
+	ec := a.eventConn
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return fmt.Errorf("not connected")
+	}
+	return ec.RenameSession(processID, name)
+}
+
+// RenameStlogFile 重命名一个本地会话文件（.stlog 目录或单文件），返回新路径。
+//
+// 只处理「本地只读标签」：已经被守护进程接管的工程不能改名 —— 那边还开着文件
+// 句柄、会话路径记在内存里，改完两边就对不上了。
+func (a *App) RenameStlogFile(path, newName string) (string, error) {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return "", fmt.Errorf("名称不能为空")
+	}
+	if newName == "." || newName == ".." || strings.ContainsAny(newName, `\/:*?"<>|`) {
+		return "", fmt.Errorf(`名称不能包含 \ / : * ? " < > |，也不能是 . 或 ..`)
+	}
+	old, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(old); err != nil {
+		return "", fmt.Errorf("找不到文件: %w", err)
+	}
+	// 换掉最后一段，父目录不变
+	newPath := filepath.Join(filepath.Dir(old), newName)
+	if newPath == old {
+		return old, nil
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return "", fmt.Errorf("同名文件已存在: %s", filepath.Base(newPath))
+	}
+	if err := os.Rename(old, newPath); err != nil {
+		return "", fmt.Errorf("重命名失败（文件可能正被占用）: %w", err)
+	}
+	return newPath, nil
+}
+
 // AttachHistoryFile opens a history file for a process and loads its content.
 func (a *App) AttachHistoryFile(processID, filename string) error {
 	a.daemonMu.Lock()

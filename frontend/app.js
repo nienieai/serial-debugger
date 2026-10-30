@@ -2024,9 +2024,7 @@ async function tryConnect() {
       // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
       window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
       updateAutoSaveCheck(state.autoSaveHistory === true);
-      // 保存开关是按进程的，守护进程换了一轮之后必须重问一遍，否则标签上那枚
-      // 「保存中」标记会一直沿用上一轮的答案。清掉缓存，渲染时会重新取。
-      _resetTabHistState();
+
       const t = getActiveTab();
       state.currentMode = (t && t.mode) ? t.mode : 'single';
       updateModeUI();
@@ -2093,6 +2091,10 @@ function _applyDaemonSessionToTab(tab, ds) {
   const isConnected = ds.status === 'connected';
   const hasDeclared = !!ds.portName;
   tab.label = _daemonTabLabel(ds);
+  // 线程名：守护进程说了算（GUI 不再自己拼文案）。nameCustom 只是标记名字是
+  // 用户起的还是自动算的，右键菜单据此显示「恢复自动名」。
+  tab.name = ds.name || '';
+  tab.nameCustom = !!ds.nameCustom;
   tab.portOpen = isConnected;
   tab.mode = ds.mode || 'single';
   tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
@@ -3189,10 +3191,9 @@ function _relabelIdleTabs() {
   }
 }
 
-// 标签页标题的「兜底版」原来在这里（_tabLabelText）：标签页创建时语言包可能还没装好，
-// tab.label 会是空串。0.8.4 起标签文字改由 _tabLabelParts() 从会话状态现算
-// （端口 / 参数 / 标记分段），不再读 tab.label，这个兜底也就没有调用方了。
-// tab.label 仍然保留：右键菜单、窗口标题这类地方还要用完整标题。
+// 标签页标题：0.8.4 起标签只显示**线程名**（守护进程 process.list 的 name），
+// 由 _tabNameOf() 从会话状态取。tab.label 仍然保留 —— 右键菜单、窗口标题、
+// 文件标签的默认名还在用它。
 
 // ---- 标签高级信息浮窗（设计稿 A：c-tabpop） ----
 //
@@ -3348,7 +3349,10 @@ function _tabPopSig() {
     tb.mode,
     (vw.gui || 0) + ',' + (vw.cli || 0) + ',' + (vw.mcp || 0),
     m.params,
-    m.ports.map(function (p) { return p.port; }).join(',')
+    m.ports.map(function (p) { return p.port; }).join(','),
+    // 线程名与保存开关也进签名：改名后卡片标题要跟着换
+    tb.name || '',
+    tb.histOn === true ? 'save' : (tb.histOn === false ? 'nosave' : '?')
   ].join('|');
 }
 
@@ -3532,11 +3536,17 @@ function _tabPopRender() {
 
   el.innerHTML =
     '<div class="c-tabpop__head">' +
-      '<span class="c-tabpop__title">' + _tabPopT('tabpop.title', '会话') + ' <span dir="ltr">#' + tab.id + '</span></span>' +
+      // 标题用线程名：它是这个会话唯一的标识，会话号退到悬浮卡的页脚信息里
+      '<span class="c-tabpop__title">' + escHtml(_tabNameOf(tab)) + '</span>' +
       '<span class="c-tabpop__badge ' + badgeCls + '"><i class="c-tabpop__dot"></i>' + badgeTxt + '</span>' +
     '</div>' +
     (portsHTML ? '<div class="c-tabpop__ports">' + portsHTML + '</div>' : '') +
     (m.params ? '<div class="c-tabpop__meta" dir="ltr">' + m.params + '</div>' : '') +
+    // 保存开关搬到这里：标签上已经不放磁盘图标了
+    '<div class="c-tabpop__save">' + _tabPopT('tabpop.save', '保存') + ' ' +
+      '<b data-role="save">' + (tab.histOn === true ? _tabPopT('tabpop.on', '开') : (tab.histOn === false ? _tabPopT('tabpop.off', '关') : '—')) + '</b>' +
+      '<span class="c-tabpop__sid" dir="ltr">#' + escHtml(String(tab.id)) + '</span>' +
+    '</div>' +
     '<div class="c-tabpop__sep"></div>' +
     lanes +
     ratioHTML +
@@ -3661,6 +3671,14 @@ function _tabPopOpen(tabEl, idx) {
   requestAnimationFrame(function () { if (_tabPop) el.classList.add('is-visible'); });
   _tabPopStartTick();
   if (!tab.sessionId) return;
+  // 保存开关搬进了悬浮卡：本地的 tab.histOn 可能还不知道，开卡时补问一次。
+  // 只问一次不会循环：拿到值就写回 tab，签名变了会重画一次卡。
+  if (tab.histOn === undefined) {
+    window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
+      tab.histOn = !!on;
+      if (_tabPop && _tabPop.tab === tab) _tabPopUpdate();
+    }).catch(function () {});
+  }
   window.go.main.App.GetSessionStats(tab.sessionId).then(function (res) {
     if (!_tabPop || _tabPop.sessionId !== tab.sessionId) return;
     if (res && res.stats) {
@@ -3798,6 +3816,94 @@ function _tabMenuItem(label, opts) {
   return btn;
 }
 
+// ---- 标签就地改名 ----
+//
+// 标签上只有「图标 + 状态点 + 线程名」，所以改名就地把名字那段换成 input，
+// 不再另开对话框：
+//   回车 / 失焦 → 提交；Esc → 取消
+//   会话标签 → RenameSession（守护进程广播 process-changed 后重画）
+//   文件标签 → RenameStlogFile（改磁盘上的 .stlog 目录/文件名）
+var _tabRenaming = false;
+function _tabRenameStart(btn, idx) {
+  if (_tabRenaming) return;
+  var tab = state.tabs[idx];
+  if (!tab || tab.type === 'settings' || tab.type === 'new') return;
+  // 双击的第一下是「切标签」，switchTab 会重绘整个标签栏，传进来的按钮可能已经
+  // 不在文档里了。重新按索引找一枚当前挂在 DOM 上的。
+  if (!btn || !document.contains(btn)) {
+    btn = document.querySelector('.tab-btn[data-tab-idx="' + idx + '"]');
+  }
+  if (!btn) return;
+  var nameEl = btn.querySelector('.tab-port');
+  if (!nameEl || !nameEl.parentNode) return;
+  if (tab.type === 'stlog' && !tab.path) return;
+
+  _tabRenaming = true;
+  _tabPopClose();          // 悬停卡别挡住输入
+  _tabMenuClose();
+  var old = nameEl.textContent;
+  var input = document.createElement('input');
+  input.className = 'tab-rename';
+  input.type = 'text';
+  input.value = old;
+  input.setAttribute('spellcheck', 'false');
+  nameEl.parentNode.replaceChild(input, nameEl);
+  input.focus();
+  input.select();
+
+  var finished = false;
+  function restore() {
+    if (input.parentNode) input.parentNode.replaceChild(nameEl, input);
+    nameEl.textContent = old;
+  }
+  function finish(commit) {
+    if (finished) return;
+    finished = true;
+    _tabRenaming = false;
+    var val = String(input.value || '').trim();
+    if (!commit || val === old) { restore(); return; }
+
+    if (tab.type === 'stlog') {
+      // 文件标签：改磁盘名。失败要还原并把原因说出来（比如被占用 / 同名已存在）
+      window.go.main.App.RenameStlogFile(tab.path, val).then(function (newPath) {
+        if (!newPath) { restore(); return; }
+        tab.path = newPath;
+        tab.label = stlogBaseName(newPath);
+        if (tab._page && tab._page.root) {
+          var nameNode = tab._page.root.querySelector('.t-stlog-name');
+          var metaNode = tab._page.root.querySelector('.t-stlog-meta');
+          if (nameNode) nameNode.textContent = tab.label;
+          if (metaNode) metaNode.textContent = newPath;
+        }
+        renderTabs();
+      }).catch(function (err) {
+        restore();
+        showAlert(t('tabmenu.rename', '重命名'), String(err && err.message ? err.message : err));
+      });
+      return;
+    }
+
+    // 会话标签：名字归守护进程；本地先乐观更新，广播回来会再覆盖一次
+    tab.name = val;
+    tab.nameCustom = true;
+    renderTabs();
+    window.go.main.App.RenameSession(tab.sessionId, val).catch(function (err) {
+      // 守护进程拒绝（比如名字太长）就把本地乐观值撤回，别让界面显示一个没生效的名字
+      tab.name = old;
+      tab.nameCustom = false;
+      renderTabs();
+      showAlert(t('tabmenu.rename', '重命名'), String(err && err.message ? err.message : err));
+    });
+  }
+
+  input.addEventListener('keydown', function (e) {
+    e.stopPropagation();   // 别让全局快捷键（删除标签等）在输入时触发
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', function () { finish(true); });
+}
+
 function _tabMenuSep() {
   var sep = document.createElement('div');
   sep.className = 'menu-sep';
@@ -3841,9 +3947,28 @@ function _tabMenuOpen(clientX, clientY, idx) {
   if (!tab) return;
 
   var isSession = tab.type !== 'settings' && tab.type !== 'new' && !!tab.sessionId;
+  var isFileTab = tab.type === 'stlog';
   var menu = document.createElement('div');
   menu.className = 'menu-dropdown tab-menu';
   menu.setAttribute('role', 'menu');
+
+  // 「重命名」：会话改守护进程里的线程名，文件标签改磁盘文件名
+  if (isSession || isFileTab) {
+    menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.rename', '重命名'), {
+      onClick: function () {
+        var btn = document.querySelector('.tab-btn[data-tab-idx="' + idx + '"]');
+        if (btn) _tabRenameStart(btn, idx);
+      }
+    }));
+    if (isSession && tab.nameCustom) {
+      menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.reset_name', '恢复自动名'), {
+        onClick: function () {
+          window.go.main.App.RenameSession(tab.sessionId, '').catch(function () {});
+        }
+      }));
+    }
+    menu.appendChild(_tabMenuSep());
+  }
 
   if (isSession) {
     // 「保存历史」按进程生效（history.enable/status + processId）：勾选态先按
@@ -3853,9 +3978,9 @@ function _tabMenuOpen(clientX, clientY, idx) {
       checked: false,
       onClick: function () {
         saveOn = !saveOn;
-        // 标签上的保存标记跟着这个开关走，不要等下一次 renderTabs 才变
+        // 标签上已经不再显示保存标记（它搬进悬浮卡了），这里只更新缓存，
+        // 下次打开卡片能立刻显示正确的开/关。
         tab.histOn = saveOn;
-        renderTabs();
         window.go.main.App.SetHistoryEnabledFor(tab.sessionId, saveOn).catch(function () {});
       }
     });
@@ -3933,117 +4058,22 @@ function _tabStateClass(tb) {
   return tb.mode === 'forward' ? 'is-fwd' : 'is-live';
 }
 
-// 标签文字拆成三段：名字 / 参数 / 标记。以前是一整串 "COM4 ↔ COM14 @ 115200 [已声明]"，
-// 同粗细同颜色，扫一眼抓不到重点；拆开之后参数是灰色小字，标记只在宽裕时出现。
-function _tabLabelParts(tb) {
-  if (tb.type === 'settings' || tb.type === 'new') {
-    return { name: tb.label || '', param: '', flag: '' };
-  }
+// 标签上只剩三段：类型图标 / 状态点 / 线程名。
+//
+// 线程名归守护进程所有（process.list 的 name 字段）：GUI 不再自己拼
+// 「COM3 @ 115200」「端口转发空闲」这类文案，因为 CLI 和 MCP 也在看同一个名字，
+// 各端各拼一份必然对不上。名字为空时退回端口名/会话号。
+function _tabNameOf(tb) {
+  if (tb.type === 'settings' || tb.type === 'new') return tb.label || '';
+  if (tb.name) return tb.name;
+  if (tb.type === 'stlog') return tb.label || stlogBaseName(tb.path || '');
+  if (tb.sessionPath) return stlogBaseName(tb.sessionPath);
   var sp = tb.syncedParams;
-  if (sp && sp.portName) {
-    return {
-      name: sp.portName,
-      param: sp.baud ? String(sp.baud) : '',
-      // 声明了端口但没连：以前靠后缀 "[已声明]"，现在点本身已经说明「没连」，
-      // 后缀降级成小字标记，拥挤时第一个让位
-      flag: tb.portOpen ? '' : t('tab.declared', '已声明'),
-    };
-  }
-  if (tb.sessionPath) {
-    return { name: stlogBaseName(tb.sessionPath), param: '', flag: t('tab.project', '工程') };
-  }
-  if (tb.type === 'stlog') {
-    return {
-      name: tb.label || stlogBaseName(tb.path || ''),
-      param: '',
-      flag: (tb._stlog && tb._stlog.isDir) ? t('tab.project', '工程') : '',
-    };
-  }
-  return {
-    name: tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲'),
-    param: '',
-    flag: '',
-  };
+  if (sp && sp.portName) return sp.portName;
+  // 还没收到守护进程的 name（新建会话到第一条 process-changed 之间）：给个中性占位，
+  // 别再显示「单端口空闲」那种状态文案 —— 状态由图标右下角那枚点负责。
+  return '#' + tb.id;
 }
-
-// 速率：suffix 只有一个字母，标签上放不下 "kB/s"；悬浮卡里才有完整单位
-function _tabRateText(bps) {
-  bps = Number(bps) || 0;
-  if (bps <= 0) return '';
-  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
-  if (bps >= 1024) return (bps / 1024).toFixed(bps < 10240 ? 1 : 0) + 'k';
-  return Math.round(bps) + 'B';
-}
-
-// 只有「端口开着」的会话才有速率；统计缓存是按 processId 存的（见 onStatsRate）
-function _tabRateOf(tb) {
-  if (!tb || tb.type || !tb.sessionId || !tb.portOpen) return '';
-  var b = state.statsBase && state.statsBase[tb.sessionId];
-  if (!b) return '';
-  return _tabRateText((b.rxRate || 0) + (b.txRate || 0));
-}
-
-// 「保存」状态是按进程的开关，只有右键菜单里能看到。这里在渲染时懒加载一次，
-// 拿到后写回 tab.histOn 再重画 —— 不能同步等 IPC，否则标签栏会被拖住。
-var _tabHistFetching = {};
-// 守护进程换了一轮：所有会话的保存状态都不作数了，清掉让渲染时重新取
-function _resetTabHistState() {
-  _tabHistFetching = {};
-  (state.tabs || []).forEach(function (tb) { if (tb && !tb.type) tb.histOn = undefined; });
-}
-function _ensureTabHist(tb) {
-  if (!tb || tb.type || !tb.sessionId || !state.daemonOnline) return;
-  if (tb.histOn !== undefined || _tabHistFetching[tb.sessionId]) return;
-  _tabHistFetching[tb.sessionId] = true;
-  var sid = tb.sessionId;
-  window.go.main.App.GetHistoryStatusFor(sid).then(function (on) {
-    delete _tabHistFetching[sid];
-    tb.histOn = !!on;
-    if (state.tabs.indexOf(tb) >= 0) renderTabs();
-  }).catch(function () {
-    delete _tabHistFetching[sid];
-    tb.histOn = false;
-  });
-}
-
-// 每秒刷一次速率：只改文本，不重建标签（重建会闪、会打断悬停/拖动）。
-function _updateTabRateTexts() {
-  var scroll = document.getElementById('tabsScroll');
-  if (!scroll) return;
-  var btns = scroll.querySelectorAll('.tab-btn[data-tab-idx]');
-  var changed = false;
-  for (var i = 0; i < btns.length; i++) {
-    var idx = parseInt(btns[i].getAttribute('data-tab-idx'), 10);
-    var t = state.tabs[idx];
-    var el = btns[i].querySelector('.tab-rate');
-    if (!t || !el) continue;
-    var txt = _tabRateOf(t);
-    if (el.textContent !== txt) {
-      // 只有字数变了才可能改变标签宽度，才值得重算密度
-      if (el.textContent.length !== txt.length) changed = true;
-      el.textContent = txt;
-    }
-  }
-  if (changed) _updateTabDensity(true);
-}
-
-// 标签栏密度：内容放不下就逐级丢信息（速率 → 保存 → 参数/标记 → 端口名省略）。
-// 尺子和 _updateTabArrows 用的是同一把：scrollWidth vs clientWidth。
-// 级别只写在容器上、靠 CSS 隐藏子元素，所以不重建 DOM。
-var _tabBarWidth = -1;
-function _updateTabDensity(force) {
-  var scroll = document.getElementById('tabsScroll');
-  if (!scroll) return;
-  if (!force && scroll.clientWidth === _tabBarWidth) return;
-  _tabBarWidth = scroll.clientWidth;
-  var lvl = 0;
-  for (; lvl < 4; lvl++) {
-    scroll.setAttribute('data-lvl', String(lvl));
-    if (scroll.scrollWidth <= scroll.clientWidth) return;
-  }
-  scroll.setAttribute('data-lvl', '4');
-}
-
 function renderTabs() {
   const scroll = document.getElementById('tabsScroll');
   if (!scroll) return;
@@ -4096,40 +4126,17 @@ function renderTabs() {
     ico.innerHTML = icon(_tabIconKey(t), 14, 14);
     btn.appendChild(ico);
 
-    // 端口名（主）/ 参数（灰）/ 标记（更弱）—— 分三段，权重不同
-    const parts = _tabLabelParts(t);
+    // 线程名（唯一的一段文字）。其余状态（参数/保存/速率/累计…）全在悬浮卡里。
     const nameSpan = document.createElement('span');
     nameSpan.className = 'tab-port';
-    nameSpan.textContent = parts.name;
+    nameSpan.textContent = _tabNameOf(t);
     btn.appendChild(nameSpan);
-    if (parts.param) {
-      const paramSpan = document.createElement('span');
-      paramSpan.className = 'tab-param';
-      paramSpan.textContent = parts.param;
-      btn.appendChild(paramSpan);
-    }
-    // 保存标记：只在「端口开着且确实在落盘」时出现。没连的时候什么也写不进去，
-    // 挂个磁盘图标反而误导（懒加载见 _ensureTabHist）。
-    _ensureTabHist(t);
-    if (t.histOn === true && t.portOpen) {
-      const saveSpan = document.createElement('span');
-      saveSpan.className = 'tab-save';
-      saveSpan.innerHTML = icon('save', 12, 12);
-      btn.appendChild(saveSpan);
-    }
-    if (parts.flag) {
-      const flagSpan = document.createElement('span');
-      flagSpan.className = 'tab-flag';
-      flagSpan.textContent = parts.flag;
-      btn.appendChild(flagSpan);
-    }
-    // 速率槽位常驻：每秒只改文本，靠 :empty 消失（见 style.css 8a）
-    if (!t.type) {
-      const rateSpan = document.createElement('span');
-      rateSpan.className = 'tab-rate';
-      rateSpan.textContent = _tabRateOf(t);
-      btn.appendChild(rateSpan);
-    }
+    // 双击改名：会话改守护进程里的线程名，文件标签改磁盘文件名
+    btn.addEventListener('dblclick', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      _tabRenameStart(btn, i);
+    });
     if (isChooser) {
       btn.title = window.t('newtab.hint', '选择一种模式开始');
     } else if (isSettings) {
@@ -4167,9 +4174,7 @@ function renderTabs() {
     }
   }
 
-  // 重绘后标签总宽变了：先按可用宽度定密度级别，再重算左右箭头显隐
-  // （ResizeObserver 不会因为子节点变多而触发）—— 见 bindTabsScroll / TODO #26。
-  _updateTabDensity(true);
+  // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点变多而触发）
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
 }
 
@@ -4692,9 +4697,7 @@ function bindTabsScroll() {
   var right = bar.querySelector('.tabs-scroll-arrow--right');
   if (!left || !right) return;
   function update() {
-    // 窗口宽度变了，标签栏能显示到哪一层也要重算（_updateTabDensity 内部按
-    // clientWidth 做了缓存，滚动时不会反复重排）。
-    if (typeof _updateTabDensity === 'function') _updateTabDensity();
+
     var max = scroll.scrollWidth - scroll.clientWidth;
     left.classList.toggle('is-hidden', scroll.scrollLeft <= 1);
     right.classList.toggle('is-hidden', scroll.scrollLeft >= max - 1);
@@ -4867,7 +4870,6 @@ function onStatsRate(data) {
     any.txRate = data.writeRateBps || 0;
     any.rxRate = data.readRateBps || 0;
   }
-  _updateTabRateTexts();
 
   const tab = getActiveTab();
   if (!tab || !tab.sessionId || !data || data.processId !== tab.sessionId) return;

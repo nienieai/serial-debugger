@@ -50,6 +50,10 @@ const (
 	ProcessUnwatch    Method = "process.unwatch"
 	ProcessWatched    Method = "process.watched"
 	ForwardCreate     Method = "forward.create"
+
+	// ProcessRename 改线程名：{processId, name}。name 为空串表示退回自动名
+	// （端口名 / 会话号）。工程会话的名字会写回工程目录的 settings.json。
+	ProcessRename Method = "process.rename"
 )
 
 // ── 数据收发与历史 ──
@@ -108,7 +112,7 @@ var All = []Method{
 	// 进程生命周期
 	ProcessList, ProcessCreate, ProcessDestroy, ProcessConnect, ProcessDisconnect,
 	ProcessSwitch, ProcessSetMode, ProcessWatch, ProcessUnwatch, ProcessWatched,
-	ForwardCreate,
+	ForwardCreate, ProcessRename,
 	// 数据收发与历史
 	SessionSend, SessionHistory, SessionStats, SessionClearHistory,
 	SendTrigger, SendRingName,

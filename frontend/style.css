@@ -418,13 +418,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 .statusbar::before { background-image: var(--statusbar-bg-overlay, none), var(--statusbar-bg-image, none); }
 .header > *, .tabs-bar > *, .statusbar > * { position: relative; z-index: 1; }
 
-/* ---- 8a. 标签内容：类型图标 + 状态点 ----
-   设计见 0.8.4-dev/tab-icon-preview-v2.html 的 P4 方案：
+/* ---- 8a. 标签内容：类型图标 + 状态点 + 线程名 ----
+   标签上只允许三样东西（其余状态全部由悬浮卡 c-tabpop 承担）：
      类型（单端口/转发/设置/新建/文件）→ 左侧 14px 图标，中性灰，靠形状区分
-     状态（已连/转发/空闲/只读）      → 图标右下角 5px 点，整条标签唯一的着色处
-     参数 / 保存 / 速率               → 是「信息」不是状态，不拥挤才显示
-   以前一个标签上同时有圆点、图标颜色、斜体、绿字加粗、压暗五套信号，只表达三种语义；
-   现在状态只有一枚点，其余信息按拥挤程度退让（.tabs-scroll[data-lvl]，见 _updateTabDensity）。 */
+     开关（已连/空闲/只读）            → 图标右下角 5px 点，整条标签唯一的着色处
+     线程名                            → 唯一的一段文字，长名字截断
+   名字归守护进程所有（process.list 的 name），GUI 不再自己拼「COM3 @ 115200」
+   「端口转发空闲」这类文案 —— 否则 CLI / MCP / GUI 各拼一份必然对不上。 */
 .tab-ico {
   position: relative; display: inline-flex; align-self: center;
   width: 14px; height: 14px; flex: 0 0 14px;
@@ -446,49 +446,22 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* 只读标签（单个 .stlog 文件、还没推给守护进程的工程）：虚线边框，不参与彩色语义 */
 .tab-btn.is-ro { border-style: dashed; }
 
-/* 端口名/文件名最长 170px：一个 30 字符的 .stlog 文件名能让整条标签栏被它一个人吃掉
-   （实测 240px），先在这里截断，比等到 4 级降级才省略更早生效 */
+/* 线程名最长 170px：自定义名字可能很长，一个名字不该把整条标签栏吃掉 */
 .tab-port {
   font-variant-numeric: tabular-nums;
   max-width: 170px; overflow: hidden; text-overflow: ellipsis;
   display: inline-block; vertical-align: bottom;
 }
-.tab-param { font-size: 11.5px; color: var(--placeholder); font-variant-numeric: tabular-nums; }
-.tab-flag  { font-size: 10.5px; color: var(--placeholder); }
-.tab-rate  {
-  font-size: 11.5px; color: var(--placeholder); font-variant-numeric: tabular-nums;
-  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+
+/* 就地改名的输入框：宽度跟着标签走，不改变标签高度 */
+.tab-rename {
+  flex: 0 1 auto; min-width: 60px; max-width: 170px;
+  height: 20px; padding: 0 3px;
+  background: var(--input-bg); color: var(--fg);
+  border: 1px solid var(--accent); border-radius: 4px;
+  font: inherit; font-size: 13px; line-height: 18px;
+  outline: none;
 }
-/* 保存是「信息」不是「状态」：用前景色压到 72%，既不上色抢状态点，也不会糊成灰块 */
-.tab-save { display: inline-flex; align-items: center; color: var(--fg); opacity: .72; }
-.tab-save > svg { display: block; width: 12px; height: 12px; }
-
-/* 没有内容的槽位不留空隙（否则每个标签白占一个 gap） */
-.tab-param:empty, .tab-flag:empty, .tab-rate:empty { display: none; }
-
-/* 拥挤降级：速率 → 保存 → 参数/标记 → 端口名省略。级别写在容器上，靠 CSS 隐藏，
-   不重建 DOM —— 每秒刷速率时标签不会闪。 */
-.tabs-scroll[data-lvl="1"] .tab-rate,
-.tabs-scroll[data-lvl="1"] .tab-flag { display: none; }
-
-.tabs-scroll[data-lvl="2"] .tab-rate,
-.tabs-scroll[data-lvl="2"] .tab-flag,
-.tabs-scroll[data-lvl="2"] .tab-save { display: none; }
-
-.tabs-scroll[data-lvl="3"] .tab-rate,
-.tabs-scroll[data-lvl="3"] .tab-flag,
-.tabs-scroll[data-lvl="3"] .tab-save,
-.tabs-scroll[data-lvl="3"] .tab-param { display: none; }
-
-.tabs-scroll[data-lvl="4"] .tab-rate,
-.tabs-scroll[data-lvl="4"] .tab-flag,
-.tabs-scroll[data-lvl="4"] .tab-save,
-.tabs-scroll[data-lvl="4"] .tab-param { display: none; }
-.tabs-scroll[data-lvl="4"] .tab-port {
-  max-width: 62px; overflow: hidden; text-overflow: ellipsis;
-  display: inline-block; vertical-align: bottom;
-}
-
 .tab-btn .close-tab {
   color: var(--tab-close); width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 6px; flex-shrink: 0; transition: background 0.15s, color 0.15s;
@@ -594,6 +567,13 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   margin-top: 2px; color: var(--placeholder); font-size: 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
+/* 保存开关 + 会话号：标签上已经不放磁盘图标了，这两条信息落在卡片里 */
+.c-tabpop__save {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 5px;
+  font-size: 11.5px; color: var(--placeholder);
+}
+.c-tabpop__save b { color: var(--fg); font-weight: 600; }
+.c-tabpop__sid { margin-inline-start: auto; font-family: "Cascadia Code", "Consolas", monospace; }
 .c-tabpop__sep { height: 1px; background: var(--border); opacity: .7; margin: 7px -11px; }
 
 /* 速率行：一行「方向 · 累计 · 当前速率」，下面一条通栏进度条 */
