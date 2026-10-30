@@ -334,25 +334,14 @@ func (p *Process) recordHistoryAt(ts int64, hexData, direction, origin string) {
 	}
 	p.ringBufMu.Unlock()
 
-	// 文件指针与 closeHistory/HistoryDetach 竞争；持读锁期间只读取指针，
-	// 真正的写盘放在锁外，避免把串口读循环卡在磁盘 I/O 上。
-	p.histFileMu.RLock()
-	f := p.historyFile
-	p.histFileMu.RUnlock()
-
-	// Lazy-create history file on first real data (not system events).
-	if f == nil && direction != "system" && p.shouldSaveHistory() {
-		p.newHistoryFile()
-		p.histFileMu.RLock()
-		f = p.historyFile
-		p.histFileMu.RUnlock()
+	// 落盘只剩这一条路：.stlog 会话（v2）。history/*.log 不再写——
+	// 逐条对照过 16833 条，ts / 方向 / payload / 来源完全一致，而 .log 存的是
+	// hex 字符串，体积是 .stlog 的两倍。
+	//
+	// 惰性建会话：系统事件（连上/断开）不触发，避免只录到一串 sys 行。
+	if direction != "system" && p.shouldSaveHistory() {
+		p.ensureStlogSession()
 	}
-	if f != nil {
-		appendHistoryPacket(f, pkt)
-	}
-
-	// 同一份数据再镜像一份 .stlog（没有在录时是空操作，见 daemon/stlog.go）。
-	// 放在 .log 之后：.log 是既有功能，别让新路径的失败挡住它。
 	p.appendStlog(ts, hexData, direction, origin)
 }
 
@@ -1347,76 +1336,95 @@ func (p *Process) openHistoryFile() {
 	if !p.shouldSaveHistory() {
 		return
 	}
-	// 已有文件就别再建：全局默认切换 / 重复开启不应产生一串空文件。
-	p.histFileMu.RLock()
-	hasFile := p.historyFile != nil
-	p.histFileMu.RUnlock()
-	if hasFile {
+	p.stlogMu.Lock()
+	has := p.stlog != nil
+	p.stlogMu.Unlock()
+	if has {
 		return
 	}
-	if err := p.newHistoryFile(); err != nil {
-		logOp("错误", "打开历史文件失败 (进程 #%s): %v", p.id, err)
+	// 先把上一个会话读回环形缓冲：重启后打开「保存历史」还能接着看上次的录制。
+	// 必须在建新会话之前——新建的空目录会成为「最近的会话」，把真数据挡掉。
+	p.restoreLatestSession()
+	if err := p.ensureStlogSession(); err != nil {
+		logOp("错误", "开启录制失败 (进程 #%s): %v", p.id, err)
 	}
 }
 
-func (p *Process) attachHistoryFile(filename string) error {
-	f, path, err := attachHistoryFile(historyDir(), filename)
+// restoreLatestSession 在环形缓冲还是空的时候，把最近一个会话读回来。
+//
+// v2 起不再写 history/*.log，重启后的历史就靠这个恢复；已经开着「保存历史」
+// 又切端口时会新建会话，那时环里已有数据，不重复加载。
+func (p *Process) restoreLatestSession() {
+	dir := latestSessionDir(historyDir())
+	if dir == "" {
+		return
+	}
+	p.ringBufMu.Lock()
+	defer p.ringBufMu.Unlock()
+	if p.historyRing == nil || !p.historyRing.IsEmpty() {
+		return
+	}
+	n, err := loadSessionIntoRing(p.historyRing, dir)
 	if err != nil {
+		logOp("错误", "恢复历史失败 (进程 #%s, %s): %v", p.id, filepath.Base(dir), err)
+		return
+	}
+	if n > 0 {
+		logOp("历史", "进程 #%s 已从 %s 恢复 %d 条", p.id, filepath.Base(dir), n)
+	}
+}
+
+// ensureStlogSession 确保当前进程有一个正在写的会话目录；已有就什么都不做。
+func (p *Process) ensureStlogSession() error {
+	p.stlogMu.Lock()
+	has := p.stlog != nil
+	p.stlogMu.Unlock()
+	if has {
+		return nil
+	}
+	p.openStlogFile()
+	p.stlogMu.Lock()
+	ok := p.stlog != nil
+	p.stlogMu.Unlock()
+	if !ok {
+		return fmt.Errorf("会话目录没建起来")
+	}
+	return nil
+}
+
+// detachHistoryFile 封存当前会话；环形缓冲区不受影响。
+func (p *Process) detachHistoryFile() {
+	p.histFileMu.Lock()
+	p.historyFile = nil
+	p.historyFileName = ""
+	p.histFileMu.Unlock()
+	p.detachStlogFile()
+}
+
+// attachHistoryFile 把一个**已有的 .log** 读进环形缓冲。
+//
+// v2 起不再往 .log 里写，但这个入口保留：history/ 里堆着的老文件仍然能打开查看。
+// 只读不追加——继续录制的数据都进 .stlog 会话。
+func (p *Process) attachHistoryFile(filename string) error {
+	path := filepath.Join(historyDir(), filepath.Base(filename))
+	if _, err := os.Stat(path); err != nil {
 		return err
 	}
-	p.histFileMu.Lock()
-	p.historyFile = f
-	p.historyFileName = filepath.Base(path)
-	p.histFileMu.Unlock()
 	// loadHistoryIntoRing 直接向环内写，必须与 readLoop 的 recordHistory
 	// 串行化；同时也避免拿到已 unmap 的环。
 	p.ringBufMu.Lock()
-	n := 0
+	defer p.ringBufMu.Unlock()
 	if p.historyRing == nil {
-		err = fmt.Errorf("历史环形缓冲区已关闭")
-	} else {
-		n, err = loadHistoryIntoRing(p.historyRing, path)
+		return fmt.Errorf("历史环形缓冲区已关闭")
 	}
-	p.ringBufMu.Unlock()
+	n, err := loadHistoryIntoRing(p.historyRing, path)
 	if err != nil {
-		p.histFileMu.Lock()
-		p.historyFile.Close()
-		p.historyFile = nil
-		p.historyFileName = ""
-		p.histFileMu.Unlock()
 		return fmt.Errorf("加载历史文件失败: %w", err)
 	}
 	if n > 0 {
 		logOp("历史", "进程 #%s 已加载 %s (%d 条)", p.id, filepath.Base(path), n)
 	}
 	return nil
-}
-
-func (p *Process) newHistoryFile() error {
-	f, path, err := newHistoryFile(historyDir(), p.id)
-	if err != nil {
-		return err
-	}
-	p.histFileMu.Lock()
-	p.historyFile = f
-	p.historyFileName = filepath.Base(path)
-	p.histFileMu.Unlock()
-	// 建 .log 的同时建同名 .stlog：两者都是"落盘"，开关也只有一个，
-	// 分开建会漏掉 recordHistoryAt 里那条惰性建文件的路径。
-	p.openStlogFile(filepath.Base(path))
-	return nil
-}
-
-// detachHistoryFile 关闭当前历史文件但不触碰环形缓冲区。
-func (p *Process) detachHistoryFile() {
-	p.histFileMu.Lock()
-	f := p.historyFile
-	p.historyFile = nil
-	p.historyFileName = ""
-	p.histFileMu.Unlock()
-	closeHistoryFile(f)
-	// .stlog 与 .log 同步封存：停止保存、进程关闭、daemon 退出都走这里。
-	p.detachStlogFile()
 }
 
 // closeHistory closes the shared memory ring buffer and the history file.

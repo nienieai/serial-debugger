@@ -12,7 +12,77 @@ import (
 	"time"
 
 	"github.com/nienieai/serial-debugger/ringbuf"
+	"github.com/nienieai/serial-debugger/sessionfile"
 )
+
+// dirByteToName 是 dirToByte 的反向：会话里的方向字节 → 历史包里的方向串。
+func dirByteToName(d uint8) string {
+	switch sessionfile.DirBase(d) {
+	case sessionfile.DirRx:
+		return "rx"
+	case sessionfile.DirTx:
+		return "tx"
+	case sessionfile.DirP1:
+		return "1"
+	case sessionfile.DirP2:
+		return "2"
+	}
+	return "system"
+}
+
+// latestSessionDir 返回 dir 下最近修改的会话目录（含 manifest.json 或 pkg-*.stlog）。
+func latestSessionDir(dir string) string {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var best string
+	var bestT time.Time
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if !sessionfile.IsSessionDir(p) {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().After(bestT) {
+			best, bestT = p, fi.ModTime()
+		}
+	}
+	return best
+}
+
+// loadSessionIntoRing 把一个会话目录里的帧搬进环形缓冲，等价于 loadHistoryIntoRing
+// 对 .log 做的事。v2 起录制只写会话目录，重启后的历史就从这里恢复。
+//
+// 系统帧（dir=0）在历史包里存的是文本而不是 hex，这里按同样规则还原。
+func loadSessionIntoRing(rb *ringbuf.RingBuffer, dir string) (int, error) {
+	info, err := sessionfile.ReadSession(dir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for i := range info.Frames {
+		f := &info.Frames[i]
+		var hexData string
+		if sessionfile.DirBase(f.Dir) == sessionfile.DirSystem {
+			hexData = string(f.Payload)
+		} else {
+			hexData = hex.EncodeToString(f.Payload)
+		}
+		pkt := encodeHistoryPacket(int64(f.Ts), hexData, dirByteToName(f.Dir), f.OriginStr)
+		if !rb.WriteEvict(pkt) {
+			return count, fmt.Errorf("ring buffer 写入失败（第 %d 条）", count)
+		}
+		count++
+	}
+	return count, nil
+}
 
 // 历史落盘的**默认值**：新进程是否把数据写进 history/*.log。
 //

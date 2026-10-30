@@ -71,15 +71,15 @@ func TestStlogMirrorsHistory(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("会话数 = %d，期望 1 个: %v", len(files), files)
 	}
-	// 目录名按 v2 规则自动生成（时间戳 + id8 = 24 字符），不再和 .log 同名；
-	// 与 .log 的配对关系记在 settings.json 的 log 字段里。
+	// 目录名按 v2 规则自动生成（时间戳 + id8 = 24 字符），不再和 .log 同名。
 	if base := filepath.Base(files[0]); len(base) != 24 {
 		t.Fatalf("目录名不像 v2 会话目录: %s", base)
 	}
-	info := mustReadStlog(t, files[0])
-	if info.SettingsDoc == nil || !strings.HasSuffix(info.SettingsDoc.Log, "_"+proc.id+".log") {
-		t.Fatalf("settings.json 的 log 字段对不上 .log: %+v", info.SettingsDoc)
+	// v2 起不再写 history/*.log：同一份数据逐条对照过完全等价，而 .log 体积翻倍
+	if logs, _ := filepath.Glob(filepath.Join(dir, "*.log")); len(logs) != 0 {
+		t.Fatalf("不该再产生 .log 文件: %v", logs)
 	}
+	info := mustReadStlog(t, files[0])
 	if len(info.Pages) != 1 {
 		t.Errorf("页数 = %d，期望 1", len(info.Pages))
 	}
@@ -285,5 +285,50 @@ func TestStlogRecordsForwardMode(t *testing.T) {
 	// 统计块只有 rx/tx 两栏，转发录制不该往里加数。
 	if info.RxTotal != 0 || info.TxTotal != 0 {
 		t.Errorf("统计块 rx/tx = %d/%d，期望 0/0", info.RxTotal, info.TxTotal)
+	}
+}
+
+// v2 起不再写 history/*.log：重启后的历史要从最近的会话目录读回来。
+func TestHistoryRestoreFromSession(t *testing.T) {
+	pm, proc, dir := newSaveTestProc(t)
+	proc.config = SerialConfig{Port: "COM9", Baud: 9600}
+	proc.SetSaveHistory(true)
+	proc.recordHistoryAt(1000, "AABB", "rx", "")
+	proc.recordHistoryAt(1001, "CCDD", "tx", "gui-1a2b3c4d")
+	proc.detachHistoryFile() // 封存会话
+
+	if n := countLogFiles(t, dir); n != 0 {
+		t.Fatalf(".log 文件数 = %d，v2 起不该再写", n)
+	}
+	if len(findSessions(t, dir)) != 1 {
+		t.Fatalf("会话数 = %d，期望 1", len(findSessions(t, dir)))
+	}
+
+	// 模拟重启：环清空，再打开「保存历史」
+	if err := pm.ClearHistory(proc.id); err != nil {
+		t.Fatalf("清空历史失败: %v", err)
+	}
+	proc.SetSaveHistory(false)
+	proc.SetSaveHistory(true)
+
+	proc.ringBufMu.Lock()
+	pkts := proc.historyRing.Snapshot()
+	proc.ringBufMu.Unlock()
+	if len(pkts) != 2 {
+		t.Fatalf("恢复后环里 %d 条，期望 2", len(pkts))
+	}
+	e0, ok := decodeHistoryPacket(pkts[0])
+	if !ok {
+		t.Fatal("第一条解不出来")
+	}
+	if !strings.EqualFold(e0.Hex, "AABB") || e0.Direction != "rx" {
+		t.Fatalf("第一条 = %+v，期望 rx/aabb", e0)
+	}
+	e1, ok := decodeHistoryPacket(pkts[1])
+	if !ok {
+		t.Fatal("第二条解不出来")
+	}
+	if !strings.EqualFold(e1.Hex, "CCDD") || e1.Direction != "tx" || e1.Origin != "gui-1a2b3c4d" {
+		t.Fatalf("第二条 = %+v，期望 tx/ccdd/gui-1a2b3c4d", e1)
 	}
 }

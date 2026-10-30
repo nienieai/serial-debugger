@@ -1520,7 +1520,8 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if proc == nil {
 			return protocol.Response{ID: req.ID, Error: "process not found"}
 		}
-		if err := proc.newHistoryFile(); err != nil {
+		// v2 起「新建历史文件」= 开一个新会话目录，不再建 history/*.log
+		if err := proc.ensureStlogSession(); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}

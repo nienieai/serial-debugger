@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/nienieai/serial-debugger/sessionfile"
@@ -44,16 +43,12 @@ var (
 // 目录里是 manifest.json（仅做连接）、settings.json（端口/模式等设置）、
 // index.bin（缓存）和 pkg-0001.stlog（数据，本身仍是完整合法的 v1.4 文件）。
 //
-// .log 的文件名不再用来拼目录名（目录名按 v2 规则自动生成），而是记进
-// settings.json 的 log 字段，两边仍然能成对找到。
+// v2 起不再写 history/*.log：同一份数据逐条对照过（ts / 方向 / payload / 来源
+// 全一致），而 .log 存的是 hex 字符串，体积是 .stlog 的两倍。写入只剩这一条路。
 //
 // 幂等：已经在录就直接返回。全局默认被反复切换、或用户重复点"开始保存"时，
 // 不会堆出一串空目录。
-func (p *Process) openStlogFile(logBase string) {
-	if !strings.HasSuffix(logBase, ".log") {
-		return
-	}
-
+func (p *Process) openStlogFile() {
 	p.stlogMu.Lock()
 	defer p.stlogMu.Unlock()
 	if p.stlog != nil {
@@ -86,10 +81,6 @@ func (p *Process) openStlogFile(logBase string) {
 	if err != nil {
 		logOp("错误", "建会话目录失败 (进程 #%s): %v", p.id, err)
 		return
-	}
-	sess.SettingsDoc().Log = logBase
-	if err := sess.SaveSettings(); err != nil {
-		logOp("错误", "写 settings.json 失败 (进程 #%s): %v", p.id, err)
 	}
 	p.stlog = sess
 	p.stlogName = filepath.Base(sess.Dir())
