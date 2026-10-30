@@ -1322,9 +1322,10 @@ v1.4 相对 v1.3.1 多出的工作量主要在 P1（页模型 + 双影）与 P3�
 
 **本项目与新增代码**
 
-- 项目本体是 **MIT License**（见仓库根 `LICENSE`，Copyright (c) 2026 nienieai）。
-- 新增的 `sessionfile` 包、`history.files/open/export` 等全部随项目以 MIT 发布：可自由使用、修改、
-  再分发、商用，仅需保留版权声明与许可文本。**不新增任何第三方依赖**，
+- 项目本体是 **Apache License 2.0**（见仓库根 `LICENSE`，版权与归属见 `NOTICE`，Copyright 2026 nienieai）。
+- 新增的 `sessionfile` 包、`history.files/open/export` 等全部随项目以 Apache-2.0 发布：可自由使用、
+  修改、再分发、商用，需保留版权声明、许可文本与 `NOTICE`，并在修改过的文件里注明变更。
+  **不新增任何第三方依赖**，
   因此 `THIRD_PARTY_NOTICES.md` 无需变更（锁使用已在列的 `golang.org/x/sys`，导出 CSV 自己实现）。
 
 **关于技术本身的权属（工程判断，不是法律意见）**

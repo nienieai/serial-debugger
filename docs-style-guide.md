@@ -45,7 +45,7 @@
   <img src="https://img.shields.io/github/v/release/<owner>/<repo>?color=blue" alt="Release"/>
   <img src="https://img.shields.io/github/actions/workflow/status/<owner>/<repo>/ci.yml" alt="CI"/>
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8" alt="Go"/>
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License"/>
+  <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"/>
 </p>
 
 <!-- ========== 2. 一句话简介 + 架构亮点 ========== -->
@@ -153,7 +153,7 @@ build\bin\serialtool.exe      # Windows
 <!-- ========== 9. 许可证 ========== -->
 ## 许可证
 
-[MIT](LICENSE) © 2025 <owner>
+[Apache-2.0](LICENSE) © 2025 <owner>
 ```
 
 ### 1.3 每节的硬性规则
@@ -169,7 +169,7 @@ build\bin\serialtool.exe      # Windows
 | 使用示例 | 1～2 个真实场景，**步骤列表** + 可复制的输入/输出；不给完整教程，教程属于文档站。 |
 | 文档链接 | 用**表格**列文档；每行「链接 + 一句话说明」。 |
 | 贡献指南 | ≤ 5 行正文 + 指向 `CONTRIBUTING.md` 的链接。 |
-| 许可证 | 一行：`[MIT](LICENSE) © <年份> <作者/组织>`；文件必须真实存在。 |
+| 许可证 | 一行：`[Apache-2.0](LICENSE) © <年份> <作者/组织>`（有 `NOTICE` 时一并链接）；文件必须真实存在。 |
 
 ---
 

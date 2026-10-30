@@ -143,7 +143,7 @@
 | 87 | 设置页标题「设置」越用越黑，像叠了重影 | 已修复 | **2026-10-26 修复**（用户截图：设置页左上角「设置」二字带明显黑色重影，「改一次字体阴影就黑一次」）。根因不在样式（`computed textShadow === 'none'`，全仓库也没有 `text-shadow`）：`refreshSettingsPage()` 找的是 `.settings-layout`，却拿 `buildSettingsPage()`（返回整个 `.settings-wrapper`）去 `replaceChild`，于是每刷新一次就**多套一层 wrapper、多复制一个 `position:absolute` 的 `.settings-header`**；header 叠在同一坐标 (16,62)，标题文字一层层压上去就成了"黑重影"。触发点两处：切语言（`i18n.js:28`）、颜色区「重置」按钮（`settingspage.js:1023`）—— 改字体/字号本身不重建，只是用户往往在改完设置后切语言看效果。实测：切 3 次语言后 wrapper/header/title 各 4 个，标题区域平均灰度 **211.64 → 174.40**（暗像素占比 18.68% → 30.77%）；人为克隆 3 份 header 得到同样的 174.40，确认是叠层而非阴影。修法：替换目标改成 `layout.closest('.settings-wrapper')`，并向上找到**最外层** wrapper（已叠出多层的窗口刷新一次即自愈回 1 层），nav/panel 的查找改在新 wrapper 内做。夹具 `_audit/settings_refresh_no_dup.py` 12 项（改字体/改字号/切 3 次语言/颜色重置/激活面板保留/自愈）；变异：替换目标退回 layout → 5 项红、wrapper 一路涨到 7 |
 | 88 | 设置页「数据高亮」的预览不像显示框 | 已修复 | **2026-10-27 改**（用户请求：「能让设置中高亮的预览窗口用类似显示框的渲染方式吗」）。旧预览是 `innerHTML` 拼串：字号写死 10px/11px、颜色逐 span 内联、控制字符自己拼 `.ctrl-mark/.ctrl-real`、转义字节用带内联色的裸 span，跟主显示区两套实现 —— 所以预览里的行距、字重、`←↵` 标记、`/FF`、Hex 行都跟真实显示框对不上。改法：① `makeDataRow()` 增加可选第 6 参数 `{ displayMode }`（默认行为不变），让预览能在同一栏里同时画「文本」和「Hex」两种渲染而不去动全局 `state.displayMode`；② `_renderColorPreview()` 改为每栏调 4 次 `makeDataRow`（Rx 文本 / Rx Hex / Tx 文本 / Tx Hex，转发用 P1/P2），segments 手工构造，转义/控制字符全部走 `renderSegments()` 的真实路径；③ 深浅两栏各用 `_applyPreviewVars(box, mode)` 把该主题的 `--dc-*` 内联到容器（`_applyDisplayColors` 只写 `:root[data-theme=…]`，两套配色要同屏并排只能这样）；④ `_applyDisplayStyle()` 的规则选择器加上 `.c-color-preview`，预览字号/字体/tab 宽度跟 `state.displayFontSize` / `displayFontFamily`。**顺带发现**：旧预览硬编码的「~10B」是错的，转发示例实际是 9 字节，真实渲染算出来是 `~9B`。夹具 `_audit/settings_color_preview.py` 21 项；变异：把 `.c-color-preview` 从字号规则里去掉 → 3 项红，`makeDataRow` 忽略 `opts` → 2 项红 |
 
-## v0.8.3（进行中）
+## v0.8.3 已完成
 
 | 需求 / 问题 | 说明 |
 |---|---|
@@ -157,6 +157,13 @@
 | 自动滚动误冻结 | 根因是 `content-visibility:auto` 让 `scrollHeight` 在行进入视口时虚增，而判定只看 `scrollHeight` → 误判「离开底部」并冻结跟滚。改为只有 `scrollTop` 变小才算用户上翻；已冻结时仍以「真回到底部」解冻 |
 | 部署脚本 | `deploy-dev.ps1`：`-Build` 先构建 4 个 exe + 前端，再镜像部署到 `0.8.3-dev`（含 `resources-system` 子树守卫），逐文件校验字节数；目标目录有同名 exe 在跑就拒绝部署。`BUILD.md` 记「资源查找顺序」与「热重载版从磁盘读前端」两个坑 |
 | 示例夹具 | `stlog-samples/` 6 个（基础 / 多页 / 跨页切帧 / 坏链恢复 / 单页多片 / 整页无帧头），另 `07-real-com16/` 两段真实录制 |
+| **.stlog v2：一次录制 = 一个目录**（`c3d280a`） | 目录名 `<yyyyMMdd_HHmmss>_<id8>`（24 字符，允许改名）；`manifest.json`（只记连接）+ `settings.json`（业务设置 + 预留 `plot`）+ `index.bin`（可重建缓存）+ `pkg-%04d.stlog`（每包都是合法 v1.4）。切包 `entryCost = 12 + payload + 来源串`，默认 64 MiB（可配 8 MiB–1 GiB），一帧不跨包、超大帧独占一包。`ReadSession` 目录走 v2、文件走 v1.4 |
+| 停止写 `history/*.log`（`c36b428`） | 录制只剩 `.stlog`；老 `.log` 只读可读；历史恢复（`history.new` / `history.attach`）改从 `.stlog` 读回 |
+| 会话文件交给守护进程（`6073969`…`f0ff709`） | 新增 IPC `session.open`：只接受工程目录，按 `settings.json` 建单端口 / 转发进程并灌入历史；单个 `.stlog` 直接拒绝。GUI 打开工程先是只读页（**离线可用**），顶栏「推送到守护进程」把它恢复成会话页后自动关掉只读页；失败保留只读页并报错。`process.list` 增加 `sessionPath`，同步时不再给文件会话多建标签页 |
+| 拖入解析 + 毛玻璃遮罩（`688538d`、`18f4ff3`） | 工程目录与 `.stlog` 都能开，无法识别的路径汇总成一个警告窗；遮罩覆盖「菜单栏下沿 → 状态栏上沿」，z-index 压过「守护进程未启用」；守护进程未启动时不再显示引导页 |
+| 浮窗定稿（`69b1721`、`d5d3961`、`6f97647`） | 文件页浮窗换成 v2 结构（端口 → 参数 → 两条车道 → 分流比 → 帧/时长/来源）；尖角整段删除 —— 1× 下 45° 抗锯齿永远对不齐边色 |
+| 系统帧不再显示成 Tx（`73f6e02`） | `Sys` 标签、无箭头、强制文本模式 |
+| 许可证 MIT → Apache 2.0 | `LICENSE` 换全文 + 新增 `NOTICE`；README / THIRD_PARTY_NOTICES / docs / `wails.json` / 三个 `winres.json` 同步；用 `go-winres make` 重新生成 6 个 `rsrc_windows_*.syso`，exe 的 `LegalCopyright` 与 `FileVersion`（0.8.0 → 0.8.3）一并对齐 |
 
 ## v0.8.2 已完成
 
