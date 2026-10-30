@@ -28,7 +28,7 @@
     --status-offline: #888; --tab-close: #888;
     /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
     --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
-    --tabpop-glass-border: rgba(160, 160, 160, 0.10);
+    --tabpop-glass-border: rgba(160, 160, 160, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
   }
@@ -45,7 +45,7 @@
     --hex-escape: #777; --badge-cli: #059669;
     --status-offline: #aaa; --tab-close: #999;
     --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
-    --tabpop-glass-border: rgba(128, 128, 128, 0.10);
+    --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
   }
@@ -62,7 +62,7 @@
   --hex-escape: #8b8b8b; --badge-cli: #10b981;
   --status-offline: #888; --tab-close: #888;
   --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
-  --tabpop-glass-border: rgba(160, 160, 160, 0.10);
+  --tabpop-glass-border: rgba(160, 160, 160, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
 }
@@ -77,7 +77,7 @@
   --hex-escape: #777; --badge-cli: #059669;
   --status-offline: #aaa; --tab-close: #999;
   --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
-  --tabpop-glass-border: rgba(128, 128, 128, 0.10);
+  --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
 }
@@ -488,8 +488,10 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   width: 9px; height: 9px; border-radius: 2px;
   background: none;
   border: 0;
-  border-left: 1px solid var(--border);
-  border-top: 1px solid var(--border);
+  /* 与卡片同一条描边（--tabpop-glass-border），别用实色 --border：
+     两者颜色不一致时，尖角看起来像贴上去的一小块，和卡片的毛玻璃描边断开 */
+  border-left: 1px solid var(--tabpop-glass-border);
+  border-top: 1px solid var(--tabpop-glass-border);
   transform: rotate(45deg);
 }
 /* 没有 backdrop-filter 的老 WebView2：卡片与箭头一起退回纯色（此时箭头填色才是对的） */
@@ -502,8 +504,8 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 }
 .c-tabpop.is-above .c-tabpop__arrow {
   top: auto; bottom: -5px; border-left: 0; border-top: 0;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--tabpop-glass-border);
+  border-bottom: 1px solid var(--tabpop-glass-border);
 }
 
 .c-tabpop__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
