@@ -389,10 +389,13 @@ func (c *DaemonClient) verifyProtocol() error {
 	}
 	info, err := protocol.DecodeDaemonInfo(res)
 	if err != nil {
-		return fmt.Errorf("解析守护进程版本失败: %w", err)
+		// 老守护进程回的是整数协议号（旧版是 1），解码成字符串会失败。
+		// 这不是「解析坏了」，而是两边代际不同，直接说清楚怎么办。
+		return fmt.Errorf("读取守护进程协议号失败（可能是旧版守护进程，本客户端要求 IPC %s）: %w。请执行 serial-cli start 重启守护进程",
+			protocol.ProtocolVersion, err)
 	}
 	if !info.Compatible() {
-		return fmt.Errorf("IPC 协议版本不匹配：客户端为 %d，守护进程为 %s（协议 %d）。请执行 serial-cli shutdown 后重试",
+		return fmt.Errorf("IPC 协议不兼容：客户端 %s，守护进程 %s（协议 %s）。请执行 serial-cli start 重启守护进程",
 			protocol.ProtocolVersion, info.Version, info.ProtocolVersion)
 	}
 	return nil
@@ -1105,6 +1108,15 @@ func StartDaemon() (string, error) {
 		}
 		return "restarted", nil
 	}
+	if errors.Is(err, protocol.ErrProtocolDecode) {
+		// 守护进程在跑、也答了 daemon.info，但协议号解析不出来 —— 老版本（整数协议号）。
+		// 这条必须走「重启」，不能落到 startDaemonProcess：旧实例还占着 Global 互斥体，
+		// 新实例会以「已在运行」退出，变成静默失败。
+		if rerr := restartDaemon(); rerr != nil {
+			return "", rerr
+		}
+		return "restarted", nil
+	}
 	return startDaemonProcess()
 }
 
@@ -1114,7 +1126,14 @@ func DaemonInfo() (protocol.DaemonInfo, error) {
 	if err != nil {
 		return protocol.DaemonInfo{}, err
 	}
-	return protocol.DecodeDaemonInfo(res)
+	info, err := protocol.DecodeDaemonInfo(res)
+	if err != nil {
+		// 与 verifyProtocol 保持同一句人话：解码失败最常见的成因是「对端是老版本，
+		// 协议号还是整数 1」，光打印 json 报错看不出该做什么。
+		return protocol.DaemonInfo{}, fmt.Errorf("读取守护进程协议号失败（可能是旧版守护进程，本客户端要求 IPC %s）: %w。请执行 serial-cli start 重启守护进程",
+			protocol.ProtocolVersion, err)
+	}
+	return info, nil
 }
 
 // restartDaemon 关闭正在运行的守护进程（可能是旧版本），等它真正退出后重启。

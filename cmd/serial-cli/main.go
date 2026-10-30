@@ -191,10 +191,10 @@ func cmdCheck() {
 	info, err := client.DaemonInfo()
 	if err == nil {
 		fmt.Println("IPC 健康检查: " + paintOut("ok", ansiGreen))
-		fmt.Printf("守护进程版本: %s (IPC 协议 %d)\n", info.Version, info.ProtocolVersion)
-		fmt.Printf("客户端版本:   %s (IPC 协议 %d)\n", version.Version, protocol.ProtocolVersion)
+		fmt.Printf("守护进程版本: %s (IPC %s)\n", info.Version, info.ProtocolVersion)
+		fmt.Printf("客户端版本:   %s (IPC %s)\n", version.Version, protocol.ProtocolVersion)
 		if !info.Compatible() {
-			fmt.Println(paintOut("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程", ansiYellow))
+			fmt.Println(paintOut("⚠ IPC 协议不兼容（要求 MAJOR.MINOR 一致），请执行 serial-cli start 重启守护进程", ansiYellow))
 		}
 		if !processRunning {
 			fmt.Println("(tasklist 检测失效，但守护进程实际运行中)")
@@ -204,7 +204,7 @@ func cmdCheck() {
 
 	// daemon.info 不可用时区分三种情况，不再一律报「守护进程未运行」。
 	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
-		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC 协议 %d)\n",
+		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC %s)\n",
 			version.Version, protocol.ProtocolVersion)
 		fmt.Println(paintOut("请执行 serial-cli start 重启守护进程", ansiYellow))
 		return

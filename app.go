@@ -17,6 +17,7 @@ import (
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/decode"
 	"github.com/nienieai/serial-debugger/pipe"
+	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 
@@ -766,6 +767,12 @@ func (a *App) GetBuiltinIcons() map[string]string {
 
 func (a *App) GetVersion() string {
 	return version.Version
+}
+
+// GetProtocolVersion 返回本客户端使用的 IPC 协议版本（MAJOR.MINOR.PATCH）。
+// 关于页要显示它，别再在 JS 里硬编码 —— 硬编码的那份必然和守护进程报的漂移。
+func (a *App) GetProtocolVersion() string {
+	return protocol.ProtocolVersion
 }
 
 func (a *App) GetThreads() map[string]any {

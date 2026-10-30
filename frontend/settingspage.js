@@ -520,7 +520,8 @@ function buildSettingsPage() {
 	colA.appendChild(hA);
 	var kv = document.createElement('div');
 	kv.className = 'settings-about-kv';
-	[['settings.about_kv_proto', '协议号', 'IPC 1'],
+	var protoValEl = null;
+	[['settings.about_kv_proto', '协议号', ''],
 	 ['settings.about_kv_dir', '程序目录', ''],
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
 	 ['settings.about_kv_back', '后端', 'Go / Wails v2'],
@@ -533,9 +534,17 @@ function buildSettingsPage() {
 		var v = document.createElement('span');
 		v.className = 'settings-about-v';
 		v.textContent = row[2];
+		if (row[0] === 'settings.about_kv_proto') protoValEl = v;
 		kv.appendChild(k);
 		kv.appendChild(v);
 	});
+	// 协议号从后端取（MAJOR.MINOR.PATCH）。这里以前写死 'IPC 1'，而守护进程报的是
+	// 另一个字段 —— 两处一旦漂移，关于页就是在骗人。
+	try {
+		window.go.main.App.GetProtocolVersion().then(function(pv) {
+			if (pv && protoValEl) protoValEl.textContent = 'IPC ' + pv;
+		}).catch(function() {});
+	} catch (e) { /* 非 Wails 环境（设计稿 / 测试桩）忽略 */ }
 	colA.appendChild(kv);
 	// 设置已经拆成 settings/ 目录（gui.ini / cli.ini / daemon.ini），
 	// 这里给一个直达入口，省得用户自己去程序目录里翻。

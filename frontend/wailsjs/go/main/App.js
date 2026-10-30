@@ -102,6 +102,10 @@ export function GetPorts() {
   return window['go']['main']['App']['GetPorts']();
 }
 
+export function GetProtocolVersion() {
+  return window['go']['main']['App']['GetProtocolVersion']();
+}
+
 export function GetSessionHistory(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['GetSessionHistory'](arg1, arg2, arg3, arg4);
 }
