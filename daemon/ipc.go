@@ -1197,6 +1197,29 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
+	case contract.SessionOpen:
+		// 把一个 .stlog 会话推给守护进程：建进程、灌数据，之后按正常会话接口读
+		var p struct {
+			Path string `json:"path"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.Path == "" {
+			return protocol.Response{ID: req.ID, Error: "path required"}
+		}
+		proc, frames, err := s.pm.OpenSession(p.Path)
+		if err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"processId": proc.id,
+			"mode":      proc.mode,
+			"port":      proc.config.Port,
+			"portB":     proc.forwardConfigB.Port,
+			"frames":    frames,
+		}}
+
 	case contract.SessionHistory:
 		var p struct {
 			ProcessID  string `json:"processId"`

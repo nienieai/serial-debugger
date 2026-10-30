@@ -55,6 +55,7 @@ const (
 // ── 数据收发与历史 ──
 const (
 	SessionSend         Method = "session.send"
+	SessionOpen         Method = "session.open"
 	SessionHistory      Method = "session.history"
 	SessionStats        Method = "session.stats"
 	SessionClearHistory Method = "session.clearhistory"

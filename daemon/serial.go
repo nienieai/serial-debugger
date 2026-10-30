@@ -214,6 +214,9 @@ type Process struct {
 	forwardStopCh   chan struct{}
 	forwardStopOnce sync.Once
 
+	// sessionPath 非空表示这是一个从 .stlog 打开的只读文件会话（见 OpenSession）
+	sessionPath string
+
 	// per-source viewer counts: {"gui": N, "cli": N, "mcp": N}
 	viewers map[string]int
 
@@ -1751,6 +1754,64 @@ func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, erro
 
 // Destroy destroys a process. If connected, disconnects first.
 // Saves multistr entries before destroying.
+// OpenSession 把一个 .stlog 会话（目录或 v1.4 单文件）变成守护进程里的一个进程。
+//
+// 不连串口：Create 走 declare-only 分支，只建进程和共享环。随后清掉它顺手写的
+// 「端口已声明」系统事件，再把文件里的帧灌进环。之后上层用 processId 走正常的
+// 会话接口（session.history / stats / …），与真实串口会话没有区别。
+//
+// 模式取自文件头的设置：转发录制建出来的就是 forward，P1/P2 配色、分流比这些
+// 不需要额外告诉前端，自然就对了。
+func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
+	info, err := sessionfile.ReadSession(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	mode, port, portB, baud := "single", "", "", 0
+	if s := info.Settings; s != nil {
+		if s.Mode == sessionfile.ModeForward {
+			mode = "forward"
+		}
+		port, portB, baud = s.Port, s.PortB, s.Baud
+	}
+	// Create 只有 port 非空时才走 declare-only 分支；文件里没记端口时拿文件名顶上，
+	// 它只用于界面显示。
+	displayPort := port
+	if displayPort == "" {
+		displayPort = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	cfg := SerialConfig{Port: displayPort, Baud: baud}
+	var cfgB *SerialConfig
+	if mode == "forward" {
+		if portB == "" {
+			mode = "single" // 文件说转发却没有 B 口：按单口处理，别让 Create 报错
+		} else {
+			cfgB = &SerialConfig{Port: portB, Baud: baud}
+		}
+	}
+
+	proc, err := pm.Create(mode, displayPort, cfg, cfgB, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	proc.sessionPath = path
+
+	// 清掉 Create 写的那条「端口已声明」：文件里本来就有自己的系统帧，
+	// 不清掉会在最前面多出一条假的声明事件。
+	proc.ringBufMu.Lock()
+	if proc.historyRing != nil {
+		proc.historyRing.Reset()
+	}
+	n, err := loadSessionIntoRing(proc.historyRing, path)
+	proc.ringBufMu.Unlock()
+	if err != nil {
+		pm.Destroy(proc.id)
+		return nil, 0, err
+	}
+	logOp("历史", "进程 #%s 已打开文件会话 %s (%d 条)", proc.id, filepath.Base(path), n)
+	return proc, n, nil
+}
+
 func (pm *ProcessManager) Destroy(id string) error {
 	pm.mu.Lock()
 	proc, ok := pm.processes[id]

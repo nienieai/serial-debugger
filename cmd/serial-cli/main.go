@@ -751,6 +751,28 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		printJSON(result)
 
+	case "session-open":
+		// 把一个 .stlog 会话（目录或单文件）推给守护进程，由它开一个文件会话进程
+		if len(args) < 2 {
+			printErr("用法: serial-cli session-open <会话目录|.stlog>")
+			errExit(fmt.Errorf("缺少路径"), interactive)
+			return
+		}
+		result, err := dc.Call(contract.SessionOpen, map[string]any{"path": args[1]})
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
+		fmt.Printf("进程    : #%v\n", result["processId"])
+		fmt.Printf("模式    : %v\n", result["mode"])
+		portB, _ := result["portB"].(string)
+		if portB != "" {
+			fmt.Printf("端口    : %v ↔ %v\n", result["port"], portB)
+		} else {
+			fmt.Printf("端口    : %v\n", result["port"])
+		}
+		fmt.Printf("帧      : %v\n", result["frames"])
+
 	case "sessions":
 		result, err := dc.Call(contract.ProcessList, nil)
 		if err != nil {
