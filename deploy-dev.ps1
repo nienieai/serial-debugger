@@ -19,7 +19,7 @@
     蒙混过去。
 
 .PARAMETER Target
-    目标目录。默认 <仓库>\..\串口调试工具\0.8.3-dev。
+    目标目录。默认 <仓库>\..\串口调试工具\0.8.4-dev。
 
 .PARAMETER Build
     先重新编译再部署：
@@ -44,7 +44,7 @@ $repo = $PSScriptRoot
 if (-not $repo) { $repo = (Get-Location).Path }
 
 if (-not $Target) {
-    $Target = Join-Path (Split-Path $repo -Parent) '串口调试工具\0.8.3-dev'
+    $Target = Join-Path (Split-Path $repo -Parent) '串口调试工具\0.8.4-dev'
 }
 $Target = [System.IO.Path]::GetFullPath($Target)
 if (-not (Test-Path -LiteralPath $Target)) {
