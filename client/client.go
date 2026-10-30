@@ -461,16 +461,28 @@ func (c *DaemonClient) readSubLoop() {
 	}
 }
 
-// startHeartbeat sends a ping every 5 s. After 3 consecutive failures the
-// connection is considered dead and OnDisconnect is called (if set).
+// 心跳参数：间隔 2s、单次超时 1.5s、连续 3 次失败判掉线。
+//
+// 为什么能比原来的 5s 激进：正常关闭是守护进程主动广播 daemon-shutdown
+// （即时生效），心跳只负责「意外退出」。最坏发现时间 ≈ 2s×3 + 1.5s ≈ 7.5s，
+// 原来是 5s×3 + 10s ≈ 25s。
+//
+// 但间隔不能再短：守护进程处理大 history 请求或落盘 flush 时会有百毫秒级停顿，
+// 而误判掉线的代价是清空所有会话页（app.js 的 handleDaemonOffline）。
+const (
+	heartbeatInterval = 2 * time.Second
+	heartbeatTimeout  = 1500 * time.Millisecond
+)
+
+// startHeartbeat 每 2s ping 一次；连续 3 次失败判连接已死，回调 OnDisconnect。
 func (c *DaemonClient) startHeartbeat() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 	failures := 0
 	for {
 		select {
 		case <-ticker.C:
-			_, err := c.Call(contract.Ping, nil)
+			_, err := c.callWithTimeout(contract.Ping, nil, heartbeatTimeout)
 			if err != nil {
 				failures++
 				if failures >= 3 {
@@ -491,6 +503,14 @@ func (c *DaemonClient) startHeartbeat() {
 
 // Call sends a request on the daemon pipe and waits for the response on the resp pipe.
 func (c *DaemonClient) Call(method contract.Method, params map[string]any) (map[string]any, error) {
+	return c.callWithTimeout(method, params, requestTimeoutFor(method))
+}
+
+// callWithTimeout 是 Call 的可指定超时版本。
+//
+// 心跳必须用它：通用超时是 10s，而心跳间隔只有 2s —— 一次 ping 卡满 10s，
+// ticker 会连着丢好多个 tick，判定掉线的时间被拖到几十秒，比原来的 5s×3 还糟。
+func (c *DaemonClient) callWithTimeout(method contract.Method, params map[string]any, timeout time.Duration) (map[string]any, error) {
 	c.wMu.Lock()
 	id := c.reqID
 	c.reqID++
@@ -522,7 +542,7 @@ func (c *DaemonClient) Call(method contract.Method, params map[string]any) (map[
 			return nil, fmt.Errorf("%s", msg.Error)
 		}
 		return msg.Result, nil
-	case <-time.After(requestTimeoutFor(method)):
+	case <-time.After(timeout):
 		c.pendMu.Lock()
 		delete(c.pending, id)
 		c.pendMu.Unlock()

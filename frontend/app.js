@@ -12,7 +12,6 @@ const state = {
   p1DisplayMode: 'text',
   p2DisplayMode: 'text',
   currentMode: 'single',
-  statusInterval: null,
   lastPorts: '',
   knownDaemonSessions: {},
   // 正在等会话页的工程路径（session.open 之后、syncDaemonSessions 建页之前）
@@ -1883,8 +1882,11 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('ports-list', (data) => updatePortList(data.ports));
     window.runtime.EventsOn('daemon-offline', () => onDaemonGone('offline'));
     window.runtime.EventsOn('daemon-shutdown', () => onDaemonGone('shutdown'));
-    // 守护进程就绪（管道可连接）时立刻连，别等 checkOffline 的 1s 轮询
-    window.runtime.EventsOn('daemon-ready', () => { if (!state.daemonOnline) tryConnect(); });
+    // 守护进程就绪（管道可连接）时立刻连；离线时不再有轮询，靠这个事件重连
+    window.runtime.EventsOn('daemon-ready', () => {
+      _tlog('事件 daemon-ready', undefined, 'online=' + state.daemonOnline);
+      if (!state.daemonOnline) tryConnect();
+    });
     window.runtime.EventsOn('process-changed', (data) => syncDaemonSessions(data));
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));
@@ -1972,89 +1974,77 @@ function initConfigListeners() {
   if (intervalEl) intervalEl.addEventListener('change', () => saveSettings());
 }
 
-// When online the Go-side heartbeat monitors the connection; no JS polling.
-// When offline we check the process list every second (lightweight tasklist, no IPC).
-function startOfflineCheck() {
-  if (state.statusInterval) clearInterval(state.statusInterval);
-  state.statusInterval = setInterval(checkOffline, 1000);
+// ---- 连接状态 ----
+//
+// 上线只有两条路：
+//   ① 启动时主动连一次（init → tryConnect）
+//   ② 守护进程就绪事件 daemon-ready（Go 侧每 3s 重发一次，丢一次也能自愈）
+//
+// 掉线只有两条路：
+//   ① 守护进程正常关闭 → daemon-shutdown（即时广播，不依赖心跳）
+//   ② 意外退出 → Go 侧心跳 2s×3 + 一次重连确认，真的连不上才发 daemon-offline
+//
+// 这里**不再有离线轮询**。轮询曾经和用户点「启动守护进程」抢同一把锁，把点击
+// 静默吞掉——「先开 GUI 后开守护进程，大概率连不上」就是这么来的。
+
+// ---- 连接耗时诊断 ----
+//
+// 时间戳格式与 daemon.log 一致（HH:MM:SS.mmm），可以直接对照。
+// 只是诊断输出，不影响任何控制流。
+function _nowStamp() {
+  var d = new Date();
+  return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+function _tlog(name, ms, extra) {
+  if (!window.console) return;
+  console.log('[' + _nowStamp() + '] [daemon] ' + name +
+    (ms === undefined ? '' : ' ' + ms + 'ms') + (extra ? ' ' + extra : ''));
 }
 
-function stopOfflineCheck() {
-  if (state.statusInterval) { clearInterval(state.statusInterval); state.statusInterval = null; }
-}
-
-// Prevent overlapping connection attempts when daemon is detected externally.
-// checkOffline fires every 1s; without this guard, each tick spawns a new
-// tryConnect while the previous one is still blocking on WaitNamedPipeW (5 s),
-// leading to retry-chain storms and missed detections.
+// _connecting 只保护后台探测（daemon-ready 每 3s 重发，不能被叠加）；
+// 用户主动操作（startDaemon）走自己的 _starting，两者互不吞。
 var _connecting = false;
 
-async function checkOffline() {
-  if (state.daemonOnline) { stopOfflineCheck(); return; }
-  if (_connecting) return; // let the running tryConnect finish
-  // processRunning 只用于界面展示，**不再**作为是否尝试连接的条件。
-  // 它是 tasklist 的启发式结果（每次约 250ms），误判时会让 GUI 永远不去
-  // 尝试连接——守护进程明明在等也一直显示离线。CheckDaemonStatus 内部直接
-  // 拨 IPC，没有守护进程时 WaitNamedPipe 立刻返回 ERROR_FILE_NOT_FOUND，
-  // 代价很低，且是权威判据。
-  try {
-    state.processRunning = await window.go.main.App.DaemonProcessRunning();
-  } catch { state.processRunning = false; }
-  connectRetries = 0;
-  tryConnect();
-}
-
-let connectRetries = 0;
 async function tryConnect() {
-  if (_connecting) return; // guard against concurrent calls (e.g. setTimeout retry + checkOffline)
+  if (state.daemonOnline) return;
+  if (_connecting) { _tlog('tryConnect 跳过：上一次还没结束'); return; }
   _connecting = true;
+  var tConn = performance.now();
   try {
     const ok = await window.go.main.App.CheckDaemonStatus();
-    if (ok) {
-      if (!state.daemonOnline) {
-        state.daemonOnline = true;
-        state.processRunning = true;
-        state.connectFailures = 0;
-        connectRetries = 0;
-        stopOfflineCheck();
-        updateDaemonUI();
-        updateOpenBtn();
-        await syncDaemonSessions();
-        // GUI 的「默认自动保存」存在 gui.ini，是本地真相：连上后推给守护进程，
-        // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
-        window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
-        updateAutoSaveCheck(state.autoSaveHistory === true);
-        const t = getActiveTab();
-        state.currentMode = (t && t.mode) ? t.mode : 'single';
-        updateModeUI();
-        refreshPortsForce().then(() => _syncPortSelectsFromTab());
-        applyI18n();
-      }
-      _connecting = false;
-    } else {
-      connectRetries++;
-      if (connectRetries < 3 && !state.daemonOnline) {
-        // Quick retry before falling back to slow offline check
-        _connecting = false;
-        setTimeout(tryConnect, 500);
-      } else {
-        _connecting = false;
-        if (!state.daemonOnline) startOfflineCheck();
-      }
+    _tlog('CheckDaemonStatus', Math.round(performance.now() - tConn), 'ok=' + ok);
+    if (ok && !state.daemonOnline) {
+      state.daemonOnline = true;
+      state.processRunning = true;
+      state.connectFailures = 0;
+      updateDaemonUI();
+      updateOpenBtn();
+      await syncDaemonSessions();
+      // GUI 的「默认自动保存」存在 gui.ini，是本地真相：连上后推给守护进程，
+      // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
+      window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
+      updateAutoSaveCheck(state.autoSaveHistory === true);
+      const t = getActiveTab();
+      state.currentMode = (t && t.mode) ? t.mode : 'single';
+      updateModeUI();
+      refreshPortsForce().then(() => _syncPortSelectsFromTab());
+      applyI18n();
     }
   } catch (e) {
+    _tlog('tryConnect 异常', Math.round(performance.now() - tConn), String(e));
+  } finally {
     _connecting = false;
-    if (!state.daemonOnline) startOfflineCheck();
   }
 }
 
 function onDaemonGone(reason) {
+  _tlog('onDaemonGone', undefined, 'reason=' + reason);
   if (!state.daemonOnline) return;
   state.daemonOnline = false;
   state.connectFailures = 0;
   updateDaemonUI();
   handleDaemonOffline();
-  startOfflineCheck();
+  // 不再启动离线轮询：重连交给 daemon-ready 事件（Go 侧每 3s 重发一次）
 }
 
 // ---- session sync ----
@@ -2653,29 +2643,36 @@ async function toggleDaemon() {
   }
 }
 
+// _starting 是「用户主动启动」的互斥，和后台探测的 _connecting 分开 ——
+// 后台探测再频繁也不该把用户的点击吞掉（那正是「先开 GUI 后开守护进程连不上」的成因）。
+var _starting = false;
+
 async function startDaemon() {
-  if (_connecting) return;
-  _connecting = true;
+  if (_starting) { _tlog('startDaemon 被跳过：上一次启动还没结束'); return; }
+  _starting = true;
   if (_statusBar && _statusBar.daemon) _statusBar.daemon.setBusy(true);
-  stopOfflineCheck();
+  var tStart = performance.now();
   try {
     await window.go.main.App.StartDaemon();
+    _tlog('App.StartDaemon', Math.round(performance.now() - tStart));
     state.processRunning = true;
     state.daemonOnline = true;
     state.connectFailures = 0;
     updateDaemonUI();
     updateOpenBtn();
     await syncDaemonSessions();
+    _tlog('syncDaemonSessions 完成', Math.round(performance.now() - tStart));
   } catch (e) {
+    _tlog('startDaemon 失败', Math.round(performance.now() - tStart), String(e));
     console.error('startDaemon failed:', e);
     state.daemonOnline = false;
     state.processRunning = false;
     updateDaemonUI();
-    startOfflineCheck();
     showAlert(t('cli.error','错误'), t('serial.start_fail','启动失败: ') + e);
+  } finally {
+    _starting = false;
+    if (_statusBar && _statusBar.daemon) _statusBar.daemon.setBusy(false);
   }
-  _connecting = false;
-  if (_statusBar && _statusBar.daemon) _statusBar.daemon.setBusy(false);
 }
 
 async function stopDaemon() {
@@ -2692,7 +2689,6 @@ async function stopDaemon() {
   state.knownDaemonSessions = {};
   state.activeTab = 0;
   updateEmptyState();
-  startOfflineCheck();
   updateDaemonUI();
   updateOpenBtn();
   updateSyncIndicator();

@@ -101,11 +101,17 @@ func (a *App) Startup(ctx context.Context) {
 	go a.watchDaemonReady(ctx)
 }
 
+// daemonReadyRepeat 是「守护进程就绪」事件的重发间隔（见 watchDaemonReady）。
+const daemonReadyRepeat = 3 * time.Second
+
 // watchDaemonReady 把「守护进程就绪」变成前端可订阅的事件。
 //
 // pipe.WaitReady 在 Windows 上就是 WaitNamedPipe：守护进程一 Listen 就返回，
-// 不存在「进程起来了但管道还没建好」的误判。就绪期间不重复通知，等端点消失
-// （守护进程退出）后回到外层继续等下一次。
+// 不存在「进程起来了但管道还没建好」的误判。
+//
+// 就绪期间每 daemonReadyRepeat 重发一次：前端已经删掉离线轮询，上线完全依赖
+// 这个事件，而 EventsEmit 在页面加载完成前发出会被丢弃（热重载、慢机器启动都
+// 踩得到）——只发一次，丢一次就永久离线。这是 Go 侧的事件重发，不是客户端轮询。
 func (a *App) watchDaemonReady(ctx context.Context) {
 	for ctx.Err() == nil {
 		if !pipe.WaitReady(1 * time.Second) {
@@ -113,7 +119,8 @@ func (a *App) watchDaemonReady(ctx context.Context) {
 		}
 		runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
 		for ctx.Err() == nil && pipe.WaitReady(300*time.Millisecond) {
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(daemonReadyRepeat)
+			runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
 		}
 	}
 }
@@ -132,13 +139,35 @@ func (a *App) Shutdown(ctx context.Context) {
 // a stale connection from killing a fresh reconnection.
 func (a *App) onDaemonDisconnected(ec *client.DaemonClient) {
 	a.daemonMu.Lock()
-	if a.eventConn == ec {
-		a.eventConn = nil
+	if a.eventConn != ec {
 		a.daemonMu.Unlock()
-		runtime.EventsEmit(a.ctx, "daemon-offline", map[string]any{"reason": "heartbeat"})
-	} else {
-		a.daemonMu.Unlock()
+		return
 	}
+	a.eventConn = nil
+	a.daemonMu.Unlock()
+
+	// 判死之后先重连一次再报离线。
+	//
+	// 心跳可能误判（守护进程只是卡顿一下），而前端收到 daemon-offline 会销毁
+	// 所有会话页、清掉历史缓存 —— 代价太大。重连成功就静默恢复：连接对象换了，
+	// 前端无感。只有真的连不上才发离线事件。
+	if nec, err := client.NewDaemonClient("gui"); err == nil {
+		nec.OnDisconnect = func() { a.onDaemonDisconnected(nec) }
+		a.daemonMu.Lock()
+		if a.eventConn != nil {
+			// 期间别的路径（CheckDaemonStatus / StartDaemon）已经连上，别抢
+			a.daemonMu.Unlock()
+			nec.Close()
+			return
+		}
+		a.eventConn = nec
+		a.daemonMu.Unlock()
+		go a.pollDaemonEvents(nec)
+		go nec.Subscribe(nil)
+		return
+	}
+
+	runtime.EventsEmit(a.ctx, "daemon-offline", map[string]any{"reason": "heartbeat"})
 }
 
 // ---- daemon lifecycle ----
