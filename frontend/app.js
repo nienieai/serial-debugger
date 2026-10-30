@@ -2637,6 +2637,8 @@ function updateDaemonUI() {
     if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
       _syncChooserAvailability(t._page.root);
     }
+    // 只读工程页的「推送到守护进程」按钮跟着守护进程状态亮/灭
+    if (t.type === 'stlog' && t._stlog && typeof stlogSyncPushBtn === 'function') stlogSyncPushBtn(t);
   });
   _updateStatsVisible();
   // 引导页的显隐也依赖 daemonOnline，这里跟着刷一次，别等 updateEmptyState 的调用方
@@ -6068,11 +6070,12 @@ function stlogExport(path, btn) {
   });
 }
 
-// openStlogTab 开一个「文件浏览」标签页：只读本地单个 .stlog。
+// openStlogTab 开一个只读标签页（单个 .stlog，或工程目录的本地浏览形态）。
 //
-// 工程目录不走这里 —— 它带着连接方式和业务设置，打开就该是一页能继续用的会话
-// （见 openProjectTab）。这条路上没有任何守护进程成分，离线也能用。
-function openStlogTab(path) {
+// 数据一律来自本地磁盘，离线也能用。kind='session' 的工程页多一个能力：顶栏
+// 「推送到守护进程」—— 点了就把它交给守护进程，恢复成能继续用的会话页，然后
+// 这个只读页自行关闭（见 stlogPushToDaemon）。
+function openStlogTab(path, kind) {
   for (var i = 0; i < state.tabs.length; i++) {
     if (state.tabs[i].type === 'stlog' && state.tabs[i].path === path) {
       switchTab(i);
@@ -6124,10 +6127,18 @@ function openStlogTab(path) {
   exportBtn.className = 't-stlog-btn';
   exportBtn.textContent = '导出文本';
   exportBtn.addEventListener('click', function () { stlogExport(path, exportBtn); });
+  // 「推送到守护进程」：只有工程目录才有，单 .stlog 是包文件，守护进程不收。
+  // 打开时不自动推 —— 用户可能只是想翻翻记录。
+  var pushBtn = document.createElement('button');
+  pushBtn.className = 't-stlog-btn';
+  pushBtn.textContent = '推送到守护进程';
+  pushBtn.style.display = 'none';
+  pushBtn.addEventListener('click', function () { stlogPushToDaemon(tab); });
   actions.appendChild(countEl);
   actions.appendChild(yearBtn);
   actions.appendChild(modeBtn);
   actions.appendChild(exportBtn);
+  actions.appendChild(pushBtn);
 
   bar.appendChild(infoBox);
   bar.appendChild(actions);
@@ -6160,7 +6171,9 @@ function openStlogTab(path) {
     source: 'gui',
     _stlog: {
       offset: 0, total: 0, loaded: false, loading: false, rendered: false,
-      mode: 'hex', frames: [], modeBtn: modeBtn,
+      // isDir：工程目录（可以推给守护进程）；单个 .stlog 一律只读
+      isDir: kind === 'session',
+      mode: 'hex', frames: [], modeBtn: modeBtn, pushBtn: pushBtn,
       content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
     },
     _page: {
@@ -6186,43 +6199,17 @@ function openStlogTab(path) {
   // 关键：遮罩是按「当前活动标签」判定的，直接改 state.activeTab 不会触发重算。
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
+  stlogSyncPushBtn(tab);
   stlogLoad(tab);
   return tab;
 }
 
-// _projectNeedsDaemon 提示「工程要守护进程」，两个入口共用一段文案。
-function _projectNeedsDaemon() {
-  showAlert('需要守护进程',
-    '工程目录要恢复成一个能继续用的会话，得先把守护进程起来。\n\n' +
-    '菜单 → 守护进程 → 启动守护进程\n\n' +
-    '只想看看记录？用「从文件打开 → .stlog 文件」，那个不需要守护进程。', null, true);
-}
-
-// openProjectTab 把一个工程目录恢复成守护进程里的会话页（单端口 / 转发）。
+// openProjectTab 打开一个工程目录：先给一页只读浏览（离线也能翻记录）。
 //
-// 工程不是"只读文件"：它带着连接方式和业务设置，打开就该是一页能继续用的会话
-// —— 串口面板、发送区、统计、历史都在。所以这条路必须有守护进程；离线时明确
-// 拒绝，而不是退化成文件浏览页（只读浏览的入口是单个 .stlog）。
-//
-// 实现上不自己拼标签页：在 _pendingProjectPaths 里登记，让 syncDaemonSessions
-// 认出这个进程并按普通会话建页（那套建页逻辑很长，复制一份必然漂移）。
+// 想接着用的时候按顶栏「推送到守护进程」，它会被守护进程恢复成会话页
+// （单端口 / 转发），然后这个只读页自行关闭（见 stlogPushToDaemon）。
 function openProjectTab(path) {
-  if (!state.daemonOnline) {
-    _projectNeedsDaemon();
-    return;
-  }
-  // 同一个工程已经开着：切过去，别为它再建一个进程
-  for (var i = 0; i < state.tabs.length; i++) {
-    if (state.tabs[i]._projectPath === path) { switchTab(i); return; }
-  }
-
-  state._pendingProjectPaths[path] = true;
-  window.go.main.App.OpenStlogSession(path).then(function () {
-    return _waitProjectTab(path);
-  }).catch(function (err) {
-    delete state._pendingProjectPaths[path];
-    showAlert('打开工程失败', String(err), null, true);
-  });
+  openStlogTab(path, 'session');
 }
 
 // _waitProjectTab 等 syncDaemonSessions 把工程建成标签页，然后切过去。
@@ -6247,13 +6234,77 @@ function _waitProjectTab(path) {
   });
 }
 
+// stlogSyncPushBtn 刷新顶栏「推送到守护进程」按钮的状态。
+//
+// 单 .stlog 没有这个能力（守护进程不收包文件），直接隐藏 —— 留个永远点不动的
+// 灰按钮只会让人以为功能坏了。
+function stlogSyncPushBtn(tab) {
+  var st = tab._stlog;
+  var btn = st.pushBtn;
+  if (!btn) return;
+  if (!st.isDir) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  btn.textContent = '推送到守护进程';
+  if (!state.daemonOnline) {
+    btn.disabled = true;
+    btn.title = '守护进程未启动（菜单 守护进程 → 启停）';
+    return;
+  }
+  btn.disabled = false;
+  btn.title = '把这个工程交给守护进程，恢复成会话页（单端口 / 转发）；历史从共享环读';
+}
+
+// stlogPushToDaemon 把当前只读工程页交给守护进程，换成会话页。
+//
+// 会话页由 syncDaemonSessions 建（_pendingProjectPaths 登记 + _waitProjectTab 等），
+// 建成并切过去之后，这个只读页就没有存在意义了，静默关掉。
+// 失败时保持原样：数据还在，报个错就行。
+function stlogPushToDaemon(tab) {
+  var st = tab._stlog;
+  if (!st.isDir || st.pushing || !state.daemonOnline) return;
+  st.pushing = true;
+  if (st.pushBtn) { st.pushBtn.disabled = true; st.pushBtn.textContent = '推送中…'; }
+  state._pendingProjectPaths[tab.path] = true;
+  window.go.main.App.OpenStlogSession(tab.path).then(function () {
+    return _waitProjectTab(tab.path);
+  }).then(function () {
+    _closeStlogByPath(tab.path);
+  }).catch(function (err) {
+    st.pushing = false;
+    delete state._pendingProjectPaths[tab.path];
+    stlogSyncPushBtn(tab);
+    showAlert('推送到守护进程失败', String(err) + '\n\n这一页仍然按本地文件读。', null, true);
+  });
+}
+
+// _closeStlogByPath 静默关掉某个只读页（推送成功后由会话页接手）。
+//
+// 不走 closeTab：那里会处理 sessionId 清理、焦点转移和模式刷新，而这里只是把
+// 一个不持有会话的页摘掉，顺手把 activeTab 索引修正到会话页上。
+function _closeStlogByPath(path) {
+  for (var i = 0; i < state.tabs.length; i++) {
+    var t = state.tabs[i];
+    if (t.type !== 'stlog' || t.path !== path) continue;
+    if (t._page) { t._page.destroy(); t._page = null; }
+    state.tabs.splice(i, 1);
+    if (state.activeTab > i) state.activeTab--;
+    else if (state.activeTab === i) state.activeTab = Math.max(0, state.tabs.length - 1);
+    renderTabs();
+    updateEmptyState();
+    var cur = getActiveTab();
+    if (cur && cur._page) cur._page.show();
+    return;
+  }
+}
+
 // chooseOpenFile 「新建会话 → 从文件打开」的入口：先问开哪种，再弹对应的系统对话框。
 //
-// 两条路性质完全不同：工程目录会被恢复成会话（需要守护进程），.stlog 文件只是
-// 只读浏览（离线也能用）。Windows 一个对话框选不了两种，所以先问一句。
+// 两种都能离线打开、都是只读浏览。区别是工程目录多一个「推送到守护进程」的
+// 能力：点了会被守护进程恢复成能继续用的会话页。Windows 一个对话框选不了两种，
+// 所以先问一句。
 function chooseOpenFile() {
   showChoice('打开会话',
-    '要打开的是哪种？\n\n· 工程目录：恢复成一个能继续用的会话（单端口 / 转发），需要守护进程\n· .stlog 文件：单个包文件，只读浏览，不需要守护进程',
+    '要打开的是哪种？\n\n· 工程目录：先按只读页浏览，需要时推送到守护进程，恢复成会话\n· .stlog 文件：单个包文件，只读浏览\n\n两种都能离线打开',
     [
       { label: '工程目录', onPick: pickProjectDir },
       { label: '.stlog 文件', onPick: pickStlogFile }
@@ -6289,13 +6340,8 @@ function _pickPath(dlg, kind, open) {
   });
 }
 
-// pickProjectDir 选一个工程目录，交给守护进程恢复成会话。
+// pickProjectDir 选一个工程目录，开成只读页（顶栏可推送到守护进程）。
 function pickProjectDir() {
-  if (!state.daemonOnline) {
-    // 早点说，别让用户挑完目录才被告知要守护进程
-    _projectNeedsDaemon();
-    return;
-  }
   _pickPath(window.go.main.App.PickStlogDir(), 'session', openProjectTab);
 }
 
