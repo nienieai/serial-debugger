@@ -102,7 +102,12 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 // daemonReadyRepeat 是「守护进程就绪」事件的重发间隔（见 watchDaemonReady）。
-const daemonReadyRepeat = 3 * time.Second
+//
+// 1 秒而不是更长：手动启停 daemon 时，GUI 只能靠这个事件发现它起来了
+// （GUI 自己点的「启动」走 App.StartDaemon，会主动连，不受这个间隔影响）。
+// 实测间隔 3s 时，daemon 起来后 3.0s 才注册，看着就像「慢连接」。
+// 代价可以忽略：在线时前端收到事件立刻 return，根本不调 Go。
+const daemonReadyRepeat = 1 * time.Second
 
 // watchDaemonReady 把「守护进程就绪」变成前端可订阅的事件。
 //
@@ -117,8 +122,13 @@ func (a *App) watchDaemonReady(ctx context.Context) {
 		if !pipe.WaitReady(1 * time.Second) {
 			continue
 		}
+		// 端点从不可用变成可用：立刻通知，不用等下一个重发周期
 		runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
-		for ctx.Err() == nil && pipe.WaitReady(300*time.Millisecond) {
+		for ctx.Err() == nil {
+			// 端点消失（守护进程退出）就回外层，等它下次就绪时**立即**再通知
+			if !pipe.WaitReady(300 * time.Millisecond) {
+				break
+			}
 			time.Sleep(daemonReadyRepeat)
 			runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
 		}
