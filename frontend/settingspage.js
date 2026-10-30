@@ -480,6 +480,9 @@ function buildSettingsPage() {
 			function(v) { _tabSet('tabSubLine', v); })));
 	bTabLayout.appendChild(_row(t('settings.tab_name_max', '名字最大宽度'),
 		(function() {
+			// 输入框右边挂一个 px：单看「170」分不清是像素还是字符数
+			var wrap = document.createElement('span');
+			wrap.className = 'settings-num';
 			var inp = document.createElement('input');
 			inp.type = 'number';
 			inp.className = 'settings-select';
@@ -492,7 +495,12 @@ function buildSettingsPage() {
 				inp.value = String(n);
 				_tabSet('tabNameMax', n);
 			});
-			return inp;
+			wrap.appendChild(inp);
+			var unit = document.createElement('span');
+			unit.className = 'settings-unit';
+			unit.textContent = 'px';
+			wrap.appendChild(unit);
+			return wrap;
 		})()));
 	panelTabs.appendChild(bTabLayout);
 

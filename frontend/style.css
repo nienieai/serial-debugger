@@ -511,6 +511,14 @@ body[data-tab-lines="2"] .tab-ico.is-ro::after { width: 7px; height: 7px; box-sh
 body[data-tab-lines="2"] .tab-port { font-size: 14px; }
 body[data-tab-lines="2"] .tab-btn .close-tab { width: 26px; height: 26px; }
 body[data-tab-lines="2"] .tab-placeholder { height: 45px; }
+/* 「+」在双行下也必须还是方框。它同时挂着 .tab-btn，会被上面那条 height:45px
+   按 (0,2,1) 的权重压过 .tab-new 的 28×28 —— 只改高不改宽，方框被抻成 28×45 的
+   竖条。等比放到 42（28 × 1.5，和其它元素同一口径）；padding 归零是因为
+   .tab-btn 那行给的是 0 6px 0 9px，左右不等会让「+」偏左。 */
+body[data-tab-lines="2"] .tab-new {
+  width: 42px; height: 42px; min-width: 42px;
+  padding: 0; border-radius: 10px; font-size: 18px;
+}
 
 /* ---- 8a-3. 拥挤降级 ----
    顺序由 data-tab-collapse 决定：
@@ -1972,6 +1980,27 @@ input.settings-select { -moz-appearance: textfield; }
 input.settings-select::-webkit-inner-spin-button,
 input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
+/* 数值框 + 单位：光一个 170 看不出是像素还是字符数，右边挂个单位 */
+.settings-num { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.settings-num > .settings-select { flex: 1 1 auto; min-width: 0; }
+.settings-unit { flex: none; font-size: 13px; color: var(--placeholder); }
+
+/* ---- 标签页：卡内两列 ----
+   与「编码与显示」同一套（label 170 + 控件吃满半列）。这面板只有 7 项、控件又小，
+   单列满宽时 .settings-select 的 flex:1 1 auto 会把下拉框拉到 800+ px，
+   整张卡看起来就是几个长条；分两列后控件回到 310 上下，和同页其它面板一致。 */
+.settings-panel[data-panel="tabs"] > .settings-bubble {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 44px;
+  align-items: start;
+}
+.settings-panel[data-panel="tabs"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
+/* 第一排两格不要上分割线。grid 里行仍按 DOM 顺序流动：
+   nth-child(2) 是第一排左、nth-child(3) 是第一排右。 */
+.settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(2),
+.settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(3) { border-top: none; }
+
 /* ---- 整体外观：一行式 ---- */
 .settings-modeline { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .settings-modeline-main { display: flex; align-items: center; gap: 14px; flex: 1 1 320px; min-width: 0; }
@@ -2356,11 +2385,17 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 /* ---- 窄屏：卡内字段退回单列，去掉竖线 ---- */
 @media (max-width: 1249px) {
   .settings-panel[data-panel="display"] > .settings-bubble,
-  .settings-panel[data-panel="storage"] > .settings-bubble {
+  .settings-panel[data-panel="storage"] > .settings-bubble,
+  .settings-panel[data-panel="tabs"] > .settings-bubble {
     display: block;
   }
   .settings-panel[data-panel="display"] > .settings-bubble::after,
   .settings-panel[data-panel="storage"] > .settings-bubble::after { display: none; }
+  /* 落回单列后「第一排右格」这个概念不存在了，把那条去线规则还回去，
+     否则第二个字段上方会少一道分割线 */
+  .settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(3) {
+    border-top: 1px solid var(--border);
+  }
   .settings-about2 { grid-template-columns: 1fr; gap: 22px; }
 }
 @media (max-width: 620px) {
