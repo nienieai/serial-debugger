@@ -1932,7 +1932,8 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
   border-top: none;
 }
 .settings-panel[data-panel="display"] > .settings-bubble::after,
-.settings-panel[data-panel="storage"] > .settings-bubble::after {
+.settings-panel[data-panel="storage"] > .settings-bubble::after,
+.settings-panel[data-panel="tabs"] > .settings-bubble::after {
   content: '';
   position: absolute;
   left: 50%;
@@ -2390,7 +2391,8 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
     display: block;
   }
   .settings-panel[data-panel="display"] > .settings-bubble::after,
-  .settings-panel[data-panel="storage"] > .settings-bubble::after { display: none; }
+  .settings-panel[data-panel="storage"] > .settings-bubble::after,
+  .settings-panel[data-panel="tabs"] > .settings-bubble::after { display: none; }
   /* 落回单列后「第一排右格」这个概念不存在了，把那条去线规则还回去，
      否则第二个字段上方会少一道分割线 */
   .settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(3) {
