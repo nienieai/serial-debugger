@@ -2,7 +2,7 @@
 
 > 本文档维护：**待实现**（按优先级排序的表）、**已知问题**（表）、**进行中版本**与近期版本（v0.6.3 ～ v0.8.3）的已完成记录；
 > 更早版本完成情况见 [CHANGELOG.md](CHANGELOG.md)。
-> 会话文件（`.stlog`）的格式方案在 `docs/archive/会话文件方案-v1.4.md`——**该目录已 gitignore，只在本机留档**，阶段表 P1–P4 在该文件 §12 之后。
+> 会话文件（`.stlog`）的格式规范在 [docs/format/stlog-format.md](docs/format/stlog-format.md)（**已进版本控制**：改格式字段必须同 PR 改规范，版本演进见 [docs/format/CHANGES.md](docs/format/CHANGES.md)）。
 
 ## 待实现
 

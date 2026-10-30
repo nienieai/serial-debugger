@@ -15,3 +15,6 @@
 # Windows 批处理保持 CRLF，否则 cmd.exe 解析可能出错
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# .stlog 是定长页 + 整页 CRC：任何换行转换都会把文件写坏
+*.stlog binary
