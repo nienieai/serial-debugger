@@ -1109,6 +1109,22 @@ func probeDropPath(p string) DropProbe {
 	return DropProbe{Path: p, Kind: "file"}
 }
 
+// OpenStlogSession 把一个 .stlog 会话（目录或 v1.4 单文件）推给守护进程，
+// 由它开一个文件会话进程。返回的 processId 之后走常规会话接口读数据。
+func (a *App) OpenStlogSession(path string) (map[string]any, error) {
+	if path == "" {
+		return nil, fmt.Errorf("路径为空")
+	}
+	result, err := a.call(contract.SessionOpen, map[string]any{"path": path})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("守护进程没有返回会话信息")
+	}
+	return result, nil
+}
+
 // OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
 //
 // 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，

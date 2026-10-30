@@ -3067,6 +3067,12 @@ function closeTab(idx) {
   if (tab.sessionId && state.daemonOnline) {
     window.go.main.App.CloseSession(tab.sessionId).catch(() => {});
   }
+  // 文件页的会话进程由 session.open 建出来，关标签时要一并销毁，否则守护进程里
+  // 会累积一堆没人用的文件会话
+  if (tab.type === 'stlog' && tab._stlog && tab._stlog.processId && state.daemonOnline) {
+    window.go.main.App.CloseSession(tab._stlog.processId).catch(() => {});
+    tab._stlog.processId = '';
+  }
   if (tab.sessionId) {
     delete state.historyCache[tab.sessionId];
     delete state.statsBase[tab.sessionId];
@@ -3353,7 +3359,7 @@ function _tabPopRenderFile() {
   '</div>';
 
   // 页脚三项：帧（已载入/总数）、时长、来源数。绝对时间范围退到 title。
-  var loaded = (typeof st.offset === 'number') ? st.offset : 0;
+  var loaded = (st.frames && st.frames.length) ? st.frames.length : 0;
   var totalFrames = (typeof info.total === 'number') ? info.total : 0;
   var srcCount = (info.origins && info.origins.length) ? info.origins.length : 0;
   var range = stlogRangeText(info.firstTs, info.lastTs) || '';
@@ -3393,7 +3399,7 @@ function _tabPopSpanText(firstTs, lastTs) {
 function _tabPopFileSig() {
   var st = (_tabPop && _tabPop.tab && _tabPop.tab._stlog) || {};
   var info = st.info || {};
-  return ['file', info.path || '', info.total || 0, st.offset || 0].join('|');
+  return ['file', info.path || '', info.total || 0, (st.frames ? st.frames.length : 0)].join('|');
 }
 
 function _tabPopRender() {
@@ -5813,6 +5819,9 @@ function stlogBaseName(p) {
 
 // 与 Go 侧 stlogDirName / 导出一致：1/2/3/4 是 rx/tx/P1/P2，其它算系统事件。
 function stlogDirName(d) {
+  // 会话接口回来的方向已经是字符串（rx/tx/1/2/system），原样用；
+  // 本地 ReadStlogFrames 回来的是数字，走下面的映射。
+  if (typeof d === 'string') return d;
   switch (d & 0x7f) {
     case 1: return 'rx';
     case 2: return 'tx';
@@ -5892,49 +5901,76 @@ function stlogBarText(info) {
   return parts.join(' · ');
 }
 
-function stlogUpdateChrome(tab, info) {
+function stlogUpdateChrome(tab) {
   var st = tab._stlog;
+  var info = st.info || {};
   st.meta.textContent = stlogBarText(info);
   // 完整来源串放进 title：顶栏只显示种类，鼠标停上去能看到具体是哪个客户端
   st.meta.title = (info.origins && info.origins.length)
     ? info.origins.join(', ')
     : '这个文件里没有来源信息（Rx 恒无来源；样本文件通常是合成的）';
-  st.count.textContent = '帧 ' + st.offset + ' / ' + st.total;
-  if (st.offset >= st.total) {
+  var loaded = st.frames.length;
+  var total = (typeof info.total === 'number') ? info.total : loaded;
+  st.count.textContent = '帧 ' + loaded + ' / ' + total;
+  if (st.exhausted) {
     st.more.style.display = 'none';
   } else {
     st.more.style.display = '';
-    st.moreBtn.textContent = '加载更多（还有 ' + (st.total - st.offset) + ' 帧）';
+    st.moreBtn.textContent = '加载更多（还有 ' + Math.max(0, total - loaded) + ' 帧）';
   }
 }
 
-// stlogLoad 追加一批帧。offset 由服务端回显，避免前后端各算一套。
+// stlogLoad 从守护进程取一批帧。
+//
+// v2 起文件页的数据源是守护进程里的文件会话（session.open 建出来的进程），
+// 所以分页方式与实时会话一致：**从最新往前翻**。已载入的帧按时间正序显示，
+// 更早的一批 unshift 到数组前面再整体重画。
 function stlogLoad(tab) {
   var st = tab._stlog;
-  if (st.loading || (st.loaded && st.offset >= st.total)) return;
+  if (!st.processId || st.loading || st.exhausted) return;
   st.loading = true;
   st.moreBtn.disabled = true;
-  window.go.main.App.ReadStlogFrames(tab.path, st.offset, STLOG_PAGE_SIZE).then(function (info) {
+
+  // 游标 = 当前最旧一条的 tsMs + 这一毫秒里已经拿了几条
+  var beforeMs = 0, sameTsSkip = 0;
+  if (st.frames.length) {
+    beforeMs = st.frames[0].tsMs || 0;
+    for (var i = 0; i < st.frames.length; i++) {
+      if ((st.frames[i].tsMs || 0) !== beforeMs) break;
+      sameTsSkip++;
+    }
+  }
+
+  window.go.main.App.GetSessionHistory(st.processId, STLOG_PAGE_SIZE, beforeMs, sameTsSkip).then(function (data) {
     st.loading = false;
     st.moreBtn.disabled = false;
     st.loaded = true;
-    st.total = info.total;
-    st.info = info;             // 浮窗要拿它显示大小/页/记录/时间范围/来源
-    var frames = info.frames || [];
-    frames.forEach(function (f) {
-      st.frames.push(f);          // 缓存一份，切 Hex/文本、切年份时重画不用重新读文件
-      makeDataRow(st.content, stlogDirName(f.dir),
-                  stlogTsText(f.ts, state.stlogShowYear !== false), f.hex,
-                  null, { displayMode: st.mode }, f.origin || '');
-    });
-    st.offset = info.offset + frames.length;
-    if (!st.rendered) {
-      st.rendered = true;
-      if (st.total === 0) stlogSysRow(tab, '文件里没有帧');
-      st.content.scrollTop = 0;
+    if (!data) {
+      st.exhausted = true;
+      stlogSysRow(tab, '读取失败（进程可能已销毁）');
+      return;
     }
-    stlogUpdateChrome(tab, info);
-    st.content.appendChild(st.more); // 「加载更多」永远待在最后一行之后
+    var hist = (data.history || []).map(function (e) {
+      return { ts: e.tsMs, tsMs: e.tsMs, dir: e.direction, hex: e.hex, origin: e.origin };
+    });
+    if (hist.length === 0) {
+      st.exhausted = true;
+      if (!st.rendered) {
+        st.rendered = true;
+        stlogSysRow(tab, '文件里没有帧');
+      }
+      stlogUpdateChrome(tab);
+      return;
+    }
+    st.frames = hist.concat(st.frames);
+    st.rendered = true;
+    st.exhausted = !data.hasMore;
+    stlogRerender(tab);
+    stlogUpdateChrome(tab);
+    if (!st.firstLoadDone) {
+      st.firstLoadDone = true;
+      st.content.scrollTop = st.content.scrollHeight; // 最新一条在最下面
+    }
   }).catch(function (err) {
     st.loading = false;
     st.moreBtn.disabled = false;
@@ -6094,8 +6130,34 @@ function openStlogTab(path) {
   // 关键：遮罩是按「当前活动标签」判定的，直接改 state.activeTab 不会触发重算。
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
-  stlogLoad(tab);
+  _stlogOpenInDaemon(tab);
   return tab;
+}
+
+// _stlogOpenInDaemon 把文件推给守护进程，由它开一个文件会话进程，再从那里取数据。
+//
+// 帧走进程的共享环（分页用 GetSessionHistory）；摘要（大小/页/记录/来源）仍由本地
+// 读一次文件拿到——它只用于顶栏和浮窗，不参与分页。
+//
+// 离线时打不开：这条链路必须经过守护进程，和「完全切到 daemon」的选择一致。
+function _stlogOpenInDaemon(tab) {
+  var st = tab._stlog;
+  if (!state.daemonOnline) {
+    stlogSysRow(tab, '守护进程未运行，无法打开文件会话');
+    return;
+  }
+  window.go.main.App.OpenStlogSession(tab.path).then(function (res) {
+    st.processId = res.processId;
+    // 摘要：只取 1 帧，够拼顶栏和浮窗
+    return window.go.main.App.ReadStlogFrames(tab.path, 0, 1);
+  }).then(function (info) {
+    st.info = info || {};
+    stlogUpdateChrome(tab);
+    stlogLoad(tab);
+  }).catch(function (err) {
+    if (window.console) console.error('[stlog] open ' + tab.path, err);
+    stlogSysRow(tab, '打开文件会话失败: ' + String(err));
+  });
 }
 
 // chooseOpenFile 弹系统文件对话框选一个 .stlog，再开成文件标签页。

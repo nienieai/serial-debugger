@@ -94,6 +94,8 @@ export function OpenSession(arg1:main.SerialConfig):Promise<string>;
 
 export function OpenStlogFile(arg1:string):Promise<Record<string, any>>;
 
+export function OpenStlogSession(arg1:string):Promise<Record<string, any>>;
+
 export function PickStlogFile():Promise<string>;
 
 export function ProbeDroppedPaths(arg1:Array<string>):Promise<Array<main.DropProbe>>;
