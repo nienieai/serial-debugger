@@ -1201,20 +1201,21 @@ func startDaemonProcess() (string, error) {
 }
 
 func findDaemonExe() string {
+	name := daemonExeName()
 	exePath, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(exePath)
-		p := filepath.Join(dir, "serial-daemon.exe")
+		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 	if wd, err := os.Getwd(); err == nil {
-		p := filepath.Join(wd, "serial-daemon.exe")
+		p := filepath.Join(wd, name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
-		p = filepath.Join(wd, "build", "bin", "serial-daemon.exe")
+		p = filepath.Join(wd, "build", "bin", name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}

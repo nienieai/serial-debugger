@@ -185,7 +185,7 @@ func cmdCheck() {
 	if !processRunning {
 		runColor = ansiRed
 	}
-	fmt.Printf("进程检测 (tasklist): %s\n",
+	fmt.Printf("进程检测: %s\n",
 		paintOut(map[bool]string{true: "true", false: "false"}[processRunning], runColor))
 
 	info, err := client.DaemonInfo()
@@ -197,7 +197,7 @@ func cmdCheck() {
 			fmt.Println(paintOut("⚠ IPC 协议不兼容（要求 MAJOR.MINOR 一致），请执行 serial-cli start 重启守护进程", ansiYellow))
 		}
 		if !processRunning {
-			fmt.Println("(tasklist 检测失效，但守护进程实际运行中)")
+			fmt.Println("(进程检测失效，但守护进程实际运行中)")
 		}
 		return
 	}

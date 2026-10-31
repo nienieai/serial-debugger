@@ -14,6 +14,12 @@ func hideWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 }
 
+// daemonExeName 返回守护进程可执行文件名。Windows 上必须带 .exe，
+// 否则 findDaemonExe 找不到它（Linux 上叫 serial-daemon，见 process_other.go）。
+func daemonExeName() string {
+	return "serial-daemon.exe"
+}
+
 // IsDaemonProcessRunning 检查进程列表里是否有 serial-daemon.exe。
 //
 // 注意这只是一个**启发式**判断：tasklist 被安全软件拦截、系统繁忙导致
