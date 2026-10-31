@@ -16,14 +16,19 @@
   --reserve-top: 82px;
 
   /* 菜单毛玻璃（顶部菜单栏 + 下拉菜单 + 标签右键菜单）。
-     参数直接沿用标签悬浮卡（c-tabpop）那一套 —— 它已经在产品里调到能看：
-     10% 底色 + blur(20px)，透明度靠 backdrop-filter 的模糊兜住可读性，
-     而不是靠把底色堆厚。第一版我试过 82% 底色的「假毛玻璃」，那样只是
-     半透明色块，背后的纹理全被盖死，和悬浮卡也不是一个观感。
-     想单独调菜单就覆盖 --menu-glass-*，不影响悬浮卡。 */
-  --menu-glass-bg: var(--tabpop-glass-bg);
+     下拉/右键菜单压在**正文**上，标签悬浮卡只压在标签栏上 —— 场景不同，不再共用
+     一档底色（原先 --menu-glass-* 是 alias 到 --tabpop-*，10% 的底压在正文上完全
+     挡不住，背后代码块的对比度原样透上来把菜单文字吞掉）。
+     现在两件事分工：底色负责整体压住背后的内容，文字光晕负责字周围那一圈。
+     光晕颜色必须与主题的「背景」同向才算反色 —— 浅色白蒙版 + 白晕、深色提亮蒙版
+     + 黑晕；反过来会变成一圈脏边。参考正运算范围 0.17.4（css/03-canvas.css:327）
+     同一场景的取值，这里先取淡一档（.30）再按真机效果调。
+     想单独调顶部菜单栏就覆盖 --header-glass-bg（它背后是 body 纯色，不需要压）。 */
+  --menu-glass-bg: rgba(255, 255, 255, 0.30);
   --menu-glass-border: var(--tabpop-glass-border);
   --menu-glass-blur: var(--tabpop-glass-blur);
+  --menu-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+  --header-glass-bg: var(--tabpop-glass-bg);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -41,6 +46,8 @@
     --tabpop-glass-border: rgba(160, 160, 160, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
+    --menu-glass-bg: rgba(255, 255, 255, 0.14);
+    --menu-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
     /* 拖入遮罩：半透明 + 模糊，透出下面的标签栏和内容 */
     --dropmask-bg: rgba(18, 18, 18, 0.55);
   }
@@ -60,6 +67,8 @@
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
+    --menu-glass-bg: rgba(255, 255, 255, 0.30);
+    --menu-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
     --dropmask-bg: rgba(248, 248, 248, 0.55);
   }
 }
@@ -78,6 +87,8 @@
   --tabpop-glass-border: rgba(160, 160, 160, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
+  --menu-glass-bg: rgba(255, 255, 255, 0.14);
+  --menu-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
   --dropmask-bg: rgba(18, 18, 18, 0.55);
 }
 
@@ -94,6 +105,8 @@
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
+  --menu-glass-bg: rgba(255, 255, 255, 0.30);
+  --menu-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
   --dropmask-bg: rgba(248, 248, 248, 0.55);
 }
 
@@ -251,7 +264,7 @@ button:disabled:active { transform: none; box-shadow: none; }
      只是溢出到 header 外面），一旦 header 也有 backdrop-filter，菜单采样到的
      就是那 26px 高的菜单栏本身 → 模糊出来是空的，表现成「纯透明、背后文字
      原样透过来」。标签悬浮卡 c-tabpop 挂在 body 下没有这层祖先，所以它正常。 */
-  background: var(--menu-glass-bg);
+  background: var(--header-glass-bg);
   border-bottom: 1px solid var(--menu-glass-border);
   flex-shrink: 0; user-select: none; height: 26px;
   /* 菜单下拉必须压在标签栏和页面之上。header 自身没有定位时，下拉的 z-index:100
@@ -284,14 +297,26 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-item:hover .menu-dropdown { display: none; }
 .menu-item.is-open .menu-dropdown { display: block; }
 
+/* 反色文字光晕：下拉浮在正文之上，背后内容已被 blur(20px) 糊成大色块，
+   字周围补一圈与背景同色的光晕就能立住。零偏移双层模糊 —— 不用
+   `0 1px 2px` 那种投影，投影只往一个方向推，光晕要四周都裹住才隔得开。
+   text-shadow 可继承，挂在容器上，按钮/快捷键/文字一起带上。
+   顶部菜单栏不加：它背后是 body 纯色，没有内容穿透，加了只会让字发虚。 */
+.menu-dropdown, .menu-sub-dropdown { text-shadow: var(--menu-text-glow); }
+
 /* Menu items: 4-zone grid (chk 22px | text 1fr | shortcut auto | arrow 22px) */
 .menu-dropdown button, .menu-sub-dropdown button, .menu-sub-trigger {
   display: grid; grid-template-columns: 22px 1fr auto 22px; align-items: center;
   width: 100%; text-align: left; background: transparent; border: none; border-radius: 0;
   padding: 6px 8px; font-size: 13px; cursor: pointer; color: var(--fg);
+  /* 光晕必须显式写：Chromium 的 UA 样式阻断 text-shadow 继承进 button / input
+     （实测只挂在 .menu-dropdown 上时，button 算出来是 none），菜单项文字全在
+     button 里，靠继承会静默失效。 */
+  text-shadow: var(--menu-text-glow);
 }
 .menu-dropdown button:hover, .menu-sub-dropdown button:hover, .menu-sub-trigger:hover {
-  background: var(--hover); border-radius: 4px;
+  /* 悬停时菜单项是实色底，背后不再有东西要隔开，白晕/黑晕反而会显出一圈亮边 */
+  background: var(--hover); border-radius: 4px; text-shadow: none;
 }
 .menu-chk { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
 .chk.on { position: relative; }
