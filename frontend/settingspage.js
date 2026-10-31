@@ -271,18 +271,19 @@ function buildSettingsPage() {
 	panelDisplay.appendChild(bFont);
 
 	// ── 新标签页的默认值（存守护进程的 daemon.ini）──
-	// 这三块原来编辑的是「全局设置」；0.8.4 起语义变成「新标签页的默认值」——
-	// 单个标签页的值在 标签右键菜单 →「标签页设置」里改。
-	// 守护进程离线时写不了 daemon.ini，整组置灰：改不了就别让人点。
+	// 这三块编辑的是「新标签页的默认值」，写的是守护进程的 daemon.ini。
+	// 守护进程离线时根本写不了那个文件，显示的也还是上次启动时的旧值 ——
+	// 整块不显示，免得让人对着一组改了没用的控件。
 	var defOff = !state.daemonOnline;
+	var defHide = !state.daemonOnline;
 
 	var bDefEnc = _bubble(t('settings.bubble_encoding','编码格式'));
 	bDefEnc.appendChild(_row(t('settings.bubble_encoding','编码格式'),
 		_buildSelect(['utf-8','gb2312','ascii'], ['UTF-8','GB2312','ASCII'],
 			state._dispDefaults.encoding,
 			function(v) { _setDispDefault('encoding', v); }, defOff)));
-	bDefEnc.appendChild(_bubbleFooter('defenc', t('settings.hint_defaults',
-		'这里是新标签页的默认值，保存在守护进程的 settings\\daemon.ini；单个标签页可在标签右键菜单里单独设置。')));
+
+	if (defHide) bDefEnc.classList.add('is-hidden');
 	panelDisplay.appendChild(bDefEnc);
 
 	var bDefHex = _bubble(t('settings.bubble_hex','Hex显示设置'));
@@ -298,6 +299,7 @@ function buildSettingsPage() {
 			[ t('settings.sep_space','空格'), t('settings.sep_comma','逗号'), t('settings.sep_none','无分割') ],
 			state._dispDefaults.hexSep,
 			function(v) { _setDispDefault('hexSep', v); }, defOff)));
+	if (defHide) bDefHex.classList.add('is-hidden');
 	panelDisplay.appendChild(bDefHex);
 
 	var bDefText = _bubble(t('settings.bubble_text','文本显示设置'));
@@ -317,6 +319,7 @@ function buildSettingsPage() {
 	bDefText.appendChild(_row(t('settings.copy_hex_escapes','允许复制转义字节'),
 		_buildToggle(function() { _setDispDefault('copyHexEscapes', !state._dispDefaults.copyHexEscapes); },
 			state._dispDefaults.copyHexEscapes, defOff)));
+	if (defHide) bDefText.classList.add('is-hidden');
 	panelDisplay.appendChild(bDefText);
 
 	var bText = _bubble(t('settings.bubble_behavior','行为'));

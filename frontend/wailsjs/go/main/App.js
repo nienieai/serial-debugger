@@ -234,6 +234,10 @@ export function SaveAppSettings(arg1) {
   return window['go']['main']['App']['SaveAppSettings'](arg1);
 }
 
+export function SaveDisplayDefaults(arg1) {
+  return window['go']['main']['App']['SaveDisplayDefaults'](arg1);
+}
+
 export function SearchHistory(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SearchHistory'](arg1, arg2, arg3, arg4);
 }
