@@ -529,5 +529,6 @@
   "settings.color_send_ph": "Texto de ayuda",
   "settings.send_preview_text": "Texto",
   "settings.send_preview_hex": "Hex",
-  "settings.send_preview_empty": "Vacío"
+  "settings.send_preview_empty": "Vacío",
+  "settings.bubble_colors_basic": "Básico"
 }

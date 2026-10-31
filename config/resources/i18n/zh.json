@@ -529,5 +529,6 @@
   "settings.color_send_ph": "占位提示",
   "settings.send_preview_text": "文本",
   "settings.send_preview_hex": "Hex",
-  "settings.send_preview_empty": "空"
+  "settings.send_preview_empty": "空",
+  "settings.bubble_colors_basic": "基础"
 }

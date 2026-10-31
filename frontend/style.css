@@ -2379,9 +2379,10 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   align-items: start;
 }
 .settings-panel[data-panel="colors"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
+/* 端口转发卡只有一组，单列：两块预览并排、表格吃满整卡 */
+.settings-panel[data-panel="colors"] > .settings-bubble[data-bubble="forward"] { display: block; }
+.settings-panel[data-panel="colors"] > .settings-bubble[data-bubble="forward"]::after { display: none; }
 .c-color-group { min-width: 0; }
-/* 三组：历史流 | 发送框 一行，端口转发独占一行（它 9 项，摆半列会挤成两半） */
-.settings-panel[data-panel="colors"] > .settings-bubble > .c-color-group:last-child { grid-column: 1 / -1; }
 .c-color-head { gap: 6px; }
 .c-color-head__chk { width: 26px; }
 .c-color-head__grp { width: 62px; }

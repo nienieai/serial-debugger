@@ -529,5 +529,6 @@
   "settings.color_send_ph": "Texte indicatif",
   "settings.send_preview_text": "Texte",
   "settings.send_preview_hex": "Hex",
-  "settings.send_preview_empty": "Vide"
+  "settings.send_preview_empty": "Vide",
+  "settings.bubble_colors_basic": "Général"
 }

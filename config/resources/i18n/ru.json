@@ -529,5 +529,6 @@
   "settings.color_send_ph": "Подсказка",
   "settings.send_preview_text": "Текст",
   "settings.send_preview_hex": "Hex",
-  "settings.send_preview_empty": "Пусто"
+  "settings.send_preview_empty": "Пусто",
+  "settings.bubble_colors_basic": "Основное"
 }

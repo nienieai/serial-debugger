@@ -529,5 +529,6 @@
   "settings.color_send_ph": "プレースホルダー",
   "settings.send_preview_text": "テキスト",
   "settings.send_preview_hex": "Hex",
-  "settings.send_preview_empty": "空"
+  "settings.send_preview_empty": "空",
+  "settings.bubble_colors_basic": "基本"
 }

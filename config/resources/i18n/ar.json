@@ -529,5 +529,6 @@
   "settings.color_send_ph": "نص العنصر النائب",
   "settings.send_preview_text": "نص",
   "settings.send_preview_hex": "Hex",
-  "settings.send_preview_empty": "فارغ"
+  "settings.send_preview_empty": "فارغ",
+  "settings.bubble_colors_basic": "أساسي"
 }

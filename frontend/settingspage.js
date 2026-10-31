@@ -330,7 +330,6 @@ function buildSettingsPage() {
 	panelDisplay.appendChild(bAdv);
 
 	// Display color overrides — new layout: [name] [bg-color:dark|light] [fg-color:dark|light]
-	var bColor = _bubble(t('settings.bubble_colors_display','数据高亮'), _buildColorResetBtn());
 	var colorGroups = [
 		// kind 决定用哪个预览渲染器：stream = 主显示区那条路径（makeDataRow），
 		// send = 发送框预览，fwd = 端口转发。历史流那一组就是原来的「单端口」，
@@ -369,16 +368,19 @@ function buildSettingsPage() {
 			{ key: 'fctrl',  i18n: 'settings.color_ctrl',    fb: '控制字符', bgKey: 'fctrlBg', fgKey: 'fctrlFg' }
 		]}
 	];
-	colorGroups.forEach(function(grp) {
-		// 每组包一层，两个分组在宽屏下并排（窄屏自动落成单列）
+	// 往一张卡里塞一个颜色分组。showTitle=false 时不画 `.c-color-sep` —— 卡片标题
+	// 已经叫「端口转发」了，组标题再写一遍是重复。
+	function _appendColorGroup(host, grp, showTitle) {
 		var group = document.createElement('div');
 		group.className = 'c-color-group';
-		var sep = document.createElement('div');
-		sep.className = 'c-color-sep';
-		var sepLbl = document.createElement('span');
-		sepLbl.textContent = grp.title;
-		sep.appendChild(sepLbl);
-		group.appendChild(sep);
+		if (showTitle !== false) {
+			var sep = document.createElement('div');
+			sep.className = 'c-color-sep';
+			var sepLbl = document.createElement('span');
+			sepLbl.textContent = grp.title;
+			sep.appendChild(sepLbl);
+			group.appendChild(sep);
+		}
 		// Preview section
 		var preview = document.createElement('div');
 		preview.className = 'c-color-preview-wrap';
@@ -418,14 +420,24 @@ function buildSettingsPage() {
 		hdr.appendChild(hdrFg);
 		group.appendChild(hdr);
 		grp.items.forEach(function(cfg) { group.appendChild(_buildColorRow(cfg)); });
-		bColor.appendChild(group);
+		host.appendChild(group);
 		// Render preview after DOM attached
 		setTimeout(function() {
 			if ((grp.kind || 'stream') === 'send') _renderSendPreview(preview);
 			else _renderColorPreview(grp.items, preview, grp.kind);
 		}, 10);
-	});
-	panelColors.appendChild(bColor);
+	}
+
+	// 两张卡：基础（历史流 + 发送框）｜端口转发
+	var bBasic = _bubble(t('settings.bubble_colors_basic','基础'), _buildColorResetBtn());
+	_appendColorGroup(bBasic, colorGroups[0]);   // 历史流
+	_appendColorGroup(bBasic, colorGroups[1]);   // 发送框
+	panelColors.appendChild(bBasic);
+
+	var bFwd = _bubble(t('settings.color_group_forward','端口转发'));
+	bFwd.setAttribute('data-bubble', 'forward');
+	_appendColorGroup(bFwd, colorGroups[2], false);
+	panelColors.appendChild(bFwd);
 
 	// ── Panel: 外观 ──
 	var panelAppear = document.createElement('div');
