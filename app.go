@@ -544,6 +544,27 @@ func (a *App) GetClients() []map[string]any {
 	return out
 }
 
+// GetDisplayDefaults 返回 daemon.ini 的 [display] 段：新标签页的显示设置初始值。
+// 守护进程没在跑时返回 nil，由前端用内置默认值兜底（离线也得能建标签页）。
+func (a *App) GetDisplayDefaults() map[string]any {
+	result, err := a.call(contract.DisplayDefaults, nil)
+	if err != nil {
+		return nil
+	}
+	d, _ := result["display"].(map[string]any)
+	return d
+}
+
+// SetSessionDisplay 把一条会话的显示设置写进它的工程文件。
+// 普通串口会话没有工程目录，守护进程那边只更新内存、不落盘，也不算失败。
+func (a *App) SetSessionDisplay(processID string, display map[string]any) error {
+	_, err := a.call(contract.SessionSetDisplay, map[string]any{
+		"processId": processID,
+		"display":   display,
+	})
+	return err
+}
+
 func (a *App) GetSessions() []map[string]any {
 	result, err := a.call(contract.ProcessList, nil)
 	if err != nil {

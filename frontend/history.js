@@ -279,6 +279,10 @@ function _originLabel(origin) {
 // opts（可选）：{ displayMode } —— 只给设置页的颜色预览用，让它能在一屏里同时
 // 画「文本」和「Hex」两种渲染，而不必去改全局 state.displayMode。
 function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
+  // 显示设置按标签页走：这里把渲染上下文设成当前标签页（或调用方显式指定的
+  // opts.disp），下面 decoder.js 的渲染函数就用这一份，不再读全局 state。
+  var _disp = (opts && opts.disp) || _dispOf();
+  setDisplayContext(_disp);
   const row = document.createElement('div');
   row.className = 'data-row';
 
@@ -342,7 +346,7 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
   } else {
     // Legacy fallback: JS-side hexToText (backward compat for cached entries)
     let text;
-    if (state.encoding === 'ascii') {
+    if (_disp.encoding === 'ascii') {
       text = sanitizeText(hexToText(hex));
     } else {
       text = hexToText(hex);

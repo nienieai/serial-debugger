@@ -232,8 +232,9 @@ function buildSettingsPage() {
 	panelColors.className = 'settings-panel is-hidden';
 	panelColors.setAttribute('data-panel', 'colors');
 
-	var bInput = _bubble(t('settings.bubble_encoding','编码格式'));
-	bInput.appendChild(_row(t('settings.bubble_encoding','编码格式'), _buildEncodingSelect()));
+	// 编码格式 0.8.4 起改按标签页设置（标签右键菜单 →「标签页设置」）。
+	// 设置页只保留与「当前是哪个标签页」无关的排版项。
+	var bInput = _bubble(t('settings.bubble_typography','排版'));
 	bInput.appendChild(_row(t('settings.tab_size','制表符长度'),
 		_buildSelect([1,2,3,4,5,6,7,8], ['1','2','3','4','5','6','7','8'], state.tabSize, function(v) { state.tabSize = parseInt(v); _applyDisplayStyle(); saveSettings(); })
 	));
@@ -269,32 +270,11 @@ function buildSettingsPage() {
 	bFont.appendChild(_row(t('settings.font_size','字号'), fontSizeInput));
 	panelDisplay.appendChild(bFont);
 
-	var bHex = _bubble(t('settings.bubble_hex','Hex显示设置'));
-	bHex.appendChild(_row(t('settings.hex_prefix','Hex 前缀 (0x)'), _buildToggle(function() { toggleHexPrefix(); }, state.hexPrefix)));
-	bHex.appendChild(_row(t('settings.hex_case','Hex 大写'), _buildToggle(function() { toggleHexCase(); }, state.hexCase === 'upper')));
-	bHex.appendChild(_row(t('settings.hex_sep','Hex 分隔符'),
-		_buildSelect(['none','space','comma'], [t('settings.sep_none','无分割'),t('settings.sep_space','空格'),t('settings.sep_comma','逗号')], state.hexSep, function(v) { setHexSep(v); })
-	));
-	panelDisplay.appendChild(bHex);
-
-	var bText = _bubble(t('settings.bubble_text','文本显示设置'));
-	bText.appendChild(_row(t('settings.hex_escape','转义字节'),
-		_buildSelect(['show','hide','raw'], [t('settings.esc_show','显示 /FF'),t('settings.esc_hide','隐藏转义'),t('settings.esc_raw','原始输出')], state.hexEscapeMode, function(v) { setHexEscapeMode(v); _updateHexEscFmtRow(); })
-	));
-	var hexEscFmtRow = _row(t('settings.hex_escape_fmt','转义格式'),
-		_buildSelect(['slash','backslash-x','0x','angle','bracket'],
-			[t('settings.esc_fmt_slash','/FF'), t('settings.esc_fmt_bslash_x','\\xFF'), t('settings.esc_fmt_0x','0xFF'), t('settings.esc_fmt_angle','<FF>'), t('settings.esc_fmt_bracket','[FF]')],
-			state.hexEscapeFormat || 'slash',
-			function(v) { setHexEscapeFormat(v); }
-		)
-	);
-	hexEscFmtRow.id = 'hexEscFmtRow';
-	bText.appendChild(hexEscFmtRow);
-	bText.appendChild(_row(t('settings.cr_visible','可见控制字符'), _buildToggle(function() { toggleCrVisible(); }, state.crVisible)));
-	bText.appendChild(_row(t('settings.copy_hex_escapes','允许复制转义字节'), _buildToggle(function() { state.copyHexEscapes = !state.copyHexEscapes; saveSettings(); }, state.copyHexEscapes)));
+	// Hex 显示设置（前缀 / 大小写 / 分隔）与文本显示设置（转义字节 / 控制字符 /
+	// 复制）0.8.4 起都按标签页走 —— 整体搬到「标签页设置」弹窗，设置页不再有这两块：
+	// 它们属于某一条会话的「怎么看」，不分标签页地摆在这里只会误导。
+	var bText = _bubble(t('settings.bubble_behavior','行为'));
 	bText.appendChild(_row(t('settings.lock_scroll','默认锁定滚动'), _buildToggle(function() { state.scrollLocked = !state.scrollLocked; saveSettings(); }, state.scrollLocked)));
-	// Initial visibility for format row
-	hexEscFmtRow.classList.toggle('is-hidden', state.hexEscapeMode !== 'show');
 	panelDisplay.appendChild(bText);
 
 	// 高级：历史渲染窗口行数

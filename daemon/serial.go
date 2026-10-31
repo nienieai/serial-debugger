@@ -218,6 +218,14 @@ type Process struct {
 	// sessionPath 非空表示这是一个从 .stlog 打开的只读文件会话（见 OpenSession）
 	sessionPath string
 
+	// display 是这条会话的显示设置（编码 / Hex / 控制字符 / 转义）。
+	//
+	// 只有工程会话会从 settings.json 读出来、并在改动时写回去；普通串口会话
+	// 这里是空的 —— 那些设置只活在 GUI 的标签页里，进程一关就没了（与线程名
+	// 同一套取舍：一个口下次还是不是「同一个会话」本来就说不清）。
+	displayMu sync.RWMutex
+	display   map[string]any
+
 	// customName 是用户起的线程名（nameMu 保护）。空串表示「用自动名」：
 	// 自动名按当前模式与端口现算（见 autoName），所以「先建空闲会话、之后才连上
 	// 端口」这种常见流程不需要在 connect/switch 各处挂钩子，名字自己就会变过来。
@@ -1900,6 +1908,60 @@ func persistSessionLabel(dir, name string) error {
 	return sessionfile.SaveSettingsDoc(dir, doc)
 }
 
+// Display 返回这条会话的显示设置（工程会话才有，普通会话是 nil）。
+func (p *Process) Display() map[string]any {
+	p.displayMu.RLock()
+	defer p.displayMu.RUnlock()
+	if p.display == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p.display))
+	for k, v := range p.display {
+		out[k] = v
+	}
+	return out
+}
+
+// SetDisplay 记下一条会话的显示设置，工程会话顺手写回工程目录的 settings.json。
+//
+// 普通串口会话（sessionPath 为空）只更新内存、不落盘：这些设置按标签页走，
+// 进程一关就没了 —— 与线程名同一套取舍。没有工程目录时也不会失败，
+// 只是无事可做，所以返回 nil。
+func (pm *ProcessManager) SetDisplay(id string, display map[string]any) error {
+	pm.mu.RLock()
+	proc, ok := pm.processes[id]
+	pm.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("process not found: %s", id)
+	}
+
+	proc.displayMu.Lock()
+	proc.display = display
+	path := proc.sessionPath
+	proc.displayMu.Unlock()
+
+	if path == "" {
+		return nil
+	}
+	if err := persistSessionDisplay(path, display); err != nil {
+		// 内存里已经生效了，落盘失败只记日志：改显示设置不该因为工程目录
+		// 只读、被杀软占住就整体失败。
+		logOp("错误", "进程 #%s 的显示设置写回工程失败: %v", id, err)
+	}
+	return nil
+}
+
+// persistSessionDisplay 把显示设置写进工程目录的 settings.json（display 段）。
+// 与 persistSessionLabel 同一套：只动设置文档，不碰已封包的字节。
+func persistSessionDisplay(dir string, display map[string]any) error {
+	doc, err := sessionfile.LoadSettingsDoc(dir)
+	if err != nil {
+		doc = &sessionfile.SettingsDoc{V: sessionfile.SettingsDocVer, Mode: sessionfile.ModeSingle}
+	}
+	doc.Display = display
+	return sessionfile.SaveSettingsDoc(dir, doc)
+}
+
 // OpenSession 把一个**工程目录**变成守护进程里的一个进程。
 //
 // 只接受工程目录（manifest.json + pkg-*.stlog）：单个 .stlog 是包文件，没有设置
@@ -1961,6 +2023,14 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 	// 拿来当名字正好，不会显示成「会话 #3」。
 	if s := info.Settings; s != nil && s.Label != "" {
 		proc.SetCustomName(strings.TrimSpace(s.Label))
+	}
+	// 工程里存过显示设置就带进进程：GUI 建标签页时直接用这一份，而不是
+	// daemon.ini 的默认值 —— 打开一个旧工程，看到的就是它当初的样子。
+	// 注意读的是 settings.json（SettingsDoc），不是包头槽那份录制快照。
+	if doc, derr := sessionfile.LoadSettingsDoc(path); derr == nil && len(doc.Display) > 0 {
+		proc.displayMu.Lock()
+		proc.display = doc.Display
+		proc.displayMu.Unlock()
 	}
 
 	// 清掉 Create 写的那条「端口已声明」：文件里本来就有自己的系统帧，
@@ -2425,6 +2495,11 @@ func (pm *ProcessManager) List() []map[string]any {
 			// 文件会话进程（session.open 建出来的）带工程目录路径；普通进程是空串。
 			// 前端据此不给它另建标签页 —— 文件页本身就是它的视图。
 			"sessionPath": p.sessionPath,
+		}
+		// 工程会话的显示设置（settings.json 的 display 段）。普通会话没有，
+		// GUI 就按 daemon.ini 的默认值建标签页。
+		if d := p.Display(); len(d) > 0 {
+			entry["display"] = d
 		}
 		// Include config for connected processes and idle processes that have stored config
 		hasConfig := p.status == "connected" || p.config.Port != ""

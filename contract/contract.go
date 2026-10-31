@@ -63,8 +63,18 @@ const (
 	SessionHistory      Method = "session.history"
 	SessionStats        Method = "session.stats"
 	SessionClearHistory Method = "session.clearhistory"
-	SendTrigger         Method = "send.trigger"
-	SendRingName        Method = "send.ringname"
+	// SessionSetDisplay 把一条会话的显示设置（编码 / Hex / 控制字符 / 转义）
+	// 写进它的工程文件：{processId, display:{...}}。
+	// 没有工程目录的会话（普通串口 / 空闲）不落盘 —— 这些设置只活在标签页里。
+	SessionSetDisplay Method = "session.setdisplay"
+	SendTrigger       Method = "send.trigger"
+	SendRingName      Method = "send.ringname"
+)
+
+// ── 显示设置默认值 ──
+const (
+	// DisplayDefaults 返回 daemon.ini [display] 段：新会话的显示设置初始值。
+	DisplayDefaults Method = "display.defaults"
 )
 
 // ── 自动发送与多字符串 ──
@@ -115,6 +125,7 @@ var All = []Method{
 	ForwardCreate, ProcessRename,
 	// 数据收发与历史
 	SessionSend, SessionHistory, SessionStats, SessionClearHistory,
+	SessionSetDisplay, DisplayDefaults,
 	SendTrigger, SendRingName,
 	// 自动发送与多字符串
 	AutosendStart, AutosendStop, AutosendStatus, AutosendInterval,

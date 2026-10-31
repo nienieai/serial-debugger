@@ -1229,6 +1229,26 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
+	case contract.DisplayDefaults:
+		// 新会话的显示设置初始值：daemon.ini 的 [display] 段（缺键回内置默认）
+		return protocol.Response{ID: req.ID, Result: map[string]any{"display": processDaemonSettings().Display}}
+
+	case contract.SessionSetDisplay:
+		var p struct {
+			ProcessID string         `json:"processId"`
+			Display   map[string]any `json:"display"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.ProcessID == "" {
+			return protocol.Response{ID: req.ID, Error: "processId required"}
+		}
+		if err := s.pm.SetDisplay(p.ProcessID, p.Display); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
+
 	case contract.SessionOpen:
 		// 把一个 .stlog 会话推给守护进程：建进程、灌数据，之后按正常会话接口读
 		var p struct {

@@ -22,14 +22,13 @@ const state = {
   quickPresets: [],
   _qpCycleActive: false,
   _qpCycleTimer: null,
-  encoding: 'utf-8',
-  hexCase: 'upper',
-  hexPrefix: true,
-  hexSep: 'space',
-  crVisible: true,
-  hexEscapeMode: 'show',
-  hexEscapeFormat: 'slash',
-  copyHexEscapes: true,
+  // 显示设置的**默认值**（daemon.ini 的 [display] 段，连不上守护进程时用内置默认）。
+  // 0.8.4 起编码 / Hex / 控制字符 / 转义 这几项不再存在 gui.ini，而是按标签页走：
+  // 每个会话标签页有自己的 disp（见 _newTabDisp），默认值从这里拷。
+  _dispDefaults: {
+    encoding: 'utf-8', hexCase: 'upper', hexPrefix: true, hexSep: 'space',
+    crVisible: true, hexEscapeMode: 'show', hexEscapeFormat: 'slash', copyHexEscapes: true
+  },
   displayFontFamily: 'Consolas',
   displayFontSize: 14,
   tabSize: 4,
@@ -86,6 +85,99 @@ function getSendState() {
   return tab._s;
 }
 
+// ---- 按标签页的显示设置 ----
+//
+// 0.8.4 起 encoding / hexCase / hexPrefix / hexSep / crVisible / hexEscapeMode /
+// hexEscapeFormat / copyHexEscapes 这 8 项不再是全局 state，而是挂在标签页上
+// （tab.disp）。默认值来自 daemon.ini 的 [display] 段（state._dispDefaults）。
+//
+// 只有工程会话会把这些落盘（写进工程目录的 settings.json）；普通串口会话、
+// 空闲会话的设置只活在标签页里，关掉标签页就回默认值。
+
+// 取一个标签页的显示设置；不传就用当前标签页。非会话标签页（设置页 / 选择页 /
+// .stlog 本地页）没有 disp，回落到默认值。
+function _dispOf(tab) {
+  if (tab === undefined) tab = getActiveTab();
+  return (tab && tab.disp) ? tab.disp : state._dispDefaults;
+}
+
+// 新标签页的 disp：从默认值深拷贝一份，免得几个标签页共享同一个对象。
+function _newTabDisp() {
+  return Object.assign({}, state._dispDefaults);
+}
+
+// 改当前标签页的某一项显示设置（菜单与标签页设置弹窗共用）。
+//
+// 落盘规则：工程会话才写回工程文件；其它会话只改内存。改完要重渲染当前标签页 ——
+// 这 8 项全都只影响「怎么看」，不影响已经收到的字节。
+function _setDisp(key, val) {
+  var tab = getActiveTab();
+  var disp = _dispOf(tab);
+  if (disp[key] === val) return;
+  disp[key] = val;
+  if (tab && tab.sessionId && state.daemonOnline) {
+    // 守护进程那边只负责工程会话的落盘；普通会话它只更新内存
+    window.go.main.App.SetSessionDisplay(tab.sessionId, disp).catch(function() {});
+  }
+  // 编码变了要通知解码线程，并重解缓存
+  if (key === 'encoding' && tab && tab.sessionId) {
+    window.go.main.App.SetTabEncoding(tab.sessionId, val).catch(function() {});
+    _redecodeActiveTab(val);
+  }
+}
+
+// 从守护进程拉显示设置默认值（daemon.ini 的 [display] 段）。守护进程没在跑时
+// Go 侧返回 nil，保持内置默认 —— 离线也照样能建标签页。
+async function loadDisplayDefaults() {
+  try {
+    var raw = await window.go.main.App.GetDisplayDefaults();
+    if (raw) _applyDisplayDefaults(raw);
+  } catch (e) {}
+}
+
+// ini 里一切都是字符串，这里按各自的值域校验并转换，非法值一律忽略（保持默认）。
+function _applyDisplayDefaults(raw) {
+  var d = state._dispDefaults;
+  var isBool = function(v) { return typeof v === 'boolean'; };
+  var toBool = function(v) { return v === true || v === 'true'; };
+  var pick = function(k, conv, ok) {
+    var v = raw[k];
+    if (v === undefined || v === null) return;
+    var val = conv ? conv(v) : v;
+    if (ok(val)) d[k] = val;
+  };
+  pick('encoding', null, function(v) { return v === 'utf-8' || v === 'gb2312' || v === 'ascii'; });
+  pick('hexCase', null, function(v) { return v === 'upper' || v === 'lower'; });
+  pick('hexPrefix', toBool, isBool);
+  pick('hexSep', null, function(v) { return v === 'space' || v === 'comma' || v === 'none'; });
+  pick('crVisible', toBool, isBool);
+  pick('hexEscapeMode', null, function(v) { return v === 'show' || v === 'hide' || v === 'raw'; });
+  pick('hexEscapeFormat', null, function(v) { return typeof v === 'string' && v !== ''; });
+  pick('copyHexEscapes', toBool, isBool);
+  _syncDispUi();
+}
+
+// 用新的编码重解当前标签页缓存里的历史（编码是唯一影响解码的设置项）。
+async function _redecodeActiveTab(enc) {
+  var tab = getActiveTab();
+  if (!tab || !tab.sessionId) return;
+  var entries = state.historyCache[tab.sessionId];
+  if (!entries || !entries.length) { _rerenderHistoryKeepingView(); return; }
+  var hexes = [];
+  for (var i = 0; i < entries.length; i++) {
+    if (entries[i].hex) hexes.push(entries[i].hex);
+  }
+  if (hexes.length > 0) {
+    try {
+      var results = await window.go.main.App.BatchDecodeForTab(hexes, enc);
+      for (var j = 0; j < entries.length && j < results.length; j++) {
+        if (entries[j].hex) entries[j].segments = results[j];
+      }
+    } catch (e) {}
+  }
+  _rerenderHistoryKeepingView();
+}
+
 // ---- settings persistence ----
 let _saveSettingsTimer = null;
 let _syncQuickPresetsTimer = null;
@@ -130,14 +222,9 @@ function _collectSettings() {
       append: {
         suffix: (pageEl('appendSelect')||{}).value,
       },
-      encoding: state.encoding,
-      hexCase: state.hexCase,
-      hexPrefix: state.hexPrefix,
-      hexSep: state.hexSep,
-      crVisible: state.crVisible,
-      hexEscapeMode: state.hexEscapeMode,
-      hexEscapeFormat: state.hexEscapeFormat,
-      copyHexEscapes: state.copyHexEscapes,
+      // 注意：encoding / hexCase / hexPrefix / hexSep / crVisible / hexEscapeMode /
+      // hexEscapeFormat / copyHexEscapes 这 8 项**不再写进 gui.ini** —— 它们按标签页走，
+      // 默认值来自守护进程的 daemon.ini，工程会话写进工程目录的 settings.json。
       displayFontFamily: state.displayFontFamily,
       displayFontSize: state.displayFontSize,
       tabSize: state.tabSize,
@@ -210,20 +297,9 @@ async function loadSettings() {
         if (sel) { sel.value = s.append.suffix; var csWrap = sel.closest('.cs-wrap'); if (csWrap && typeof _csRefresh === 'function') _csRefresh(csWrap); }
               }
 
-      if (s.encoding && (s.encoding === 'ascii' || s.encoding === 'gb2312' || s.encoding === 'utf-8')) {
-        state.encoding = s.encoding;
-        updateEncodingDisplay();
-      }
-      if (s.hexCase === 'upper' || s.hexCase === 'lower') state.hexCase = s.hexCase;
-      if (typeof s.hexPrefix === 'boolean') state.hexPrefix = s.hexPrefix;
-      if (s.hexSep === 'space' || s.hexSep === 'comma' || s.hexSep === 'none') state.hexSep = s.hexSep;
-      if (typeof s.crVisible === 'boolean') state.crVisible = s.crVisible;
-      if (s.hexEscapeMode === 'show' || s.hexEscapeMode === 'hide' || s.hexEscapeMode === 'raw') state.hexEscapeMode = s.hexEscapeMode;
-      else if (typeof s.showHexEscapes === 'boolean') state.hexEscapeMode = s.showHexEscapes ? 'show' : 'raw';
-      if (typeof s.hexEscapeFormat === 'string') state.hexEscapeFormat = s.hexEscapeFormat;
-      if (typeof s.copyHexEscapes === 'boolean') state.copyHexEscapes = s.copyHexEscapes;
-      updateHexMenu();
-      updateTextMenu();
+      // 编码 / Hex / 控制字符 / 转义 这几项 0.8.4 起按标签页走，不再从 gui.ini 读；
+      // 默认值由 loadDisplayDefaults() 从守护进程的 daemon.ini 拉。gui.ini 里的旧值
+      // 就此作废（用户明确要求这些不再算客户端设置）。
       if (s.colorThemeId && typeof s.colorThemeId === 'string') {
         var cid = s.colorThemeId;
         // Migrate old virtual IDs → base id + mode
@@ -471,45 +547,31 @@ function _applyDisplayStyle() {
 }
 
 function updateEncodingDisplay() {
-  if (_statusBar) _statusBar.updateEncoding({encoding: state.encoding});
+  var d = _dispOf();
+  if (_statusBar) _statusBar.updateEncoding({encoding: d.encoding});
   ['ascii','gb2312','utf-8'].forEach(e => {
     const btn = document.getElementById('menuEnc' + (e === 'utf-8' ? 'Utf8' : e.charAt(0).toUpperCase() + e.slice(1)));
     if (!btn) return;
     const chk = btn.querySelector('.chk');
-    if (chk) chk.classList.toggle('on', state.encoding === e);
+    if (chk) chk.classList.toggle('on', d.encoding === e);
   });
 }
 
-async function setEncoding(enc) {
-  if (state.encoding === enc) return;
-  state.encoding = enc;
+// 编码是**当前标签页**的设置（0.8.4 起不再全局）。切换只影响这一个标签页的解码
+// 线程和它自己缓存里的历史，别的标签页不动。
+function setEncoding(enc) {
+  if (_dispOf().encoding === enc) return;
+  _setDisp('encoding', enc);
   updateEncodingDisplay();
-  saveSettings();
-  // Notify Go: update all tab decode workers
-  if (state.daemonOnline) {
-    state.tabs.forEach(function(t) {
-      if (t.sessionId) window.go.main.App.SetTabEncoding(t.sessionId, enc);
-    });
-  }
-  // Re-decode cached history entries with new encoding
-  for (var key in state.historyCache) {
-    if (!state.historyCache.hasOwnProperty(key) || key === '_id') continue;
-    var entries = state.historyCache[key];
-    var hexes = [];
-    for (var i = 0; i < entries.length; i++) {
-      if (entries[i].hex) hexes.push(entries[i].hex);
-    }
-    if (hexes.length > 0) {
-      try {
-        var results = await window.go.main.App.BatchDecodeForTab(hexes, enc);
-        for (var j = 0; j < entries.length && j < results.length; j++) {
-          if (entries[j].hex) entries[j].segments = results[j];
-        }
-      } catch (e) {}
-    }
-  }
-  // Re-render active tab
-  _rerenderHistoryKeepingView();
+}
+
+// 当前标签页的显示设置变了之后，把状态栏/菜单勾选/标签页设置弹窗都刷一遍。
+function _syncDispUi() {
+  updateEncodingDisplay();
+  updateHexMenu();
+  updateTextMenu();
+  _updateHexEscFmtRow();
+  if (typeof syncTabSettingsPopup === 'function') syncTabSettingsPopup();
 }
 
 // ---- alert helper ----
@@ -1038,6 +1100,7 @@ function applyI18n() {
   var _menuI18n = {
     menuThemeSettings:    ['menu.theme_settings',  '主题设置'],
     menuAppSettings:      ['menu.app_settings',    '软件设置'],
+    menuTabSettings:      ['tabset.title',          '标签页设置'],
     menuNewSession:       ['menu.new_session',     '新建会话'],
     menuCloseSession:     ['menu.close_session',   '关闭会话'],
     menuQuit:             ['menu.quit',            '退出'],
@@ -1608,7 +1671,7 @@ document.addEventListener('copy', function(e) {
   // Strip markers before extracting text so only real characters enter the clipboard.
   var frag = rng.cloneContents();
   frag.querySelectorAll('.ctrl-mark').forEach(function(el) { el.remove(); });
-  if (!state.copyHexEscapes) {
+  if (!_dispOf().copyHexEscapes) {
     var hex = frag.querySelectorAll('.hex-escape,.hex-fescape');
     for (var i = 0; i < hex.length; i++) hex[i].remove();
   }
@@ -2181,6 +2244,8 @@ async function tryConnect() {
       state.connectFailures = 0;
       updateDaemonUI();
       updateOpenBtn();
+      // 先取显示设置默认值，再同步会话 —— 后面建标签页要用它初始化 disp
+      await loadDisplayDefaults();
       await syncDaemonSessions();
       // GUI 的「默认自动保存」存在 gui.ini，是本地真相：连上后推给守护进程，
       // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
@@ -2365,7 +2430,7 @@ async function syncDaemonSessions(procData) {
             guiSessionIds.add(ds.id);
             if (ds.id && state.daemonOnline) {
               window.go.main.App.StartTabDecoder(ds.id);
-              window.go.main.App.SetTabEncoding(ds.id, state.encoding);
+              window.go.main.App.SetTabEncoding(ds.id, _dispOf(orphan).encoding);
             }
             tabsChanged = true;
             return;
@@ -2390,6 +2455,9 @@ async function syncDaemonSessions(procData) {
           dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
           forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
         } : null,
+        // 工程会话带 settings.json 里的 display（打开旧工程看到的就是它当初的样子）；
+        // 普通会话用 daemon.ini 的默认值
+        disp: ds.display ? Object.assign({}, state._dispDefaults, ds.display) : _newTabDisp(),
         displayMode: state.displayMode,
         txDisplayMode: state.txDisplayMode,
         p1DisplayMode: 'text',
@@ -2406,7 +2474,7 @@ async function syncDaemonSessions(procData) {
       // Start per-tab Go decode worker
       if (ds.id && state.daemonOnline) {
         window.go.main.App.StartTabDecoder(ds.id);
-        window.go.main.App.SetTabEncoding(ds.id, state.encoding);
+        window.go.main.App.SetTabEncoding(ds.id, newTab.disp.encoding);
       }
       tabsChanged = true;
     }
@@ -3065,6 +3133,8 @@ function _sessionTabDefaults(mode, id) {
     source: 'gui',
     // 新页沿用当前全局的显示模式（否则一旦发生 tabsChanged，同步会拿这里的
     // 'text' 回填全局，把用户选好的 Hex 顶掉）
+    // 按标签页的显示设置（编码 / Hex / 控制字符 / 转义）：新标签页从默认值拷一份
+    disp: _newTabDisp(),
     displayMode: state.displayMode || 'text',
     txDisplayMode: state.txDisplayMode || 'text',
     p1DisplayMode: state.p1DisplayMode || 'text',
@@ -3136,7 +3206,7 @@ function _convertChooserToSession(tab, sid, mode) {
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
-    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, _dispOf(tab).encoding); } catch (e) {}
   }
 
   state.activeTab = idx;
@@ -3168,7 +3238,7 @@ async function autoCreateIdleSession(mode) {
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
-    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, _dispOf(tab).encoding); } catch (e) {}
   }
   updateEmptyState();
   renderTabs();
@@ -3178,6 +3248,7 @@ async function autoCreateIdleSession(mode) {
 
 
 function switchTab(idx) {
+  closeTabSettings();   // 设置弹窗属于某一个标签页，切走就关掉
   var oldTab = getActiveTab();
   var newTab = state.tabs[idx];
   if (!newTab) return;
@@ -4192,6 +4263,10 @@ function _tabMenuOpen(clientX, clientY, idx) {
         onClick: function () { _tabMenuCopy(portName); }
       }));
     }
+    // 编码 / Hex / 控制字符 / 转义 这几项按标签页走，入口就在这里
+    menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.settings', '标签页设置…'), {
+      onClick: function () { openTabSettings(tab); }
+    }));
     menu.appendChild(_tabMenuSep());
   }
 
@@ -4874,6 +4949,149 @@ function _refreshSettingsI18n() {
   }).catch(function() {});
 }
 
+// ---- 标签页设置弹窗 ----
+//
+// 编码 / Hex / 控制字符 / 转义这 8 项从 0.8.4 起按**标签页**走：菜单里那三个子菜单、
+// 设置页和这个弹窗改的都是「当前这个标签页」。工程会话由守护进程写进工程目录的
+// settings.json；其余会话只活在内存里，关掉标签页就回默认值。
+var _tabSetEl = null;
+
+function closeTabSettings() {
+  if (_tabSetEl && _tabSetEl.parentNode) _tabSetEl.parentNode.removeChild(_tabSetEl);
+  _tabSetEl = null;
+}
+
+function openTabSettings(tab) {
+  tab = tab || getActiveTab();
+  if (!tab) return;
+  closeTabSettings();
+
+  var ov = document.createElement('div');
+  ov.className = 'o-overlay--modal';
+  ov.id = 'tabSetOverlay';
+  ov.addEventListener('click', function (e) { if (e.target === ov) closeTabSettings(); });
+
+  var pop = document.createElement('div');
+  pop.className = 'tabset-popup';
+
+  var head = document.createElement('div');
+  head.className = 'tabset-head';
+  var title = document.createElement('span');
+  title.className = 'tabset-title';
+  title.textContent = t('tabset.title', '标签页设置');
+  head.appendChild(title);
+  var sub = document.createElement('span');
+  sub.className = 'tabset-sub';
+  sub.textContent = (typeof _tabNameOf === 'function' ? _tabNameOf(tab) : '') || '';
+  head.appendChild(sub);
+  var close = document.createElement('button');
+  close.className = 'c-close-btn';
+  close.textContent = '✕';
+  close.addEventListener('click', closeTabSettings);
+  head.appendChild(close);
+  pop.appendChild(head);
+
+  var body = document.createElement('div');
+  body.className = 'tabset-body';
+
+  function row(label, ctl) {
+    var r = document.createElement('div');
+    r.className = 'tabset-row';
+    var l = document.createElement('span');
+    l.className = 'tabset-label';
+    l.textContent = label;
+    r.appendChild(l);
+    r.appendChild(ctl);
+    body.appendChild(r);
+    return r;
+  }
+  function sel(values, labels, cur, onChange) {
+    var s = document.createElement('select');
+    s.className = 'settings-select';
+    values.forEach(function (v, i) {
+      var o = document.createElement('option');
+      o.value = v; o.textContent = labels[i]; if (v === cur) o.selected = true;
+      s.appendChild(o);
+    });
+    s.addEventListener('change', function () { onChange(s.value); });
+    return s;
+  }
+  function tgl(cur, onChange) {
+    var lb = document.createElement('label');
+    lb.className = 'settings-toggle';
+    var inp = document.createElement('input');
+    inp.type = 'checkbox'; inp.checked = !!cur;
+    inp.addEventListener('change', function () { onChange(inp.checked); });
+    lb.appendChild(inp);
+    var sl = document.createElement('span');
+    sl.className = 'settings-toggle-slider';
+    lb.appendChild(sl);
+    return lb;
+  }
+
+  // 控件顺序与 syncTabSettingsPopup 里的下标一一对应，别插队
+  var d = _dispOf(tab);
+  row(t('settings.bubble_encoding', '编码格式'),
+    sel(['utf-8', 'gb2312', 'ascii'], ['UTF-8', 'GB2312', 'ASCII'], d.encoding,
+      function (v) { setEncoding(v); syncTabSettingsPopup(); }));
+  row(t('settings.hex_prefix', 'Hex 前缀 (0x)'),
+    tgl(d.hexPrefix, function () { toggleHexPrefix(); syncTabSettingsPopup(); }));
+  // 开关语义与设置页一致：开 = 大写。别做成「大写/小写」下拉 —— 标题写着「Hex 大写」
+  // 而选项是「小写」，读起来是自相矛盾的。
+  row(t('settings.hex_case', 'Hex 大写'),
+    tgl(d.hexCase === 'upper', function () { toggleHexCase(); syncTabSettingsPopup(); }));
+  row(t('settings.hex_sep', 'Hex 分隔符'),
+    sel(['space', 'comma', 'none'],
+      [t('settings.sep_space', '空格'), t('settings.sep_comma', '逗号'), t('settings.sep_none', '无')], d.hexSep,
+      function (v) { setHexSep(v); syncTabSettingsPopup(); }));
+  row(t('settings.hex_escape', '转义字节'),
+    sel(['show', 'hide', 'raw'],
+      [t('settings.esc_show', '显示 /FF'), t('settings.esc_hide', '隐藏'), t('settings.esc_raw', '原始')], d.hexEscapeMode,
+      function (v) { setHexEscapeMode(v); syncTabSettingsPopup(); }));
+  row(t('settings.hex_escape_fmt', '转义格式'),
+    sel(['slash', 'backslash-x', '0x', 'angle', 'bracket'],
+      ['/FF', '\\xFF', '0xFF', '<FF>', '[FF]'], d.hexEscapeFormat || 'slash',
+      function (v) { setHexEscapeFormat(v); }));
+  row(t('settings.cr_visible', '可见控制字符'),
+    tgl(d.crVisible, function () { toggleCrVisible(); syncTabSettingsPopup(); }));
+  row(t('settings.copy_hex_escapes', '允许复制转义字节'),
+    tgl(d.copyHexEscapes, function () { _setDisp('copyHexEscapes', !_dispOf(tab).copyHexEscapes); syncTabSettingsPopup(); }));
+
+  // 落盘范围说清楚：只有工程会话会写进工程文件
+  var foot = document.createElement('div');
+  foot.className = 'tabset-foot';
+  foot.textContent = tab._projectPath
+    ? t('tabset.saved_project', '这些设置属于这个标签页，并会写进它的工程文件（settings.json）。')
+    : t('tabset.saved_memory', '这些设置只属于这个标签页，不会保存；只有工程会话才写进工程文件。');
+  body.appendChild(foot);
+
+  pop.appendChild(body);
+  ov.appendChild(pop);
+  document.getElementById('app').appendChild(ov);
+  _tabSetEl = ov;
+  syncTabSettingsPopup();
+}
+
+// 弹窗开着时，任一处改动后把控件状态同步一遍（菜单和设置页改的是同一份数据）。
+function syncTabSettingsPopup() {
+  if (!_tabSetEl) return;
+  var tab = getActiveTab();
+  if (!tab) return;
+  var d = _dispOf(tab);
+  var sels = _tabSetEl.querySelectorAll('select');
+  var inputs = _tabSetEl.querySelectorAll('input[type=checkbox]');
+  if (sels[0]) sels[0].value = d.encoding;
+  if (sels[1]) sels[1].value = d.hexSep;
+  if (sels[2]) sels[2].value = d.hexEscapeMode;
+  if (sels[3]) sels[3].value = d.hexEscapeFormat || 'slash';
+  if (inputs[0]) inputs[0].checked = !!d.hexPrefix;
+  if (inputs[1]) inputs[1].checked = d.hexCase === 'upper';
+  if (inputs[2]) inputs[2].checked = !!d.crVisible;
+  if (inputs[3]) inputs[3].checked = !!d.copyHexEscapes;
+  var rows = _tabSetEl.querySelectorAll('.tabset-row');
+  if (rows[5]) rows[5].classList.toggle('is-hidden', d.hexEscapeMode !== 'show');
+}
+
 function openSettingsPage() {
   // Check if settings tab already exists
   var existingIdx = state.tabs.findIndex(function(t) { return t.type === 'settings'; });
@@ -5375,81 +5593,77 @@ function fmtSpeed(bps, tab) {
 }
 
 function toggleHexPrefix() {
-  state.hexPrefix = !state.hexPrefix;
-  updateHexMenu();
+  _setDisp('hexPrefix', !_dispOf().hexPrefix);
+  _syncDispUi();
   refreshHexDisplay();
-  saveSettings();
 }
 
 function toggleHexCase() {
-  state.hexCase = state.hexCase === 'upper' ? 'lower' : 'upper';
-  updateHexMenu();
+  _setDisp('hexCase', _dispOf().hexCase === 'upper' ? 'lower' : 'upper');
+  _syncDispUi();
   refreshHexDisplay();
-  saveSettings();
 }
 
 function setHexSep(val) {
-  if (state.hexSep === val) return;
-  state.hexSep = val;
-  updateHexMenu();
+  if (_dispOf().hexSep === val) return;
+  _setDisp('hexSep', val);
+  _syncDispUi();
   refreshHexDisplay();
-  saveSettings();
 }
 
 function updateHexMenu() {
+  const d = _dispOf();
   const setChk = (id, on) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     const chk = btn.querySelector('.chk');
     if (chk) chk.classList.toggle('on', on);
   };
-  setChk('menuHexPrefix', state.hexPrefix);
-  setChk('menuHexLower', state.hexCase === 'lower');
-  setChk('menuHexSepN', state.hexSep === 'none');
-  setChk('menuHexSepS', state.hexSep === 'space');
-  setChk('menuHexSepC', state.hexSep === 'comma');
+  setChk('menuHexPrefix', d.hexPrefix);
+  setChk('menuHexLower', d.hexCase === 'lower');
+  setChk('menuHexSepN', d.hexSep === 'none');
+  setChk('menuHexSepS', d.hexSep === 'space');
+  setChk('menuHexSepC', d.hexSep === 'comma');
 }
 
 function toggleCrVisible() {
-  state.crVisible = !state.crVisible;
-  updateTextMenu();
+  _setDisp('crVisible', !_dispOf().crVisible);
+  _syncDispUi();
   // Re-render to show/hide CR bubbles
   _rerenderHistoryKeepingView();
-  saveSettings();
 }
 
 function updateTextMenu() {
+  const d = _dispOf();
   const setChk = (id, on) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     const chk = btn.querySelector('.chk');
     if (chk) chk.classList.toggle('on', on);
   };
-  setChk('menuCrVisible', state.crVisible);
-  setChk('menuHexEscShow', state.hexEscapeMode === 'show');
-  setChk('menuHexEscHide', state.hexEscapeMode === 'hide');
-  setChk('menuHexEscRaw', state.hexEscapeMode === 'raw');
+  setChk('menuCrVisible', d.crVisible);
+  setChk('menuHexEscShow', d.hexEscapeMode === 'show');
+  setChk('menuHexEscHide', d.hexEscapeMode === 'hide');
+  setChk('menuHexEscRaw', d.hexEscapeMode === 'raw');
 }
 
 function setHexEscapeMode(mode) {
-  if (state.hexEscapeMode === mode) return;
-  state.hexEscapeMode = mode;
-  _updateHexEscFmtRow();
-  updateTextMenu();
+  if (_dispOf().hexEscapeMode === mode) return;
+  _setDisp('hexEscapeMode', mode);
+  _syncDispUi();
   _rerenderHistoryKeepingView();
-  saveSettings();
 }
 
 function setHexEscapeFormat(fmt) {
-  if (state.hexEscapeFormat === fmt) return;
-  state.hexEscapeFormat = fmt;
+  if (_dispOf().hexEscapeFormat === fmt) return;
+  _setDisp('hexEscapeFormat', fmt);
+  _syncDispUi();
   _rerenderHistoryKeepingView();
-  saveSettings();
 }
 
 function _updateHexEscFmtRow() {
   var row = document.getElementById('hexEscFmtRow');
-  if (row) row.classList.toggle('is-hidden', state.hexEscapeMode !== 'show');
+  if (row) row.classList.toggle('is-hidden', _dispOf().hexEscapeMode !== 'show');
 }
 
 function refreshHexDisplay() {
@@ -5666,6 +5880,8 @@ function updateSendInfo() {
 	let text = input ? input.value : '';
 	if (!text) { el.textContent = ''; return; }
 	let byteSize;
+	// 发送框的字节数按当前标签页的编码算（编码已按标签页走）
+	setDisplayContext(_dispOf());
 	if (ss.sendFormat === 'hex') {
 		text = _normalizeHexInput(text);
 		byteSize = Math.floor(text.length / 2);
