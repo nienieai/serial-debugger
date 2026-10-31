@@ -2469,7 +2469,7 @@ async function tryConnect() {
         if (_ct._page) { _ct._page.destroy(); _ct._page = null; }
         state.tabs.splice(_ci, 1);
       }
-      if (state.activeTab >= state.tabs.length) state.activeTab = state.tabs.length - 1;
+        _clampActiveTab();
       updateDaemonUI();
       updateOpenBtn();
       // 先取显示设置默认值，再同步会话 —— 后面建标签页要用它初始化 disp
@@ -2507,6 +2507,31 @@ function onDaemonGone(reason) {
 let syncPending = false;
 
 // 事件载荷用 "processId"，GetSessions 用 "id"；统一成 "id"。
+// _normalizeSessions 把守护进程的进程表整理成标签页用的形状。
+//
+// _clampActiveTab 把 activeTab 拉回合法区间。
+//
+// 为什么需要它：守护进程换实例时（见 syncDaemonSessions 里「换实例」那段兜底）
+// 会把会话标签全清空，然后 activeTab = tabs.length - 1 —— 空列表时就是 -1。
+// 而其它所有修正都写成 `if (activeTab >= tabs.length)`，-1 永远小于 length，
+// 条件为假，于是 activeTab 一直是 -1：
+//   标签栏有 COM16、状态栏「运行中」，但 appendLine 拿 state.tabs[-1] 得到
+//   undefined，数据一帧都画不出来 —— 主窗口内容区全空。
+// v2 的 0.8.4 也是这个毛病（同一份前端），不是 v3 迁移引入的。
+function _clampActiveTab() {
+  if (state.tabs.length === 0) {
+    state.activeTab = -1;
+    return;
+  }
+  if (state.activeTab < 0) {
+    state.activeTab = 0;
+    return;
+  }
+  if (state.activeTab < 0 || state.activeTab >= state.tabs.length) {
+    _clampActiveTab();
+  }
+}
+
 function _normalizeSessions(list) {
   return (list || []).map(p => {
     const e = Object.assign({}, p);
@@ -2807,9 +2832,7 @@ async function syncDaemonSessions(procData) {
         tabsChanged = true;
       }
     }
-    if (tabsChanged && state.activeTab >= state.tabs.length) {
-      state.activeTab = Math.max(0, state.tabs.length - 1);
-    }
+    if (tabsChanged) _clampActiveTab();
   }
 
   // Track current daemon sessions
@@ -2817,7 +2840,7 @@ async function syncDaemonSessions(procData) {
   daemonSessions.forEach(s => { state.knownDaemonSessions[s.id] = true; });
 
   if (tabsChanged || state.tabs.length === 0) {
-    if (state.activeTab >= state.tabs.length) state.activeTab = Math.max(0, state.tabs.length - 1);
+    _clampActiveTab();
     const newTab = getActiveTab();
     state.currentMode = (newTab && newTab.mode) ? newTab.mode : 'single';
     // Sync display modes from new tab (consistent with switchToTab)
@@ -3721,7 +3744,7 @@ function _closeTabNow(tab) {
     tab._page = null;
   }
   state.tabs.splice(idx, 1);
-  if (state.activeTab >= state.tabs.length) state.activeTab = Math.max(0, state.tabs.length - 1);
+  _clampActiveTab();
   const newTab = getActiveTab();
   // Show the new active tab page (or welcome page if no tabs remain)
   if (newTab && newTab._page) {
