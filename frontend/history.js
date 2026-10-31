@@ -1162,7 +1162,14 @@ async function loadTabHistory() {
     // 只取最新的一段：整环 19 万条全要回来是这条路径上唯一的实际开销，
     // 更早的部分由「往上翻」按页回补（见 _loadOlderFromDaemon）。
     const data = await window.go.main.App.GetSessionHistory(tab.sessionId, HISTORY_INITIAL, 0, 0);
-    const history = (data && data.history) ? data.history : [];
+    // 以前 IPC 失败 / 返回 null 会静默变成空数组，界面上和「真的没数据」一模一样。
+    // 分开显示，出问题时至少能一眼看出是哪一类。
+    if (!data) {
+      display.innerHTML = '<div class="placeholder">历史读取失败：守护进程没有返回数据（' +
+        escHtml(String(tab.sessionId)) + '）</div>';
+      return;
+    }
+    const history = data.history ? data.history : [];
     history._id = tab.sessionId;
     // Save extra fields for paging / disk paging
     if (data && typeof data.oldestTsMs === 'number') history._ringOldestTsMs = data.oldestTsMs;
@@ -1171,7 +1178,9 @@ async function loadTabHistory() {
     state.historyCache[cacheKey] = history;
     renderHistoryLines(history);
   } catch (e) {
-    display.innerHTML = '<div class="placeholder">暂无记录</div>';
+    // 渲染过程中抛错也会走到这里（比如显示设置的上下文没备好），别都算成「没数据」
+    display.innerHTML = '<div class="placeholder">历史加载失败：' +
+      escHtml(String(e && e.message ? e.message : e)) + '</div>';
   } finally {
     if (_historyLoading === cacheKey) _historyLoading = null;
   }
