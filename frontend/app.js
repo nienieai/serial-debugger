@@ -91,8 +91,27 @@ let _saveSettingsTimer = null;
 let _syncQuickPresetsTimer = null;
 function saveSettings() {
   clearTimeout(_saveSettingsTimer);
-  _saveSettingsTimer = setTimeout(() => {
-    const s = {
+  _saveSettingsTimer = setTimeout(_flushSettings, 500);
+}
+
+// 立即落盘。给「勾了不再提醒马上就要退出」这类场景用 —— 防抖的 500ms 等不起：
+// 关闭 GUI 那条路径里 onOk 是 QuitApp，进程先退了的话设置就丢了。
+function saveSettingsNow() {
+  clearTimeout(_saveSettingsTimer);
+  _flushSettings();
+}
+
+function _flushSettings() {
+  window.go.main.App.SaveAppSettings(_collectSettings()).catch(() => {});
+  // Also persist multistr entries to daemon
+  var tab = getActiveTab();
+  if (tab && tab.sessionId) {
+    window.go.main.App.MultistrSave(tab.sessionId).catch(() => {});
+  }
+}
+
+function _collectSettings() {
+  return {
       displayMode: state.displayMode,
       txDisplayMode: state.txDisplayMode,
       sendRatio: state.sendRatio,
@@ -144,14 +163,7 @@ function saveSettings() {
       historyWindowRows: state.historyWindowRows,
       autoRefillHistory: state.autoRefillHistory,
       displayColors: JSON.stringify(state.displayColors || _defaultDisplayColors()),
-    };
-    window.go.main.App.SaveAppSettings(s).catch(() => {});
-    // Also persist multistr entries to daemon
-    var tab = getActiveTab();
-    if (tab && tab.sessionId) {
-      window.go.main.App.MultistrSave(tab.sessionId).catch(() => {});
-    }
-  }, 500);
+  };
 }
 
 async function loadSettings() {
@@ -502,6 +514,8 @@ async function setEncoding(enc) {
 
 // ---- alert helper ----
 var _alertCallback = null;
+// 「不再提醒」勾上并点确定时要执行的动作（可选，由 showConfirm 的第 6 个参数给）
+var _alertDontAsk = null;
 
 // _resetAlertButtons 把弹窗底部的按钮区恢复成「取消 + 确定」。
 //
@@ -515,6 +529,12 @@ function _resetAlertButtons() {
   var btns = ov.querySelector('.alert-btns');
   if (!btns) return;
   Array.prototype.slice.call(btns.querySelectorAll('.alert-choice')).forEach(function (b) { b.remove(); });
+  // 「不再提醒」默认不显示，只有 showConfirm 显式传了回调才亮出来
+  var da = document.getElementById('alertDontAsk');
+  if (da) da.classList.add('is-hidden');
+  var inp = document.getElementById('alertDontAskInput');
+  if (inp) inp.checked = false;
+  _alertDontAsk = null;
 }
 
 // okKey / cancelKey: optional i18n keys for context-specific button labels
@@ -531,7 +551,7 @@ function showAlert(title, message, okKey, mono) {
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
-function showConfirm(title, message, onOk, okKey, cancelKey) {
+function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
   _resetAlertButtons();
   _alertCallback = onOk;
   document.getElementById('alertTitle').textContent = title;
@@ -541,6 +561,13 @@ function showConfirm(title, message, onOk, okKey, cancelKey) {
   document.getElementById('alertCancelBtn').classList.remove('is-hidden');
   document.getElementById('alertOkBtn').textContent = t(okKey || 'confirm.ok', '确定');
   document.getElementById('alertCancelBtn').textContent = t(cancelKey || 'confirm.cancel', '取消');
+  // onDontAsk：可选。传了才显示「不再提醒」勾选框；勾上并点确定时先跑它，
+  // 通常就是把对应设置关掉并立即落盘。
+  var da = document.getElementById('alertDontAsk');
+  if (da && onDontAsk) {
+    _alertDontAsk = onDontAsk;
+    da.classList.remove('is-hidden');
+  }
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
@@ -574,8 +601,18 @@ function showChoice(title, message, options) {
 
 function closeAlert(ok) {
   document.getElementById('alertOverlay').classList.add('is-hidden');
-  if (ok && _alertCallback) _alertCallback();
+  var cb = _alertCallback;
+  var dontAsk = _alertDontAsk;
   _alertCallback = null;
+  _alertDontAsk = null;
+  var da = document.getElementById('alertDontAsk');
+  if (da) da.classList.add('is-hidden');
+  var inp = document.getElementById('alertDontAskInput');
+  // 顺序要紧：「不再提醒」先把设置落盘，再执行 onOk —— 关闭 GUI 那条 onOk 是
+  // QuitApp，反过来就来不及写盘了。
+  if (ok && inp && inp.checked && dontAsk) dontAsk();
+  if (inp) inp.checked = false;
+  if (ok && cb) cb();
 }
 
 // Go 的 BeforeClose 判定「这次关窗口要停守护进程、且用户开了确认」时发这个事件。
@@ -591,7 +628,12 @@ function onAppCloseConfirm(data) {
     function() {
       window.go.main.App.QuitApp().catch(function(e) { console.error('QuitApp failed:', e); });
     },
-    'confirm.quit_ok', 'confirm.cancel'
+    'confirm.quit_ok', 'confirm.cancel',
+    function() {
+      // 「不再提醒」必须在 QuitApp 之前落盘，否则进程先退了设置就丢了
+      state.shutdownDaemonWarn = false;
+      saveSettingsNow();
+    }
   );
 }
 
@@ -1859,8 +1901,20 @@ function createAlertOverlay() {
   okBtn.addEventListener('click', function() { closeAlert(true); });
   btns.appendChild(cancelBtn);
   btns.appendChild(okBtn);
+  // 「不再提醒」：默认隐藏，由 showConfirm 的第 6 个参数决定是否露出
+  var dontAsk = document.createElement('label');
+  dontAsk.className = 'alert-dontask is-hidden';
+  dontAsk.id = 'alertDontAsk';
+  var daInput = document.createElement('input');
+  daInput.type = 'checkbox';
+  daInput.id = 'alertDontAskInput';
+  var daText = document.createElement('span');
+  daText.textContent = t('confirm.dont_ask', '不再提醒');
+  dontAsk.appendChild(daInput);
+  dontAsk.appendChild(daText);
   popup.appendChild(head);
   popup.appendChild(body);
+  popup.appendChild(dontAsk);
   popup.appendChild(btns);
   ov.appendChild(popup);
   document.getElementById('app').appendChild(ov);
@@ -3260,7 +3314,13 @@ function closeTab(idx) {
       t('confirm.tab_close_title', '关闭标签页'),
       t('confirm.tab_close_msg', '这个标签的串口还开着，关闭会断开连接。确定关闭吗？'),
       function() { _closeTabNow(tab); },
-      'confirm.tab_close_ok', 'confirm.cancel'
+      'confirm.tab_close_ok', 'confirm.cancel',
+      function() {
+        // 「不再提醒」= 把这个开关关掉，并立即落盘（不走 500ms 防抖）
+        state.tabCloseWarn = false;
+        saveSettingsNow();
+        if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
+      }
     );
     return;
   }

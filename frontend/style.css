@@ -1794,6 +1794,15 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 }
 .alert-btns button:hover { background: var(--hover); }
 .alert-btns button:active { transform: scale(0.96); }
+/* 「不再提醒」：弹窗底部按钮上方的勾选项。默认 is-hidden，由 showConfirm 第 6 个参数
+   决定是否露出；只做排版，不参与弹窗布局计算（负 margin 抵掉 body 的下边距）。 */
+.alert-dontask {
+  display: flex; align-items: center; gap: 6px;
+  margin: -8px 0 12px; font-size: 13px; color: var(--placeholder);
+  cursor: pointer; user-select: none; width: fit-content;
+}
+.alert-dontask input { width: 14px; height: 14px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+.alert-dontask:hover { color: var(--fg); }
 /* 等宽 + 保留换行：多行、按列对齐的文本（.stlog 摘要用）。只做排版，不含布局。 */
 .alert-body.t-mono {
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;

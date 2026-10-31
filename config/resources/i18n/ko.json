@@ -91,6 +91,7 @@
   "confirm.cancel_shutdown": "취소",
   "confirm.close_session": "이 세션을 닫으시겠습니까?",
   "confirm.close_tab": "이 탭을 닫으시겠습니까?",
+  "confirm.dont_ask": "다시 묻지 않기",
   "confirm.ok": "확인",
   "confirm.ok_clear": "비우기",
   "confirm.ok_restore": "복원",

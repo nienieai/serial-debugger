@@ -91,6 +91,7 @@
   "confirm.cancel_shutdown": "Отмена",
   "confirm.close_session": "Закрыть этот сеанс?",
   "confirm.close_tab": "Закрыть этот сеанс?",
+  "confirm.dont_ask": "Больше не спрашивать",
   "confirm.ok": "ОК",
   "confirm.ok_clear": "Очистить",
   "confirm.ok_restore": "Восстановить",

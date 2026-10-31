@@ -91,6 +91,7 @@
   "confirm.cancel_shutdown": "Cancel",
   "confirm.close_session": "Close this session?",
   "confirm.close_tab": "Close this session?",
+  "confirm.dont_ask": "Don't ask again",
   "confirm.ok": "OK",
   "confirm.ok_clear": "Clear",
   "confirm.ok_restore": "Restore",

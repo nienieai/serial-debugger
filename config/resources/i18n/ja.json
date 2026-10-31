@@ -91,6 +91,7 @@
   "confirm.cancel_shutdown": "キャンセル",
   "confirm.close_session": "このセッションを閉じますか？",
   "confirm.close_tab": "このタブを閉じますか？",
+  "confirm.dont_ask": "今後表示しない",
   "confirm.ok": "OK",
   "confirm.ok_clear": "消去",
   "confirm.ok_restore": "復元",

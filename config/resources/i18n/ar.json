@@ -91,6 +91,7 @@
   "confirm.cancel_shutdown": "إلغاء",
   "confirm.close_session": "هل تريد إغلاق هذه الجلسة؟",
   "confirm.close_tab": "إغلاق هذه الجلسة؟",
+  "confirm.dont_ask": "لا تسأل مرة أخرى",
   "confirm.ok": "موافق",
   "confirm.ok_clear": "مسح",
   "confirm.ok_restore": "استعادة",

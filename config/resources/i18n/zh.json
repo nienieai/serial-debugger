@@ -91,6 +91,7 @@
   "confirm.cancel_shutdown": "取消",
   "confirm.close_session": "确定要关闭此会话吗？",
   "confirm.close_tab": "确定要关闭此会话吗？",
+  "confirm.dont_ask": "不再提醒",
   "confirm.ok": "确定",
   "confirm.ok_clear": "清空",
   "confirm.ok_restore": "恢复默认",
