@@ -270,9 +270,55 @@ function buildSettingsPage() {
 	bFont.appendChild(_row(t('settings.font_size','字号'), fontSizeInput));
 	panelDisplay.appendChild(bFont);
 
-	// Hex 显示设置（前缀 / 大小写 / 分隔）与文本显示设置（转义字节 / 控制字符 /
-	// 复制）0.8.4 起都按标签页走 —— 整体搬到「标签页设置」弹窗，设置页不再有这两块：
-	// 它们属于某一条会话的「怎么看」，不分标签页地摆在这里只会误导。
+	// ── 新标签页的默认值（存守护进程的 daemon.ini）──
+	// 这三块原来编辑的是「全局设置」；0.8.4 起语义变成「新标签页的默认值」——
+	// 单个标签页的值在 标签右键菜单 →「标签页设置」里改。
+	// 守护进程离线时写不了 daemon.ini，整组置灰：改不了就别让人点。
+	var defOff = !state.daemonOnline;
+
+	var bDefEnc = _bubble(t('settings.bubble_encoding','编码格式'));
+	bDefEnc.appendChild(_row(t('settings.bubble_encoding','编码格式'),
+		_buildSelect(['utf-8','gb2312','ascii'], ['UTF-8','GB2312','ASCII'],
+			state._dispDefaults.encoding,
+			function(v) { _setDispDefault('encoding', v); }, defOff)));
+	bDefEnc.appendChild(_bubbleFooter('defenc', t('settings.hint_defaults',
+		'这里是新标签页的默认值，保存在守护进程的 settings\\daemon.ini；单个标签页可在标签右键菜单里单独设置。')));
+	panelDisplay.appendChild(bDefEnc);
+
+	var bDefHex = _bubble(t('settings.bubble_hex','Hex显示设置'));
+	bDefHex.appendChild(_row(t('settings.hex_prefix','Hex 前缀 (0x)'),
+		_buildToggle(function() { _setDispDefault('hexPrefix', !state._dispDefaults.hexPrefix); },
+			state._dispDefaults.hexPrefix, defOff)));
+	bDefHex.appendChild(_row(t('settings.hex_case','Hex 大写'),
+		_buildToggle(function() {
+			_setDispDefault('hexCase', state._dispDefaults.hexCase === 'upper' ? 'lower' : 'upper');
+		}, state._dispDefaults.hexCase === 'upper', defOff)));
+	bDefHex.appendChild(_row(t('settings.hex_sep','Hex 分隔符'),
+		_buildSelect(['space','comma','none'],
+			[ t('settings.sep_space','空格'), t('settings.sep_comma','逗号'), t('settings.sep_none','无分割') ],
+			state._dispDefaults.hexSep,
+			function(v) { _setDispDefault('hexSep', v); }, defOff)));
+	panelDisplay.appendChild(bDefHex);
+
+	var bDefText = _bubble(t('settings.bubble_text','文本显示设置'));
+	bDefText.appendChild(_row(t('settings.hex_escape','转义字节'),
+		_buildSelect(['show','hide','raw'],
+			[ t('settings.esc_show','显示 /FF'), t('settings.esc_hide','隐藏转义'), t('settings.esc_raw','原始输出') ],
+			state._dispDefaults.hexEscapeMode,
+			function(v) { _setDispDefault('hexEscapeMode', v); }, defOff)));
+	bDefText.appendChild(_row(t('settings.hex_escape_fmt','转义格式'),
+		_buildSelect(['slash','backslash-x','0x','angle','bracket'],
+			[t('settings.esc_fmt_slash','/FF'), t('settings.esc_fmt_bslash_x','\\xFF'), t('settings.esc_fmt_0x','0xFF'), t('settings.esc_fmt_angle','<FF>'), t('settings.esc_fmt_bracket','[FF]')],
+			state._dispDefaults.hexEscapeFormat || 'slash',
+			function(v) { _setDispDefault('hexEscapeFormat', v); }, defOff)));
+	bDefText.appendChild(_row(t('settings.cr_visible','可见控制字符'),
+		_buildToggle(function() { _setDispDefault('crVisible', !state._dispDefaults.crVisible); },
+			state._dispDefaults.crVisible, defOff)));
+	bDefText.appendChild(_row(t('settings.copy_hex_escapes','允许复制转义字节'),
+		_buildToggle(function() { _setDispDefault('copyHexEscapes', !state._dispDefaults.copyHexEscapes); },
+			state._dispDefaults.copyHexEscapes, defOff)));
+	panelDisplay.appendChild(bDefText);
+
 	var bText = _bubble(t('settings.bubble_behavior','行为'));
 	bText.appendChild(_row(t('settings.lock_scroll','默认锁定滚动'), _buildToggle(function() { state.scrollLocked = !state.scrollLocked; saveSettings(); }, state.scrollLocked)));
 	panelDisplay.appendChild(bText);
@@ -898,9 +944,11 @@ function _buildToggle(onChange, checked, disabled) {
 	return label;
 }
 
-function _buildSelect(values, labels, current, onChange) {
+// disabled：控件当前没有作用对象时置灰（例如守护进程离线时写不了 daemon.ini）。
+function _buildSelect(values, labels, current, onChange, disabled) {
 	var sel = document.createElement('select');
 	sel.className = 'settings-select';
+	sel.disabled = !!disabled;
 	values.forEach(function(v, i) {
 		var o = document.createElement('option');
 		o.value = v;

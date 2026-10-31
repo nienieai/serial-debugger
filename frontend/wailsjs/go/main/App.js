@@ -74,6 +74,10 @@ export function GetClients() {
   return window['go']['main']['App']['GetClients']();
 }
 
+export function GetDisplayDefaults() {
+  return window['go']['main']['App']['GetDisplayDefaults']();
+}
+
 export function GetExternalColorTheme(arg1) {
   return window['go']['main']['App']['GetExternalColorTheme'](arg1);
 }
@@ -256,6 +260,10 @@ export function SetHistoryEnabledFor(arg1, arg2) {
 
 export function SetProcessMode(arg1, arg2) {
   return window['go']['main']['App']['SetProcessMode'](arg1, arg2);
+}
+
+export function SetSessionDisplay(arg1, arg2) {
+  return window['go']['main']['App']['SetSessionDisplay'](arg1, arg2);
 }
 
 export function SetTabEncoding(arg1, arg2) {

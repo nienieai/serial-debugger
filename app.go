@@ -565,6 +565,24 @@ func (a *App) SetSessionDisplay(processID string, display map[string]any) error 
 	return err
 }
 
+// SaveDisplayDefaults 把新的默认值写进 daemon.ini 的 [display] 段。
+//
+// 只有守护进程能写 daemon.ini（单写者），所以走 IPC。IPC 只认字符串值
+// （ini 里一切都是文本），这里统一转一遍；成功返回重新读出来的那份默认值，
+// 前端拿它覆盖本地缓存。
+func (a *App) SaveDisplayDefaults(display map[string]any) (map[string]any, error) {
+	flat := make(map[string]any, len(display))
+	for k, v := range display {
+		flat[k] = fmt.Sprint(v)
+	}
+	result, err := a.call(contract.DisplaySetDefaults, map[string]any{"display": flat})
+	if err != nil {
+		return nil, err
+	}
+	back, _ := result["display"].(map[string]any)
+	return back, nil
+}
+
 func (a *App) GetSessions() []map[string]any {
 	result, err := a.call(contract.ProcessList, nil)
 	if err != nil {

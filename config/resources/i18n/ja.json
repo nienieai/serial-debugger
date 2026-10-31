@@ -380,6 +380,7 @@
   "settings.hex_prefix": "0x 前置",
   "settings.hex_sep": "区切り文字",
   "settings.hint_colors": "他のテーマを使用するには resources\\themes\\ にJSONファイルを配置するか、クリックでサンプルを作成します",
+  "settings.hint_defaults": "新しいタブの既定値です。デーモンの settings\\daemon.ini に保存されます。タブごとに右クリックメニューから個別に変更できます。",
   "settings.hint_i18n": "他の言語を使用するには resources\\i18n\\ にJSONファイルを配置するか、クリックでサンプルを作成します",
   "settings.hint_icons": "他のアイコンを使用するには resources\\icons\\ にSVGファイルを配置するか、クリックでサンプルを作成します",
   "settings.history_window": "履歴ウィンドウ行数",

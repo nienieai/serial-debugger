@@ -380,6 +380,7 @@
   "settings.hex_prefix": "Préfixe 0x",
   "settings.hex_sep": "Séparateur Hex",
   "settings.hint_colors": "Autres thèmes ? Créez resources\\themes\\ et importez des thèmes, ou cliquez pour un exemple",
+  "settings.hint_defaults": "Ce sont les valeurs par défaut des nouveaux onglets, stockées dans settings\\daemon.ini du démon. Chaque onglet peut les remplacer via son menu contextuel.",
   "settings.hint_i18n": "Autres langues ? Créez resources\\i18n\\ et importez, ou cliquez pour un exemple",
   "settings.hint_icons": "Autres icônes ? Créez resources\\icons\\ et importez, ou cliquez pour un exemple",
   "settings.history_window": "Lignes de l'historique",

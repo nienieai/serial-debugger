@@ -75,6 +75,8 @@ const (
 const (
 	// DisplayDefaults 返回 daemon.ini [display] 段：新会话的显示设置初始值。
 	DisplayDefaults Method = "display.defaults"
+	// DisplaySetDefaults 改写 daemon.ini [display] 段（只有守护进程能写这个文件）。
+	DisplaySetDefaults Method = "display.setdefaults"
 )
 
 // ── 自动发送与多字符串 ──
@@ -125,7 +127,7 @@ var All = []Method{
 	ForwardCreate, ProcessRename,
 	// 数据收发与历史
 	SessionSend, SessionHistory, SessionStats, SessionClearHistory,
-	SessionSetDisplay, DisplayDefaults,
+	SessionSetDisplay, DisplayDefaults, DisplaySetDefaults,
 	SendTrigger, SendRingName,
 	// 自动发送与多字符串
 	AutosendStart, AutosendStop, AutosendStatus, AutosendInterval,

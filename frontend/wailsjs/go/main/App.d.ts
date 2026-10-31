@@ -40,6 +40,8 @@ export function GetBuiltinIcons():Promise<Record<string, string>>;
 
 export function GetClients():Promise<Array<Record<string, any>>>;
 
+export function GetDisplayDefaults():Promise<Record<string, any>>;
+
 export function GetExternalColorTheme(arg1:string):Promise<Record<string, any>>;
 
 export function GetExternalIconTheme(arg1:string):Promise<Record<string, any>>;
@@ -131,6 +133,8 @@ export function SetHistoryEnabled(arg1:boolean):Promise<void>;
 export function SetHistoryEnabledFor(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetProcessMode(arg1:string,arg2:string):Promise<void>;
+
+export function SetSessionDisplay(arg1:string,arg2:Record<string, any>):Promise<void>;
 
 export function SetTabEncoding(arg1:string,arg2:string):Promise<void>;
 

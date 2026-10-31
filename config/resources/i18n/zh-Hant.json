@@ -380,6 +380,7 @@
   "settings.hex_prefix": "Hex 前綴 (0x)",
   "settings.hex_sep": "Hex 分隔符",
   "settings.hint_colors": "想使用其他主題？在軟體目錄中新建 resources\\themes\\ 匯入主題檔案，或按此按鍵建立範例資料夾",
+  "settings.hint_defaults": "這裡是新分頁的預設值，儲存在守護進程的 settings\\\\daemon.ini；單一分頁可在分頁右鍵選單裡單獨設定。",
   "settings.hint_i18n": "想使用其他語言？在軟體目錄中新建 resources\\i18n\\ 匯入語言檔案，或按此按鍵建立範例資料夾",
   "settings.hint_icons": "想使用其他圖示主題？在軟體目錄中新建 resources\\icons\\ 匯入圖示檔案，或按此按鍵建立範例資料夾",
   "settings.history_window": "歷史視窗行數",

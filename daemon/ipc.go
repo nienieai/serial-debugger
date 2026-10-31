@@ -1233,6 +1233,27 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		// 新会话的显示设置初始值：daemon.ini 的 [display] 段（缺键回内置默认）
 		return protocol.Response{ID: req.ID, Result: map[string]any{"display": processDaemonSettings().Display}}
 
+	case contract.DisplaySetDefaults:
+		// 改的是 daemon.ini 本身：只有守护进程能写这个文件（单写者），GUI 走 IPC。
+		var p struct {
+			Display map[string]string `json:"display"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		if err := saveDisplaySection(filepath.Dir(exe), p.Display); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		// 回一份重新读出来的值，前端拿它更新本地默认值
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"success": true,
+			"display": processDaemonSettings().Display,
+		}}
+
 	case contract.SessionSetDisplay:
 		var p struct {
 			ProcessID string         `json:"processId"`

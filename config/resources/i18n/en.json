@@ -380,6 +380,7 @@
   "settings.hex_prefix": "0x Prefix",
   "settings.hex_sep": "Hex Separator",
   "settings.hint_colors": "Want more themes? Create resources\\themes\\ in the app folder and import theme files, or click to create example folder",
+  "settings.hint_defaults": "These are the defaults for new tabs, stored in the daemon's settings\\daemon.ini. Each tab can override them from its context menu.",
   "settings.hint_i18n": "Want more languages? Create resources\\i18n\\ in the app folder and import language files, or click to create example folder",
   "settings.hint_icons": "Want more icon themes? Create resources\\icons\\ in the app folder and import icon files, or click to create example folder",
   "settings.history_window": "History window rows",

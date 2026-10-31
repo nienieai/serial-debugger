@@ -126,6 +126,19 @@ function _setDisp(key, val) {
   }
 }
 
+// 改「新标签页的默认值」并写回守护进程的 daemon.ini。
+//
+// 只有守护进程能写那个文件（单写者），所以走 IPC。离线时调用方已经把控件置灰了，
+// 这里再兜一层：写不了就不要改本地缓存，免得界面显示的和文件里存的对不上。
+// 默认值只影响**新建**的标签页，已经开着的标签页各用各的 disp，不会被动到。
+function _setDispDefault(key, val) {
+  if (!state.daemonOnline) return;
+  state._dispDefaults[key] = val;
+  window.go.main.App.SaveDisplayDefaults(state._dispDefaults).then(function (back) {
+    if (back) _applyDisplayDefaults(back);
+  }).catch(function () {});
+}
+
 // 从守护进程拉显示设置默认值（daemon.ini 的 [display] 段）。守护进程没在跑时
 // Go 侧返回 nil，保持内置默认 —— 离线也照样能建标签页。
 async function loadDisplayDefaults() {
@@ -576,6 +589,8 @@ function _syncDispUi() {
 
 // ---- alert helper ----
 var _alertCallback = null;
+// 上次同步给设置页的守护进程状态：用来判断要不要重建设置页（让置灰跟上）
+var _settingsDaemonOnline = null;
 // 「不再提醒」勾上并点确定时要执行的动作（可选，由 showConfirm 的第 6 个参数给）
 var _alertDontAsk = null;
 
@@ -2863,6 +2878,16 @@ function updateDaemonUI() {
   // 页内再按能力置灰（串口卡禁用、从文件打开可用）。
   // 设置页里的「默认自动保存」跟着守护进程亮/灭（真正的开关在守护进程里）。
   if (typeof setAutoSaveToggleAvailable === 'function') setAutoSaveToggleAvailable(state.daemonOnline);
+  // 设置页里「新标签页的默认值」那三块同样依赖守护进程（要写 daemon.ini）：
+  // 状态变了就重建设置页让置灰跟上。只在真的变化时做，别每次刷新都重建。
+  // 设置页里「新标签页的默认值」那三块同样依赖守护进程（要写 daemon.ini）：
+  // 状态变了就重建设置页让置灰跟上。只在真的变化时做，别每次刷新都重建。
+  if (_settingsDaemonOnline !== state.daemonOnline) {
+    _settingsDaemonOnline = state.daemonOnline;
+    if (typeof refreshSettingsPage === 'function' && document.querySelector('.settings-layout')) {
+      refreshSettingsPage();
+    }
+  }
   state.tabs.forEach(function (t) {
     if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
       _syncChooserAvailability(t._page.root);

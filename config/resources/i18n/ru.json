@@ -380,6 +380,7 @@
   "settings.hex_prefix": "Префикс 0x",
   "settings.hex_sep": "Разделитель Hex",
   "settings.hint_colors": "Нужны темы? Создайте resources\\themes\\ и импортируйте, или нажмите для примера",
+  "settings.hint_defaults": "Это значения по умолчанию для новых вкладок, хранятся в settings\\daemon.ini демона. Каждая вкладка может переопределить их в своём контекстном меню.",
   "settings.hint_i18n": "Нужны языки? Создайте resources\\i18n\\ и импортируйте, или нажмите для примера",
   "settings.hint_icons": "Нужны значки? Создайте resources\\icons\\ и импортируйте, или нажмите для примера",
   "settings.history_window": "Строк в окне истории",
