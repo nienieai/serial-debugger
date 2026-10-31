@@ -2263,6 +2263,18 @@ async function tryConnect() {
       state.daemonOnline = true;
       state.processRunning = true;
       state.connectFailures = 0;
+      // 守护进程换了实例时进程号会被重新分配（pm.counter 每次从 1 开始），而旧标签
+      // 还记着上一实例的 sessionId —— 新实例的同号进程会被当成「还是那个会话」，
+      // 数据就串进旧标签了。能走到这里说明离线事件没送到（正常路径由 onDaemonGone
+      // 清标签），所以这里兜底：把这些绑定旧实例的会话标签整个销毁，让下面的同步
+      // 按新实例的进程表重建。宁可标签重建、重新拉一次历史，也不能让两实例的数据混在一起。
+      for (var _ci = state.tabs.length - 1; _ci >= 0; _ci--) {
+        var _ct = state.tabs[_ci];
+        if (!_ct.sessionId || _ct.type === 'settings' || _ct.type === 'stlog') continue;
+        if (_ct._page) { _ct._page.destroy(); _ct._page = null; }
+        state.tabs.splice(_ci, 1);
+      }
+      if (state.activeTab >= state.tabs.length) state.activeTab = state.tabs.length - 1;
       updateDaemonUI();
       updateOpenBtn();
       // 先取显示设置默认值，再同步会话 —— 后面建标签页要用它初始化 disp
@@ -2465,7 +2477,12 @@ async function syncDaemonSessions(procData) {
         id: state.tabCounter++,
         label: label,
         sessionId: ds.id,
+        // 守护进程的线程名，以及「这名字是不是用户起的」。标签上显示它（见 _tabNameOf），
+        // 自动名在工程会话里会让位给目录名 —— 否则推送完工程，标签上只剩「会话 #3」。
+        name: ds.name || '',
+        nameCustom: !!ds.nameCustom,
         // 工程会话记下工程路径：同一个工程再点一次要能切回这一页，而不是再建一个
+        sessionPath: ds.sessionPath || '',
         _projectPath: ds.sessionPath || null,
         portOpen: isConnected,
         mode: ds.mode || 'single',
@@ -2515,6 +2532,13 @@ async function syncDaemonSessions(procData) {
       const modeChanged = tab.mode !== newMode;
       tab.mode = newMode;
       tab.viewers = newViewers;
+      // 工程目录会跟着线程名改名。路径变了要跟着挪，否则「同一个工程再打开」
+      // 认不出这一页，会再建一个进程、录出两份（_projectPath 就是那个判据）。
+      const dsPath = ds.sessionPath || null;
+      if (dsPath && tab._projectPath !== dsPath) {
+        tab._projectPath = dsPath;
+        tabsChanged = true;
+      }
       if (tab.portOpen !== isConnected || tab.label !== newLabel || viewersChanged || modeChanged) {
         tab.portOpen = isConnected;
         tab.label = newLabel;
@@ -2802,8 +2826,23 @@ function handleDaemonOffline() {
     state.tabs.splice(i, 1);
   }
   state.activeTab = 0;
-  if (state.tabs.length === 0 && state._welcomePage) {
-    state._welcomePage.show();
+  if (state.tabs.length === 0) {
+    if (state._welcomePage) state._welcomePage.show();
+  } else {
+    // 留下来的标签（工程页 / 设置页）不归守护进程管，所以没被销毁。但它们的页面
+    // 此前多半是隐藏的 —— 刚才显示的是那个被销毁的会话页。不显出来，内容区就是
+    // 一片空白：实测「在会话页上关掉守护进程、而之前打开过工程」时，界面切到留下的
+    // 工程页，底下什么都没有。
+    state.tabs.forEach(function (t) { if (t._page) t._page.hide(); });
+    var keep = state.tabs[0];
+    if (keep._page) {
+      keep._page.show();
+      // 设置页的两块图标网格要重建一遍，否则显出来的是空槽位
+      if (keep.type === 'settings' && typeof renderSettingsThemeGrid === 'function') {
+        renderSettingsThemeGrid();
+        renderSettingsIconGrid();
+      }
+    }
   }
   state.knownDaemonSessions = {};
   state._pendingProjectPaths = {};
@@ -2812,6 +2851,9 @@ function handleDaemonOffline() {
   renderTabs();
   updateModeUI();
   loadTabHistory();
+  // activeTab 刚变过，遮罩的显示条件（按「活动标签是不是会话页」判定）得重算一次：
+  // 否则 onDaemonGone 那条路上，遮罩是照旧会话页算的，会一直盖在工程页上。
+  updateDaemonUI();
 }
 
 function updateSyncIndicator() {
@@ -4020,7 +4062,10 @@ function _tabPopStopTick() {
   }
 }
 
-function _tabPopClose() {
+// immediate=true 表示「有东西要立刻顶上来」（右键菜单、改名输入框）：不要给淡出
+// 留那 130ms 的窗口。留了的话菜单和悬浮卡会在同一片区域共存一瞬间，看起来就是
+// 「菜单闪出来、卡片倏地没了」。鼠标自己移开时仍然走淡出。
+function _tabPopClose(immediate) {
   clearTimeout(_tabPopShowTimer);
   clearTimeout(_tabPopHideTimer);
   _tabPopShowTimer = null;
@@ -4030,11 +4075,15 @@ function _tabPopClose() {
   if (!_tabPopEl) return;
   var el = _tabPopEl;
   el.classList.remove('is-visible');
+  if (immediate) { el.classList.add('is-hidden'); return; }
   setTimeout(function () { if (!_tabPop) el.classList.add('is-hidden'); }, 130);
 }
 
 function _tabPopSchedule(tabEl, idx) {
   if (document.body.classList.contains('is-tab-dragging')) return;
+  // 右键菜单开着的时候不许再冒出来：鼠标在菜单和标签之间挪一下就会触发
+  // pointerenter，浮窗弹出来正好压在菜单旁边，看着就是「菜单上面又闪了一下」。
+  if (_tabMenuEl) return;
   // 刚点过标签：切换会重绘按钮，指针下的新按钮会再收到一次 pointerenter，
   // 不挡一下的话浮窗会在点击后 140ms 又自己弹出来。
   if (Date.now() - (window._tabPopClickedAt || 0) < 400) return;
@@ -4152,7 +4201,7 @@ function _tabRenameStart(btn, idx) {
   if (tab.type === 'stlog' && !tab.path) return;
 
   _tabRenaming = true;
-  _tabPopClose();          // 悬停卡别挡住输入
+  _tabPopClose(true);      // 悬停卡别挡住输入（立刻收，不要淡出）
   _tabMenuClose();
   var old = nameEl.textContent;
   var input = document.createElement('input');
@@ -4255,7 +4304,7 @@ function _tabMenuItemT(key, fb) {
 
 function _tabMenuOpen(clientX, clientY, idx) {
   _tabMenuClose();
-  if (typeof _tabPopClose === 'function') _tabPopClose();   // 悬浮卡片让位给菜单
+  if (typeof _tabPopClose === 'function') _tabPopClose(true);   // 悬浮卡片立刻让位给菜单
   var tab = state.tabs[idx];
   if (!tab) return;
 
@@ -4341,7 +4390,9 @@ function _tabMenuOpen(clientX, clientY, idx) {
   _tabMenuEl = menu;
   document.addEventListener('pointerdown', _tabMenuOnDown, true);
   document.addEventListener('keydown', _tabMenuOnKey, true);
-  document.addEventListener('scroll', _tabMenuClose, true);
+  // 这里**不能**监听 scroll 去关菜单：菜单是 position:fixed，页面怎么滚都不会错位，
+  // 而数据区刷屏时每一帧都在滚 —— 于是右键一次菜单刚出来就被自己的 scroll 监听关掉，
+  // 表现就是「刷屏时右键打不开」。这个坑只在有流量的时候才显形。
   window.addEventListener('blur', _tabMenuClose);
   window.addEventListener('resize', _tabMenuClose);
 }
@@ -4382,9 +4433,12 @@ function _tabStateClass(tb) {
 // 各端各拼一份必然对不上。名字为空时退回端口名/会话号。
 function _tabNameOf(tb) {
   if (tb.type === 'settings' || tb.type === 'new') return tb.label || '';
-  if (tb.name) return tb.name;
   if (tb.type === 'stlog') return tb.label || stlogBaseName(tb.path || '');
+  // 用户起的名字最优先。自动名（端口名 / 「会话 #N」）只在没有工程目录时用 ——
+  // 推送或打开一个工程后，标签上该显示工程文件夹名，而不是录制那一刻的「会话 #3」。
+  if (tb.name && (tb.nameCustom || !tb.sessionPath)) return tb.name;
   if (tb.sessionPath) return stlogBaseName(tb.sessionPath);
+  if (tb.name) return tb.name;
   var sp = tb.syncedParams;
   if (sp && sp.portName) return sp.portName;
   // 还没收到守护进程的 name（新建会话到第一条 process-changed 之间）：给个中性占位，

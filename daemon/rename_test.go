@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +13,7 @@ import (
 // 线程名：默认按端口/会话号现算，改名后固定，清空后回到自动名。
 func TestProcessNameDefaultAndRename(t *testing.T) {
 	pm := NewProcessManager()
+	t.Cleanup(pm.DestroyAll) // 不清理的话共享内存会留给后面的用例撞名
 
 	// 没有端口：自动名是「会话 #<id>」
 	idle, err := pm.Create("single", "", SerialConfig{}, nil, false)
@@ -103,7 +107,20 @@ func TestRenamePersistsForProjectSession(t *testing.T) {
 	if err := pm.Rename(proc.id, "现场调试"); err != nil {
 		t.Fatalf("改名失败: %v", err)
 	}
-	doc, err := sessionfile.LoadSettingsDoc(dir)
+
+	// 目录名跟着名字走了：旧目录不在，新目录里 settings.json 拿到了新 label
+	newDir := proc.sessionDir()
+	if newDir == dir {
+		t.Fatalf("目录没跟着改名，还是 %s", dir)
+	}
+	if base := filepath.Base(newDir); base != "现场调试" {
+		t.Fatalf("新目录名 = %q，期望 现场调试", base)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("旧目录应该已经不在: %v", err)
+	}
+
+	doc, err := sessionfile.LoadSettingsDoc(newDir)
 	if err != nil {
 		t.Fatalf("读回 settings.json 失败: %v", err)
 	}
@@ -113,6 +130,87 @@ func TestRenamePersistsForProjectSession(t *testing.T) {
 	// 端口等业务设置不能被改名冲掉
 	if doc.Ports.A != "COM9" {
 		t.Fatalf("改名把 ports.a 改坏了: %q", doc.Ports.A)
+	}
+
+	// 清空名字 → 目录名回到「时间_uuid8」，从 manifest 的身份重算
+	if err := pm.Rename(proc.id, ""); err != nil {
+		t.Fatalf("清空名字失败: %v", err)
+	}
+	back := proc.sessionDir()
+	if back == newDir {
+		t.Fatalf("清空名字后目录名应改回自动名，实际仍是 %s", back)
+	}
+	if m, err := sessionfile.LoadManifest(back); err != nil || m.SessionID == "" {
+		t.Fatalf("自动名目录里读不到 manifest: %v", err)
+	}
+	if filepath.Dir(back) != filepath.Dir(dir) {
+		t.Fatalf("目录没回到同一个父目录: %s", back)
+	}
+}
+
+// 录制中改名：写者要重新挂到新目录上，前后数据一条不能少。
+func TestRenameWhileRecording(t *testing.T) {
+	histDir := t.TempDir()
+	oldOverride := historyDirOverride
+	historyDirOverride = histDir
+	oldDefault := defaultSaveHistory()
+	setDefaultSaveHistory(false)
+	t.Cleanup(func() {
+		historyDirOverride = oldOverride
+		setDefaultSaveHistory(oldDefault)
+	})
+
+	pm := NewProcessManager()
+	// 同一测试二进制里别的用例也建 ProcessManager，进程号都从 1 重来会让共享
+	// 内存名撞在一起（报"共享内存已存在"）。抬高起点错开。
+	pm.counter.Store(1901)
+	t.Cleanup(pm.DestroyAll)
+	proc, err := pm.Create("single", "", SerialConfig{}, nil, false)
+	if err != nil || proc == nil {
+		t.Fatalf("建进程失败: %v", err)
+	}
+
+	proc.config = SerialConfig{Port: "COM9", Baud: 9600}
+	proc.SetSaveHistory(true)
+
+	proc.recordHistoryAt(1000, "AABB", "rx", "")
+	proc.recordHistoryAt(1001, "CCDD", "tx", "")
+
+	oldDir := onlySession(t, histDir)
+	if proc.sessionDir() != "" {
+		t.Fatalf("新录制的会话不该有 sessionPath: %q", proc.sessionDir())
+	}
+
+	if err := pm.Rename(proc.id, "现场调试"); err != nil {
+		t.Fatalf("改名失败: %v", err)
+	}
+	newDir := filepath.Join(histDir, "现场调试")
+	if _, err := os.Stat(newDir); err != nil {
+		t.Fatalf("新目录不存在: %v", err)
+	}
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatalf("旧目录应该已经不在: %v", err)
+	}
+	proc.stlogMu.Lock()
+	name := proc.stlogName
+	proc.stlogMu.Unlock()
+	if name != "现场调试" {
+		t.Fatalf("stlogName = %q，期望跟着改名", name)
+	}
+
+	// 改名之后必须还能接着录
+	proc.recordHistoryAt(1002, "EEFF", "rx", "")
+	proc.detachHistoryFile()
+
+	info := mustReadStlog(t, newDir)
+	if len(info.Frames) != 3 {
+		t.Fatalf("帧数 = %d, want 3", len(info.Frames))
+	}
+	if !bytes.Equal(info.Frames[2].Payload, []byte{0xEE, 0xFF}) {
+		t.Fatalf("第 3 帧 = %X，期望 EEFF", info.Frames[2].Payload)
+	}
+	if info.SettingsDoc == nil || info.SettingsDoc.Label != "现场调试" {
+		t.Fatalf("settings.json 的 label 没跟上: %+v", info.SettingsDoc)
 	}
 }
 

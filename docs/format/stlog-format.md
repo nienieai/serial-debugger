@@ -126,69 +126,108 @@ GUI 的 `settings/gui.ini` 只存界面设置；守护进程的 `settings/daemon
 0x0010  ts             u64 LE          ← Unix ms，仅展示 + seq 并列时 tie-break
 0x0018  len            u16 LE          ← payload 字节数，≤ 4000
 0x001A  reserved       [6] = 0
-0x0020  payload        [len] UTF-8 JSON ← 内部 `v` 是 payloadVersion（§2.3）
+0x0020  payload        [len] TLV      ← key–length–value 序列，见 §2.3
 0x0020+len      crc32        u32 LE    ← 覆盖 0x00..0x1F + payload（含 len 自身）
 0x0024+len      endMagic     "ELOG" u32
 填充            0x00 直到 0x1000（整页写满）
 ```
 
 - **`slotVersion` 与 `payloadVersion` 是两个独立版本号**：前者管槽布局（改动就换布局），
-  后者管 JSON 字段（只加字段不升版也可以）。v1：`slotVersion == 1`、`payloadVersion == 2`。
+  后者管 payload 的编码方式。v1.4：`slotVersion == 1`、`payloadVersion == 3`。
+- **`payloadVersion` 3 起 payload 是 TLV 表**（§2.3）：加字段只分配新 key，
+  **不需要再升这个号**；它只在编码方式本身变化时才动。
 - **槽版本与页版本互相独立**：`slotVersion`（槽布局）、页头 `ver`（页布局）、
-  统计块 `ver`（统计块布局）、`payloadVersion`（JSON 字段集）四个号各管一层。
+  统计块 `ver`（统计块布局）、`payloadVersion`（payload 编码）四个号各管一层。
   任一层版本比本程序新，对应单位即视为无效。
 - `crc32` 必须覆盖 `len`，否则"长度字段被写坏"这类损坏会绕过校验。
 - `endMagic` 用来区分**"被截断"**与**"CRC 错"**：诊断信息不同，排查成本差很多。
 - 单槽载荷上限 4000 B（= 4096 − 32 头 − 8 尾 − 56 余量），超了是写入方 bug，不是用户错误。
 
-### 2.3 快照载荷（JSON）
+### 2.3 快照载荷（TLV）
 
-```json
-{
-  "v": 2,
-  "uuid": "3f2a9b1c",
-  "created": "2026-10-29T14:40:01+08:00",
-  "app": "0.8.3",
-  "port": "COM12", "baud": 115200, "dataBits": 8,
-  "stopBits": "1", "parity": "none", "flow": "none",
-  "mode": "single", "portB": null, "baudB": null,
-  "encoding": "utf-8",
-  "label": "COM12 @ 115200",
-  "notes": "",
-  "record": true,
-  "origins": ["gui-a3f1", "cli-7b2c"],
-  "stats": {"entries": 123456, "lastTs": 1730000000000}
-}
+payload 是 **key–length–value 序列**，按 key 升序写出：
+
+```text
+条目 = key u16 LE | len u16 LE | value[len]
 ```
 
-| 字段 | 可变 | 约束 |
-|---|---|---|
-| `v`（payloadVersion） | 否 | == 2；更高版本 → 该槽无效 |
-| `uuid` / `created` / `app` | 否 | 必须存在；`created` 为 ISO-8601 带时区 |
-| 端口参数（`port/baud/…/baudB`） | 是 | 重连、换端口、改参数后更新 |
-| `label` | 是 | ≤ 256 B（UTF-8），写入前校验 |
-| `notes` | 是 | ≤ 1 KB，写入前校验 |
-| `record` | 是 | 当前是否在记录（仅崩溃后供人参考，不驱动自动恢复） |
-| `origins` | **只追加** | 位置数组，id = 下标 + 1；不重排、不删除；追加时去重；**每个元素 ≤ 64 B** |
-| `stats` | 是 | **仅** 关闭 / 推送移交前写；不允许定时写 |
+- **key 的类型由表约定，条目不存类型字节**：要加设置就分配一个没人用过的 key，
+  老读者遇到不认识的 key 跳过即可 —— **加字段永远不用升 `payloadVersion`**。
+- 取值方式真要变时换一个新 key，旧 key 的读法留着。
+- 空值不写（读回来就是零值）；重复 key 取第一个；未知 key 跳过。
+- 结构性错误（条目越界、缺 `payload_ver`）才判该槽无效；单条值的长度对不上时
+  按"认不出来"处理，不牵连整槽。
 
-**实现现状（0.8.3 的 `sessionfile.Settings`）**
+**号段**
 
-Go 侧目前只写这 8 个字段：`v` / `uuid` / `created` / `label` / `port` / `baud` / `mode` / `portB`。
-上表里的 `app`、参数细节（`dataBits` / `stopBits` / `parity` / `flow` / `baudB`）、`encoding`、
-`notes`、`record`、`origins`、`stats` 都还是**设计保留字段，尚未实现**——
+| 号段 | 用途 |
+|---|---|
+| `0x0001` | 身份与格式 |
+| `0x0010`–`0x001F` | 录制元数据 |
+| `0x0100`–`0x01FF` | 显示设置 |
+| `0x0200`–`0x02FF` | 绘图预留 |
+| `0x8000`–`0xFFFF` | 私有 / 实验 |
+
+**已分配的 key（`payloadVersion = 3`，0.8.4）**
+
+| key | 名称 | 类型 | 说明 |
+|---|---|---|---|
+| `0x0001` | `payload_ver` | u16 | == 3；更高 → 该槽无效 |
+| `0x0010` | `uuid` | string | 会话 id |
+| `0x0011` | `created` | string | ISO-8601 带时区 |
+| `0x0012` | `label` | string | **建文件那一刻的线程名**，不是端口名 |
+| `0x0013` | `mode` | string | `single` / `forward`；缺省按 `single` |
+| `0x0014` | `port` | string | A 口 |
+| `0x0015` | `baud` | u32 | |
+| `0x0016` | `port_b` | string | 仅转发录制有值 |
+| `0x0100` | `display.encoding` | string | |
+| `0x0101` | `display.hexCase` | string | |
+| `0x0102` | `display.hexPrefix` | string | |
+| `0x0103` | `display.hexSep` | string | |
+| `0x0104` | `display.crVisible` | string | |
+| `0x0105` | `display.hexEscapeMode` | string | |
+| `0x0106` | `display.hexEscapeFormat` | string | |
+| `0x0107` | `display.copyHexEscapes` | string | |
+| `0x0108` | `display.tabSize` | string | |
+| `0x0109` | `display.eolSequence` | string | |
+
+槽是**录制快照**：所有字段都是"建这个包那一刻"的值，之后不再改 —— 改线程名、
+换端口都不回写已封包的字节。
+
+`display.*` 是"怎么看"那一组（编码、Hex 大小写/前缀/分隔、控制字符、转义字节、
+制表符长度、行尾序列），共 10 项。值和 `settings.json` 的 `display` 段、
+`daemon.ini` 的 `[display]` 段同名同形（字符串：`utf-8` / `upper` / `true` / `4`…），
+一处 key 表三处对齐。
+
+**与 `settings.json` 的关系（v2 会话目录）**
+
+- 槽里这份是**冗余自描述**：保证单个 `pkg-*.stlog` 拎出去也能按当初的样子读。
+- 工程目录以 `settings.json` 为准：它会随用户改设置而变，槽里这份不会。
+- 打开工程目录时读 `settings.json` 的 `display`；单独打开一个 `pkg-*.stlog` 时
+  只能靠槽 —— 这正是把它们放进槽的原因。
+
+**老文件（`payloadVersion` ≤ 2）**
+
+payload 是 UTF-8 JSON（以 `{` 开头）。读取方按首字节判别：`{` → JSON，否则 → TLV。
+v2 文件照常打开，只是读不到 `display`（回落到 `settings.json` 或 `daemon.ini`
+的默认值）。**新写入只写 TLV。**
+
+**设计保留、尚未实现**
+
+`app`、串口参数细节（`dataBits` / `stopBits` / `parity` / `flow` / `baudB`）、
+`notes`、`record`、`origins`、`stats`，将来的 key 从 `0x0017` 起分配。
 `origins` 没实现，所以来源一律走 `origin = 255` 内联（§2.8）。
 
-转发录制：`mode = "forward"`、`portB` 为 B 口，`port` 始终是 A 口。
-**老文件没有 `mode` 字段，读回来是空串，必须按 `single` 处理**（`Settings.IsForward()` 为 false）。
+转发录制：`mode = forward`、`port_b` 为 B 口，`port` 始终是 A 口。
+**老文件没有 `mode`，读回来是空串，必须按 `single` 处理**（`Settings.IsForward()` 为 false）。
 
-**`origins` 的容量规则（两条上限，取小者）**
+**`origins` 的容量规则（将来的 `0x0017`，两条上限取小者）**
 
 - **硬上限 254 条**：`origin` 是 u8，255 保留给"内联回退"，0 保留不用（§2.8），所以 id 最多到 254。
-- **字节预算 4000 B**：序列化后 `len` 必须 ≤ 4000；追加新来源会超限时同样冻结字典。
+- **字节预算 4000 B**：TLV 编码后 `len` 必须 ≤ 4000；追加新来源会超限时同样冻结字典。
+  TLV 每条是 `key(2) + len(2) + 名字`，比 JSON 的 `"名字",` 省约 6 B，容量比原先更宽松。
 - 触发任一上限后：**冻结字典**，此后新来源一律用 `origin = 255` 内联（每条约 +14 B，见 §2.8）。
-- 典型容量：base 约 450 B，余量约 3.5 KB；9 字符来源名约 290 个（被 254 条硬上限先卡住），
-  16 字符约 180 个（被字节预算先卡住）。
+- 典型容量：按 TLV 重算后，9 字符来源名仍先撞 254 条硬上限，16 字符的也不会再先撞字节预算。
 - **绝不删除或重排**字典项：已有记录按 id 引用，删一条会让那些记录永久不可解。
 - 同一字符串复用同一 id，不重复占号（追加前查重）。
 - 单个元素 ≤ 64 B 与内联上限一致，避免"能进字典的存不下、能内联的进不了字典"这种不对称。
@@ -201,7 +240,7 @@ Go 侧目前只写这 8 个字段：`v` / `uuid` / `created` / `label` / `port` 
 1. 读 0x0000 与 0x1000 各 32 B（只要槽头），必要时再读整槽
 2. 逐槽校验：magic == "SLOG" / slotVersion == 1 / flags == 0 / len ≤ 4000
              / 0x20+len+8 ≤ 4096 / crc32 匹配 / endMagic == "ELOG"
-             / payload 能解析成 JSON 且 payloadVersion == 2、uuid 与 created 存在
+             / payload 能解析（TLV，payloadVersion == 3；老文件按 JSON）且 uuid 与 created 存在
 3. 选槽：两槽有效 → seq 大者；seq 相等 → ts 大者；ts 也相等 → 取 A
          一槽有效 → 用它
          两槽都无效 → 拒绝打开（但记录区仍可从 0x4000 扫描救回）
@@ -209,7 +248,7 @@ Go 侧目前只写这 8 个字段：`v` / `uuid` / `created` / `label` / `port` 
 
 - 选槽规则必须**确定性**，禁止"随机挑一个"或"按文件顺序挑"。
 - 校验失败的槽**不修复、不删除**，它保留的是上一次的完整状态，是回退依据。
-- 若 `payloadVersion` 比本程序支持的新（例如 3）：该槽无效；两槽都新 → 提示"由更新版本创建"。
+- 若 `payloadVersion` 比本程序支持的新（例如 4）：该槽无效；两槽都新 → 提示"由更新版本创建"。
 - **槽的校验与页的校验完全独立**：槽坏了不影响读记录（§2.13），页坏了不影响读设置。
   这是把"设置区"和"数据区"放在同一个文件里却互不牵连的前提。
 
@@ -220,7 +259,7 @@ Go 侧目前只写这 8 个字段：`v` / `uuid` / `created` / `label` / `port` 
 
 ```
 1. 状态 S = 当前完整设置（内存结构体）
-2. 序列化 JSON → bytes（≤ 4000；超了就按 §2.3 冻结字典后重试）
+2. 编码 TLV → bytes（按 key 升序；≤ 4000）
 3. 去重：若 bytes 与当前生效槽的 payload 逐字节相同 → 直接返回，不写盘、不动 seq
 4. target = 两槽中 seq 较小的那个；无效槽优先当 target
 5. newSeq = max(有效槽 seq) + 1（都无效则 1）
@@ -234,7 +273,7 @@ Go 侧目前只写这 8 个字段：`v` / `uuid` / `created` / `label` / `port` 
 - **不 fsync 也安全**：目标槽写坏 → CRC/endMagic 失败 → 读取方回退另一槽。
 - **去重为什么重要**：没有它，"打开→什么都不改→关闭"要写两页（置脏 + 置净的等价物），
   与"空会话零写"的语义直接冲突。去重后，状态没变就是零写。
-  去重比较的是**序列化字节**，所以字段序列化顺序必须稳定（用 struct 而非 map 承载设置）。
+  去重比较的是**编码后的字节**，所以写出顺序必须稳定（TLV 一律按 key 升序，与 map 遍历顺序无关）。
 - **合并写入天然正确**：写协程每秒最多落盘一次，期间多次状态变化只写最终状态（全量快照不含历史）。
 - 写失败（EIO/ENOSPC）：旧槽仍有效，元数据回退到上一次；记日志、报错、**不停止记录**。
 
@@ -1077,8 +1116,8 @@ allow_network_dir = false
 | 文件被其他写者占用 | `file_locked`，提示"文件已被占用（GUI / 守护进程 / 其他程序）" |
 | 文件被守护进程占用，GUI 拖入 | 若 `drop_action=push` 或点推送 → 复用已有会话；否则提示"已被守护进程接管" |
 | 魔数不对 / 不是本格式 | 尝试 legacy 只读路径，失败则报错 |
-| 单槽损坏（CRC / endMagic / len 越界 / JSON 坏） | 该槽作废，用另一槽；**不修复、不覆盖**损坏槽（留着做回退依据） |
-| `slotVersion` ≠ 1 / `payloadVersion` > 2 | 该槽无效；两槽都如此 → 提示"由更新版本创建" |
+| 单槽损坏（CRC / endMagic / len 越界 / payload 坏） | 该槽作废，用另一槽；**不修复、不覆盖**损坏槽（留着做回退依据） |
+| `slotVersion` ≠ 1 / `payloadVersion` > 3 | 该槽无效；两槽都如此 → 提示"由更新版本创建" |
 | 两槽都坏 | 拒绝打开（设置不可信）；**记录区仍可从 0x4000 扫描做"救回导出"**，origin 一律显示 `unknown(id=N)` |
 | 快照序列化后 > 4000 B | 冻结 origins 字典、新来源改内联；仍超则拒绝写入并报错（属 bug，不是用户错误） |
 | **单页 CRC 失败（尾页）** | 按 §2.10 用影子恢复；三个候选都无效 → 停在该页之前，报告"最后 N 字节可能丢失" |
@@ -1111,7 +1150,7 @@ allow_network_dir = false
 - `history.attach`（现有）保留，行为等价于「由文件开始」的 replay 分支。
 - 不自动转换历史文件；需要时用 `export` 转 csv/txt 再迁。
 - **格式版本策略**：
-  - `slotVersion = 1` 固定槽布局；`payloadVersion = 2` 固定 JSON 字段集；
+  - `slotVersion = 1` 固定槽布局；`payloadVersion = 3` 固定 payload 的 TLV 编码；
   - **页头 `ver = 1` 固定页布局**；统计块 `ver = 1` 固定统计块布局；
   - 任一层要变，就升那一层的版本号，让旧程序把对应单位视为无效——
     不做"向前兼容地往固定结构里塞新字段"。
@@ -1128,7 +1167,7 @@ allow_network_dir = false
 **槽与设置**
 
 - 槽校验逐项：magic / `slotVersion=2` / `flags≠0` / `len>4000` / `0x20+len+8>4096` / crc 错 /
-  endMagic 错 / JSON 坏 / `payloadVersion=3` → 该槽无效；
+  endMagic 错 / payload 坏 / `payloadVersion=4` → 该槽无效；
 - 选槽：两有效取 seq 大；seq 等取 ts 大；再等取 A；一有效用它；都无效拒绝；
 - **torn write**：把槽截断到 0..4095 的抽样长度（如 0/1/32/33/34/2048/4095），
   写模式必须回退另一槽且设置完整；
@@ -1228,7 +1267,7 @@ allow_network_dir = false
 
 **安全**
 
-- 恶意文件（巨型 `len`、`committedLen` 指向页外、`pageOffset` 乱填、`seq` 全 1、坏 JSON、
+- 恶意文件（巨型 `len`、`committedLen` 指向页外、`pageOffset` 乱填、`seq` 全 1、坏 payload、
   超长 label、`origins` 上千条、保留名/路径穿越文件名）→ 不崩、不越界、不无限循环；
 - **恶意帧**：构造"续片链永远不结束"的文件（每条记录 bit7 都是 1）→ 必须在读到页尾时停机，
   不能无限累积内存；

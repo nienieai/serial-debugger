@@ -353,12 +353,23 @@ func (a *App) DaemonProcessRunning() bool {
 func (a *App) StartDaemon() error {
 	a.daemonMu.Lock()
 	a.stopping = false
-
-	if a.eventConn != nil {
-		a.daemonMu.Unlock()
-		return nil
-	}
+	cur := a.eventConn
 	a.daemonMu.Unlock()
+
+	// 有连接不等于连接活着：daemon 可能在 OnDisconnect 触发之前就没了 —— 用户点
+	// 「停止守护进程」之后立刻点「启动」正落在这个窗口里。这里真 ping 一次确认，
+	// 别拿着一条死管道去发请求，那正是「切换模式失败: The pipe is being closed.」
+	if cur != nil {
+		if cur.Alive(1500 * time.Millisecond) {
+			return nil
+		}
+		a.daemonMu.Lock()
+		if a.eventConn == cur {
+			a.eventConn = nil
+		}
+		a.daemonMu.Unlock()
+		cur.Close()
+	}
 
 	status, err := client.StartDaemon()
 	if err != nil {

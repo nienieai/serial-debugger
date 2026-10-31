@@ -216,6 +216,10 @@ type Process struct {
 	forwardStopOnce sync.Once
 
 	// sessionPath 非空表示这是一个从 .stlog 打开的只读文件会话（见 OpenSession）
+	//
+	// pathMu 保护它：目录会跟着线程名改名（renameProjectDir），而 List / SetDisplay
+	// 在别的 goroutine 里读。
+	pathMu      sync.RWMutex
 	sessionPath string
 
 	// display 是这条会话的显示设置（编码 / Hex / 控制字符 / 转义）。
@@ -294,6 +298,34 @@ func (p *Process) SetCustomName(name string) {
 	p.nameMu.Lock()
 	p.customName = name
 	p.nameMu.Unlock()
+}
+
+// sessionDir 返回工程目录；普通串口会话是空串。
+func (p *Process) sessionDir() string {
+	p.pathMu.RLock()
+	defer p.pathMu.RUnlock()
+	return p.sessionPath
+}
+
+// setSessionDir 更新工程目录（目录跟着线程名改名之后调用）。
+func (p *Process) setSessionDir(dir string) {
+	p.pathMu.Lock()
+	p.sessionPath = dir
+	p.pathMu.Unlock()
+}
+
+// projectDir 返回这条会话此刻的工程目录：录制中以录制目录为准，否则用打开工程
+// 时记下的路径。两者都没有就是普通串口会话（空串，没有目录可谈）。
+//
+// 两个来源必须都看：sessionPath 只在 OpenSession 打开已有工程时设，而新录制出来
+// 的会话目录挂在 stlog 上 —— 只看前者的话，录制中改名会找不到目录。
+func (p *Process) projectDir() string {
+	p.stlogMu.Lock()
+	defer p.stlogMu.Unlock()
+	if p.stlog != nil {
+		return p.stlog.Dir()
+	}
+	return p.sessionDir()
 }
 
 // HasCustomName 报告当前名字是不是用户起的（决定要不要写回工程文件）。
@@ -1862,11 +1894,13 @@ func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, erro
 // Rename 改一个进程的线程名。传空串表示退回自动名（端口名 / 会话号）。
 //
 // 名字只有两种持久化方式，刻意不做第三种：
-//   - 工程会话（sessionPath 非空）：写回工程目录的 settings.json（label 字段）
+//   - 工程会话（sessionPath 非空）：写回工程目录的 settings.json（label 字段），
+//     并且**目录名也跟着名字走**（见 renameProjectDir）
 //   - 普通串口会话：只活在进程里，守护进程一重启就没了 —— 一个口下次再说还是不是
 //     「同一个会话」本来就说不清，硬存只会让名字张冠李戴
 //
-// 改名后广播 process-changed：GUI 标签、CLI/MCP 的 sessions 列表都靠它刷新。
+// 改名后广播 process-changed：GUI 标签、CLI/MCP 的 sessions 列表都靠它刷新；
+// 工程目录改了名，新路径也在这份列表里（sessionPath 字段），前端据此更新。
 func (pm *ProcessManager) Rename(id, name string) error {
 	name = strings.TrimSpace(name)
 	if utf8.RuneCountInString(name) > 64 {
@@ -1880,8 +1914,16 @@ func (pm *ProcessManager) Rename(id, name string) error {
 	}
 
 	proc.SetCustomName(name)
-	if proc.sessionPath != "" {
-		if err := persistSessionLabel(proc.sessionPath, name); err != nil {
+
+	// 目录跟着名字走。失败只记日志、不影响改名本身：名字已经在内存里生效了，
+	// 改不了目录通常是有别的程序占着它（Windows 上连只读句柄都会挡住 rename）。
+	if err := proc.renameProjectDir(name); err != nil {
+		logOp("警告", "进程 #%s 的工程目录改名失败: %v", id, err)
+	}
+
+	// 注意顺序：先改目录再写 settings.json，否则写回的是改名后已经不存在的路径
+	if dir := proc.projectDir(); dir != "" {
+		if err := persistSessionLabel(dir, name); err != nil {
 			// 名字已经在内存里生效了，落盘失败只记日志：改名不该因为文件写不进去
 			// 就整体失败（只读介质、文件被别处占用都可能发生）。
 			logOp("错误", "进程 #%s 的线程名写回工程失败: %v", id, err)
@@ -1890,6 +1932,65 @@ func (pm *ProcessManager) Rename(id, name string) error {
 	logOp("线程", "进程 #%s 改名为 %q", id, proc.Name())
 	if pm.onProcessChanged != nil {
 		pm.onProcessChanged()
+	}
+	return nil
+}
+
+// renameProjectDir 让工程目录跟着线程名走；普通串口会话没有目录，直接返回。
+//
+// 目录有两个来源，都要看：sessionPath 只在「打开已有工程」时设，而新录制出来的
+// 会话目录挂在 stlog 上。正在录制就以录制目录为准 —— 那才是此刻在写的那个。
+//
+// 空名字表示退回自动名：目录名按 manifest 里的 created + sessionId 重算回
+// 「时间_uuid8」的原始形态，不需要另外记着什么原始值。
+func (p *Process) renameProjectDir(name string) error {
+	dir := p.projectDir()
+	if dir == "" {
+		return nil
+	}
+	parent := filepath.Dir(dir)
+
+	var target string
+	if name == "" {
+		m, err := sessionfile.LoadManifest(dir)
+		if err != nil {
+			return err
+		}
+		target = filepath.Join(parent, sessionfile.SessionDirNameFor(m.Created, m.SessionID))
+	} else {
+		base := sessionfile.SanitizeDirName(name)
+		if base == "" {
+			return nil // 名字里没有能当目录名的字符：保持原名
+		}
+		if base == filepath.Base(dir) {
+			return nil // 已经是这个名字，零开销
+		}
+		target = sessionfile.UniqueDirName(parent, base)
+	}
+	if target == dir {
+		return nil
+	}
+
+	// 录制中：stlogMu 同时串行化 Append 与改名，期间不会有记录插进来。
+	// 锁序 stlogMu → Session.mu 与 appendStlog 一致，不会死锁。
+	p.stlogMu.Lock()
+	if st := p.stlog; st != nil {
+		err := st.RenameDir(target)
+		if err == nil {
+			p.stlogName = filepath.Base(target)
+		}
+		p.stlogMu.Unlock()
+		return err
+	}
+	p.stlogMu.Unlock()
+
+	if err := os.Rename(dir, target); err != nil {
+		return err
+	}
+	// 只有「打开已有工程」的会话才更新 sessionPath：新录制的会话路径为空，
+	// 给它填上会让前端误以为是文件会话（不再给它建标签页）。
+	if p.sessionDir() != "" {
+		p.setSessionDir(target)
 	}
 	return nil
 }
@@ -1937,9 +2038,8 @@ func (pm *ProcessManager) SetDisplay(id string, display map[string]any) error {
 
 	proc.displayMu.Lock()
 	proc.display = display
-	path := proc.sessionPath
 	proc.displayMu.Unlock()
-
+	path := proc.sessionDir()
 	if path == "" {
 		return nil
 	}
@@ -2027,10 +2127,16 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 	// 工程里存过显示设置就带进进程：GUI 建标签页时直接用这一份，而不是
 	// daemon.ini 的默认值 —— 打开一个旧工程，看到的就是它当初的样子。
 	// 注意读的是 settings.json（SettingsDoc），不是包头槽那份录制快照。
-	if doc, derr := sessionfile.LoadSettingsDoc(path); derr == nil && len(doc.Display) > 0 {
-		proc.displayMu.Lock()
-		proc.display = doc.Display
-		proc.displayMu.Unlock()
+	if doc, derr := sessionfile.LoadSettingsDoc(path); derr == nil {
+		if len(doc.Display) > 0 {
+			proc.displayMu.Lock()
+			proc.display = doc.Display
+			proc.displayMu.Unlock()
+		}
+		// 关掉时这个工程还在录：推送回来就接着录（续写同一个目录，不另起会话）
+		if doc.Save {
+			proc.resumeRecording(path)
+		}
 	}
 
 	// 清掉 Create 写的那条「端口已声明」：文件里本来就有自己的系统帧，
@@ -2494,7 +2600,7 @@ func (pm *ProcessManager) List() []map[string]any {
 			"sendRingName": p.sendRingName,
 			// 文件会话进程（session.open 建出来的）带工程目录路径；普通进程是空串。
 			// 前端据此不给它另建标签页 —— 文件页本身就是它的视图。
-			"sessionPath": p.sessionPath,
+			"sessionPath": p.sessionDir(),
 		}
 		// 工程会话的显示设置（settings.json 的 display 段）。普通会话没有，
 		// GUI 就按 daemon.ini 的默认值建标签页。

@@ -961,14 +961,13 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		proc := s.pm.Get(p.ProcessID)
-		name := ""
+		result := map[string]any{"success": true, "name": ""}
 		if proc != nil {
-			name = proc.Name()
+			result["name"] = proc.Name()
+			// 工程目录会跟着名字改名，返回新路径：客户端据此更新自己记的工程路径
+			result["sessionPath"] = proc.sessionDir()
 		}
-		return protocol.Response{ID: req.ID, Result: map[string]any{
-			"success": true,
-			"name":    name,
-		}}
+		return protocol.Response{ID: req.ID, Result: result}
 
 	case contract.ProcessDestroy:
 		var p struct {

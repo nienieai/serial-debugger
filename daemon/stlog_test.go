@@ -140,6 +140,15 @@ func TestStlogMirrorsHistory(t *testing.T) {
 	if info.Settings.UUID == "" || info.Settings.Created == "" {
 		t.Errorf("设置块缺 uuid/created: %+v", info.Settings)
 	}
+	// 显示设置也要落进槽里：单个 pkg 拎出来得能按当初的样子看。这条进程没被
+	// 客户端推过 display，应该落 daemon.ini 的默认值（这里退化成内置默认）。
+	if got := info.Settings.Display["encoding"]; got != "utf-8" {
+		t.Errorf("设置块 display.encoding = %q，期望 utf-8", got)
+	}
+	if len(info.Settings.Display) != len(displayKeys) {
+		t.Errorf("设置块 display 条目 = %d，期望 %d: %v",
+			len(info.Settings.Display), len(displayKeys), info.Settings.Display)
+	}
 }
 
 // 关闭「保存历史」之后不再追加，且不会另建一个会话目录。

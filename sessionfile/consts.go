@@ -27,9 +27,12 @@ const (
 )
 
 // Slot constants.
+//
+// SlotPayloadVer 记的是**payload 的编码方式**，不是字段清单：v3 起 payload
+// 是 TLV 表（见 payload.go），加字段只要分配新 key，不用再动这个数。
 const (
 	SlotVer        = 1
-	SlotPayloadVer = 2
+	SlotPayloadVer = 3
 	MaxSlotPayload = 4000
 )
 

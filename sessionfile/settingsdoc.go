@@ -30,6 +30,9 @@ type SettingsDoc struct {
 	//
 	// 同样是 map：这些键以后还会加，读写时不该因为旧版本不认识就把它们丢掉。
 	Display map[string]any `json:"display,omitempty"`
+	// Save 记的是「关掉的那一刻这个工程还在录」。推送回守护进程时据此决定要不要
+	// 接着录 —— 续写的是同一个目录（见 daemon 的 OpenSession），不是另起一个会话。
+	Save bool `json:"save,omitempty"`
 }
 
 // SessionPorts 是 settings.json 里的端口段。转发录制时 A/B 都有值。
@@ -53,6 +56,12 @@ func NewSettingsDoc(set Settings) *SettingsDoc {
 	if doc.Mode == "" {
 		doc.Mode = ModeSingle
 	}
+	if len(set.Display) > 0 {
+		doc.Display = make(map[string]any, len(set.Display))
+		for k, v := range set.Display {
+			doc.Display[k] = v
+		}
+	}
 	return doc
 }
 
@@ -69,12 +78,13 @@ func (d *SettingsDoc) ToSettings() Settings {
 		mode = ModeSingle
 	}
 	return Settings{
-		V:     SlotPayloadVer,
-		Label: d.Label,
-		Port:  d.Ports.A,
-		Baud:  d.Ports.Baud,
-		Mode:  mode,
-		PortB: d.Ports.B,
+		V:       SlotPayloadVer,
+		Label:   d.Label,
+		Port:    d.Ports.A,
+		Baud:    d.Ports.Baud,
+		Mode:    mode,
+		PortB:   d.Ports.B,
+		Display: DisplayStrings(d.Display),
 	}
 }
 
