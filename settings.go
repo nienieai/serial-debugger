@@ -37,7 +37,13 @@ type AppSettings struct {
 	ColorThemeID      string  `json:"colorThemeId" ini:"color_theme_id"`
 	IconThemeID       string  `json:"iconThemeId" ini:"icon_theme_id"`
 	Language          string  `json:"language" ini:"language"`
-	AutoCreateSession bool    `json:"autoCreateSession" ini:"auto_create_session"`
+	// AutoCreateMode 是「启动时新建会话」：none 不建 / single 单端口空闲 /
+	// forward 端口转发空闲。0.8.4 之前是布尔 auto_create_session，旧键不再读取 ——
+	// 旧默认正是「开 + 单端」，缺键时按 single 处理，行为不变。
+	AutoCreateMode string `json:"autoCreateMode" ini:"auto_create_mode"`
+	// AutoStartDaemon 是「随 GUI 启动守护进程」：GUI 本地偏好。打开后 GUI 启动时
+	// 若守护进程没在跑就自动拉起；默认关，保持「由用户点菜单启停」的旧行为。
+	AutoStartDaemon bool `json:"autoStartDaemon" ini:"auto_start_daemon"`
 	// AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
 	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
 	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
@@ -107,7 +113,7 @@ func defaultSettings() *AppSettings {
 		ColorThemeID:      "theme-default",
 		IconThemeID:       "",
 		Language:          "zh",
-		AutoCreateSession: true,
+		AutoCreateMode:    "single",
 		StlogShowYear:     true,
 		// 标签栏：默认单行（保持 0.8.4 现状），客户端数字按 0.8.3 原样分来源彩色
 		TabTwoLines:    false,

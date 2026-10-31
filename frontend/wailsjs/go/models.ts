@@ -103,7 +103,8 @@ export namespace main {
 	    colorThemeId: string;
 	    iconThemeId: string;
 	    language: string;
-	    autoCreateSession: boolean;
+	    autoCreateMode: string;
+	    autoStartDaemon: boolean;
 	    autoSaveHistory: boolean;
 	    displayColors: string;
 	    stlogShowYear: boolean;
@@ -143,7 +144,8 @@ export namespace main {
 	        this.colorThemeId = source["colorThemeId"];
 	        this.iconThemeId = source["iconThemeId"];
 	        this.language = source["language"];
-	        this.autoCreateSession = source["autoCreateSession"];
+	        this.autoCreateMode = source["autoCreateMode"];
+	        this.autoStartDaemon = source["autoStartDaemon"];
 	        this.autoSaveHistory = source["autoSaveHistory"];
 	        this.displayColors = source["displayColors"];
 	        this.stlogShowYear = source["stlogShowYear"];

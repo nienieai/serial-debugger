@@ -2344,6 +2344,11 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 }
 .settings-toggle input:checked + .settings-toggle-slider { background: var(--accent); }
 .settings-toggle input:checked + .settings-toggle-slider::after { transform: translateX(18px); }
+/* 置灰：控件当前没有作用对象（如守护进程离线时的「默认自动保存」）。
+   只降不透明度、换掉 pointer 手感，滑块形状与开/关位置保持不变 —— 用户能看出
+   「现在是开/关，只是暂时改不了」，而不是以为它被关掉了。 */
+.settings-toggle.is-disabled { opacity: .45; }
+.settings-toggle.is-disabled .settings-toggle-slider { cursor: not-allowed; }
 /* ---- 空状态 / 搜索隐藏 ---- */
 .settings-empty { padding: 40px; text-align: center; color: var(--placeholder); }
 .settings-bubble.is-hidden, .settings-row.is-hidden { display: none; }

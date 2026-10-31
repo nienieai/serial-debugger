@@ -47,7 +47,11 @@ const state = {
   // 关掉后只摆一个「↑ 向上滚动加载更多」的提示，由用户点了才取。
   autoRefillHistory: true,
   statsBase: {},
-  autoCreateSession: false,
+  // 「启动时新建会话」：none 不建 / single 单端口空闲 / forward 端口转发空闲。
+  // 0.8.4 从布尔 autoCreateSession 改成三选一（旧的 false 等价于 none）。
+  autoCreateMode: 'single',
+  // 「随 GUI 启动守护进程」：GUI 启动时若守护进程没在跑就自动拉起。
+  autoStartDaemon: false,
   // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
   autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
@@ -117,7 +121,8 @@ function saveSettings() {
       colorThemeMode: state.colorThemeMode,
       iconThemeId: state.iconThemeId,
       language: state.language,
-      autoCreateSession: state.autoCreateSession,
+      autoCreateMode: state.autoCreateMode || 'single',
+      autoStartDaemon: state.autoStartDaemon === true,
       autoSaveHistory: state.autoSaveHistory === true,
       tabTwoLines: state.tabTwoLines === true,
       tabSubLine: state.tabSubLine || 'a',
@@ -208,8 +213,13 @@ async function loadSettings() {
         state.colorThemeId = 'system'; state.colorThemeMode = s.theme;
       }
       if (s.iconThemeId && typeof s.iconThemeId === 'string') state.iconThemeId = s.iconThemeId;
-      if (typeof s.autoCreateSession === 'boolean') state.autoCreateSession = s.autoCreateSession;
-      updateAutoCreateCheck(state.autoCreateSession);
+      if (s.autoCreateMode === 'none' || s.autoCreateMode === 'single' || s.autoCreateMode === 'forward') {
+        state.autoCreateMode = s.autoCreateMode;
+      }
+      // 缺键（旧 gui.ini 的 auto_create_session 已不再读取）时保持默认 single ——
+      // 旧默认正是「开 + 单端」，行为不变。
+      updateAutoCreateCheck(state.autoCreateMode !== 'none');
+      if (typeof s.autoStartDaemon === 'boolean') state.autoStartDaemon = s.autoStartDaemon;
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
@@ -272,6 +282,15 @@ async function loadSettings() {
     applySendRatio();
     applyQuickPanelRatio();
     quickPanelRender();
+  }
+
+  // 「随 GUI 启动守护进程」：要等设置读完才知道该不该拉，所以放在这里而不是
+  // DOMContentLoaded 里。不 await —— tryConnect() 同时在跑；守护进程若已在跑，
+  // startDaemon() 会直接确认连上、不会重复拉起。
+  if (state.autoStartDaemon && !state.daemonOnline && !state._autoStartTried) {
+    state._autoStartTried = true;
+    _tlog('autoStartDaemon', undefined, '自动拉起守护进程');
+    startDaemon();
   }
 }
 
@@ -2210,9 +2229,10 @@ async function syncDaemonSessions(procData) {
   // Skip while a tab is being intentionally closed (suppress window to avoid
   // the process-changed event from the destroy triggering immediate re-creation).
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
-  // autoCreateSession: add a local tab (no daemon process) when no tabs exist
-  if (!suppress && state.autoCreateSession && daemonSessions.length === 0 && state.tabs.length === 0) {
-    await autoCreateIdleSession();  // 自动补一个单端口空闲会话（不弹选择页）
+  // autoCreateMode: add a local tab (no daemon process) when no tabs exist
+  var autoMode = state.autoCreateMode || 'single';
+  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0) {
+    await autoCreateIdleSession(autoMode);  // 按设置补一个单端 / 转发空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
     // 列表判断「会话还在不在」—— 列表一空，刚挂上去的 sessionId 立刻被当成已消失
@@ -2685,6 +2705,8 @@ function updateDaemonUI() {
   }
   // 「+」和「文件 → 新建会话」不再随守护进程状态置灰：离线也能进选择页，
   // 页内再按能力置灰（串口卡禁用、从文件打开可用）。
+  // 设置页里的「默认自动保存」跟着守护进程亮/灭（真正的开关在守护进程里）。
+  if (typeof setAutoSaveToggleAvailable === 'function') setAutoSaveToggleAvailable(state.daemonOnline);
   state.tabs.forEach(function (t) {
     if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
       _syncChooserAvailability(t._page.root);
@@ -3041,13 +3063,14 @@ function _convertChooserToSession(tab, sid, mode) {
 
 // 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
 // 这个时机用户不在交互中）。
-async function autoCreateIdleSession() {
+async function autoCreateIdleSession(mode) {
   if (!state.daemonOnline) return;
-  var sid = await _createIdleProcessOfMode('single');
+  var m = (mode === 'forward') ? 'forward' : 'single';
+  var sid = await _createIdleProcessOfMode(m);
   if (!sid) return;
   if (state.tabs.some(function(x) { return x.sessionId === sid; })) return;
 
-  var tab = _sessionTabDefaults('single');
+  var tab = _sessionTabDefaults(m);
   tab.sessionId = sid;
   tab.connectedAt = Date.now();
   tab._page = new TabPage(state.tabs.length, tab);
@@ -6074,10 +6097,19 @@ function updateAutoSaveCheck(on) {
   }
 }
 
+// 菜单里的「启动时自动创建会话」仍是开关：勾上 = 上次选的模式（没选过就是单端），
+// 取消 = none。三选一（单端 / 转发）在设置页里选。
 function toggleAutoCreateSession() {
-  state.autoCreateSession = !state.autoCreateSession;
-  updateAutoCreateCheck(state.autoCreateSession);
+  if (state.autoCreateMode === 'none') {
+    state.autoCreateMode = state._lastCreateMode || 'single';
+  } else {
+    state._lastCreateMode = state.autoCreateMode;
+    state.autoCreateMode = 'none';
+  }
+  updateAutoCreateCheck(state.autoCreateMode !== 'none');
   saveSettings();
+  // 设置页若开着，把下拉同步过来（没开时 refreshSettingsPage 自己会 no-op）
+  if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
 }
 
 function updateAutoCreateCheck(on) {

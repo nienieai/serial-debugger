@@ -556,8 +556,30 @@ function buildSettingsPage() {
 	panelStorage.className = 'settings-panel is-hidden';
 	panelStorage.setAttribute('data-panel', 'storage');
 	var bStorage = _bubble(t('settings.bubble_storage','存储与行为'));
-	bStorage.appendChild(_row(t('settings.auto_save','默认自动保存'), _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true)));
-	bStorage.appendChild(_row(t('settings.auto_create','启动时自动创建会话'), _buildToggle(function() { toggleAutoCreateSession(); }, state.autoCreateSession !== false)));
+	// 纯 GUI 本地偏好：GUI 启动时若守护进程没在跑就自动拉起（不推给守护进程）。
+	bStorage.appendChild(_row(t('settings.auto_start_daemon','随 GUI 启动守护进程'),
+		_buildToggle(function() {
+			state.autoStartDaemon = !state.autoStartDaemon;
+			saveSettings();
+		}, state.autoStartDaemon === true)));
+	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）。守护进程
+	// 没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由
+	// setAutoSaveToggleAvailable() 恢复。
+	var autoSaveToggle = _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true, !state.daemonOnline);
+	var autoSaveInput = autoSaveToggle.querySelector('input');
+	if (autoSaveInput) autoSaveInput.setAttribute('data-toggle', 'autoSave');
+	bStorage.appendChild(_row(t('settings.auto_save','默认自动保存'), autoSaveToggle));
+	bStorage.appendChild(_row(t('settings.auto_create','启动时新建会话'),
+		_buildSelect(['none', 'single', 'forward'],
+			[ t('settings.auto_create_none', '不创建'),
+			  t('settings.auto_create_single', '单端口'),
+			  t('settings.auto_create_forward', '端口转发') ],
+			state.autoCreateMode || 'single',
+			function(v) {
+				state.autoCreateMode = v;
+				updateAutoCreateCheck(v !== 'none');
+				saveSettings();
+			})));
 	panelStorage.appendChild(bStorage);
 
 	// ── Panel: 语言 ──
@@ -853,12 +875,15 @@ function _row(labelText, control, i18nKey) {
 	return row;
 }
 
-function _buildToggle(onChange, checked) {
+// disabled：控件当前没有作用对象时置灰（例如守护进程离线时的「默认自动保存」）。
+// 置灰只挡交互，不动已保存的值 —— 守护进程起来后原样恢复。
+function _buildToggle(onChange, checked, disabled) {
 	var label = document.createElement('label');
-	label.className = 'settings-toggle';
+	label.className = 'settings-toggle' + (disabled ? ' is-disabled' : '');
 	var input = document.createElement('input');
 	input.type = 'checkbox';
 	input.checked = !!checked;
+	input.disabled = !!disabled;
 	input.addEventListener('change', function() { onChange(); });
 	label.appendChild(input);
 	var slider = document.createElement('span');
@@ -1814,6 +1839,16 @@ function refreshSettingsPage() {
 	renderSettingsThemeGrid();
 	renderSettingsIconGrid();
 	refreshSettingsLangList();
+}
+
+// 守护进程上线/下线时同步「默认自动保存」的可用性。设置页没打开时
+// querySelector 找不到 input，天然 no-op。
+function setAutoSaveToggleAvailable(online) {
+	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="autoSave"]');
+	if (!input) return;
+	input.disabled = !online;
+	var label = input.closest('.settings-toggle');
+	if (label) label.classList.toggle('is-disabled', !online);
 }
 
 // ---- check if settings tab is active ----
