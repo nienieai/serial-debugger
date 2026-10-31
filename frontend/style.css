@@ -14,6 +14,16 @@
      （top 54 + height 28 = 82px）中的较大者，否则第一条数据行会被按钮压住。
      .c-clear-btn 的 top 由本值倒推，改一处即可。 */
   --reserve-top: 82px;
+
+  /* 菜单毛玻璃（顶部菜单栏 + 下拉菜单 + 标签右键菜单）。
+     参数直接沿用标签悬浮卡（c-tabpop）那一套 —— 它已经在产品里调到能看：
+     10% 底色 + blur(20px)，透明度靠 backdrop-filter 的模糊兜住可读性，
+     而不是靠把底色堆厚。第一版我试过 82% 底色的「假毛玻璃」，那样只是
+     半透明色块，背后的纹理全被盖死，和悬浮卡也不是一个观感。
+     想单独调菜单就覆盖 --menu-glass-*，不影响悬浮卡。 */
+  --menu-glass-bg: var(--tabpop-glass-bg);
+  --menu-glass-border: var(--tabpop-glass-border);
+  --menu-glass-blur: var(--tabpop-glass-blur);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -234,7 +244,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* ---- 7. Components: Menu ---- */
 .header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 0 4px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+  /* 毛玻璃：底色半透明，菜单栏后面的内容（主题背景图）透出来并被模糊。
+     没有背景图的纯色主题下就是「比 bg2 略透一点」，不会变难读。 */
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
+  border-bottom: 1px solid var(--menu-glass-border);
   flex-shrink: 0; user-select: none; height: 26px;
   /* 菜单下拉必须压在标签栏和页面之上。header 自身没有定位时，下拉的 z-index:100
      只在 .menu-bar 内部排序，而 .menu-bar 被 7b 那条 `.header > *` 规则定成
@@ -255,7 +271,11 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-item.is-open .menu-label { background: var(--bg3); }
 .menu-dropdown {
   display: none; position: absolute; top: calc(100% + 4px); left: 0;
-  background: var(--bg2); border: 1px solid var(--border);
+  /* 毛玻璃：菜单浮在页面之上，模糊的是它后面的数据行，纹理看得见 */
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
+  border: 1px solid var(--menu-glass-border);
   min-width: max-content; width: max-content; z-index: 100; padding: 0;
   border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
@@ -306,11 +326,24 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .menu-sub-dropdown {
   display: none; position: absolute; left: 100%; top: 0;
-  background: var(--bg2); border: 1px solid var(--border);
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
+  border: 1px solid var(--menu-glass-border);
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   min-width: max-content; width: max-content; z-index: 110; padding: 0;
 }
 .menu-sub:hover .menu-sub-dropdown { display: block; }
+
+/* 与 c-tabpop 同一个回退：不支持 backdrop-filter 时半透明底会透出下面的文字，
+   菜单就成了重影，所以退回不透明底色。 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .header { background: var(--bg2); }
+  .menu-dropdown, .menu-sub-dropdown {
+    background: var(--tabpop-bg-solid);
+    border-color: var(--border);
+  }
+}
 
 .c-theme-btn {
   background: transparent; border: none; color: var(--fg) !important;
