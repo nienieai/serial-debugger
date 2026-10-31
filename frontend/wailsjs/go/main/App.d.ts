@@ -40,6 +40,8 @@ export function GetBuiltinIcons():Promise<Record<string, string>>;
 
 export function GetClients():Promise<Array<Record<string, any>>>;
 
+export function GetDisplayDefaults():Promise<Record<string, any>>;
+
 export function GetExternalColorTheme(arg1:string):Promise<Record<string, any>>;
 
 export function GetExternalIconTheme(arg1:string):Promise<Record<string, any>>;
@@ -53,6 +55,8 @@ export function GetHistoryStatusFor(arg1:string):Promise<boolean>;
 export function GetI18n(arg1:string):Promise<Record<string, string>>;
 
 export function GetPorts():Promise<Array<Record<string, any>>>;
+
+export function GetProtocolVersion():Promise<string>;
 
 export function GetSessionHistory(arg1:string,arg2:number,arg3:number,arg4:number):Promise<Record<string, any>>;
 
@@ -102,13 +106,21 @@ export function PickStlogFile():Promise<string>;
 
 export function ProbeDroppedPaths(arg1:Array<string>):Promise<Array<main.DropProbe>>;
 
+export function QuitApp():Promise<void>;
+
 export function ReadMultistrEntries(arg1:string):Promise<string>;
 
 export function ReadStlogFrames(arg1:string,arg2:number,arg3:number):Promise<Record<string, any>>;
 
 export function RefreshPorts():Promise<Array<Record<string, any>>>;
 
+export function RenameSession(arg1:string,arg2:string):Promise<void>;
+
+export function RenameStlogFile(arg1:string,arg2:string):Promise<string>;
+
 export function SaveAppSettings(arg1:main.AppSettings):Promise<void>;
+
+export function SaveDisplayDefaults(arg1:Record<string, any>):Promise<Record<string, any>>;
 
 export function SearchHistory(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Record<string, any>>;
 
@@ -123,6 +135,8 @@ export function SetHistoryEnabled(arg1:boolean):Promise<void>;
 export function SetHistoryEnabledFor(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetProcessMode(arg1:string,arg2:string):Promise<void>;
+
+export function SetSessionDisplay(arg1:string,arg2:Record<string, any>):Promise<void>;
 
 export function SetTabEncoding(arg1:string,arg2:string):Promise<void>;
 

@@ -1,5 +1,6 @@
 # 构建产物
 build/bin/
+build/bin-linux/
 *.exe
 
 # 运行时生成数据

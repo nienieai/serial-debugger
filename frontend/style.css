@@ -14,6 +14,21 @@
      （top 54 + height 28 = 82px）中的较大者，否则第一条数据行会被按钮压住。
      .c-clear-btn 的 top 由本值倒推，改一处即可。 */
   --reserve-top: 82px;
+
+  /* 压在正文上的浮层共用一档参数：下拉菜单、标签右键菜单、标签信息浮窗 c-tabpop。
+     底色 --tabpop-glass-bg 负责整体压住背后的内容，文字光晕 --glass-text-glow
+     负责字周围那一圈。原先 10% 的底压在正文上完全挡不住 —— 背后代码块的对比度
+     原样透上来把文字吞掉；标签信息浮窗弹下来同样压住正文，所以和菜单一起改。
+     光晕颜色必须与主题的「背景」同向才算反色 —— 浅色白蒙版 + 白晕、深色提亮蒙版
+     + 黑晕；反过来会变成一圈脏边。参考正运算范围 0.17.4（css/03-canvas.css:327）
+     同一场景的取值，这里先取淡一档（.30）再按真机效果调。
+     顶部菜单栏不跟着变实：它背后是 body 纯色、没有内容穿透，单独用
+     --header-glass-bg 维持原来那档。 */
+  --menu-glass-bg: var(--tabpop-glass-bg);
+  --menu-glass-border: var(--tabpop-glass-border);
+  --menu-glass-blur: var(--tabpop-glass-blur);
+  --glass-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+  --header-glass-bg: rgba(0, 0, 0, 0.10);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,10 +42,12 @@
     --hex-escape: #8b8b8b; --badge-cli: #10b981;
     --status-offline: #888; --tab-close: #888;
     /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
-    --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+    --tabpop-glass-bg: rgba(255, 255, 255, 0.14);
     --tabpop-glass-border: rgba(160, 160, 160, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
+    --glass-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
+    --header-glass-bg: rgba(255, 255, 255, 0.10);
     /* 拖入遮罩：半透明 + 模糊，透出下面的标签栏和内容 */
     --dropmask-bg: rgba(18, 18, 18, 0.55);
   }
@@ -46,10 +63,15 @@
     --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
     --hex-escape: #777; --badge-cli: #059669;
     --status-offline: #aaa; --tab-close: #999;
-    --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+    --tabpop-glass-bg: rgba(255, 255, 255, 0.30);
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
+    /* 光晕与 header 底色必须在四个主题块里都写全：只写 :root 的话，「系统深色 +
+       应用浅色」会命中 @media (prefers-color-scheme: dark) 那份、而
+       [data-theme="light"] 不覆盖它 —— 浅色界面上画出来就是黑阴影。 */
+    --glass-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+    --header-glass-bg: rgba(0, 0, 0, 0.10);
     --dropmask-bg: rgba(248, 248, 248, 0.55);
   }
 }
@@ -64,10 +86,12 @@
   --fwd-p1-hover: #2563eb; --fwd-p2-hover: #d97706;
   --hex-escape: #8b8b8b; --badge-cli: #10b981;
   --status-offline: #888; --tab-close: #888;
-  --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+  --tabpop-glass-bg: rgba(255, 255, 255, 0.14);
   --tabpop-glass-border: rgba(160, 160, 160, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
+  --glass-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
+  --header-glass-bg: rgba(255, 255, 255, 0.10);
   --dropmask-bg: rgba(18, 18, 18, 0.55);
 }
 
@@ -80,10 +104,12 @@
   --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
   --hex-escape: #777; --badge-cli: #059669;
   --status-offline: #aaa; --tab-close: #999;
-  --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+  --tabpop-glass-bg: rgba(255, 255, 255, 0.30);
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
+  --glass-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+  --header-glass-bg: rgba(0, 0, 0, 0.10);
   --dropmask-bg: rgba(248, 248, 248, 0.55);
 }
 
@@ -234,7 +260,15 @@ button:disabled:active { transform: none; box-shadow: none; }
 /* ---- 7. Components: Menu ---- */
 .header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 0 4px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+  /* 半透明底，但**不加** backdrop-filter。
+     backdrop-filter 会把元素变成 "backdrop root"：它内部后代的 backdrop-filter
+     只能采样这个元素自己的内容。下拉菜单是 .header 的后代（position:absolute
+     只是溢出到 header 外面），一旦 header 也有 backdrop-filter，菜单采样到的
+     就是那 26px 高的菜单栏本身 → 模糊出来是空的，表现成「纯透明、背后文字
+     原样透过来」。标签悬浮卡 c-tabpop 挂在 body 下没有这层祖先，所以它正常。 */
+  background: var(--header-glass-bg);
+  border-bottom: 1px solid var(--menu-glass-border);
   flex-shrink: 0; user-select: none; height: 26px;
   /* 菜单下拉必须压在标签栏和页面之上。header 自身没有定位时，下拉的 z-index:100
      只在 .menu-bar 内部排序，而 .menu-bar 被 7b 那条 `.header > *` 规则定成
@@ -255,21 +289,37 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-item.is-open .menu-label { background: var(--bg3); }
 .menu-dropdown {
   display: none; position: absolute; top: calc(100% + 4px); left: 0;
-  background: var(--bg2); border: 1px solid var(--border);
+  /* 毛玻璃：菜单浮在页面之上，模糊的是它后面的数据行，纹理看得见 */
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
+  border: 1px solid var(--menu-glass-border);
   min-width: max-content; width: max-content; z-index: 100; padding: 0;
   border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 .menu-item:hover .menu-dropdown { display: none; }
 .menu-item.is-open .menu-dropdown { display: block; }
 
+/* 反色文字光晕：下拉浮在正文之上，背后内容已被 blur(20px) 糊成大色块，
+   字周围补一圈与背景同色的光晕就能立住。零偏移双层模糊 —— 不用
+   `0 1px 2px` 那种投影，投影只往一个方向推，光晕要四周都裹住才隔得开。
+   text-shadow 可继承，挂在容器上，按钮/快捷键/文字一起带上。
+   顶部菜单栏不加：它背后是 body 纯色，没有内容穿透，加了只会让字发虚。 */
+.menu-dropdown, .menu-sub-dropdown { text-shadow: var(--glass-text-glow); }
+
 /* Menu items: 4-zone grid (chk 22px | text 1fr | shortcut auto | arrow 22px) */
 .menu-dropdown button, .menu-sub-dropdown button, .menu-sub-trigger {
   display: grid; grid-template-columns: 22px 1fr auto 22px; align-items: center;
   width: 100%; text-align: left; background: transparent; border: none; border-radius: 0;
   padding: 6px 8px; font-size: 13px; cursor: pointer; color: var(--fg);
+  /* 光晕必须显式写：Chromium 的 UA 样式阻断 text-shadow 继承进 button / input
+     （实测只挂在 .menu-dropdown 上时，button 算出来是 none），菜单项文字全在
+     button 里，靠继承会静默失效。 */
+  text-shadow: var(--glass-text-glow);
 }
 .menu-dropdown button:hover, .menu-sub-dropdown button:hover, .menu-sub-trigger:hover {
-  background: var(--hover); border-radius: 4px;
+  /* 悬停时菜单项是实色底，背后不再有东西要隔开，白晕/黑晕反而会显出一圈亮边 */
+  background: var(--hover); border-radius: 4px; text-shadow: none;
 }
 .menu-chk { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
 .chk.on { position: relative; }
@@ -306,11 +356,24 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .menu-sub-dropdown {
   display: none; position: absolute; left: 100%; top: 0;
-  background: var(--bg2); border: 1px solid var(--border);
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
+  border: 1px solid var(--menu-glass-border);
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   min-width: max-content; width: max-content; z-index: 110; padding: 0;
 }
 .menu-sub:hover .menu-sub-dropdown { display: block; }
+
+/* 与 c-tabpop 同一个回退：不支持 backdrop-filter 时半透明底会透出下面的文字，
+   菜单就成了重影，所以退回不透明底色。 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .header { background: var(--bg2); }
+  .menu-dropdown, .menu-sub-dropdown {
+    background: var(--tabpop-bg-solid);
+    border-color: var(--border);
+  }
+}
 
 .c-theme-btn {
   background: transparent; border: none; color: var(--fg) !important;
@@ -418,16 +481,142 @@ button:disabled:active { transform: none; box-shadow: none; }
 .statusbar::before { background-image: var(--statusbar-bg-overlay, none), var(--statusbar-bg-image, none); }
 .header > *, .tabs-bar > *, .statusbar > * { position: relative; z-index: 1; }
 
-.tab-dot { width: 8px; height: 8px; min-width: 8px; flex-shrink: 0; border-radius: 50%; transition: background 0.25s, box-shadow 0.25s; background: transparent; align-self: center; }
-.tab-dot.live { background: var(--green); box-shadow: 0 0 5px rgba(22,198,12,0.55); }
+/* ---- 8a. 标签内容：类型图标 + 状态点 + 线程名（+ 可选第二行） ----
+   标签上只允许这几样东西（其余状态全部由悬浮卡 c-tabpop 承担）：
+     类型（单端口/转发/设置/新建/文件）→ 左侧图标（单行 14px / 双行 21px），中性灰
+     开关（已连/空闲/只读）            → 图标右下角小点，整条标签唯一的着色处
+     线程名                            → 0.8.3 起归守护进程所有（process.list 的 name）
+     第二行（仅双行）                  → 端口与参数 / 参数与速率 / 保存与客户端
+     客户端数字                        → 单行挂名字右边、双行挂第二行末尾
+   这些都能在「设置 → 标签页」里单独开关，统一写在 body 的 data-tab-* 上：
+     data-tab-lines=1|2  单行/双行（双行整体高度 ×1.5）
+     data-tab-dot=on|off 状态点
+     data-tab-cli=on|off 客户端数字
+     data-tab-collapse=sub|clients  拥挤时先牺牲谁
+     --tab-name-max      名字最大宽度（px） */
+.tab-ico {
+  position: relative; display: inline-flex; align-self: center;
+  width: 14px; height: 14px; flex: 0 0 14px;
+  color: var(--placeholder);
+}
+.tab-ico > svg { display: block; width: 14px; height: 14px; }
+/* 点压在图标自身的右下角（不外挂）：图标笔画只画到 22/24，挂出去会像「掉下来的一粒」。
+   1.5px 底色描边让点和图标笔画分开，深浅主题都靠这一条。
+   注意生成条件写在状态类里：设置/新建没有状态，也就不该有那枚点。 */
+.tab-ico.is-live::after, .tab-ico.is-fwd::after, .tab-ico.is-idle::after, .tab-ico.is-ro::after {
+  content: ''; position: absolute; right: 0; bottom: 0;
+  width: 5px; height: 5px; border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--input-bg);
+}
+.tab-ico.is-live::after { background: var(--green); }
+.tab-ico.is-fwd::after  { background: var(--fwd-p1); }
+.tab-ico.is-idle::after { background: var(--placeholder); opacity: .75; }
+.tab-ico.is-ro::after   { background: transparent; box-shadow: none; border: 1px solid var(--placeholder); }
+body[data-tab-dot="off"] .tab-ico::after { display: none; }
 
+/* 只读标签（单个 .stlog 文件、还没推给守护进程的工程）：虚线边框，不参与彩色语义 */
+.tab-btn.is-ro { border-style: dashed; }
+
+/* 文字块：单行时只有名字，双行时名字 + 明细 */
+/* text-align: start 是必须的：标签本体是 <button>，浏览器默认 text-align:center，
+   双行时名字会被居中、而第二行（flex）靠左，两行就对不齐了 */
+.tab-txt { display: flex; flex-direction: column; justify-content: center; min-width: 0; gap: 3px; text-align: start; }
+body[data-tab-lines="1"] .tab-txt { gap: 0; }
+
+/* 线程名：宽度跟随「名字最大宽度」设置；自定义名字可能很长，一个名字不该吃掉整条标签栏 */
+.tab-port {
+  font-variant-numeric: tabular-nums;
+  max-width: var(--tab-name-max, 170px);
+  overflow: hidden; text-overflow: ellipsis;
+  display: inline-block; vertical-align: bottom;
+}
+
+/* 第二行：只在双行模式出现（单行时 DOM 里就没有它，这条是兜底） */
+.tab-sub {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 11.5px; font-weight: 400; line-height: 1.15; color: var(--placeholder);
+  max-width: 220px; overflow: hidden; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+body[data-tab-lines="1"] .tab-sub { display: none; }
+.tab-sub__txt { overflow: hidden; text-overflow: ellipsis; }
+.tab-sub__txt:empty { display: none; }
+
+/* 客户端数字：0.8.3 原样分来源彩色（GUI 蓝 / CLI 绿 / MCP 橙），
+   或设置里选「总数」只显示一个数字。 */
+.tab-cli {
+  display: inline-flex; align-items: baseline; gap: 2px; flex: none;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+body[data-tab-cli="off"] .tab-cli { display: none; }
+.tab-cli--src i { font-style: normal; }
+.tab-cli__g { color: #4a9eff; }
+.tab-cli__c { color: #4caf50; }
+.tab-cli__m { color: #ff9800; }
+:root[data-theme="light"] .tab-cli__g { color: #1d4ed8; }
+:root[data-theme="light"] .tab-cli__c { color: #15803d; }
+:root[data-theme="light"] .tab-cli__m { color: #b45309; }
+
+/* ---- 8a-2. 双行标签：整体高度 ×1.5 ----
+   栏 36→54、标签 30→45、激活 33→50、图标 14→21、点 5→7、关闭 22→26、
+   名字 13→14。字号只加 1px：真按 1.5 乘会变成 19.5px，比内容区标题还大。 */
+body[data-tab-lines="2"] .tabs-bar { height: 54px; }
+body[data-tab-lines="2"] .tab-btn { height: 45px; gap: 7px; padding: 0 6px 0 9px; }
+body[data-tab-lines="2"] .tab-btn.is-active { height: 50px; padding-bottom: 6px; }
+body[data-tab-lines="2"] .tab-btn:not(.is-active) { border-radius: 8px; }
+body[data-tab-lines="2"] .tab-ico { width: 21px; height: 21px; flex: 0 0 21px; }
+body[data-tab-lines="2"] .tab-ico > svg { width: 21px; height: 21px; }
+body[data-tab-lines="2"] .tab-ico.is-live::after,
+body[data-tab-lines="2"] .tab-ico.is-fwd::after,
+body[data-tab-lines="2"] .tab-ico.is-idle::after,
+body[data-tab-lines="2"] .tab-ico.is-ro::after { width: 7px; height: 7px; box-shadow: 0 0 0 2px var(--input-bg); }
+body[data-tab-lines="2"] .tab-port { font-size: 14px; }
+body[data-tab-lines="2"] .tab-btn .close-tab { width: 26px; height: 26px; }
+body[data-tab-lines="2"] .tab-placeholder { height: 45px; }
+/* 「+」在双行下也必须还是方框。它同时挂着 .tab-btn，会被上面那条 height:45px
+   按 (0,2,1) 的权重压过 .tab-new 的 28×28 —— 只改高不改宽，方框被抻成 28×45 的
+   竖条。等比放到 42（28 × 1.5，和其它元素同一口径）；padding 归零是因为
+   .tab-btn 那行给的是 0 6px 0 9px，左右不等会让「+」偏左。 */
+body[data-tab-lines="2"] .tab-new {
+  width: 42px; height: 42px; min-width: 42px;
+  padding: 0; border-radius: 10px; font-size: 18px;
+}
+
+/* ---- 8a-3. 拥挤降级 ----
+   顺序由 data-tab-collapse 决定：
+     sub（默认）  第二行收窄 → 第二行隐藏 → 数字隐藏 + 名字收窄 → 名字省略
+     clients      数字隐藏 → 第二行收窄 → 第二行隐藏 + 名字收窄 → 名字省略
+   第 2 级之后标签高度不变，只收内容 —— 高度突变会让内容区上下跳。 */
+.tabs-scroll[data-lvl="1"] .tab-sub { max-width: 130px; }
+.tabs-scroll[data-lvl="2"] .tab-sub { display: none; }
+.tabs-scroll[data-lvl="3"] .tab-sub,
+.tabs-scroll[data-lvl="4"] .tab-sub { display: none; }
+.tabs-scroll[data-lvl="3"] .tab-cli,
+.tabs-scroll[data-lvl="4"] .tab-cli { display: none; }
+.tabs-scroll[data-lvl="3"] .tab-port { max-width: 110px; }
+.tabs-scroll[data-lvl="4"] .tab-port { max-width: 62px; }
+
+/* 数字优先：一上来就先去掉客户端数字 */
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="1"] .tab-cli { display: none; }
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="1"] .tab-sub { max-width: 150px; }
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="2"] .tab-sub { max-width: 96px; }
+body[data-tab-collapse="clients"] .tabs-scroll[data-lvl="2"] .tab-cli { display: none; }
+
+/* 就地改名的输入框：宽度跟着标签走，不改变标签高度 */
+.tab-rename {
+  flex: 0 1 auto; min-width: 60px; max-width: var(--tab-name-max, 170px);
+  height: 20px; padding: 0 3px;
+  background: var(--input-bg); color: var(--fg);
+  border: 1px solid var(--accent); border-radius: 4px;
+  font: inherit; font-size: 13px; line-height: 18px;
+  outline: none;
+}
 .tab-btn .close-tab {
   color: var(--tab-close); width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 6px; flex-shrink: 0; transition: background 0.15s, color 0.15s;
 }
 .tab-btn .close-tab:hover { background: var(--red); color: #fff; }
-.tab-idle { font-style: italic; color: var(--placeholder); }
-.tab-forward { color: var(--green) !important; font-weight: 600; }
 /* 拖动排序中：原标签自己改成固定定位、压暗，在标签栏这一行里左右滑；
    原位由 .tab-placeholder 占着 —— 其余标签因此会实时让位。
    不用投影/浮起效果：它要看起来就是「原来那个标签被按暗了正在挪」。 */
@@ -462,12 +651,13 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .c-tabpop {
   position: fixed; z-index: 4000;
   width: 264px; padding: 9px 11px 10px;
-  /* 毛玻璃参数与调色板一致（color-picker.html 的 transparency="glass"）：
-     深色 rgba(255,255,255,.10)、浅色 rgba(0,0,0,.10)，模糊 blur(20px)；
-     不支持 backdrop-filter 时由下面的 @supports 回退成不透明底色。 */
+  /* 与下拉菜单同一档（压在正文上的浮层）：底色负责压住背后的内容，文字光晕
+     负责字周围那一圈。不支持 backdrop-filter 时由下面的 @supports 回退成实色。 */
   background-color: var(--tabpop-glass-bg);
   backdrop-filter: var(--tabpop-glass-blur);
   -webkit-backdrop-filter: var(--tabpop-glass-blur);
+  /* 浮窗里的文字都在 div/span 上，继承即可（button 才需要显式设 —— 见 .menu-dropdown） */
+  text-shadow: var(--glass-text-glow);
   color: var(--fg);
   border: 1px solid var(--tabpop-glass-border); border-radius: 10px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .28);
@@ -528,6 +718,13 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   margin-top: 2px; color: var(--placeholder); font-size: 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
+/* 保存开关 + 会话号：标签上已经不放磁盘图标了，这两条信息落在卡片里 */
+.c-tabpop__save {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 5px;
+  font-size: 11.5px; color: var(--placeholder);
+}
+.c-tabpop__save b { color: var(--fg); font-weight: 600; }
+.c-tabpop__sid { margin-inline-start: auto; font-family: "Cascadia Code", "Consolas", monospace; }
 .c-tabpop__sep { height: 1px; background: var(--border); opacity: .7; margin: 7px -11px; }
 
 /* 速率行：一行「方向 · 累计 · 当前速率」，下面一条通栏进度条 */
@@ -764,6 +961,34 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .c-color-preview .data-row:last-child { margin-bottom: 0; }
 .c-preview-dark  { color: #d4d4d4; background: #1e1e1e; border: 1px solid var(--border); }
 .c-preview-light { color: #1a1a1a; background: #f3f3f3; border: 1px solid var(--border); }
+
+/* 发送框预览（设置 → 数据高亮 → 发送框）。
+   不复用 `.send-input-mirror`：那套是「透明 textarea + 绝对定位镜像层」（inset:0、
+   42px 上下内边距），塞进设置页这个小框会撑爆。这里只借用同一组 `--dc-send*` 变量，
+   回退链与真实发送框逐字一致，避免预览和实物漂移。 */
+.c-send-preview {
+  padding: 7px 9px; border-radius: 6px; flex: 1 1 0; min-width: 0;
+  font-size: 12px; line-height: 1.55;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow: hidden;
+}
+.c-send-preview__row { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.c-send-preview__row + .c-send-preview__row { margin-top: 4px; }
+.c-send-preview__tag {
+  flex: none; width: 22px;
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 10px;
+  color: var(--placeholder); letter-spacing: 0.02em;
+}
+.c-send-preview__text   { color: var(--dc-sendText, var(--fg)); }
+.c-send-preview__hex    { color: var(--dc-sendHex, var(--dc-hexTx, var(--fg))); }
+.c-send-preview__bad    { color: var(--dc-sendHexBad, var(--dc-hexInv, var(--red)));
+                          text-decoration: underline; text-decoration-style: wavy; text-underline-offset: 2px; }
+.c-send-preview__prefix { color: var(--dc-sendPrefix, var(--placeholder)); }
+.c-send-preview__ctrl   { color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg)));
+                          background: var(--dc-sendCtrlBg, transparent); }
+/* Tab：真实发送框里 → 叠在制表位上，宽度由 tab-size 撑开；预览里用 4ch 模拟 */
+.c-send-preview__tab    { display: inline-block; width: 4ch; }
+.c-send-preview__ph     { color: var(--dc-sendPh, var(--placeholder)); }
 
 /* Close × button */
 .c-close-btn { background: transparent; border: none; font-size: 16px; padding: 0 4px; cursor: pointer; color: var(--fg); opacity: 0.6; }
@@ -1027,8 +1252,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .ctrl-fchar[data-ws="tab"] .ctrl-real::after {
   content: '→';
   position: absolute; left: 0; top: 0;
-  color: var(--dc-ctrlFg, var(--fg));
-  font-weight: inherit; font-style: inherit;
+  color: var(--dc-ctrlFg, var(--fg)); font-weight: inherit; font-style: inherit;
   pointer-events: none;
 }
 .ctrl-mark {
@@ -1145,7 +1369,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   padding: 42px 12px 40px 12px; font-size: 15px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   line-height: 1.5; white-space: pre-wrap; word-break: break-all;
-  color: var(--fg); background: var(--input-bg);
+  color: var(--dc-sendText, var(--fg)); background: var(--input-bg);
 }
 .send-input-mirror .send-mirror-placeholder { color: var(--placeholder); }
 /* ── 镜像层必须与 textarea 逐格同宽 ────────────────────────────────────────
@@ -1170,7 +1394,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .send-input-mirror .ctrl-char[data-ws="tab"] .ctrl-real::after,
 .send-input-mirror .ctrl-fchar[data-ws="tab"] .ctrl-real::after {
   content: '→'; position: absolute; left: 0; top: 0;
-  color: var(--dc-ctrlFg, var(--fg)); font-weight: inherit; font-style: inherit;
+  color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg))); font-weight: inherit; font-style: inherit;
   pointer-events: none;
 }
 /* Send hint — 发送框校验/失败提示（悬浮，不参与布局、不挡操作）。
@@ -1182,12 +1406,19 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   border: 1px solid var(--red); border-radius: 6px; padding: 3px 9px;
   font-size: 12px; line-height: 1.5; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
-/* Send mirror hex coloring */
-.send-input-mirror .send-hex-ok { color: var(--dc-hexTx, var(--fg)); }
-.send-input-mirror .send-hex-bad { color: var(--dc-hexInv, var(--red)); text-decoration: underline; text-decoration-color: var(--dc-hexInv, var(--red)); text-underline-offset: 2px; text-decoration-style: wavy; }
+/* Send mirror hex coloring —— 0.8.4 起发送框有自己的键，不再借历史流的：
+   以前 hex 字节吃 --dc-hexTx、非法字节吃 --dc-hexInv、控制字符吃 --dc-ctrlFg/Bg，
+   改发送框会连带改记录区里 Tx 行的颜色，反之亦然。
+   var() 的第二参保留旧键：样式可能比设置先到，那一瞬间回退到旧行为。 */
+.send-input-mirror .send-hex-ok { color: var(--dc-sendHex, var(--dc-hexTx, var(--fg))); }
+.send-input-mirror .send-hex-bad { color: var(--dc-sendHexBad, var(--dc-hexInv, var(--red))); text-decoration: underline; text-decoration-color: var(--dc-sendHexBad, var(--dc-hexInv, var(--red))); text-underline-offset: 2px; text-decoration-style: wavy; }
 /* 0x 前缀用弱化色：原来和 .send-hex-ok 同一个 --dc-hexTx，等于没有区分作用
    （TODO #47）。前缀只是分隔符，压暗一档既不再抢字节的视觉，也仍然看得见。 */
-.send-input-mirror .send-hex-prefix { color: var(--placeholder); }
+.send-input-mirror .send-hex-prefix { color: var(--dc-sendPrefix, var(--placeholder)); }
+/* 发送框自己的控制字符/占位符：与历史流的 .ctrl-char 分开，否则两边同色 */
+.send-input-mirror .send-mirror-placeholder { color: var(--dc-sendPh, var(--placeholder)); }
+.send-input-mirror .ctrl-mark { color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg))); }
+.send-input-mirror .ctrl-char { background: var(--dc-sendCtrlBg, var(--dc-ctrlBg, transparent)); }
 #sendInput {
   position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
   background: transparent; color: transparent; border: none; border-radius: 0;
@@ -1563,10 +1794,49 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 }
 .alert-btns button:hover { background: var(--hover); }
 .alert-btns button:active { transform: scale(0.96); }
+/* 「不再提醒」：弹窗底部按钮上方的勾选项。默认 is-hidden，由 showConfirm 第 6 个参数
+   决定是否露出；只做排版，不参与弹窗布局计算（负 margin 抵掉 body 的下边距）。 */
+.alert-dontask {
+  display: flex; align-items: center; gap: 6px;
+  margin: -8px 0 12px; font-size: 13px; color: var(--placeholder);
+  cursor: pointer; user-select: none; width: fit-content;
+}
+.alert-dontask input { width: 14px; height: 14px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+.alert-dontask:hover { color: var(--fg); }
 /* 等宽 + 保留换行：多行、按列对齐的文本（.stlog 摘要用）。只做排版，不含布局。 */
 .alert-body.t-mono {
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
   font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+}
+
+/* ---- 标签页设置弹窗 ----
+   编码 / Hex / 控制字符 / 转义这几项按标签页走，入口是标签右键菜单。
+   只做排版与外观，控件复用设置页的 .settings-select / .settings-toggle。 */
+.tabset-popup {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  width: 380px; max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 80px); display: flex; flex-direction: column;
+}
+.tabset-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+}
+.tabset-title { font-size: 14px; font-weight: 600; }
+.tabset-sub {
+  font-size: 12px; color: var(--placeholder); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.tabset-body { padding: 8px 14px 12px; overflow-y: auto; }
+.tabset-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 0;
+}
+.tabset-label { font-size: 13px; }
+.tabset-row.is-hidden { display: none; }
+.tabset-foot {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: 11.5px; line-height: 1.5; color: var(--placeholder);
 }
 
 /* ---- 18. Status Bar ---- */
@@ -1799,7 +2069,8 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
   border-top: none;
 }
 .settings-panel[data-panel="display"] > .settings-bubble::after,
-.settings-panel[data-panel="storage"] > .settings-bubble::after {
+.settings-panel[data-panel="storage"] > .settings-bubble::after,
+.settings-panel[data-panel="tabs"] > .settings-bubble::after {
   content: '';
   position: absolute;
   left: 50%;
@@ -1846,6 +2117,27 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 input.settings-select { -moz-appearance: textfield; }
 input.settings-select::-webkit-inner-spin-button,
 input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* 数值框 + 单位：光一个 170 看不出是像素还是字符数，右边挂个单位 */
+.settings-num { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.settings-num > .settings-select { flex: 1 1 auto; min-width: 0; }
+.settings-unit { flex: none; font-size: 13px; color: var(--placeholder); }
+
+/* ---- 标签页：卡内两列 ----
+   与「编码与显示」同一套（label 170 + 控件吃满半列）。这面板只有 7 项、控件又小，
+   单列满宽时 .settings-select 的 flex:1 1 auto 会把下拉框拉到 800+ px，
+   整张卡看起来就是几个长条；分两列后控件回到 310 上下，和同页其它面板一致。 */
+.settings-panel[data-panel="tabs"] > .settings-bubble {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 44px;
+  align-items: start;
+}
+.settings-panel[data-panel="tabs"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
+/* 第一排两格不要上分割线。grid 里行仍按 DOM 顺序流动：
+   nth-child(2) 是第一排左、nth-child(3) 是第一排右。 */
+.settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(2),
+.settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(3) { border-top: none; }
 
 /* ---- 整体外观：一行式 ---- */
 .settings-modeline { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
@@ -2091,6 +2383,11 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 }
 .settings-toggle input:checked + .settings-toggle-slider { background: var(--accent); }
 .settings-toggle input:checked + .settings-toggle-slider::after { transform: translateX(18px); }
+/* 置灰：控件当前没有作用对象（如守护进程离线时的「默认自动保存」）。
+   只降不透明度、换掉 pointer 手感，滑块形状与开/关位置保持不变 —— 用户能看出
+   「现在是开/关，只是暂时改不了」，而不是以为它被关掉了。 */
+.settings-toggle.is-disabled { opacity: .45; }
+.settings-toggle.is-disabled .settings-toggle-slider { cursor: not-allowed; }
 /* ---- 空状态 / 搜索隐藏 ---- */
 .settings-empty { padding: 40px; text-align: center; color: var(--placeholder); }
 .settings-bubble.is-hidden, .settings-row.is-hidden { display: none; }
@@ -2190,6 +2487,9 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
   align-items: start;
 }
 .settings-panel[data-panel="colors"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
+/* 端口转发卡只有一组，单列：两块预览并排、表格吃满整卡 */
+.settings-panel[data-panel="colors"] > .settings-bubble[data-bubble="forward"] { display: block; }
+.settings-panel[data-panel="colors"] > .settings-bubble[data-bubble="forward"]::after { display: none; }
 .c-color-group { min-width: 0; }
 .c-color-head { gap: 6px; }
 .c-color-head__chk { width: 26px; }
@@ -2231,11 +2531,18 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 /* ---- 窄屏：卡内字段退回单列，去掉竖线 ---- */
 @media (max-width: 1249px) {
   .settings-panel[data-panel="display"] > .settings-bubble,
-  .settings-panel[data-panel="storage"] > .settings-bubble {
+  .settings-panel[data-panel="storage"] > .settings-bubble,
+  .settings-panel[data-panel="tabs"] > .settings-bubble {
     display: block;
   }
   .settings-panel[data-panel="display"] > .settings-bubble::after,
-  .settings-panel[data-panel="storage"] > .settings-bubble::after { display: none; }
+  .settings-panel[data-panel="storage"] > .settings-bubble::after,
+  .settings-panel[data-panel="tabs"] > .settings-bubble::after { display: none; }
+  /* 落回单列后「第一排右格」这个概念不存在了，把那条去线规则还回去，
+     否则第二个字段上方会少一道分割线 */
+  .settings-panel[data-panel="tabs"] > .settings-bubble > .settings-row:nth-child(3) {
+    border-top: 1px solid var(--border);
+  }
   .settings-about2 { grid-template-columns: 1fr; gap: 22px; }
 }
 @media (max-width: 620px) {

@@ -157,6 +157,14 @@ var allTools = []toolDef{
 		}, Required: []string{"processId", "mode"}},
 	},
 	{
+		Name:        "serial_rename",
+		Description: "Rename a session thread (the name shown in every client's tab/list; this is the only label a thread has). Pass an empty name to fall back to the automatic name (port name, or 'session #N' when no port is declared). Project sessions persist the name in the project's settings.json; plain serial sessions keep it in daemon memory only.",
+		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
+			"processId": {Type: "string", Description: "Process ID to rename."},
+			"name":      {Type: "string", Description: "New thread name (max 64 chars). Empty string restores the automatic name."},
+		}, Required: []string{"processId"}},
+	},
+	{
 		Name:        "serial_close",
 		Description: "Close and destroy a serial process. If connected, disconnects first.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{
@@ -319,6 +327,7 @@ var toolHandlers = map[string]toolHandler{
 	"serial_multistr_status": handleMultistrStatus,
 	"serial_probe_ports":     handleProbePorts,
 	"serial_set_mode":        handleSetMode,
+	"serial_rename":          handleRename,
 }
 
 func okResult(v any) *toolCallResult {
@@ -452,6 +461,25 @@ func handleConnect(raw json.RawMessage) *toolCallResult {
 	}, "mcp")
 	if err != nil {
 		return errResult(fmt.Sprintf("Failed to connect: %v", err))
+	}
+	return okResult(result)
+}
+
+func handleRename(raw json.RawMessage) *toolCallResult {
+	var p struct {
+		ProcessID string `json:"processId"`
+		Name      string `json:"name"`
+	}
+	json.Unmarshal(raw, &p)
+	if p.ProcessID == "" {
+		return errResult("processId is required")
+	}
+	result, err := client.CallOnce(contract.ProcessRename, map[string]any{
+		"processId": p.ProcessID,
+		"name":      p.Name,
+	}, "mcp")
+	if err != nil {
+		return errResult(fmt.Sprintf("Failed to rename: %v", err))
 	}
 	return okResult(result)
 }

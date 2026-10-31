@@ -852,6 +852,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if mode == "" {
 			mode = "single"
 		}
+		requestedName, _ := req.Params["name"].(string)
 		connect := true
 		if v, ok := req.Params["connect"]; ok {
 			if b, ok := v.(bool); ok {
@@ -900,7 +901,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			}
 			cfgA := SerialConfig{Port: p.Port, Baud: p.Baud, DataBits: p.DataBits, StopBits: p.StopBits, Parity: p.Parity}
 			cfgB := SerialConfig{Port: p.PortB, Baud: p.BaudB, DataBits: p.DataBitsB, StopBits: p.StopBitsB, Parity: p.ParityB}
-			proc, err := s.pm.Create("forward", p.Port, cfgA, &cfgB, connect)
+			proc, err := s.pm.CreateNamed("forward", p.Port, requestedName, cfgA, &cfgB, connect)
 			if err != nil {
 				logOp("错误", "%s 创建转发进程失败: %v", label, err)
 				return protocol.Response{ID: req.ID, Error: err.Error()}
@@ -914,6 +915,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			}
 			return protocol.Response{ID: req.ID, Result: map[string]any{
 				"processId": proc.id,
+				"name":      proc.Name(),
 				"connected": connected,
 				"success":   true,
 			}}
@@ -923,7 +925,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		if err := convParams(req.Params, &cfg); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params: " + err.Error()}
 		}
-		proc, err := s.pm.Create("single", cfg.Port, cfg, nil, connect)
+		proc, err := s.pm.CreateNamed("single", cfg.Port, requestedName, cfg, nil, connect)
 		if err != nil {
 			logOp("错误", "%s 创建进程失败: %v", label, err)
 			return protocol.Response{ID: req.ID, Error: err.Error()}
@@ -939,9 +941,33 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{
 			"processId": proc.id,
+			"name":      proc.Name(),
 			"connected": connected,
 			"success":   true,
 		}}
+
+	case contract.ProcessRename:
+		var p struct {
+			ProcessID string `json:"processId"`
+			Name      string `json:"name"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.ProcessID == "" {
+			return protocol.Response{ID: req.ID, Error: "processId required"}
+		}
+		if err := s.pm.Rename(p.ProcessID, p.Name); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		proc := s.pm.Get(p.ProcessID)
+		result := map[string]any{"success": true, "name": ""}
+		if proc != nil {
+			result["name"] = proc.Name()
+			// 工程目录会跟着名字改名，返回新路径：客户端据此更新自己记的工程路径
+			result["sessionPath"] = proc.sessionDir()
+		}
+		return protocol.Response{ID: req.ID, Result: result}
 
 	case contract.ProcessDestroy:
 		var p struct {
@@ -1133,6 +1159,7 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			DataBitsB int    `json:"dataBitsB"`
 			StopBitsB string `json:"stopBitsB"`
 			ParityB   string `json:"parityB"`
+			Name      string `json:"name"` // 线程名；留空用自动名（A ↔ B）
 		}
 		if err := convParams(req.Params, &p); err != nil {
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
@@ -1163,12 +1190,16 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		cfgA := SerialConfig{Port: p.PortA, Baud: p.BaudA, DataBits: p.DataBitsA, StopBits: p.StopBitsA, Parity: p.ParityA}
 		cfgB := SerialConfig{Port: p.PortB, Baud: p.BaudB, DataBits: p.DataBitsB, StopBits: p.StopBitsB, Parity: p.ParityB}
-		proc, err := s.pm.ForwardCreate(cfgA, cfgB)
+		proc, err := s.pm.CreateNamed("forward", cfgA.Port, p.Name, cfgA, &cfgB, true)
 		if err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
-		logOp("串口", "%s 创建转发 %s \u2194 %s \u2192 #%s", label, p.PortA, p.PortB, proc.id)
-		return protocol.Response{ID: req.ID, Result: map[string]any{"processId": proc.id, "success": true}}
+		logOp("串口", "%s 创建转发 %s \u2194 %s → #%s", label, p.PortA, p.PortB, proc.id)
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"processId": proc.id,
+			"name":      proc.Name(),
+			"success":   true,
+		}}
 
 	case contract.SessionSend:
 		var p struct {
@@ -1193,6 +1224,47 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			return protocol.Response{ID: req.ID, Error: "invalid params"}
 		}
 		if err := s.pm.ClearHistory(p.ProcessID); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
+
+	case contract.DisplayDefaults:
+		// 新会话的显示设置初始值：daemon.ini 的 [display] 段（缺键回内置默认）
+		return protocol.Response{ID: req.ID, Result: map[string]any{"display": processDaemonSettings().Display}}
+
+	case contract.DisplaySetDefaults:
+		// 改的是 daemon.ini 本身：只有守护进程能写这个文件（单写者），GUI 走 IPC。
+		var p struct {
+			Display map[string]string `json:"display"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		if err := saveDisplaySection(filepath.Dir(exe), p.Display); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		// 回一份重新读出来的值，前端拿它更新本地默认值
+		return protocol.Response{ID: req.ID, Result: map[string]any{
+			"success": true,
+			"display": processDaemonSettings().Display,
+		}}
+
+	case contract.SessionSetDisplay:
+		var p struct {
+			ProcessID string         `json:"processId"`
+			Display   map[string]any `json:"display"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.ProcessID == "" {
+			return protocol.Response{ID: req.ID, Error: "processId required"}
+		}
+		if err := s.pm.SetDisplay(p.ProcessID, p.Display); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}

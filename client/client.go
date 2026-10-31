@@ -389,10 +389,13 @@ func (c *DaemonClient) verifyProtocol() error {
 	}
 	info, err := protocol.DecodeDaemonInfo(res)
 	if err != nil {
-		return fmt.Errorf("解析守护进程版本失败: %w", err)
+		// 老守护进程回的是整数协议号（旧版是 1），解码成字符串会失败。
+		// 这不是「解析坏了」，而是两边代际不同，直接说清楚怎么办。
+		return fmt.Errorf("读取守护进程协议号失败（可能是旧版守护进程，本客户端要求 IPC %s）: %w。请执行 serial-cli start 重启守护进程",
+			protocol.ProtocolVersion, err)
 	}
 	if !info.Compatible() {
-		return fmt.Errorf("IPC 协议版本不匹配：客户端为 %d，守护进程为 %s（协议 %d）。请执行 serial-cli shutdown 后重试",
+		return fmt.Errorf("IPC 协议不兼容：客户端 %s，守护进程 %s（协议 %s）。请执行 serial-cli start 重启守护进程",
 			protocol.ProtocolVersion, info.Version, info.ProtocolVersion)
 	}
 	return nil
@@ -461,16 +464,28 @@ func (c *DaemonClient) readSubLoop() {
 	}
 }
 
-// startHeartbeat sends a ping every 5 s. After 3 consecutive failures the
-// connection is considered dead and OnDisconnect is called (if set).
+// 心跳参数：间隔 2s、单次超时 1.5s、连续 3 次失败判掉线。
+//
+// 为什么能比原来的 5s 激进：正常关闭是守护进程主动广播 daemon-shutdown
+// （即时生效），心跳只负责「意外退出」。最坏发现时间 ≈ 2s×3 + 1.5s ≈ 7.5s，
+// 原来是 5s×3 + 10s ≈ 25s。
+//
+// 但间隔不能再短：守护进程处理大 history 请求或落盘 flush 时会有百毫秒级停顿，
+// 而误判掉线的代价是清空所有会话页（app.js 的 handleDaemonOffline）。
+const (
+	heartbeatInterval = 2 * time.Second
+	heartbeatTimeout  = 1500 * time.Millisecond
+)
+
+// startHeartbeat 每 2s ping 一次；连续 3 次失败判连接已死，回调 OnDisconnect。
 func (c *DaemonClient) startHeartbeat() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 	failures := 0
 	for {
 		select {
 		case <-ticker.C:
-			_, err := c.Call(contract.Ping, nil)
+			_, err := c.callWithTimeout(contract.Ping, nil, heartbeatTimeout)
 			if err != nil {
 				failures++
 				if failures >= 3 {
@@ -491,6 +506,14 @@ func (c *DaemonClient) startHeartbeat() {
 
 // Call sends a request on the daemon pipe and waits for the response on the resp pipe.
 func (c *DaemonClient) Call(method contract.Method, params map[string]any) (map[string]any, error) {
+	return c.callWithTimeout(method, params, requestTimeoutFor(method))
+}
+
+// callWithTimeout 是 Call 的可指定超时版本。
+//
+// 心跳必须用它：通用超时是 10s，而心跳间隔只有 2s —— 一次 ping 卡满 10s，
+// ticker 会连着丢好多个 tick，判定掉线的时间被拖到几十秒，比原来的 5s×3 还糟。
+func (c *DaemonClient) callWithTimeout(method contract.Method, params map[string]any, timeout time.Duration) (map[string]any, error) {
 	c.wMu.Lock()
 	id := c.reqID
 	c.reqID++
@@ -522,11 +545,19 @@ func (c *DaemonClient) Call(method contract.Method, params map[string]any) (map[
 			return nil, fmt.Errorf("%s", msg.Error)
 		}
 		return msg.Result, nil
-	case <-time.After(requestTimeoutFor(method)):
+	case <-time.After(timeout):
 		c.pendMu.Lock()
 		delete(c.pending, id)
 		c.pendMu.Unlock()
 		return nil, fmt.Errorf("request timeout: %s", method)
+	case <-c.done:
+		// 连接已经被 Close（心跳判死、StopDaemon、shutdown）。不在这里立刻返回
+		// 的话，调用方要白等满整个超时 —— GUI 清理会话页、CLI 交互模式重连都会
+		// 各卡 10 秒。
+		c.pendMu.Lock()
+		delete(c.pending, id)
+		c.pendMu.Unlock()
+		return nil, fmt.Errorf("connection closed")
 	}
 }
 
@@ -556,6 +587,20 @@ func (c *DaemonClient) ReadEvent() <-chan *protocol.RawMsg {
 
 // ClientId returns the unique client identifier.
 func (c *DaemonClient) ClientId() string { return c.clientId }
+
+// Alive 用一次短 ping 判断这条连接还活着没有。
+//
+// CLI 交互模式用它决定要不要重连：整个 shell 会话只建一次连接，daemon 重启后
+// 旧连接会死（心跳判死或对端关闭），靠这个判断自动恢复，不用退出重进。
+// 超时给 1.5s（与心跳一致）：daemon 处理大 history 请求时会有百毫秒级停顿，
+// 太短会误判；误判只是多建一次连接，代价很低但没必要。
+func (c *DaemonClient) Alive(timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
+	_, err := c.callWithTimeout(contract.Ping, nil, timeout)
+	return err == nil
+}
 
 // Close shuts down all 3 pipes.
 func (c *DaemonClient) Close() error {
@@ -1063,7 +1108,22 @@ func StartDaemon() (string, error) {
 		}
 		return "restarted", nil
 	}
+	if errors.Is(err, protocol.ErrProtocolDecode) {
+		// 守护进程在跑、也答了 daemon.info，但协议号解析不出来 —— 老版本（整数协议号）。
+		// 这条必须走「重启」，不能落到 startDaemonProcess：旧实例还占着 Global 互斥体，
+		// 新实例会以「已在运行」退出，变成静默失败。
+		if rerr := restartDaemon(); rerr != nil {
+			return "", rerr
+		}
+		return "restarted", nil
+	}
 	return startDaemonProcess()
+}
+
+// RenameSession 改一个会话进程的线程名（空串 = 退回自动名）。
+func (c *DaemonClient) RenameSession(processID, name string) error {
+	_, err := c.Call(contract.ProcessRename, map[string]any{"processId": processID, "name": name})
+	return err
 }
 
 // DaemonInfo 通过一次性连接读取守护进程的身份与协议版本。
@@ -1072,7 +1132,14 @@ func DaemonInfo() (protocol.DaemonInfo, error) {
 	if err != nil {
 		return protocol.DaemonInfo{}, err
 	}
-	return protocol.DecodeDaemonInfo(res)
+	info, err := protocol.DecodeDaemonInfo(res)
+	if err != nil {
+		// 与 verifyProtocol 保持同一句人话：解码失败最常见的成因是「对端是老版本，
+		// 协议号还是整数 1」，光打印 json 报错看不出该做什么。
+		return protocol.DaemonInfo{}, fmt.Errorf("读取守护进程协议号失败（可能是旧版守护进程，本客户端要求 IPC %s）: %w。请执行 serial-cli start 重启守护进程",
+			protocol.ProtocolVersion, err)
+	}
+	return info, nil
 }
 
 // restartDaemon 关闭正在运行的守护进程（可能是旧版本），等它真正退出后重启。

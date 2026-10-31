@@ -46,7 +46,10 @@ func main() {
 			app.Startup(ctx)
 			uiStartHotReload(ctx)
 		},
-		OnShutdown: app.Shutdown,
+		// 关窗口前先问一句「要不要一起停守护进程」（设置里可选三种模式）。
+		// 返回值是 prevent：true = 拦住这次关闭，前端确认后由 QuitApp 再退一次。
+		OnBeforeClose: app.BeforeClose,
+		OnShutdown:    app.Shutdown,
 		Bind: []any{
 			app,
 		},

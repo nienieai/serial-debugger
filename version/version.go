@@ -6,4 +6,4 @@ package version
 // 唯一来源是 wails.json 的 info.productVersion：build.ps1 会把它通过
 // -ldflags "-X ...Version=x.y.z" 注入进来，所以这里是构建时的默认值，
 // 不是需要手改的地方（保留 var 而不是 const 才能被 ldflags 覆盖）。
-var Version = "0.8.3"
+var Version = "0.8.4"

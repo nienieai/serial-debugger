@@ -69,13 +69,25 @@ func (p *Process) openStlogFile() {
 	if p.forwardConfigB.Port != "" {
 		mode, portB = sessionfile.ModeForward, p.forwardConfigB.Port
 	}
+	// Display 让单个 pkg 拎出来也能按当初的样子显示（工程目录仍以
+	// settings.json 为准，见 settingsdoc.go）。
+	//
+	// 客户端只在用户改设置时才推 display，新建会话那一刻这里是空的；空着就
+	// 落 daemon.ini 的默认值 —— 那正是 GUI 此刻在用的那一份，不落等于白加字段。
+	display := sessionfile.DisplayStrings(p.Display())
+	if len(display) == 0 {
+		display = processDaemonSettings().Display
+	}
 	set := sessionfile.Settings{
-		V:     sessionfile.SlotPayloadVer,
-		Label: p.config.Port,
-		Port:  p.config.Port,
-		Baud:  p.config.Baud,
-		Mode:  mode,
-		PortB: portB,
+		V: sessionfile.SlotPayloadVer,
+		// Label 记的是「开始录制这一刻的线程名」，不是端口名：改名之后新包会带上
+		// 新名字，已封包的字节不动（包头槽是自描述快照，见 v2 §3）。
+		Label:   p.Name(),
+		Port:    p.config.Port,
+		Baud:    p.config.Baud,
+		Mode:    mode,
+		PortB:   portB,
+		Display: display,
 	}
 	sess, err := sessionfile.CreateSessionIn(dir, set)
 	if err != nil {
@@ -87,6 +99,11 @@ func (p *Process) openStlogFile() {
 	p.stlogPending = false
 	p.stlogStop = make(chan struct{})
 	p.startStlogTicker(p.stlogStop)
+	// 记下「这个工程在录」：推送回守护进程时据此决定要不要接着录（见 OpenSession）。
+	// 只改 save 一个字段，别整份写回 —— 那会冲掉之后改的 label / display。
+	if err := sess.SetSaveFlag(true); err != nil {
+		logOp("错误", "进程 #%s 写 save 标记失败: %v", p.id, err)
+	}
 	logOp("历史", "进程 #%s 开始录制 %s", p.id, sess.Dir())
 }
 
@@ -207,6 +224,34 @@ func (p *Process) detachStlogFile() {
 	p.closeStlogLocked()
 }
 
+// resumeRecording 把一个已存在工程的录制接回来：同一个目录、接着往最后一个包里写。
+//
+// 只在 OpenSession 用 —— settings.json 的 save=true 说明上次是开着保存关掉的。
+// 和 SetSaveHistory(true) 的区别就在这点：那个会新建一个会话目录，这个续写旧的。
+func (p *Process) resumeRecording(dir string) {
+	sess, err := sessionfile.OpenSessionDir(dir)
+	if err != nil {
+		logOp("错误", "进程 #%s 接着录 %s 失败: %v", p.id, dir, err)
+		return
+	}
+	p.saveHistory.Store(true)
+	p.saveHistorySet.Store(true)
+
+	p.stlogMu.Lock()
+	if p.stlog != nil { // 已经有录制在跑（理论上不会）
+		p.stlogMu.Unlock()
+		_ = sess.Close()
+		return
+	}
+	p.stlog = sess
+	p.stlogName = filepath.Base(sess.Dir())
+	p.stlogPending = false
+	p.stlogStop = make(chan struct{})
+	p.startStlogTicker(p.stlogStop)
+	p.stlogMu.Unlock()
+	logOp("历史", "进程 #%s 接着录制 %s", p.id, dir)
+}
+
 // closeStlogLocked 关掉当前录制文件并清空状态；调用方必须持有 stlogMu。
 func (p *Process) closeStlogLocked() {
 	w := p.stlog
@@ -216,6 +261,11 @@ func (p *Process) closeStlogLocked() {
 	p.stlogPending = false
 	if w == nil {
 		return
+	}
+	// 清掉「在录」标记：这个工程现在是停着的，推送回来不该自动开录。
+	// 必须在 Close 之前写 —— 那个调用会把目录封存、文件关掉。
+	if err := w.SetSaveFlag(false); err != nil {
+		logOp("错误", "清除工程的在录标记失败 (进程 #%s, %s): %v", p.id, name, err)
 	}
 	if err := w.Close(); err != nil {
 		logOp("错误", "关闭 .stlog 失败 (进程 #%s, %s): %v", p.id, name, err)

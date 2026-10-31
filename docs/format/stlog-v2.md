@@ -62,11 +62,18 @@ yyyyMMdd_HHmmss_<id8>            例：20261030_104512_ab12cd34
   **不改时间戳**——改了就和"创建于什么时候"对不上
 - **不带端口 / 模式**：转发模式有两个口、录到一半 `SwitchPort` 会换口、`COM4` 换台机器
   就没有意义。这些信息放 `manifest.label`，只用于界面显示
-- **目录名可以改**：会话身份是 `manifest.sessionId`，不是目录名。GUI 打开时读
+- **目录名跟着线程名走**：会话身份是 `manifest.sessionId`，不是目录名。GUI 打开时读
   `manifest.json`，不靠目录名匹配；"最近工程"存 `(sessionId, path)`，路径失效时按
   `sessionId` 重新认领。改名不影响读取，也不影响包的自描述性（§3）
 - 改名可以把时间 / id 段整个丢掉（用户改成「温度采集」也合法），同一父目录下的
-  唯一性由文件系统保证
+  唯一性由文件系统保证：重名依次加 ` (2)`、` (3)`…
+- 反过来的规则也要记住：**清空名字 = 退回自动名**，目录名按 `created` + `sessionId`
+  重算回 `yyyyMMdd_HHmmss_<id8>`，不需要另外记着原始值
+- 落成目录名之前要过一遍过滤：删掉 Windows 不允许的 `<>:"/\|?*` 与控制字符、去掉
+  首尾空格和点、按 64 个字符截断、`CON`/`NUL`/`COM1` 这类保留名补一个后缀。非法
+  字符是删而不是替换成下划线 —— `a/b` 和 `a_b` 替换后会撞成同一个名字
+- 改名时目录里有文件被打开（Windows 上连只读句柄都算）会导致 rename 失败。这时
+  **名字照改、目录名不动**，只记一条警告：不能因为改不了文件夹就让改名失败
 
 ### 2.2 目录内容约束
 
@@ -220,7 +227,11 @@ seq 重复     → 保留 created 较新者，另一个改名 pkg-NNNN.stlog.dup
   "mode": "forward",
   "ports": { "a": "COM4", "b": "COM14", "baud": 115200 },
   "log": "202610301045_3.log",
-  "plot": {}
+  "plot": {},
+  "display": { "encoding": "utf-8", "hexCase": "upper", "hexPrefix": "true",
+               "hexSep": "space", "crVisible": "true", "hexEscapeMode": "show",
+               "hexEscapeFormat": "slash", "copyHexEscapes": "true",
+               "tabSize": "4", "eolSequence": "lf" }
 }
 ```
 
@@ -232,6 +243,7 @@ seq 重复     → 保留 created 较新者，另一个改名 pkg-NNNN.stlog.dup
 | `ports` | 录制开始时的端口快照；`baud` 为 0 表示未知 |
 | `log` | 与之同时录制的那份 `history/*.log` 文件名，便于成对查找 |
 | `plot` | 预留给绘图：选中通道、量程、坐标轴、区域、标注。当前只保留结构，不解释内容 |
+| `display` | 这条会话的显示设置：编码、Hex 大小写/前缀/分隔、控制字符、转义字节、制表符长度、行尾序列。值与 `daemon.ini` 的 `[display]` 段同名同形（都是字符串）；同一份也会写进包头槽，让单个 `pkg-*.stlog` 拎出去也能按当初的样子读 |
 
 规则：
 

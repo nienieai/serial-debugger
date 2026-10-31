@@ -262,6 +262,91 @@ func (s *Session) SaveSettings() error {
 	return SaveSettingsDoc(s.dir, s.doc)
 }
 
+// SetSaveFlag 只改 settings.json 里的 save 字段。
+//
+// 必须「读磁盘 → 改一个字段 → 写回」，不能直接 SaveSettings()：内存里的 doc 是
+// 建会话那一刻的，之后的改名（persistSessionLabel）和显示设置（persistSessionDisplay）
+// 都是另外读改写落盘的，整份写回会把它们冲掉。
+func (s *Session) SetSaveFlag(v bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	doc, err := LoadSettingsDoc(s.dir)
+	if err != nil {
+		doc = s.doc
+	}
+	if doc.Save == v {
+		s.doc = doc
+		return nil
+	}
+	doc.Save = v
+	if err := SaveSettingsDoc(s.dir, doc); err != nil {
+		return err
+	}
+	s.doc = doc
+	return nil
+}
+
+// Created 返回会话创建时间（RFC3339）。名字清空、退回自动目录名时要用它重算。
+func (s *Session) Created() string { return s.manifest.Created }
+
+// RenameDir 把整个会话目录改名。
+//
+// Windows 上目录里有打开的文件就不允许改名（实测返回 Access denied，只读句柄
+// 也一样），Linux 上虽然允许，这里仍然先关写者 —— 两套路径只是省掉两次毫秒级
+// 调用，却多出一套要单独测的分支。关掉不丢数据：Writer.Close 会 Flush + Sync，
+// 重开走 OpenWriter 从尾页续写。
+//
+// 改名期间持有 s.mu，Append 会阻塞等它做完（毫秒级）。
+func (s *Session) RenameDir(newDir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("stlog: session 已关闭")
+	}
+	oldDir := s.dir
+	if newDir == oldDir {
+		return nil
+	}
+	// 目标已存在就不动：宁可这次不改，也不要和别人的目录合到一起
+	if _, err := os.Stat(newDir); err == nil {
+		return fmt.Errorf("stlog: 目标目录已存在: %s", newDir)
+	}
+
+	w := s.w
+	if w != nil {
+		s.w = nil
+		if err := w.Close(); err != nil {
+			s.reopenWriterLocked(oldDir)
+			return err
+		}
+	}
+
+	if err := os.Rename(oldDir, newDir); err != nil {
+		if rerr := s.reopenWriterLocked(oldDir); rerr != nil {
+			return fmt.Errorf("%w（重开旧目录也失败: %v）", err, rerr)
+		}
+		return err
+	}
+
+	s.dir = newDir
+	if w != nil {
+		if err := s.reopenWriterLocked(newDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reopenWriterLocked 在 dir 上重新打开当前包的写者；调用方必须持有 s.mu。
+func (s *Session) reopenWriterLocked(dir string) error {
+	w, err := OpenWriter(filepath.Join(dir, PkgFileName(s.seq)))
+	if err != nil {
+		return err
+	}
+	s.w = w
+	return nil
+}
+
 // Close 封包 → 写 manifest → 写索引。可重复调用。
 func (s *Session) Close() error {
 	s.mu.Lock()
@@ -290,6 +375,51 @@ type PackageInfo struct {
 	LastTs  uint64
 	Sealed  bool
 	Err     error
+}
+
+// OpenSessionDir 打开一个已存在的会话目录并**续写**：接着往最后一个还没封包的
+// 包里追加，那个包封了就按序号开新包。ReadSession 是只读的，这个是可写的。
+//
+// 只给「推送回守护进程、接着录」用（见 daemon 的 OpenSession）。
+func OpenSessionDir(dir string) (*Session, error) {
+	m, err := LoadManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := LoadSettingsDoc(dir)
+	if err != nil {
+		// 设置文档丢了不影响续写：身份在 manifest 里，业务设置退回默认值
+		doc = NewSettingsDoc(Settings{})
+	}
+	s := &Session{dir: dir, manifest: m, doc: doc, pkgMax: DefaultPkgMaxBytes}
+
+	// index.bin 是缓存：能用就带上。关闭时会整份写回，不带上的话老包的摘要就没了。
+	if idx, ok := LoadIndex(dir, m.Files.Packages); ok {
+		s.entries = idx.Entries
+	} else {
+		for _, ref := range m.Files.Packages {
+			s.entries = append(s.entries, IndexEntry{Seq: ref.Seq, Bytes: ref.Bytes, Sealed: ref.Sealed})
+		}
+	}
+
+	// 续写最后一个「还没封」的包；已经封了就按序号开新包
+	if n := len(m.Files.Packages); n > 0 {
+		last := m.Files.Packages[n-1]
+		s.seq = last.Seq
+		if !last.Sealed {
+			w, err := OpenWriter(filepath.Join(dir, last.File))
+			if err != nil {
+				return nil, err
+			}
+			s.w = w
+		}
+	}
+	if s.w == nil {
+		if err := s.openPackage(doc.ToSettings()); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // ReadSession 读会话：path 是目录则按 v2 读，是文件则按 v1.4 单文件读。

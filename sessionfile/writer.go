@@ -1,13 +1,15 @@
 package sessionfile
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 )
 
-// Settings is the JSON payload stored in a slot. Kept small on purpose.
+// Settings 是包头槽里那份自描述快照。
+//
+// 落盘编码见 payload.go（v3 起是 TLV 表）；这里的 json tag 只服务于
+// settings.json 的映射与 Wails 的序列化，不再是槽里的字节格式。
 type Settings struct {
 	V       int    `json:"v"`
 	UUID    string `json:"uuid"`
@@ -20,6 +22,12 @@ type Settings struct {
 	Mode string `json:"mode,omitempty"`
 	// PortB 只在转发录制里有值（A 口仍然放在 Port）。
 	PortB string `json:"portB,omitempty"`
+	// Display 是录制这一刻的「怎么看」：编码、Hex 大小写/前缀/分隔、控制字符、
+	// 转义字节。键名与 settings.json 的 display 段一致，值统一是字符串。
+	//
+	// 放进槽里是为了让单个 pkg 拎出来也能按当初的样子显示；工程目录仍然以
+	// settings.json 为准（它还会随用户改设置而变，槽里这份不会）。
+	Display map[string]string `json:"display,omitempty"`
 }
 
 // Recording modes stored in Settings.Mode.
@@ -327,10 +335,7 @@ func writeFreshHeader(f *os.File, set Settings) error {
 	if set.Created == "" {
 		set.Created = time.Now().Format(time.RFC3339)
 	}
-	payload, err := json.Marshal(set)
-	if err != nil {
-		return err
-	}
+	payload := EncodeSettings(set)
 	sa, err := EncodeSlot(&Slot{Seq: 1, Ts: uint64(time.Now().UnixMilli()), Payload: payload})
 	if err != nil {
 		return err

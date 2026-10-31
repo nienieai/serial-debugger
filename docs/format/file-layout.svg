@@ -86,7 +86,7 @@
   <line x1="440" y1="166" x2="466" y2="166" stroke="#94a3b8" stroke-width="1.5"/>
   <circle cx="440" cy="166" r="3" fill="#94a3b8"/>
   <text class="annb" x="474" y="158">两槽 = 两份完整设置快照</text>
-  <text class="ann" x="474" y="178">seq · ts · payload(JSON) · crc32 · endMagic；交替写，取 seq 大且校验通过者</text>
+  <text class="ann" x="474" y="178">seq · ts · payload(TLV) · crc32 · endMagic；交替写，取 seq 大且校验通过者</text>
 
   <line x1="440" y1="264" x2="466" y2="264" stroke="#ea580c" stroke-width="1.8"/>
   <circle cx="440" cy="264" r="3" fill="#ea580c"/>

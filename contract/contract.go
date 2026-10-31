@@ -50,6 +50,10 @@ const (
 	ProcessUnwatch    Method = "process.unwatch"
 	ProcessWatched    Method = "process.watched"
 	ForwardCreate     Method = "forward.create"
+
+	// ProcessRename 改线程名：{processId, name}。name 为空串表示退回自动名
+	// （端口名 / 会话号）。工程会话的名字会写回工程目录的 settings.json。
+	ProcessRename Method = "process.rename"
 )
 
 // ── 数据收发与历史 ──
@@ -59,8 +63,20 @@ const (
 	SessionHistory      Method = "session.history"
 	SessionStats        Method = "session.stats"
 	SessionClearHistory Method = "session.clearhistory"
-	SendTrigger         Method = "send.trigger"
-	SendRingName        Method = "send.ringname"
+	// SessionSetDisplay 把一条会话的显示设置（编码 / Hex / 控制字符 / 转义）
+	// 写进它的工程文件：{processId, display:{...}}。
+	// 没有工程目录的会话（普通串口 / 空闲）不落盘 —— 这些设置只活在标签页里。
+	SessionSetDisplay Method = "session.setdisplay"
+	SendTrigger       Method = "send.trigger"
+	SendRingName      Method = "send.ringname"
+)
+
+// ── 显示设置默认值 ──
+const (
+	// DisplayDefaults 返回 daemon.ini [display] 段：新会话的显示设置初始值。
+	DisplayDefaults Method = "display.defaults"
+	// DisplaySetDefaults 改写 daemon.ini [display] 段（只有守护进程能写这个文件）。
+	DisplaySetDefaults Method = "display.setdefaults"
 )
 
 // ── 自动发送与多字符串 ──
@@ -108,9 +124,10 @@ var All = []Method{
 	// 进程生命周期
 	ProcessList, ProcessCreate, ProcessDestroy, ProcessConnect, ProcessDisconnect,
 	ProcessSwitch, ProcessSetMode, ProcessWatch, ProcessUnwatch, ProcessWatched,
-	ForwardCreate,
+	ForwardCreate, ProcessRename,
 	// 数据收发与历史
 	SessionSend, SessionHistory, SessionStats, SessionClearHistory,
+	SessionSetDisplay, DisplayDefaults, DisplaySetDefaults,
 	SendTrigger, SendRingName,
 	// 自动发送与多字符串
 	AutosendStart, AutosendStop, AutosendStatus, AutosendInterval,

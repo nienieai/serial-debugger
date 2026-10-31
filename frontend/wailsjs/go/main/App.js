@@ -74,6 +74,10 @@ export function GetClients() {
   return window['go']['main']['App']['GetClients']();
 }
 
+export function GetDisplayDefaults() {
+  return window['go']['main']['App']['GetDisplayDefaults']();
+}
+
 export function GetExternalColorTheme(arg1) {
   return window['go']['main']['App']['GetExternalColorTheme'](arg1);
 }
@@ -100,6 +104,10 @@ export function GetI18n(arg1) {
 
 export function GetPorts() {
   return window['go']['main']['App']['GetPorts']();
+}
+
+export function GetProtocolVersion() {
+  return window['go']['main']['App']['GetProtocolVersion']();
 }
 
 export function GetSessionHistory(arg1, arg2, arg3, arg4) {
@@ -198,6 +206,10 @@ export function ProbeDroppedPaths(arg1) {
   return window['go']['main']['App']['ProbeDroppedPaths'](arg1);
 }
 
+export function QuitApp() {
+  return window['go']['main']['App']['QuitApp']();
+}
+
 export function ReadMultistrEntries(arg1) {
   return window['go']['main']['App']['ReadMultistrEntries'](arg1);
 }
@@ -210,8 +222,20 @@ export function RefreshPorts() {
   return window['go']['main']['App']['RefreshPorts']();
 }
 
+export function RenameSession(arg1, arg2) {
+  return window['go']['main']['App']['RenameSession'](arg1, arg2);
+}
+
+export function RenameStlogFile(arg1, arg2) {
+  return window['go']['main']['App']['RenameStlogFile'](arg1, arg2);
+}
+
 export function SaveAppSettings(arg1) {
   return window['go']['main']['App']['SaveAppSettings'](arg1);
+}
+
+export function SaveDisplayDefaults(arg1) {
+  return window['go']['main']['App']['SaveDisplayDefaults'](arg1);
 }
 
 export function SearchHistory(arg1, arg2, arg3, arg4) {
@@ -240,6 +264,10 @@ export function SetHistoryEnabledFor(arg1, arg2) {
 
 export function SetProcessMode(arg1, arg2) {
   return window['go']['main']['App']['SetProcessMode'](arg1, arg2);
+}
+
+export function SetSessionDisplay(arg1, arg2) {
+  return window['go']['main']['App']['SetSessionDisplay'](arg1, arg2);
 }
 
 export function SetTabEncoding(arg1, arg2) {

@@ -279,6 +279,10 @@ function _originLabel(origin) {
 // opts（可选）：{ displayMode } —— 只给设置页的颜色预览用，让它能在一屏里同时
 // 画「文本」和「Hex」两种渲染，而不必去改全局 state.displayMode。
 function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
+  // 显示设置按标签页走：这里把渲染上下文设成当前标签页（或调用方显式指定的
+  // opts.disp），下面 decoder.js 的渲染函数就用这一份，不再读全局 state。
+  var _disp = (opts && opts.disp) || _dispOf();
+  setDisplayContext(_disp);
   const row = document.createElement('div');
   row.className = 'data-row';
 
@@ -342,7 +346,7 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
   } else {
     // Legacy fallback: JS-side hexToText (backward compat for cached entries)
     let text;
-    if (state.encoding === 'ascii') {
+    if (_disp.encoding === 'ascii') {
       text = sanitizeText(hexToText(hex));
     } else {
       text = hexToText(hex);
@@ -1158,7 +1162,14 @@ async function loadTabHistory() {
     // 只取最新的一段：整环 19 万条全要回来是这条路径上唯一的实际开销，
     // 更早的部分由「往上翻」按页回补（见 _loadOlderFromDaemon）。
     const data = await window.go.main.App.GetSessionHistory(tab.sessionId, HISTORY_INITIAL, 0, 0);
-    const history = (data && data.history) ? data.history : [];
+    // 以前 IPC 失败 / 返回 null 会静默变成空数组，界面上和「真的没数据」一模一样。
+    // 分开显示，出问题时至少能一眼看出是哪一类。
+    if (!data) {
+      display.innerHTML = '<div class="placeholder">历史读取失败：守护进程没有返回数据（' +
+        escHtml(String(tab.sessionId)) + '）</div>';
+      return;
+    }
+    const history = data.history ? data.history : [];
     history._id = tab.sessionId;
     // Save extra fields for paging / disk paging
     if (data && typeof data.oldestTsMs === 'number') history._ringOldestTsMs = data.oldestTsMs;
@@ -1167,7 +1178,9 @@ async function loadTabHistory() {
     state.historyCache[cacheKey] = history;
     renderHistoryLines(history);
   } catch (e) {
-    display.innerHTML = '<div class="placeholder">暂无记录</div>';
+    // 渲染过程中抛错也会走到这里（比如显示设置的上下文没备好），别都算成「没数据」
+    display.innerHTML = '<div class="placeholder">历史加载失败：' +
+      escHtml(String(e && e.message ? e.message : e)) + '</div>';
   } finally {
     if (_historyLoading === cacheKey) _historyLoading = null;
   }

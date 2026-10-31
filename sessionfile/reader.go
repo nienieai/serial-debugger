@@ -289,8 +289,17 @@ func readSettings(f *os.File) *Settings {
 	if chosen == nil || len(chosen.Payload) == 0 {
 		return nil
 	}
-	var set Settings
-	if err := json.Unmarshal(chosen.Payload, &set); err != nil {
+	// 旧文件（SlotPayloadVer <= 2）的 payload 是 JSON，以 '{' 开头；TLV 的第一个
+	// key 是 0x0001，首字节是 0x01，两者不会混淆。
+	if chosen.Payload[0] == '{' {
+		var set Settings
+		if err := json.Unmarshal(chosen.Payload, &set); err != nil {
+			return nil
+		}
+		return &set
+	}
+	set, err := DecodeSettings(chosen.Payload)
+	if err != nil {
 		return nil
 	}
 	return &set

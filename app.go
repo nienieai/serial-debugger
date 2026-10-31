@@ -17,6 +17,7 @@ import (
 	"github.com/nienieai/serial-debugger/contract"
 	"github.com/nienieai/serial-debugger/decode"
 	"github.com/nienieai/serial-debugger/pipe"
+	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 
@@ -31,6 +32,13 @@ type App struct {
 	stopping  bool
 	checking  bool
 	daemonMu  sync.Mutex
+
+	// 关闭流程（OnBeforeClose）用的标志。
+	//
+	// forceQuit 由 QuitApp 置位：前端确认后那次 BeforeClose 必须直接放行，
+	// 否则会再弹一次确认框 —— 用户点了「确定」却关不掉窗口。
+	closeMu   sync.Mutex
+	forceQuit bool
 
 	// Tab decode workers — one goroutine per tab.
 	tabDecoders   map[string]*tabDecodeUnit // processId → worker
@@ -101,19 +109,36 @@ func (a *App) Startup(ctx context.Context) {
 	go a.watchDaemonReady(ctx)
 }
 
+// daemonReadyRepeat 是「守护进程就绪」事件的重发间隔（见 watchDaemonReady）。
+//
+// 1 秒而不是更长：手动启停 daemon 时，GUI 只能靠这个事件发现它起来了
+// （GUI 自己点的「启动」走 App.StartDaemon，会主动连，不受这个间隔影响）。
+// 实测间隔 3s 时，daemon 起来后 3.0s 才注册，看着就像「慢连接」。
+// 代价可以忽略：在线时前端收到事件立刻 return，根本不调 Go。
+const daemonReadyRepeat = 1 * time.Second
+
 // watchDaemonReady 把「守护进程就绪」变成前端可订阅的事件。
 //
 // pipe.WaitReady 在 Windows 上就是 WaitNamedPipe：守护进程一 Listen 就返回，
-// 不存在「进程起来了但管道还没建好」的误判。就绪期间不重复通知，等端点消失
-// （守护进程退出）后回到外层继续等下一次。
+// 不存在「进程起来了但管道还没建好」的误判。
+//
+// 就绪期间每 daemonReadyRepeat 重发一次：前端已经删掉离线轮询，上线完全依赖
+// 这个事件，而 EventsEmit 在页面加载完成前发出会被丢弃（热重载、慢机器启动都
+// 踩得到）——只发一次，丢一次就永久离线。这是 Go 侧的事件重发，不是客户端轮询。
 func (a *App) watchDaemonReady(ctx context.Context) {
 	for ctx.Err() == nil {
 		if !pipe.WaitReady(1 * time.Second) {
 			continue
 		}
+		// 端点从不可用变成可用：立刻通知，不用等下一个重发周期
 		runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
-		for ctx.Err() == nil && pipe.WaitReady(300*time.Millisecond) {
-			time.Sleep(300 * time.Millisecond)
+		for ctx.Err() == nil {
+			// 端点消失（守护进程退出）就回外层，等它下次就绪时**立即**再通知
+			if !pipe.WaitReady(300 * time.Millisecond) {
+				break
+			}
+			time.Sleep(daemonReadyRepeat)
+			runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
 		}
 	}
 }
@@ -126,19 +151,140 @@ func (a *App) Shutdown(ctx context.Context) {
 	}
 }
 
+// ---- 关闭流程 ----
+//
+// Wails 的 OnBeforeClose 是同步返回 bool 的（true = 放行），而「要不要停守护进程」
+// 需要问用户。所以分两段：第一次进 BeforeClose 判定需要确认时，发事件把关闭拦住；
+// 前端弹框、点确定后调 QuitApp()，第二次进 BeforeClose 看到 forceQuit 直接放行。
+// 用户点取消则什么也不做，窗口留着，下次关闭时重新走一遍。
+
+// BeforeClose 决定这次关窗口要不要先停守护进程。
+//
+// 注意返回值是 **prevent**，不是「放行」：返回 true 表示拦住这次关闭
+// （wails 的 Frontend.Quit 里是 `if OnBeforeClose(...) { return }`，
+// 见 desktop/windows/frontend.go:453）。第一版按「true = 放行」写反了，
+// 症状是关窗口直接退、确认框根本不弹。
+func (a *App) BeforeClose(ctx context.Context) bool {
+	a.closeMu.Lock()
+	forced := a.forceQuit
+	a.closeMu.Unlock()
+	if forced {
+		return false // QuitApp 已经确认过了，放行
+	}
+
+	cfg := a.LoadAppSettings()
+	clients := a.GetClients()
+	switch decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients)) {
+	case closeStopDaemon:
+		a.stopDaemonQuiet()
+		return false
+	case closeConfirm:
+		// 拦住这次关闭，交给前端弹框；用户点确定后由 QuitApp 再退一次。
+		runtime.EventsEmit(a.ctx, "app-close-confirm", map[string]any{"mode": cfg.ShutdownDaemonMode})
+		return true
+	default:
+		return false
+	}
+}
+
+// closeAction 是「关窗口时怎么处理守护进程」的判定结果。
+type closeAction int
+
+const (
+	closeProceed    closeAction = iota // 直接放行，不动守护进程
+	closeStopDaemon                    // 先停守护进程再放行
+	closeConfirm                       // 拦住关闭，让前端弹确认框
+)
+
+// decideClose 是 BeforeClose 的判定核心，单独拆出来是为了能直接测各种组合。
+//
+// mode: never 从不 / last 最后一个客户端才关 / always 总是关。
+// connected: 本次是否真的连着守护进程（没连上就没什么可关的）。
+// clientCount: 守护进程上的客户端总数（含自己）。
+//
+// 注意 clientCount 数的是**全部**客户端，不是只数 gui：否则「只剩一个 GUI、
+// 旁边还有个 CLI/MCP 连着」时关窗口会把它们一起断掉。当前 source 只有
+// gui / cli / mcp 三种（protocol.go:91），这里不按 source 过滤，将来加 web
+// 客户端也自动算进来。
+func decideClose(mode string, warn, connected bool, clientCount int) closeAction {
+	if mode != "last" && mode != "always" {
+		return closeProceed // never（含旧配置缺这个键）
+	}
+	if !connected {
+		return closeProceed
+	}
+	if mode == "last" && clientCount > 1 {
+		return closeProceed // 还有别的客户端，它/它们还要用
+	}
+	if !warn {
+		return closeStopDaemon
+	}
+	return closeConfirm
+}
+
+// QuitApp 由前端在用户确认退出后调用：先停守护进程，再真正退出。
+func (a *App) QuitApp() {
+	a.closeMu.Lock()
+	a.forceQuit = true
+	a.closeMu.Unlock()
+	a.stopDaemonQuiet()
+	runtime.Quit(a.ctx)
+}
+
+// stopDaemonQuiet 与 StopDaemon 走同一条 IPC 路径，但不做那个 3 秒的 stopping
+// 复位 —— 进程马上要退了，不需要再允许重连。
+func (a *App) stopDaemonQuiet() {
+	a.daemonMu.Lock()
+	a.stopping = true
+	ec := a.eventConn
+	a.eventConn = nil
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return
+	}
+	client.CallOnce(contract.Shutdown, nil, "gui")
+	ec.Close()
+}
+
 // onDaemonDisconnected is called by the heartbeat goroutine when the
 // connection to the daemon is lost (3 consecutive ping failures).
 // It only takes effect if ec is still the active connection, preventing
 // a stale connection from killing a fresh reconnection.
 func (a *App) onDaemonDisconnected(ec *client.DaemonClient) {
 	a.daemonMu.Lock()
-	if a.eventConn == ec {
-		a.eventConn = nil
+	if a.eventConn != ec {
 		a.daemonMu.Unlock()
-		runtime.EventsEmit(a.ctx, "daemon-offline", map[string]any{"reason": "heartbeat"})
-	} else {
-		a.daemonMu.Unlock()
+		return
 	}
+	a.eventConn = nil
+	a.daemonMu.Unlock()
+
+	// 判死之后先重连一次再报离线。
+	//
+	// 心跳可能误判（守护进程只是卡顿一下），而前端收到 daemon-offline 会销毁
+	// 所有会话页、清掉历史缓存 —— 代价太大。重连成功就静默恢复：连接对象换了，
+	// 前端无感。只有真的连不上才发离线事件。
+	if nec, err := client.NewDaemonClient("gui"); err == nil {
+		nec.OnDisconnect = func() { a.onDaemonDisconnected(nec) }
+		a.daemonMu.Lock()
+		if a.eventConn != nil {
+			// 期间别的路径（CheckDaemonStatus / StartDaemon）已经连上，别抢
+			a.daemonMu.Unlock()
+			nec.Close()
+			return
+		}
+		a.eventConn = nec
+		a.daemonMu.Unlock()
+		go a.pollDaemonEvents(nec)
+		go nec.Subscribe(nil)
+		// 告诉前端「又连上了」。这次重连是 Go 侧发起的，前端并不知道连接对象换了；
+		// 而 daemon 重启前的 daemon-shutdown 广播已经让前端进了离线态（还清掉了
+		// 会话页），不通知的话界面会一直停在离线，等下一次 daemon-ready 重发才醒。
+		runtime.EventsEmit(a.ctx, "daemon-ready", map[string]any{})
+		return
+	}
+
+	runtime.EventsEmit(a.ctx, "daemon-offline", map[string]any{"reason": "heartbeat"})
 }
 
 // ---- daemon lifecycle ----
@@ -207,12 +353,23 @@ func (a *App) DaemonProcessRunning() bool {
 func (a *App) StartDaemon() error {
 	a.daemonMu.Lock()
 	a.stopping = false
-
-	if a.eventConn != nil {
-		a.daemonMu.Unlock()
-		return nil
-	}
+	cur := a.eventConn
 	a.daemonMu.Unlock()
+
+	// 有连接不等于连接活着：daemon 可能在 OnDisconnect 触发之前就没了 —— 用户点
+	// 「停止守护进程」之后立刻点「启动」正落在这个窗口里。这里真 ping 一次确认，
+	// 别拿着一条死管道去发请求，那正是「切换模式失败: The pipe is being closed.」
+	if cur != nil {
+		if cur.Alive(1500 * time.Millisecond) {
+			return nil
+		}
+		a.daemonMu.Lock()
+		if a.eventConn == cur {
+			a.eventConn = nil
+		}
+		a.daemonMu.Unlock()
+		cur.Close()
+	}
 
 	status, err := client.StartDaemon()
 	if err != nil {
@@ -396,6 +553,45 @@ func (a *App) GetClients() []map[string]any {
 		}
 	}
 	return out
+}
+
+// GetDisplayDefaults 返回 daemon.ini 的 [display] 段：新标签页的显示设置初始值。
+// 守护进程没在跑时返回 nil，由前端用内置默认值兜底（离线也得能建标签页）。
+func (a *App) GetDisplayDefaults() map[string]any {
+	result, err := a.call(contract.DisplayDefaults, nil)
+	if err != nil {
+		return nil
+	}
+	d, _ := result["display"].(map[string]any)
+	return d
+}
+
+// SetSessionDisplay 把一条会话的显示设置写进它的工程文件。
+// 普通串口会话没有工程目录，守护进程那边只更新内存、不落盘，也不算失败。
+func (a *App) SetSessionDisplay(processID string, display map[string]any) error {
+	_, err := a.call(contract.SessionSetDisplay, map[string]any{
+		"processId": processID,
+		"display":   display,
+	})
+	return err
+}
+
+// SaveDisplayDefaults 把新的默认值写进 daemon.ini 的 [display] 段。
+//
+// 只有守护进程能写 daemon.ini（单写者），所以走 IPC。IPC 只认字符串值
+// （ini 里一切都是文本），这里统一转一遍；成功返回重新读出来的那份默认值，
+// 前端拿它覆盖本地缓存。
+func (a *App) SaveDisplayDefaults(display map[string]any) (map[string]any, error) {
+	flat := make(map[string]any, len(display))
+	for k, v := range display {
+		flat[k] = fmt.Sprint(v)
+	}
+	result, err := a.call(contract.DisplaySetDefaults, map[string]any{"display": flat})
+	if err != nil {
+		return nil, err
+	}
+	back, _ := result["display"].(map[string]any)
+	return back, nil
 }
 
 func (a *App) GetSessions() []map[string]any {
@@ -723,6 +919,12 @@ func (a *App) GetBuiltinIcons() map[string]string {
 
 func (a *App) GetVersion() string {
 	return version.Version
+}
+
+// GetProtocolVersion 返回本客户端使用的 IPC 协议版本（MAJOR.MINOR.PATCH）。
+// 关于页要显示它，别再在 JS 里硬编码 —— 硬编码的那份必然和守护进程报的漂移。
+func (a *App) GetProtocolVersion() string {
+	return protocol.ProtocolVersion
 }
 
 func (a *App) GetThreads() map[string]any {
@@ -1396,6 +1598,53 @@ func (a *App) GetHistoryStatusFor(processID string) bool {
 	}
 	v, _ := ec.GetHistoryStatusFor(processID)
 	return v
+}
+
+// RenameSession 改线程名（空串 = 退回自动名：端口名 / 会话号）。
+//
+// 名字归守护进程所有：GUI 不本地存一份，改完等 process-changed 回来重画标签，
+// 这样 CLI / MCP 改的名字在同一块界面上立刻可见，不会出现两份真相。
+func (a *App) RenameSession(processID, name string) error {
+	a.daemonMu.Lock()
+	ec := a.eventConn
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return fmt.Errorf("not connected")
+	}
+	return ec.RenameSession(processID, name)
+}
+
+// RenameStlogFile 重命名一个本地会话文件（.stlog 目录或单文件），返回新路径。
+//
+// 只处理「本地只读标签」：已经被守护进程接管的工程不能改名 —— 那边还开着文件
+// 句柄、会话路径记在内存里，改完两边就对不上了。
+func (a *App) RenameStlogFile(path, newName string) (string, error) {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return "", fmt.Errorf("名称不能为空")
+	}
+	if newName == "." || newName == ".." || strings.ContainsAny(newName, `\/:*?"<>|`) {
+		return "", fmt.Errorf(`名称不能包含 \ / : * ? " < > |，也不能是 . 或 ..`)
+	}
+	old, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(old); err != nil {
+		return "", fmt.Errorf("找不到文件: %w", err)
+	}
+	// 换掉最后一段，父目录不变
+	newPath := filepath.Join(filepath.Dir(old), newName)
+	if newPath == old {
+		return old, nil
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return "", fmt.Errorf("同名文件已存在: %s", filepath.Base(newPath))
+	}
+	if err := os.Rename(old, newPath); err != nil {
+		return "", fmt.Errorf("重命名失败（文件可能正被占用）: %w", err)
+	}
+	return newPath, nil
 }
 
 // AttachHistoryFile opens a history file for a process and loads its content.

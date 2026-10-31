@@ -134,8 +134,9 @@ function createSettingsOverlay() {
 // 分类栏图标：用 icons.js 里已有的键，保证浅色/深色主题下都跟随 currentColor
 var SETTINGS_NAV_ICONS = {
 	display: 'terminal',
-	colors: 'theme_palette',
-	appearance: 'theme_light',
+	colors: 'highlighter',    // 数据高亮：给各类数据指定颜色，一支高亮笔
+	appearance: 'theme_palette', // 外观：调色板（原来在「数据高亮」上，18px 下像水滴）
+	tabs: 'tabs',             // 标签页：窗口顶上的标签栏（原来是 menu 的三条横线，纯占位）
 	storage: 'devices',
 	language: 'globe',
 	about: 'info'
@@ -221,7 +222,7 @@ function buildSettingsPage() {
 	body.className = 'settings-body';
 
 
-	// ── Panel: 编码与显示 ──
+	// ── Panel: 界面（字体 / 行为 / 高级；编码与显示已按标签页走）──
 	var panelDisplay = document.createElement('div');
 	panelDisplay.className = 'settings-panel';
 	panelDisplay.setAttribute('data-panel', 'display');
@@ -231,15 +232,8 @@ function buildSettingsPage() {
 	panelColors.className = 'settings-panel is-hidden';
 	panelColors.setAttribute('data-panel', 'colors');
 
-	var bInput = _bubble(t('settings.bubble_encoding','编码格式'));
-	bInput.appendChild(_row(t('settings.bubble_encoding','编码格式'), _buildEncodingSelect()));
-	bInput.appendChild(_row(t('settings.tab_size','制表符长度'),
-		_buildSelect([1,2,3,4,5,6,7,8], ['1','2','3','4','5','6','7','8'], state.tabSize, function(v) { state.tabSize = parseInt(v); _applyDisplayStyle(); saveSettings(); })
-	));
-	bInput.appendChild(_row(t('settings.eol_sequence','行尾序列'),
-		_buildSelect(['lf','cr','crlf'], ['LF','CR','CRLF'], state.eolSequence, function(v) { state.eolSequence = v; saveSettings(); if(_statusBar)_statusBar.updateEol(); })
-	));
-	panelDisplay.appendChild(bInput);
+	// 制表符长度 / 行尾序列 / 编码 0.8.4 起都按标签页走，
+	// 在「标签页设置」弹窗里改；设置页这一气泡已经没有剩下的项了。
 
 	var bFont = _bubble(t('settings.bubble_font','显示字体'));
 	bFont.appendChild(_row(t('settings.font_family','字体'),
@@ -268,32 +262,60 @@ function buildSettingsPage() {
 	bFont.appendChild(_row(t('settings.font_size','字号'), fontSizeInput));
 	panelDisplay.appendChild(bFont);
 
-	var bHex = _bubble(t('settings.bubble_hex','Hex显示设置'));
-	bHex.appendChild(_row(t('settings.hex_prefix','Hex 前缀 (0x)'), _buildToggle(function() { toggleHexPrefix(); }, state.hexPrefix)));
-	bHex.appendChild(_row(t('settings.hex_case','Hex 大写'), _buildToggle(function() { toggleHexCase(); }, state.hexCase === 'upper')));
-	bHex.appendChild(_row(t('settings.hex_sep','Hex 分隔符'),
-		_buildSelect(['none','space','comma'], [t('settings.sep_none','无分割'),t('settings.sep_space','空格'),t('settings.sep_comma','逗号')], state.hexSep, function(v) { setHexSep(v); })
-	));
-	panelDisplay.appendChild(bHex);
+	// ── 新标签页的默认值（存守护进程的 daemon.ini）──
+	// 这三块编辑的是「新标签页的默认值」，写的是守护进程的 daemon.ini。
+	// 守护进程离线时根本写不了那个文件，显示的也还是上次启动时的旧值 ——
+	// 整块不显示，免得让人对着一组改了没用的控件。
+	var defOff = !state.daemonOnline;
+	var defHide = !state.daemonOnline;
 
-	var bText = _bubble(t('settings.bubble_text','文本显示设置'));
-	bText.appendChild(_row(t('settings.hex_escape','转义字节'),
-		_buildSelect(['show','hide','raw'], [t('settings.esc_show','显示 /FF'),t('settings.esc_hide','隐藏转义'),t('settings.esc_raw','原始输出')], state.hexEscapeMode, function(v) { setHexEscapeMode(v); _updateHexEscFmtRow(); })
-	));
-	var hexEscFmtRow = _row(t('settings.hex_escape_fmt','转义格式'),
+	var bDefEnc = _bubble(t('settings.bubble_encoding','编码格式'));
+	bDefEnc.appendChild(_row(t('settings.bubble_encoding','编码格式'),
+		_buildSelect(['utf-8','gb2312','ascii'], ['UTF-8','GB2312','ASCII'],
+			state._dispDefaults.encoding,
+			function(v) { _setDispDefault('encoding', v); }, defOff)));
+
+	if (defHide) bDefEnc.classList.add('is-hidden');
+	panelDisplay.appendChild(bDefEnc);
+
+	var bDefHex = _bubble(t('settings.bubble_hex','Hex显示设置'));
+	bDefHex.appendChild(_row(t('settings.hex_prefix','Hex 前缀 (0x)'),
+		_buildToggle(function() { _setDispDefault('hexPrefix', !state._dispDefaults.hexPrefix); },
+			state._dispDefaults.hexPrefix, defOff)));
+	bDefHex.appendChild(_row(t('settings.hex_case','Hex 大写'),
+		_buildToggle(function() {
+			_setDispDefault('hexCase', state._dispDefaults.hexCase === 'upper' ? 'lower' : 'upper');
+		}, state._dispDefaults.hexCase === 'upper', defOff)));
+	bDefHex.appendChild(_row(t('settings.hex_sep','Hex 分隔符'),
+		_buildSelect(['space','comma','none'],
+			[ t('settings.sep_space','空格'), t('settings.sep_comma','逗号'), t('settings.sep_none','无分割') ],
+			state._dispDefaults.hexSep,
+			function(v) { _setDispDefault('hexSep', v); }, defOff)));
+	if (defHide) bDefHex.classList.add('is-hidden');
+	panelDisplay.appendChild(bDefHex);
+
+	var bDefText = _bubble(t('settings.bubble_text','文本显示设置'));
+	bDefText.appendChild(_row(t('settings.hex_escape','转义字节'),
+		_buildSelect(['show','hide','raw'],
+			[ t('settings.esc_show','显示 /FF'), t('settings.esc_hide','隐藏转义'), t('settings.esc_raw','原始输出') ],
+			state._dispDefaults.hexEscapeMode,
+			function(v) { _setDispDefault('hexEscapeMode', v); }, defOff)));
+	bDefText.appendChild(_row(t('settings.hex_escape_fmt','转义格式'),
 		_buildSelect(['slash','backslash-x','0x','angle','bracket'],
 			[t('settings.esc_fmt_slash','/FF'), t('settings.esc_fmt_bslash_x','\\xFF'), t('settings.esc_fmt_0x','0xFF'), t('settings.esc_fmt_angle','<FF>'), t('settings.esc_fmt_bracket','[FF]')],
-			state.hexEscapeFormat || 'slash',
-			function(v) { setHexEscapeFormat(v); }
-		)
-	);
-	hexEscFmtRow.id = 'hexEscFmtRow';
-	bText.appendChild(hexEscFmtRow);
-	bText.appendChild(_row(t('settings.cr_visible','可见控制字符'), _buildToggle(function() { toggleCrVisible(); }, state.crVisible)));
-	bText.appendChild(_row(t('settings.copy_hex_escapes','允许复制转义字节'), _buildToggle(function() { state.copyHexEscapes = !state.copyHexEscapes; saveSettings(); }, state.copyHexEscapes)));
+			state._dispDefaults.hexEscapeFormat || 'slash',
+			function(v) { _setDispDefault('hexEscapeFormat', v); }, defOff)));
+	bDefText.appendChild(_row(t('settings.cr_visible','可见控制字符'),
+		_buildToggle(function() { _setDispDefault('crVisible', !state._dispDefaults.crVisible); },
+			state._dispDefaults.crVisible, defOff)));
+	bDefText.appendChild(_row(t('settings.copy_hex_escapes','允许复制转义字节'),
+		_buildToggle(function() { _setDispDefault('copyHexEscapes', !state._dispDefaults.copyHexEscapes); },
+			state._dispDefaults.copyHexEscapes, defOff)));
+	if (defHide) bDefText.classList.add('is-hidden');
+	panelDisplay.appendChild(bDefText);
+
+	var bText = _bubble(t('settings.bubble_behavior','行为'));
 	bText.appendChild(_row(t('settings.lock_scroll','默认锁定滚动'), _buildToggle(function() { state.scrollLocked = !state.scrollLocked; saveSettings(); }, state.scrollLocked)));
-	// Initial visibility for format row
-	hexEscFmtRow.classList.toggle('is-hidden', state.hexEscapeMode !== 'show');
 	panelDisplay.appendChild(bText);
 
 	// 高级：历史渲染窗口行数
@@ -329,9 +351,11 @@ function buildSettingsPage() {
 	panelDisplay.appendChild(bAdv);
 
 	// Display color overrides — new layout: [name] [bg-color:dark|light] [fg-color:dark|light]
-	var bColor = _bubble(t('settings.bubble_colors_display','数据高亮'), _buildColorResetBtn());
 	var colorGroups = [
-		{ title: t('settings.color_group_single','单端口'), items: [
+		// kind 决定用哪个预览渲染器：stream = 主显示区那条路径（makeDataRow），
+		// send = 发送框预览，fwd = 端口转发。历史流那一组就是原来的「单端口」，
+		// 只是改了名 —— 这些颜色本来就只出现在记录区。
+		{ title: t('settings.color_group_stream','历史流'), kind: 'stream', items: [
 			{ key: 'tsTx',   i18n: 'settings.color_ts_tx',   fb: '发送时间戳' },
 			{ key: 'tsRx',   i18n: 'settings.color_ts_rx',   fb: '接收时间戳' },
 			{ key: 'stat',   i18n: 'settings.color_stat',    fb: '字符统计' },
@@ -343,7 +367,17 @@ function buildSettingsPage() {
 			{ key: 'hexEsc', i18n: 'settings.color_hex_esc', fb: '转义字节' },
 			{ key: 'ctrl',   i18n: 'settings.color_ctrl',    fb: '控制字符', bgKey: 'ctrlBg', fgKey: 'ctrlFg' }
 		]},
-		{ title: t('settings.color_group_forward','端口转发'), items: [
+		// 发送框这套是 0.8.4 新拆出来的：以前它借历史流的 hexTx / hexInv / ctrlFg，
+		// 改一头会连带改另一头。
+		{ title: t('settings.color_group_send','发送框'), kind: 'send', items: [
+			{ key: 'sendText',   i18n: 'settings.color_send_text',    fb: '输入文本' },
+			{ key: 'sendHex',    i18n: 'settings.color_send_hex',     fb: 'Hex 字节' },
+			{ key: 'sendHexBad', i18n: 'settings.color_send_hex_bad', fb: '非法 Hex' },
+			{ key: 'sendPrefix', i18n: 'settings.color_send_prefix',  fb: '0x 前缀' },
+			{ key: 'sendCtrl',   i18n: 'settings.color_ctrl',         fb: '控制字符', bgKey: 'sendCtrlBg', fgKey: 'sendCtrl' },
+			{ key: 'sendPh',     i18n: 'settings.color_send_ph',      fb: '占位提示' }
+		]},
+		{ title: t('settings.color_group_forward','端口转发'), kind: 'fwd', items: [
 			{ key: 'ts1',    i18n: 'settings.color_ts_1',    fb: 'P1时间戳' },
 			{ key: 'ts2',    i18n: 'settings.color_ts_2',    fb: 'P2时间戳' },
 			{ key: 'fstat',  i18n: 'settings.color_stat',    fb: '字符统计' },
@@ -355,21 +389,25 @@ function buildSettingsPage() {
 			{ key: 'fctrl',  i18n: 'settings.color_ctrl',    fb: '控制字符', bgKey: 'fctrlBg', fgKey: 'fctrlFg' }
 		]}
 	];
-	colorGroups.forEach(function(grp) {
-		// 每组包一层，两个分组在宽屏下并排（窄屏自动落成单列）
+	// 往一张卡里塞一个颜色分组。showTitle=false 时不画 `.c-color-sep` —— 卡片标题
+	// 已经叫「端口转发」了，组标题再写一遍是重复。
+	function _appendColorGroup(host, grp, showTitle) {
 		var group = document.createElement('div');
 		group.className = 'c-color-group';
-		var sep = document.createElement('div');
-		sep.className = 'c-color-sep';
-		var sepLbl = document.createElement('span');
-		sepLbl.textContent = grp.title;
-		sep.appendChild(sepLbl);
-		group.appendChild(sep);
+		if (showTitle !== false) {
+			var sep = document.createElement('div');
+			sep.className = 'c-color-sep';
+			var sepLbl = document.createElement('span');
+			sepLbl.textContent = grp.title;
+			sep.appendChild(sepLbl);
+			group.appendChild(sep);
+		}
 		// Preview section
 		var preview = document.createElement('div');
 		preview.className = 'c-color-preview-wrap';
 		preview.id = 'colorPreview_' + grp.items[0].key;
 		preview._colorItems = grp.items;
+		preview._colorKind = grp.kind || 'stream';
 		group.appendChild(preview);
 		// Two-layer column header: 设置项 | 加粗 | 背景颜色 | 字体颜色
 		// 加粗/斜体用 B / I 符号，深浅用月亮/太阳图标：这两列只有 26/28px 宽，
@@ -403,11 +441,24 @@ function buildSettingsPage() {
 		hdr.appendChild(hdrFg);
 		group.appendChild(hdr);
 		grp.items.forEach(function(cfg) { group.appendChild(_buildColorRow(cfg)); });
-		bColor.appendChild(group);
+		host.appendChild(group);
 		// Render preview after DOM attached
-		setTimeout(function() { _renderColorPreview(grp.items, preview); }, 10);
-	});
-	panelColors.appendChild(bColor);
+		setTimeout(function() {
+			if ((grp.kind || 'stream') === 'send') _renderSendPreview(preview);
+			else _renderColorPreview(grp.items, preview, grp.kind);
+		}, 10);
+	}
+
+	// 两张卡：基础（历史流 + 发送框）｜端口转发
+	var bBasic = _bubble(t('settings.bubble_colors_basic','基础'), _buildColorResetBtn());
+	_appendColorGroup(bBasic, colorGroups[0]);   // 历史流
+	_appendColorGroup(bBasic, colorGroups[1]);   // 发送框
+	panelColors.appendChild(bBasic);
+
+	var bFwd = _bubble(t('settings.color_group_forward','端口转发'));
+	bFwd.setAttribute('data-bubble', 'forward');
+	_appendColorGroup(bFwd, colorGroups[2], false);
+	panelColors.appendChild(bFwd);
 
 	// ── Panel: 外观 ──
 	var panelAppear = document.createElement('div');
@@ -453,13 +504,129 @@ function buildSettingsPage() {
 	bIcons.appendChild(_bubbleFooter('icons', t('settings.hint_icons','想使用其他图标主题？在软件目录中新建 resources\\icons\\ 下的图标包导入，或单击此按键创建示例图标包')));
 	panelAppear.appendChild(bIcons);
 
+	// ── Panel: 标签页（0.8.4）──
+	// 只管标签栏怎么画：双行、第二行内容、客户端数字、状态点、名字宽度、拥挤顺序。
+	// 改任何一项都立刻生效（调 _applyTabDisplaySettings + renderTabs），并落 gui.ini。
+	var panelTabs = document.createElement('div');
+	panelTabs.className = 'settings-panel is-hidden';
+	panelTabs.setAttribute('data-panel', 'tabs');
+
+	function _tabSet(key, val) {
+		state[key] = val;
+		if (typeof _applyTabDisplaySettings === 'function') _applyTabDisplaySettings();
+		if (typeof renderTabs === 'function') renderTabs();
+		saveSettings();
+	}
+
+	var bTabLayout = _bubble(t('settings.bubble_tab_layout', '标签栏排布'));
+	bTabLayout.appendChild(_row(t('settings.tab_two_lines', '双行标签'),
+		_buildToggle(function() { _tabSet('tabTwoLines', !state.tabTwoLines); }, state.tabTwoLines === true)));
+	bTabLayout.appendChild(_row(t('settings.tab_sub_line', '第二行内容'),
+		_buildSelect(['a', 'b', 'c'],
+			[ t('settings.tab_sub_a', '端口 · 参数'),
+			  t('settings.tab_sub_b', '参数 · 速率'),
+			  t('settings.tab_sub_c', '保存 · 客户端') ],
+			state.tabSubLine || 'a',
+			function(v) { _tabSet('tabSubLine', v); })));
+	bTabLayout.appendChild(_row(t('settings.tab_name_max', '标签名最大宽度'),
+		(function() {
+			// 输入框右边挂一个 px：单看「170」分不清是像素还是字符数
+			var wrap = document.createElement('span');
+			wrap.className = 'settings-num';
+			var inp = document.createElement('input');
+			inp.type = 'number';
+			inp.className = 'settings-select';
+			inp.min = 120; inp.max = 280; inp.step = 10;
+			inp.value = state.tabNameMax || 170;
+			inp.addEventListener('change', function() {
+				var n = parseInt(inp.value, 10);
+				if (isNaN(n) || n < 120) n = 120;
+				if (n > 280) n = 280;
+				inp.value = String(n);
+				_tabSet('tabNameMax', n);
+			});
+			wrap.appendChild(inp);
+			var unit = document.createElement('span');
+			unit.className = 'settings-unit';
+			unit.textContent = 'px';
+			wrap.appendChild(unit);
+			return wrap;
+		})()));
+	panelTabs.appendChild(bTabLayout);
+
+	var bTabInfo = _bubble(t('settings.bubble_tab_info', '标签信息'));
+	bTabInfo.appendChild(_row(t('settings.tab_show_clients', '客户端数量'),
+		_buildToggle(function() { _tabSet('tabShowClients', !state.tabShowClients); }, state.tabShowClients !== false)));
+	bTabInfo.appendChild(_row(t('settings.tab_client_style', '客户端数字样式'),
+		_buildSelect(['source', 'total'],
+			[ t('settings.tab_cli_source', '分来源（GUI/CLI/MCP 三色）'),
+			  t('settings.tab_cli_total', '总数') ],
+			state.tabClientStyle || 'source',
+			function(v) { _tabSet('tabClientStyle', v); })));
+	bTabInfo.appendChild(_row(t('settings.tab_show_dot', '状态点'),
+		_buildToggle(function() { _tabSet('tabShowDot', !state.tabShowDot); }, state.tabShowDot !== false)));
+	bTabInfo.appendChild(_row(t('settings.tab_collapse', '拥挤时的收起顺序'),
+		_buildSelect(['sub', 'clients'],
+			[ t('settings.tab_collapse_sub', '先收第二行'),
+			  t('settings.tab_collapse_clients', '先收客户端数字') ],
+			state.tabCollapse || 'sub',
+			function(v) { _tabSet('tabCollapse', v); })));
+	panelTabs.appendChild(bTabInfo);
 	// ── Panel: 存储与行为 ──
 	var panelStorage = document.createElement('div');
 	panelStorage.className = 'settings-panel is-hidden';
 	panelStorage.setAttribute('data-panel', 'storage');
 	var bStorage = _bubble(t('settings.bubble_storage','存储与行为'));
-	bStorage.appendChild(_row(t('settings.auto_save','默认自动保存'), _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true)));
-	bStorage.appendChild(_row(t('settings.auto_create','启动时自动创建会话'), _buildToggle(function() { toggleAutoCreateSession(); }, state.autoCreateSession !== false)));
+	// 纯 GUI 本地偏好：GUI 启动时若守护进程没在跑就自动拉起（不推给守护进程）。
+	bStorage.appendChild(_row(t('settings.auto_start_daemon','随 GUI 启动守护进程'),
+		_buildToggle(function() {
+			state.autoStartDaemon = !state.autoStartDaemon;
+			saveSettings();
+		}, state.autoStartDaemon === true)));
+	// 「关闭 GUI 时」怎么处理守护进程。真正判定在 Go 侧（app.go 的 BeforeClose），
+	// 这里只负责存值：last = 自己是最后一个客户端时才关，always = 每次都关。
+	bStorage.appendChild(_row(t('settings.shutdown_daemon','关闭 GUI 时'),
+		_buildSelect(['never', 'last', 'always'],
+			[ t('settings.shutdown_never', '不处理守护进程'),
+			  t('settings.shutdown_last', '最后一个客户端关闭时关闭'),
+			  t('settings.shutdown_always', '总是关闭守护进程') ],
+			state.shutdownDaemonMode || 'last',
+			function(v) {
+				state.shutdownDaemonMode = v;
+				saveSettings();
+				// 「关闭 GUI 前确认」只在真要关守护进程时才有意义
+				setShutdownWarnAvailable(v !== 'never');
+			})));
+	var warnToggle = _buildToggle(function() {
+		state.shutdownDaemonWarn = !state.shutdownDaemonWarn;
+		saveSettings();
+	}, state.shutdownDaemonWarn !== false, (state.shutdownDaemonMode || 'last') === 'never');
+	var warnInput = warnToggle.querySelector('input');
+	if (warnInput) warnInput.setAttribute('data-toggle', 'shutdownWarn');
+	bStorage.appendChild(_row(t('settings.shutdown_daemon_warn','关闭 GUI 前确认'), warnToggle));
+	bStorage.appendChild(_row(t('settings.tab_close_warn','关闭标签页前确认'),
+		_buildToggle(function() {
+			state.tabCloseWarn = !state.tabCloseWarn;
+			saveSettings();
+		}, state.tabCloseWarn === true)));
+	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）。守护进程
+	// 没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由
+	// setAutoSaveToggleAvailable() 恢复。
+	var autoSaveToggle = _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true, !state.daemonOnline);
+	var autoSaveInput = autoSaveToggle.querySelector('input');
+	if (autoSaveInput) autoSaveInput.setAttribute('data-toggle', 'autoSave');
+	bStorage.appendChild(_row(t('settings.auto_save','默认自动保存'), autoSaveToggle));
+	bStorage.appendChild(_row(t('settings.auto_create','启动时新建会话'),
+		_buildSelect(['none', 'single', 'forward'],
+			[ t('settings.auto_create_none', '不创建'),
+			  t('settings.auto_create_single', '单端口'),
+			  t('settings.auto_create_forward', '端口转发') ],
+			state.autoCreateMode || 'single',
+			function(v) {
+				state.autoCreateMode = v;
+				updateAutoCreateCheck(v !== 'none');
+				saveSettings();
+			})));
 	panelStorage.appendChild(bStorage);
 
 	// ── Panel: 语言 ──
@@ -520,7 +687,8 @@ function buildSettingsPage() {
 	colA.appendChild(hA);
 	var kv = document.createElement('div');
 	kv.className = 'settings-about-kv';
-	[['settings.about_kv_proto', '协议号', 'IPC 1'],
+	var protoValEl = null;
+	[['settings.about_kv_proto', '协议号', ''],
 	 ['settings.about_kv_dir', '程序目录', ''],
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
 	 ['settings.about_kv_back', '后端', 'Go / Wails v2'],
@@ -533,9 +701,17 @@ function buildSettingsPage() {
 		var v = document.createElement('span');
 		v.className = 'settings-about-v';
 		v.textContent = row[2];
+		if (row[0] === 'settings.about_kv_proto') protoValEl = v;
 		kv.appendChild(k);
 		kv.appendChild(v);
 	});
+	// 协议号从后端取（MAJOR.MINOR.PATCH）。这里以前写死 'IPC 1'，而守护进程报的是
+	// 另一个字段 —— 两处一旦漂移，关于页就是在骗人。
+	try {
+		window.go.main.App.GetProtocolVersion().then(function(pv) {
+			if (pv && protoValEl) protoValEl.textContent = 'IPC ' + pv;
+		}).catch(function() {});
+	} catch (e) { /* 非 Wails 环境（设计稿 / 测试桩）忽略 */ }
 	colA.appendChild(kv);
 	// 设置已经拆成 settings/ 目录（gui.ini / cli.ini / daemon.ini），
 	// 这里给一个直达入口，省得用户自己去程序目录里翻。
@@ -569,9 +745,12 @@ function buildSettingsPage() {
 
 	// Nav items + panels
 	var sections = [
-		{ key: 'display',    i18n: 'settings.nav_display',    fb: '编码与显示', panel: panelDisplay },
+		// 里面已经没有编码 / Hex / 文本那些了（它们按标签页走 / 放 daemon.ini），
+		// 剩下的是字体、行为、高级，叫「界面」。
+		{ key: 'display',    i18n: 'settings.nav_display',    fb: '界面', panel: panelDisplay },
 		{ key: 'colors',     i18n: 'settings.nav_colors',     fb: '数据高亮',   panel: panelColors },
 		{ key: 'appearance', i18n: 'settings.nav_appearance', fb: '外观',       panel: panelAppear },
+		{ key: 'tabs',       i18n: 'settings.nav_tabs',       fb: '标签页',     panel: panelTabs },
 		{ key: 'storage',    i18n: 'settings.nav_storage',    fb: '存储与行为', panel: panelStorage },
 		{ key: 'language',   i18n: 'settings.nav_language',   fb: '语言',       panel: panelLang },
 		{ key: 'about',      i18n: 'settings.nav_about',      fb: '关于',       panel: panelAbout }
@@ -606,7 +785,9 @@ function buildSettingsPage() {
 				_measureBubbleHeads(sec.panel);
 				if (sec.key === 'colors') {
 					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
-						if (el._colorItems) _renderColorPreview(el._colorItems, el);
+						if (!el._colorItems) return;
+						if (el._colorKind === 'send') _renderSendPreview(el);
+						else _renderColorPreview(el._colorItems, el, el._colorKind);
 					});
 				}
 			}, 50);
@@ -743,12 +924,15 @@ function _row(labelText, control, i18nKey) {
 	return row;
 }
 
-function _buildToggle(onChange, checked) {
+// disabled：控件当前没有作用对象时置灰（例如守护进程离线时的「默认自动保存」）。
+// 置灰只挡交互，不动已保存的值 —— 守护进程起来后原样恢复。
+function _buildToggle(onChange, checked, disabled) {
 	var label = document.createElement('label');
-	label.className = 'settings-toggle';
+	label.className = 'settings-toggle' + (disabled ? ' is-disabled' : '');
 	var input = document.createElement('input');
 	input.type = 'checkbox';
 	input.checked = !!checked;
+	input.disabled = !!disabled;
 	input.addEventListener('change', function() { onChange(); });
 	label.appendChild(input);
 	var slider = document.createElement('span');
@@ -757,9 +941,11 @@ function _buildToggle(onChange, checked) {
 	return label;
 }
 
-function _buildSelect(values, labels, current, onChange) {
+// disabled：控件当前没有作用对象时置灰（例如守护进程离线时写不了 daemon.ini）。
+function _buildSelect(values, labels, current, onChange, disabled) {
 	var sel = document.createElement('select');
 	sel.className = 'settings-select';
+	sel.disabled = !!disabled;
 	values.forEach(function(v, i) {
 		var o = document.createElement('option');
 		o.value = v;
@@ -1289,7 +1475,10 @@ function _openColorPicker(trigger, defaultColor, onApply, title) {
 }
 
 // Apply display color overrides as CSS custom properties on :root
-var _displayColorKeys = ['tsRx','tsTx','ts1','ts2','textRx','textTx','text1','text2','hexRx','hexTx','hex1','hex2','hexEsc','hexInv','ctrlBg','ctrlFg','stat','fhexEsc','fctrlBg','fctrlFg','fstat'];
+// 这里必须手工列全：`_applyDisplayColors()` 与 `_applyPreviewVars()` 都按这个数组
+// 派生 `--dc-<key>`，漏一个键就等于「设置里能改、界面上不生效」。新增颜色键时
+// 同时改 `app.js` 的 `_defaultDisplayColors()` 和这里。
+var _displayColorKeys = ['tsRx','tsTx','ts1','ts2','textRx','textTx','text1','text2','hexRx','hexTx','hex1','hex2','hexEsc','hexInv','ctrlBg','ctrlFg','stat','fhexEsc','fctrlBg','fctrlFg','fstat','sendText','sendHex','sendHexBad','sendPrefix','sendCtrlBg','sendCtrl','sendPh'];
 
 function _applyDisplayColors() {
 	var colors = state.displayColors || _defaultDisplayColors();
@@ -1503,7 +1692,13 @@ function _refreshColorPreview(key) {
 			if (!items) continue;
 			for (var ii = 0; ii < items.length; ii++) {
 				var it = items[ii];
-				if (it.key === key || it.bgKey === key || it.fgKey === key) { _renderColorPreview(items, pv); return; }
+				if (it.key === key || it.bgKey === key || it.fgKey === key) {
+					// 发送框那组要用它自己的渲染器重画；套用 _renderColorPreview 会
+					// 把预览变成历史流的数据行（改个发送框颜色，框就长得不像输入框了）
+					if (pv._colorKind === 'send') _renderSendPreview(pv);
+					else _renderColorPreview(items, pv, pv._colorKind);
+					return;
+				}
 			}
 		}
 	}
@@ -1534,20 +1729,26 @@ function _applyPreviewVars(box, mode) {
 // 这样看到的就是真实显示框里的样子（时间戳行、字符统计、控制字符标记、转义字节、
 // 字号字体都跟 `state.displayFontSize` / `displayFontFamily` 一致）。
 // `opts.displayMode` 让同一栏里既能画文本行也能画 Hex 行，不必动全局 state。
-function _renderColorPreview(items, container) {
+function _renderColorPreview(items, container, kind) {
 	if (!container) return;
 	container.innerHTML = '';
-	var isFwd = items[0].key === 'ts1';
+	var isFwd = kind ? kind === 'fwd' : items[0].key === 'ts1';
+	// 样本文案要让人一眼看到「空格」和「Tab」：空格走 renderSegments 的
+	// text 段（state.crVisible 时画成 ·），Tab 必须单独成段（t:'tab'）——
+	// text 段只按空格切分，夹在文字里的 \t 会原样输出、看不出制表位。
 	var samples = isFwd ? [
 		{ dir: '1', ts: '13:00:02.100', hex: 'E8AFB7E6B182020D0A',
 		  segs: [{ t: 'text', v: '请求' }, { t: 'hex', v: '02' }, { t: 'cr' }, { t: 'lf' }] },
 		{ dir: '2', ts: '13:00:02.200', hex: 'E7A1AEE8AEA4030D0A',
 		  segs: [{ t: 'text', v: '确认' }, { t: 'hex', v: '03' }, { t: 'cr' }, { t: 'lf' }] }
 	] : [
-		{ dir: 'rx', ts: '13:00:01.100', hex: '4869010D0A',
-		  segs: [{ t: 'text', v: 'Hi' }, { t: 'hex', v: '01' }, { t: 'cr' }, { t: 'lf' }] },
-		{ dir: 'tx', ts: '13:00:01.200', hex: '4F4BFF0D0A',
-		  segs: [{ t: 'text', v: 'OK' }, { t: 'hex', v: 'FF' }, { t: 'cr' }, { t: 'lf' }] }
+		// 三段缺一不可：空格（text 段按空格切分 → ·）、转义字节（hex 段 → /01，
+		// 吃 hexEsc 颜色）、Tab（独立 tab 段 → →，吃控制字符颜色）。少一段，
+		// 对应的那个颜色项在预览里就没有实例，调了也看不见效果。
+		{ dir: 'rx', ts: '13:00:01.100', hex: '41542B2043574D4F4445010D0A',
+		  segs: [{ t: 'text', v: 'AT+ CWMODE' }, { t: 'hex', v: '01' }, { t: 'crlf' }] },
+		{ dir: 'tx', ts: '13:00:01.200', hex: '095253540D0A',
+		  segs: [{ t: 'tab' }, { t: 'text', v: 'RST' }, { t: 'crlf' }] }
 	];
 	var modes = ['dark', 'light'];
 	for (var m = 0; m < 2; m++) {
@@ -1561,6 +1762,94 @@ function _renderColorPreview(items, container) {
 			makeDataRow(box, sm.dir, sm.ts, sm.hex, sm.segs, { displayMode: 'text' });
 			makeDataRow(box, sm.dir, sm.ts, sm.hex, null, { displayMode: 'hex' });
 		}
+		container.appendChild(box);
+	}
+}
+
+// 发送框预览：和真实发送框吃同一组变量（`--dc-send*`），但**不复用**
+// `.send-input-mirror` —— 那套是「透明 textarea 叠绝对定位镜像层」的结构
+// （inset:0 + 42px 上下内边距），塞进设置页的 96px 小框里会撑爆。这里用独立类，
+// 颜色规则在 CSS 里与真实发送框写在同一条选择器上，避免两边漂移。
+function _renderSendPreview(container) {
+	if (!container) return;
+	container.innerHTML = '';
+	var modes = ['dark', 'light'];
+	for (var m = 0; m < 2; m++) {
+		var mode = modes[m];
+		var box = document.createElement('div');
+		box.className = 'c-send-preview ' + (m === 0 ? 'c-preview-dark' : 'c-preview-light');
+		box.setAttribute('data-preview-theme', mode);
+		_applyPreviewVars(box, mode);
+
+		function makeRow(tagText) {
+			var r = document.createElement('div');
+			r.className = 'c-send-preview__row';
+			var tag = document.createElement('span');
+			tag.className = 'c-send-preview__tag';
+			tag.textContent = tagText;
+			r.appendChild(tag);
+			return r;
+		}
+
+		// 文本模式：普通字符 + 控制字符标记（· ←↵），第二行示范 Tab（→，占 4 字符位）
+		var r1 = makeRow(t('settings.send_preview_text', '文本'));
+		var w1 = document.createElement('span');
+		w1.className = 'c-send-preview__text';
+		w1.textContent = 'AT+';
+		r1.appendChild(w1);
+		var sp1 = document.createElement('span');
+		sp1.className = 'c-send-preview__ctrl';
+		sp1.textContent = '·';
+		r1.appendChild(sp1);
+		var w2 = document.createElement('span');
+		w2.className = 'c-send-preview__text';
+		w2.textContent = 'CWMODE=1';
+		r1.appendChild(w2);
+		var c1 = document.createElement('span');
+		c1.className = 'c-send-preview__ctrl';
+		c1.textContent = '←↵';
+		r1.appendChild(c1);
+		box.appendChild(r1);
+
+		var r1b = makeRow('');
+		var tab = document.createElement('span');
+		tab.className = 'c-send-preview__ctrl c-send-preview__tab';
+		tab.textContent = '→';
+		r1b.appendChild(tab);
+		var w3 = document.createElement('span');
+		w3.className = 'c-send-preview__text';
+		w3.textContent = 'RST';
+		r1b.appendChild(w3);
+		var c1b = document.createElement('span');
+		c1b.className = 'c-send-preview__ctrl';
+		c1b.textContent = '←↵';
+		r1b.appendChild(c1b);
+		box.appendChild(r1b);
+
+		// Hex 模式：0x 前缀弱化、合法字节、非法字节（波浪线）
+		var r2 = makeRow(t('settings.send_preview_hex', 'Hex'));
+		[['prefix', '0x'], ['hex', 'FF'], [null, ' '],
+		 ['prefix', '0x'], ['hex', 'AA'], [null, ' '],
+		 ['bad', '0xG1']].forEach(function(seg) {
+			if (!seg[0]) {
+				r2.appendChild(document.createTextNode(seg[1]));
+				return;
+			}
+			var s = document.createElement('span');
+			s.className = 'c-send-preview__' + seg[0];
+			s.textContent = seg[1];
+			r2.appendChild(s);
+		});
+		box.appendChild(r2);
+
+		// 空态：占位提示
+		var r3 = makeRow(t('settings.send_preview_empty', '空'));
+		var ph = document.createElement('span');
+		ph.className = 'c-send-preview__ph';
+		ph.textContent = t('send.placeholder', '输入要发送的数据...');
+		r3.appendChild(ph);
+		box.appendChild(r3);
+
 		container.appendChild(box);
 	}
 }
@@ -1601,6 +1890,25 @@ function refreshSettingsPage() {
 	renderSettingsThemeGrid();
 	renderSettingsIconGrid();
 	refreshSettingsLangList();
+}
+
+// 守护进程上线/下线时同步「默认自动保存」的可用性。设置页没打开时
+// querySelector 找不到 input，天然 no-op。
+function setAutoSaveToggleAvailable(online) {
+	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="autoSave"]');
+	if (!input) return;
+	input.disabled = !online;
+	var label = input.closest('.settings-toggle');
+	if (label) label.classList.toggle('is-disabled', !online);
+}
+
+// 「关闭 GUI 前确认」只在关闭模式真的会停守护进程时才有意义（never 下置灰）。
+function setShutdownWarnAvailable(available) {
+	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="shutdownWarn"]');
+	if (!input) return;
+	input.disabled = !available;
+	var label = input.closest('.settings-toggle');
+	if (label) label.classList.toggle('is-disabled', !available);
 }
 
 // ---- check if settings tab is active ----

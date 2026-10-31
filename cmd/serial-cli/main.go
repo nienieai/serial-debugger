@@ -101,7 +101,12 @@ func interactiveMode() {
 		printErr("请先运行 serial-cli start 启动守护进程")
 		os.Exit(1)
 	}
-	defer dc.Close()
+	// 闭包里用变量 dc：重连后它指向新连接，旧连接已在重连处关掉
+	defer func() {
+		if dc != nil {
+			dc.Close()
+		}
+	}()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -130,6 +135,22 @@ func interactiveMode() {
 		case "check":
 			cmdCheck()
 		default:
+			// daemon 重启过就把连接换掉，不用退出 shell 重进。
+			// 一次本地 ping 约 1ms；连接已被 Close 时会立刻返回，不会卡 10s。
+			if dc == nil || !dc.Alive(1500*time.Millisecond) {
+				if dc != nil {
+					dc.Close()
+					dc = nil
+				}
+				nd, derr := client.NewDaemonClient("cli")
+				if derr != nil {
+					printErr("守护进程已断开: %v", derr)
+					printErr("可用 serial-cli start 重新启动，或稍后重试")
+					continue
+				}
+				dc = nd
+				printErr("已重新连接守护进程")
+			}
 			runCommandInteractive(dc, args)
 		}
 	}
@@ -170,10 +191,10 @@ func cmdCheck() {
 	info, err := client.DaemonInfo()
 	if err == nil {
 		fmt.Println("IPC 健康检查: " + paintOut("ok", ansiGreen))
-		fmt.Printf("守护进程版本: %s (IPC 协议 %d)\n", info.Version, info.ProtocolVersion)
-		fmt.Printf("客户端版本:   %s (IPC 协议 %d)\n", version.Version, protocol.ProtocolVersion)
+		fmt.Printf("守护进程版本: %s (IPC %s)\n", info.Version, info.ProtocolVersion)
+		fmt.Printf("客户端版本:   %s (IPC %s)\n", version.Version, protocol.ProtocolVersion)
 		if !info.Compatible() {
-			fmt.Println(paintOut("⚠ 协议版本不匹配，请执行 serial-cli start 重启守护进程", ansiYellow))
+			fmt.Println(paintOut("⚠ IPC 协议不兼容（要求 MAJOR.MINOR 一致），请执行 serial-cli start 重启守护进程", ansiYellow))
 		}
 		if !processRunning {
 			fmt.Println("(tasklist 检测失效，但守护进程实际运行中)")
@@ -183,7 +204,7 @@ func cmdCheck() {
 
 	// daemon.info 不可用时区分三种情况，不再一律报「守护进程未运行」。
 	if strings.HasPrefix(err.Error(), protocol.UnknownMethodPrefix) {
-		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC 协议 %d)\n",
+		fmt.Printf("守护进程版本过旧（不支持 daemon.info），当前客户端为 %s (IPC %s)\n",
 			version.Version, protocol.ProtocolVersion)
 		fmt.Println(paintOut("请执行 serial-cli start 重启守护进程", ansiYellow))
 		return
@@ -786,12 +807,33 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 		}
 		printJSON(result)
 
+	case "rename":
+		// rename <进程号> [新名称...]：名称留空 = 退回自动名（端口名 / 会话号）
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "用法: rename <processId> [新名称]（留空则恢复自动名）")
+			if interactive {
+				return
+			}
+			os.Exit(1)
+		}
+		newName := strings.Join(args[2:], " ")
+		result, err := dc.Call(contract.ProcessRename, map[string]any{
+			"processId": args[1],
+			"name":      newName,
+		})
+		if err != nil {
+			errExit(err, interactive)
+			return
+		}
+		printJSON(result)
+
 	case "create":
 		port := ""
 		baud := 115200
 		mode := "single"
 		portB := ""
 		baudB := 115200
+		name := ""
 		for i := 1; i < len(args); i++ {
 			if args[i] == "--mode" && i+1 < len(args) {
 				mode = args[i+1]
@@ -802,6 +844,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			} else if args[i] == "--baudB" && i+1 < len(args) {
 				baudB, _ = strconv.Atoi(args[i+1])
 				i++
+			} else if args[i] == "--name" && i+1 < len(args) {
+				name = args[i+1]
+				i++
 			} else if port == "" {
 				port = args[i]
 			} else if baud == 115200 {
@@ -809,6 +854,9 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			}
 		}
 		params := map[string]any{"mode": mode}
+		if name != "" {
+			params["name"] = name
+		}
 		if port != "" {
 			params["port"] = port
 			params["baud"] = baud
@@ -1754,7 +1802,9 @@ func printHelp() {
   probe  [ports...] [--config <path>] [--budget <ms>]  设备端口探测（发送探针帧识别设备类型）
 
 进程:
-  create  [port] [baud] [--mode forward] [--portB <portB>]  创建进程（默认立即连接）
+  create  [port] [baud] [--mode forward] [--portB <portB>] [--name <名称>]
+                                     创建进程（默认立即连接，--name 指定线程名）
+  rename  <processId> [新名称]        改线程名（留空 = 恢复自动名：端口名 / 会话号）
   declare <port> [baud] [--mode forward] [--portB <p>]    声明端口配置（不打开串口，全客户端可见）
   open    <port> [baud]              打开串口（等同于 create <port> [baud]）
   connect <processId> <port> [baud]  将空闲进程连接到串口

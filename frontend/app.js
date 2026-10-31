@@ -12,7 +12,6 @@ const state = {
   p1DisplayMode: 'text',
   p2DisplayMode: 'text',
   currentMode: 'single',
-  statusInterval: null,
   lastPorts: '',
   knownDaemonSessions: {},
   // 正在等会话页的工程路径（session.open 之后、syncDaemonSessions 建页之前）
@@ -23,14 +22,15 @@ const state = {
   quickPresets: [],
   _qpCycleActive: false,
   _qpCycleTimer: null,
-  encoding: 'utf-8',
-  hexCase: 'upper',
-  hexPrefix: true,
-  hexSep: 'space',
-  crVisible: true,
-  hexEscapeMode: 'show',
-  hexEscapeFormat: 'slash',
-  copyHexEscapes: true,
+  // 显示设置的**默认值**（daemon.ini 的 [display] 段，连不上守护进程时用内置默认）。
+  // 0.8.4 起编码 / Hex / 控制字符 / 转义 这几项不再存在 gui.ini，而是按标签页走：
+  // 每个会话标签页有自己的 disp（见 _newTabDisp），默认值从这里拷。
+  _dispDefaults: {
+    encoding: 'utf-8', hexCase: 'upper', hexPrefix: true, hexSep: 'space',
+    crVisible: true, hexEscapeMode: 'show', hexEscapeFormat: 'slash', copyHexEscapes: true,
+    // 制表符长度与行尾序列同样按标签页走（状态栏那行 Tab:4 UTF-8 LF 三样都跟标签页）
+    tabSize: 4, eolSequence: 'lf'
+  },
   displayFontFamily: 'Consolas',
   displayFontSize: 14,
   tabSize: 4,
@@ -48,12 +48,32 @@ const state = {
   // 关掉后只摆一个「↑ 向上滚动加载更多」的提示，由用户点了才取。
   autoRefillHistory: true,
   statsBase: {},
-  autoCreateSession: false,
+  // 「启动时新建会话」：none 不建 / single 单端口空闲 / forward 端口转发空闲。
+  // 0.8.4 从布尔 autoCreateSession 改成三选一（旧的 false 等价于 none）。
+  autoCreateMode: 'single',
+  // 「随 GUI 启动守护进程」：GUI 启动时若守护进程没在跑就自动拉起。
+  autoStartDaemon: false,
+  // 「关闭 GUI 时」怎么处理守护进程：never 不动 / last 最后一个 GUI 关闭时关 /
+  // always 总是关。守卫判断在 Go 侧（BeforeClose），这里只负责持久化和设置页。
+  shutdownDaemonMode: 'last',
+  // 关 GUI 前要不要弹确认（会断开所有串口）。只在 last / always 下有作用。
+  shutdownDaemonWarn: true,
+  // 关闭标签页前确认：只在那个标签的串口开着时才拦。
+  tabCloseWarn: false,
   // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
   autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
   // 标签浮窗要显示它，所以在 updatePortList 里留一份。
   portDescs: {},
+
+  // ── 标签栏外观（设置 → 标签页；全部持久化到 gui.ini）──
+  tabTwoLines: false,        // 双行标签：高度 ×1.5
+  tabSubLine: 'a',           // 第二行内容：a 端口·参数 / b 参数·速率 / c 保存·客户端
+  tabShowClients: true,      // 显示客户端数量
+  tabClientStyle: 'source',  // source 分来源彩色（0.8.3 原样）/ total 只显示总数
+  tabShowDot: true,          // 图标右下角的状态点
+  tabNameMax: 170,           // 线程名最大宽度（px）
+  tabCollapse: 'sub',        // 拥挤时先牺牲谁：sub 先收第二行 / clients 先收数字
 };
 
 function newTabSendState() {
@@ -67,13 +87,141 @@ function getSendState() {
   return tab._s;
 }
 
+// ---- 按标签页的显示设置 ----
+//
+// 0.8.4 起 encoding / hexCase / hexPrefix / hexSep / crVisible / hexEscapeMode /
+// hexEscapeFormat / copyHexEscapes 这 8 项不再是全局 state，而是挂在标签页上
+// （tab.disp）。默认值来自 daemon.ini 的 [display] 段（state._dispDefaults）。
+//
+// 只有工程会话会把这些落盘（写进工程目录的 settings.json）；普通串口会话、
+// 空闲会话的设置只活在标签页里，关掉标签页就回默认值。
+
+// 取一个标签页的显示设置；不传就用当前标签页。非会话标签页（设置页 / 选择页 /
+// .stlog 本地页）没有 disp，回落到默认值。
+function _dispOf(tab) {
+  if (tab === undefined) tab = getActiveTab();
+  return (tab && tab.disp) ? tab.disp : state._dispDefaults;
+}
+
+// 新标签页的 disp：从默认值深拷贝一份，免得几个标签页共享同一个对象。
+function _newTabDisp() {
+  return Object.assign({}, state._dispDefaults);
+}
+
+// 改当前标签页的某一项显示设置（菜单与标签页设置弹窗共用）。
+//
+// 落盘规则：工程会话才写回工程文件；其它会话只改内存。改完要重渲染当前标签页 ——
+// 这 8 项全都只影响「怎么看」，不影响已经收到的字节。
+function _setDisp(key, val) {
+  var tab = getActiveTab();
+  var disp = _dispOf(tab);
+  if (disp[key] === val) return;
+  disp[key] = val;
+  if (tab && tab.sessionId && state.daemonOnline) {
+    // 守护进程那边只负责工程会话的落盘；普通会话它只更新内存
+    window.go.main.App.SetSessionDisplay(tab.sessionId, disp).catch(function() {});
+  }
+  // 编码变了要通知解码线程，并重解缓存
+  if (key === 'encoding' && tab && tab.sessionId) {
+    window.go.main.App.SetTabEncoding(tab.sessionId, val).catch(function() {});
+    _redecodeActiveTab(val);
+  }
+}
+
+// 改「新标签页的默认值」并写回守护进程的 daemon.ini。
+//
+// 只有守护进程能写那个文件（单写者），所以走 IPC。离线时调用方已经把控件置灰了，
+// 这里再兜一层：写不了就不要改本地缓存，免得界面显示的和文件里存的对不上。
+// 默认值只影响**新建**的标签页，已经开着的标签页各用各的 disp，不会被动到。
+function _setDispDefault(key, val) {
+  if (!state.daemonOnline) return;
+  state._dispDefaults[key] = val;
+  window.go.main.App.SaveDisplayDefaults(state._dispDefaults).then(function (back) {
+    if (back) _applyDisplayDefaults(back);
+  }).catch(function () {});
+}
+
+// 从守护进程拉显示设置默认值（daemon.ini 的 [display] 段）。守护进程没在跑时
+// Go 侧返回 nil，保持内置默认 —— 离线也照样能建标签页。
+async function loadDisplayDefaults() {
+  try {
+    var raw = await window.go.main.App.GetDisplayDefaults();
+    if (raw) _applyDisplayDefaults(raw);
+  } catch (e) {}
+}
+
+// ini 里一切都是字符串，这里按各自的值域校验并转换，非法值一律忽略（保持默认）。
+function _applyDisplayDefaults(raw) {
+  var d = state._dispDefaults;
+  var isBool = function(v) { return typeof v === 'boolean'; };
+  var toBool = function(v) { return v === true || v === 'true'; };
+  var pick = function(k, conv, ok) {
+    var v = raw[k];
+    if (v === undefined || v === null) return;
+    var val = conv ? conv(v) : v;
+    if (ok(val)) d[k] = val;
+  };
+  pick('encoding', null, function(v) { return v === 'utf-8' || v === 'gb2312' || v === 'ascii'; });
+  pick('hexCase', null, function(v) { return v === 'upper' || v === 'lower'; });
+  pick('hexPrefix', toBool, isBool);
+  pick('hexSep', null, function(v) { return v === 'space' || v === 'comma' || v === 'none'; });
+  pick('crVisible', toBool, isBool);
+  pick('hexEscapeMode', null, function(v) { return v === 'show' || v === 'hide' || v === 'raw'; });
+  pick('hexEscapeFormat', null, function(v) { return typeof v === 'string' && v !== ''; });
+  pick('copyHexEscapes', toBool, isBool);
+  pick('tabSize', function(v) { return parseInt(v, 10); },
+    function(v) { return typeof v === 'number' && !isNaN(v) && v >= 1 && v <= 8; });
+  pick('eolSequence', null, function(v) { return v === 'lf' || v === 'cr' || v === 'crlf'; });
+  _syncDispUi();
+}
+
+// 用新的编码重解当前标签页缓存里的历史（编码是唯一影响解码的设置项）。
+async function _redecodeActiveTab(enc) {
+  var tab = getActiveTab();
+  if (!tab || !tab.sessionId) return;
+  var entries = state.historyCache[tab.sessionId];
+  if (!entries || !entries.length) { _rerenderHistoryKeepingView(); return; }
+  var hexes = [];
+  for (var i = 0; i < entries.length; i++) {
+    if (entries[i].hex) hexes.push(entries[i].hex);
+  }
+  if (hexes.length > 0) {
+    try {
+      var results = await window.go.main.App.BatchDecodeForTab(hexes, enc);
+      for (var j = 0; j < entries.length && j < results.length; j++) {
+        if (entries[j].hex) entries[j].segments = results[j];
+      }
+    } catch (e) {}
+  }
+  _rerenderHistoryKeepingView();
+}
+
 // ---- settings persistence ----
 let _saveSettingsTimer = null;
 let _syncQuickPresetsTimer = null;
 function saveSettings() {
   clearTimeout(_saveSettingsTimer);
-  _saveSettingsTimer = setTimeout(() => {
-    const s = {
+  _saveSettingsTimer = setTimeout(_flushSettings, 500);
+}
+
+// 立即落盘。给「勾了不再提醒马上就要退出」这类场景用 —— 防抖的 500ms 等不起：
+// 关闭 GUI 那条路径里 onOk 是 QuitApp，进程先退了的话设置就丢了。
+function saveSettingsNow() {
+  clearTimeout(_saveSettingsTimer);
+  _flushSettings();
+}
+
+function _flushSettings() {
+  window.go.main.App.SaveAppSettings(_collectSettings()).catch(() => {});
+  // Also persist multistr entries to daemon
+  var tab = getActiveTab();
+  if (tab && tab.sessionId) {
+    window.go.main.App.MultistrSave(tab.sessionId).catch(() => {});
+  }
+}
+
+function _collectSettings() {
+  return {
       displayMode: state.displayMode,
       txDisplayMode: state.txDisplayMode,
       sendRatio: state.sendRatio,
@@ -92,36 +240,35 @@ function saveSettings() {
       append: {
         suffix: (pageEl('appendSelect')||{}).value,
       },
-      encoding: state.encoding,
-      hexCase: state.hexCase,
-      hexPrefix: state.hexPrefix,
-      hexSep: state.hexSep,
-      crVisible: state.crVisible,
-      hexEscapeMode: state.hexEscapeMode,
-      hexEscapeFormat: state.hexEscapeFormat,
-      copyHexEscapes: state.copyHexEscapes,
+      // 注意：encoding / hexCase / hexPrefix / hexSep / crVisible / hexEscapeMode /
+      // hexEscapeFormat / copyHexEscapes 这 8 项**不再写进 gui.ini** —— 它们按标签页走，
+      // 默认值来自守护进程的 daemon.ini，工程会话写进工程目录的 settings.json。
       displayFontFamily: state.displayFontFamily,
       displayFontSize: state.displayFontSize,
-      tabSize: state.tabSize,
-      eolSequence: state.eolSequence,
+      tabSize: state._dispDefaults.tabSize,
+      eolSequence: state._dispDefaults.eolSequence,
       theme: state.colorThemeMode,
       colorThemeId: state.colorThemeId,
       colorThemeMode: state.colorThemeMode,
       iconThemeId: state.iconThemeId,
       language: state.language,
-      autoCreateSession: state.autoCreateSession,
+      autoCreateMode: state.autoCreateMode || 'single',
+      autoStartDaemon: state.autoStartDaemon === true,
+      shutdownDaemonMode: state.shutdownDaemonMode || 'last',
+      shutdownDaemonWarn: state.shutdownDaemonWarn !== false,
+      tabCloseWarn: state.tabCloseWarn === true,
       autoSaveHistory: state.autoSaveHistory === true,
+      tabTwoLines: state.tabTwoLines === true,
+      tabSubLine: state.tabSubLine || 'a',
+      tabShowClients: state.tabShowClients !== false,
+      tabClientStyle: state.tabClientStyle || 'source',
+      tabShowDot: state.tabShowDot !== false,
+      tabNameMax: state.tabNameMax || 170,
+      tabCollapse: state.tabCollapse || 'sub',
       historyWindowRows: state.historyWindowRows,
       autoRefillHistory: state.autoRefillHistory,
       displayColors: JSON.stringify(state.displayColors || _defaultDisplayColors()),
-    };
-    window.go.main.App.SaveAppSettings(s).catch(() => {});
-    // Also persist multistr entries to daemon
-    var tab = getActiveTab();
-    if (tab && tab.sessionId) {
-      window.go.main.App.MultistrSave(tab.sessionId).catch(() => {});
-    }
-  }, 500);
+  };
 }
 
 async function loadSettings() {
@@ -168,20 +315,9 @@ async function loadSettings() {
         if (sel) { sel.value = s.append.suffix; var csWrap = sel.closest('.cs-wrap'); if (csWrap && typeof _csRefresh === 'function') _csRefresh(csWrap); }
               }
 
-      if (s.encoding && (s.encoding === 'ascii' || s.encoding === 'gb2312' || s.encoding === 'utf-8')) {
-        state.encoding = s.encoding;
-        updateEncodingDisplay();
-      }
-      if (s.hexCase === 'upper' || s.hexCase === 'lower') state.hexCase = s.hexCase;
-      if (typeof s.hexPrefix === 'boolean') state.hexPrefix = s.hexPrefix;
-      if (s.hexSep === 'space' || s.hexSep === 'comma' || s.hexSep === 'none') state.hexSep = s.hexSep;
-      if (typeof s.crVisible === 'boolean') state.crVisible = s.crVisible;
-      if (s.hexEscapeMode === 'show' || s.hexEscapeMode === 'hide' || s.hexEscapeMode === 'raw') state.hexEscapeMode = s.hexEscapeMode;
-      else if (typeof s.showHexEscapes === 'boolean') state.hexEscapeMode = s.showHexEscapes ? 'show' : 'raw';
-      if (typeof s.hexEscapeFormat === 'string') state.hexEscapeFormat = s.hexEscapeFormat;
-      if (typeof s.copyHexEscapes === 'boolean') state.copyHexEscapes = s.copyHexEscapes;
-      updateHexMenu();
-      updateTextMenu();
+      // 编码 / Hex / 控制字符 / 转义 这几项 0.8.4 起按标签页走，不再从 gui.ini 读；
+      // 默认值由 loadDisplayDefaults() 从守护进程的 daemon.ini 拉。gui.ini 里的旧值
+      // 就此作废（用户明确要求这些不再算客户端设置）。
       if (s.colorThemeId && typeof s.colorThemeId === 'string') {
         var cid = s.colorThemeId;
         // Migrate old virtual IDs → base id + mode
@@ -193,17 +329,37 @@ async function loadSettings() {
         state.colorThemeId = 'system'; state.colorThemeMode = s.theme;
       }
       if (s.iconThemeId && typeof s.iconThemeId === 'string') state.iconThemeId = s.iconThemeId;
-      if (typeof s.autoCreateSession === 'boolean') state.autoCreateSession = s.autoCreateSession;
-      updateAutoCreateCheck(state.autoCreateSession);
+      if (s.autoCreateMode === 'none' || s.autoCreateMode === 'single' || s.autoCreateMode === 'forward') {
+        state.autoCreateMode = s.autoCreateMode;
+      }
+      // 缺键（旧 gui.ini 的 auto_create_session 已不再读取）时保持默认 single ——
+      // 旧默认正是「开 + 单端」，行为不变。
+      updateAutoCreateCheck(state.autoCreateMode !== 'none');
+      if (typeof s.autoStartDaemon === 'boolean') state.autoStartDaemon = s.autoStartDaemon;
+      if (s.shutdownDaemonMode === 'never' || s.shutdownDaemonMode === 'last' || s.shutdownDaemonMode === 'always') {
+        state.shutdownDaemonMode = s.shutdownDaemonMode;
+      }
+      if (typeof s.shutdownDaemonWarn === 'boolean') state.shutdownDaemonWarn = s.shutdownDaemonWarn;
+      if (typeof s.tabCloseWarn === 'boolean') state.tabCloseWarn = s.tabCloseWarn;
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
       if (typeof s.stlogShowYear === 'boolean') state.stlogShowYear = s.stlogShowYear;
+      // ── 标签栏外观（设置 → 标签页）──
+      // 每一项都先判断类型：gui.ini 可能是旧版本写的，缺键时保持默认值。
+      if (typeof s.tabTwoLines === 'boolean') state.tabTwoLines = s.tabTwoLines;
+      if (s.tabSubLine === 'a' || s.tabSubLine === 'b' || s.tabSubLine === 'c') state.tabSubLine = s.tabSubLine;
+      if (typeof s.tabShowClients === 'boolean') state.tabShowClients = s.tabShowClients;
+      if (s.tabClientStyle === 'source' || s.tabClientStyle === 'total') state.tabClientStyle = s.tabClientStyle;
+      if (typeof s.tabShowDot === 'boolean') state.tabShowDot = s.tabShowDot;
+      if (typeof s.tabNameMax === 'number' && s.tabNameMax >= 120 && s.tabNameMax <= 280) state.tabNameMax = s.tabNameMax;
+      if (s.tabCollapse === 'sub' || s.tabCollapse === 'clients') state.tabCollapse = s.tabCollapse;
+      if (typeof _applyTabDisplaySettings === 'function') _applyTabDisplaySettings();
       if (s.language && typeof s.language === 'string') state.language = s.language;
       if (typeof s.displayFontFamily === 'string') state.displayFontFamily = s.displayFontFamily;
       if (typeof s.displayFontSize === 'number') state.displayFontSize = s.displayFontSize;
-      if (typeof s.tabSize === 'number') state.tabSize = s.tabSize;
-      if (typeof s.eolSequence === 'string') state.eolSequence = s.eolSequence;
+      // tabSize / eolSequence 0.8.4 起按标签页走，默认值由 loadDisplayDefaults 从
+      // 守护进程的 daemon.ini 拉，不再从 gui.ini 读。
       // 历史渲染窗口：null/缺失 = 按视口推导
       if (typeof s.historyWindowRows === 'number' && s.historyWindowRows > 0) {
         state.historyWindowRows = s.historyWindowRows;
@@ -218,6 +374,7 @@ async function loadSettings() {
         try { state.displayColors = JSON.parse(s.displayColors); } catch(e) {}
       }
       if (!state.displayColors) state.displayColors = _defaultDisplayColors();
+      else _migrateColorDefaults();
       if (typeof _applyDisplayColors === 'function') _applyDisplayColors();
     }
     // Always initialize UI regardless of whether settings exist
@@ -246,6 +403,15 @@ async function loadSettings() {
     applySendRatio();
     applyQuickPanelRatio();
     quickPanelRender();
+  }
+
+  // 「随 GUI 启动守护进程」：要等设置读完才知道该不该拉，所以放在这里而不是
+  // DOMContentLoaded 里。不 await —— tryConnect() 同时在跑；守护进程若已在跑，
+  // startDaemon() 会直接确认连上、不会重复拉起。
+  if (state.autoStartDaemon && !state.daemonOnline && !state._autoStartTried) {
+    state._autoStartTried = true;
+    _tlog('autoStartDaemon', undefined, '自动拉起守护进程');
+    startDaemon();
   }
 }
 
@@ -394,54 +560,45 @@ function _applyDisplayStyle() {
     el.id = 'display-font-style';
     document.head.appendChild(el);
   }
-  el.textContent = '.display-content,#sendInput,#sendMirror,.c-color-preview{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + state.tabSize + ';}';
-  if (_statusBar) _statusBar.updateTabSize({tabSize: state.tabSize});
+  var _tsz = _dispOf().tabSize;
+  el.textContent = '.display-content,#sendInput,#sendMirror,.c-color-preview{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + _tsz + ';}';
+  if (_statusBar) _statusBar.updateTabSize({tabSize: _tsz});
 }
 
 function updateEncodingDisplay() {
-  if (_statusBar) _statusBar.updateEncoding({encoding: state.encoding});
+  var d = _dispOf();
+  if (_statusBar) _statusBar.updateEncoding({encoding: d.encoding});
   ['ascii','gb2312','utf-8'].forEach(e => {
     const btn = document.getElementById('menuEnc' + (e === 'utf-8' ? 'Utf8' : e.charAt(0).toUpperCase() + e.slice(1)));
     if (!btn) return;
     const chk = btn.querySelector('.chk');
-    if (chk) chk.classList.toggle('on', state.encoding === e);
+    if (chk) chk.classList.toggle('on', d.encoding === e);
   });
 }
 
-async function setEncoding(enc) {
-  if (state.encoding === enc) return;
-  state.encoding = enc;
+// 编码是**当前标签页**的设置（0.8.4 起不再全局）。切换只影响这一个标签页的解码
+// 线程和它自己缓存里的历史，别的标签页不动。
+function setEncoding(enc) {
+  if (_dispOf().encoding === enc) return;
+  _setDisp('encoding', enc);
   updateEncodingDisplay();
-  saveSettings();
-  // Notify Go: update all tab decode workers
-  if (state.daemonOnline) {
-    state.tabs.forEach(function(t) {
-      if (t.sessionId) window.go.main.App.SetTabEncoding(t.sessionId, enc);
-    });
-  }
-  // Re-decode cached history entries with new encoding
-  for (var key in state.historyCache) {
-    if (!state.historyCache.hasOwnProperty(key) || key === '_id') continue;
-    var entries = state.historyCache[key];
-    var hexes = [];
-    for (var i = 0; i < entries.length; i++) {
-      if (entries[i].hex) hexes.push(entries[i].hex);
-    }
-    if (hexes.length > 0) {
-      try {
-        var results = await window.go.main.App.BatchDecodeForTab(hexes, enc);
-        for (var j = 0; j < entries.length && j < results.length; j++) {
-          if (entries[j].hex) entries[j].segments = results[j];
-        }
-      } catch (e) {}
-    }
-  }
-  // Re-render active tab
-  _rerenderHistoryKeepingView();
+}
+
+// 当前标签页的显示设置变了之后，把状态栏/菜单勾选/标签页设置弹窗都刷一遍。
+function _syncDispUi() {
+  updateEncodingDisplay();
+  updateHexMenu();
+  updateTextMenu();
+  _updateHexEscFmtRow();
+  if (typeof syncTabSettingsPopup === 'function') syncTabSettingsPopup();
 }
 
 // ---- alert helper ----
 var _alertCallback = null;
+// 上次同步给设置页的守护进程状态：用来判断要不要重建设置页（让置灰跟上）
+var _settingsDaemonOnline = null;
+// 「不再提醒」勾上并点确定时要执行的动作（可选，由 showConfirm 的第 6 个参数给）
+var _alertDontAsk = null;
 
 // _resetAlertButtons 把弹窗底部的按钮区恢复成「取消 + 确定」。
 //
@@ -455,6 +612,12 @@ function _resetAlertButtons() {
   var btns = ov.querySelector('.alert-btns');
   if (!btns) return;
   Array.prototype.slice.call(btns.querySelectorAll('.alert-choice')).forEach(function (b) { b.remove(); });
+  // 「不再提醒」默认不显示，只有 showConfirm 显式传了回调才亮出来
+  var da = document.getElementById('alertDontAsk');
+  if (da) da.classList.add('is-hidden');
+  var inp = document.getElementById('alertDontAskInput');
+  if (inp) inp.checked = false;
+  _alertDontAsk = null;
 }
 
 // okKey / cancelKey: optional i18n keys for context-specific button labels
@@ -471,7 +634,7 @@ function showAlert(title, message, okKey, mono) {
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
-function showConfirm(title, message, onOk, okKey, cancelKey) {
+function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
   _resetAlertButtons();
   _alertCallback = onOk;
   document.getElementById('alertTitle').textContent = title;
@@ -481,6 +644,13 @@ function showConfirm(title, message, onOk, okKey, cancelKey) {
   document.getElementById('alertCancelBtn').classList.remove('is-hidden');
   document.getElementById('alertOkBtn').textContent = t(okKey || 'confirm.ok', '确定');
   document.getElementById('alertCancelBtn').textContent = t(cancelKey || 'confirm.cancel', '取消');
+  // onDontAsk：可选。传了才显示「不再提醒」勾选框；勾上并点确定时先跑它，
+  // 通常就是把对应设置关掉并立即落盘。
+  var da = document.getElementById('alertDontAsk');
+  if (da && onDontAsk) {
+    _alertDontAsk = onDontAsk;
+    da.classList.remove('is-hidden');
+  }
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
@@ -514,8 +684,40 @@ function showChoice(title, message, options) {
 
 function closeAlert(ok) {
   document.getElementById('alertOverlay').classList.add('is-hidden');
-  if (ok && _alertCallback) _alertCallback();
+  var cb = _alertCallback;
+  var dontAsk = _alertDontAsk;
   _alertCallback = null;
+  _alertDontAsk = null;
+  var da = document.getElementById('alertDontAsk');
+  if (da) da.classList.add('is-hidden');
+  var inp = document.getElementById('alertDontAskInput');
+  // 顺序要紧：「不再提醒」先把设置落盘，再执行 onOk —— 关闭 GUI 那条 onOk 是
+  // QuitApp，反过来就来不及写盘了。
+  if (ok && inp && inp.checked && dontAsk) dontAsk();
+  if (inp) inp.checked = false;
+  if (ok && cb) cb();
+}
+
+// Go 的 BeforeClose 判定「这次关窗口要停守护进程、且用户开了确认」时发这个事件。
+// 此刻窗口**还没关掉**（BeforeClose 返回了 false）—— 确认后调 QuitApp 再退一次，
+// 取消就什么都不做，窗口留着。
+function onAppCloseConfirm(data) {
+  var mode = (data && data.mode) || 'last';
+  showConfirm(
+    t('confirm.quit_title', '退出串口调试工具'),
+    mode === 'always'
+      ? t('confirm.quit_always', '退出将停止守护进程，所有串口连接都会断开（包括其它 GUI / CLI / MCP 客户端）。确定退出吗？')
+      : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？'),
+    function() {
+      window.go.main.App.QuitApp().catch(function(e) { console.error('QuitApp failed:', e); });
+    },
+    'confirm.quit_ok', 'confirm.cancel',
+    function() {
+      // 「不再提醒」必须在 QuitApp 之前落盘，否则进程先退了设置就丢了
+      state.shutdownDaemonWarn = false;
+      saveSettingsNow();
+    }
+  );
 }
 
 // ---- theme ----
@@ -855,13 +1057,41 @@ function _defaultDisplayColors() {
     hexEsc:  { dark: '#e91e63', light: '#c2185b', bgDark: T, bgLight: T, bold: false, italic: false },
     hexInv:  { dark: '#ff5c5c', light: '#dc2626', bgDark: T, bgLight: T, bold: false, italic: false },
     ctrlBg:  { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
-    ctrlFg:  { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    ctrlFg:  { dark: '#8a8a8a', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
     stat:    { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false },
     fhexEsc: { dark: '#e91e63', light: '#c2185b', bgDark: T, bgLight: T, bold: false, italic: false },
     fctrlBg: { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
-    fctrlFg: { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
-    fstat:   { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false }
+    fctrlFg: { dark: '#8a8a8a', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    fstat:   { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false },
+    // ── 发送框（输入区）独立配色 ──
+    // 0.8.4 之前发送框没有自己的键，全是借历史流的：hex 字节吃 --dc-hexTx、
+    // 非法字节吃 --dc-hexInv、控制字符吃 --dc-ctrlFg/Bg、普通字符吃 --fg。
+    // 于是「改发送框 Hex 颜色」会连带改掉记录区里 Tx 行的 Hex，反过来也一样。
+    sendText:   { dark: '#ffffff', light: '#000000', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendHex:    { dark: '#f59e0b', light: '#d97706', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendHexBad: { dark: '#ff5c5c', light: '#dc2626', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendPrefix: { dark: '#808080', light: '#9a9a9a', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendCtrlBg: { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
+    sendCtrl:   { dark: '#8a8a8a', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendPh:     { dark: '#808080', light: '#9a9a9a', bgDark: T, bgLight: T, bold: false, italic: false }
   };
+}
+
+// 0.8.4：控制字符的深色默认值原来是 #cccccc —— 在 #1e1e1e 背景上跟正文白字
+// （#ffffff）几乎同亮度，`·` `←↵` `→` 这些标记看着就像普通字符。改暗一档。
+// 改默认值只对「没保存过的配置」生效，所以已经写进 gui.ini 的旧值要迁移 ——
+// 但只迁移「值仍是旧默认」的那些，用户自己调过的颜色不动。
+var _CTRL_FG_OLD_DARK = '#cccccc';
+function _migrateColorDefaults() {
+  var dc = state.displayColors;
+  if (!dc) return;
+  var dflt = _defaultDisplayColors();
+  ['ctrlFg', 'fctrlFg', 'sendCtrl'].forEach(function(k) {
+    var v = dc[k];
+    if (v && typeof v.dark === 'string' && v.dark.toLowerCase() === _CTRL_FG_OLD_DARK) {
+      v.dark = dflt[k].dark;
+    }
+  });
 }
 
 function applyI18n() {
@@ -891,6 +1121,7 @@ function applyI18n() {
   var _menuI18n = {
     menuThemeSettings:    ['menu.theme_settings',  '主题设置'],
     menuAppSettings:      ['menu.app_settings',    '软件设置'],
+    menuTabSettings:      ['tabset.title',          '标签页设置'],
     menuNewSession:       ['menu.new_session',     '新建会话'],
     menuCloseSession:     ['menu.close_session',   '关闭会话'],
     menuQuit:             ['menu.quit',            '退出'],
@@ -1461,7 +1692,7 @@ document.addEventListener('copy', function(e) {
   // Strip markers before extracting text so only real characters enter the clipboard.
   var frag = rng.cloneContents();
   frag.querySelectorAll('.ctrl-mark').forEach(function(el) { el.remove(); });
-  if (!state.copyHexEscapes) {
+  if (!_dispOf().copyHexEscapes) {
     var hex = frag.querySelectorAll('.hex-escape,.hex-fescape');
     for (var i = 0; i < hex.length; i++) hex[i].remove();
   }
@@ -1754,8 +1985,20 @@ function createAlertOverlay() {
   okBtn.addEventListener('click', function() { closeAlert(true); });
   btns.appendChild(cancelBtn);
   btns.appendChild(okBtn);
+  // 「不再提醒」：默认隐藏，由 showConfirm 的第 6 个参数决定是否露出
+  var dontAsk = document.createElement('label');
+  dontAsk.className = 'alert-dontask is-hidden';
+  dontAsk.id = 'alertDontAsk';
+  var daInput = document.createElement('input');
+  daInput.type = 'checkbox';
+  daInput.id = 'alertDontAskInput';
+  var daText = document.createElement('span');
+  daText.textContent = t('confirm.dont_ask', '不再提醒');
+  dontAsk.appendChild(daInput);
+  dontAsk.appendChild(daText);
   popup.appendChild(head);
   popup.appendChild(body);
+  popup.appendChild(dontAsk);
   popup.appendChild(btns);
   ov.appendChild(popup);
   document.getElementById('app').appendChild(ov);
@@ -1883,12 +2126,17 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('ports-list', (data) => updatePortList(data.ports));
     window.runtime.EventsOn('daemon-offline', () => onDaemonGone('offline'));
     window.runtime.EventsOn('daemon-shutdown', () => onDaemonGone('shutdown'));
-    // 守护进程就绪（管道可连接）时立刻连，别等 checkOffline 的 1s 轮询
-    window.runtime.EventsOn('daemon-ready', () => { if (!state.daemonOnline) tryConnect(); });
+    // 守护进程就绪（管道可连接）时立刻连；离线时不再有轮询，靠这个事件重连
+    window.runtime.EventsOn('daemon-ready', () => {
+      _tlog('事件 daemon-ready', undefined, 'online=' + state.daemonOnline);
+      if (!state.daemonOnline) tryConnect();
+    });
     window.runtime.EventsOn('process-changed', (data) => syncDaemonSessions(data));
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));
     window.runtime.EventsOn('clients-changed', (data) => onClientsChanged(data));
+    // 关窗口时 Go 侧判定「要停守护进程、且用户开了确认」→ 拦住关闭并让前端弹框
+    window.runtime.EventsOn('app-close-confirm', (data) => onAppCloseConfirm(data));
     window.runtime.EventsOn('multistr-changed', (data) => onMultistrChanged(data));
   } catch {}
 
@@ -1972,89 +2220,92 @@ function initConfigListeners() {
   if (intervalEl) intervalEl.addEventListener('change', () => saveSettings());
 }
 
-// When online the Go-side heartbeat monitors the connection; no JS polling.
-// When offline we check the process list every second (lightweight tasklist, no IPC).
-function startOfflineCheck() {
-  if (state.statusInterval) clearInterval(state.statusInterval);
-  state.statusInterval = setInterval(checkOffline, 1000);
+// ---- 连接状态 ----
+//
+// 上线只有两条路：
+//   ① 启动时主动连一次（init → tryConnect）
+//   ② 守护进程就绪事件 daemon-ready（Go 侧每 3s 重发一次，丢一次也能自愈）
+//
+// 掉线只有两条路：
+//   ① 守护进程正常关闭 → daemon-shutdown（即时广播，不依赖心跳）
+//   ② 意外退出 → Go 侧心跳 2s×3 + 一次重连确认，真的连不上才发 daemon-offline
+//
+// 这里**不再有离线轮询**。轮询曾经和用户点「启动守护进程」抢同一把锁，把点击
+// 静默吞掉——「先开 GUI 后开守护进程，大概率连不上」就是这么来的。
+
+// ---- 连接耗时诊断 ----
+//
+// 时间戳格式与 daemon.log 一致（HH:MM:SS.mmm），可以直接对照。
+// 只是诊断输出，不影响任何控制流。
+function _nowStamp() {
+  var d = new Date();
+  return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+function _tlog(name, ms, extra) {
+  if (!window.console) return;
+  console.log('[' + _nowStamp() + '] [daemon] ' + name +
+    (ms === undefined ? '' : ' ' + ms + 'ms') + (extra ? ' ' + extra : ''));
 }
 
-function stopOfflineCheck() {
-  if (state.statusInterval) { clearInterval(state.statusInterval); state.statusInterval = null; }
-}
-
-// Prevent overlapping connection attempts when daemon is detected externally.
-// checkOffline fires every 1s; without this guard, each tick spawns a new
-// tryConnect while the previous one is still blocking on WaitNamedPipeW (5 s),
-// leading to retry-chain storms and missed detections.
+// _connecting 只保护后台探测（daemon-ready 每 3s 重发，不能被叠加）；
+// 用户主动操作（startDaemon）走自己的 _starting，两者互不吞。
 var _connecting = false;
 
-async function checkOffline() {
-  if (state.daemonOnline) { stopOfflineCheck(); return; }
-  if (_connecting) return; // let the running tryConnect finish
-  // processRunning 只用于界面展示，**不再**作为是否尝试连接的条件。
-  // 它是 tasklist 的启发式结果（每次约 250ms），误判时会让 GUI 永远不去
-  // 尝试连接——守护进程明明在等也一直显示离线。CheckDaemonStatus 内部直接
-  // 拨 IPC，没有守护进程时 WaitNamedPipe 立刻返回 ERROR_FILE_NOT_FOUND，
-  // 代价很低，且是权威判据。
-  try {
-    state.processRunning = await window.go.main.App.DaemonProcessRunning();
-  } catch { state.processRunning = false; }
-  connectRetries = 0;
-  tryConnect();
-}
-
-let connectRetries = 0;
 async function tryConnect() {
-  if (_connecting) return; // guard against concurrent calls (e.g. setTimeout retry + checkOffline)
+  if (state.daemonOnline) return;
+  if (_connecting) { _tlog('tryConnect 跳过：上一次还没结束'); return; }
   _connecting = true;
+  var tConn = performance.now();
   try {
     const ok = await window.go.main.App.CheckDaemonStatus();
-    if (ok) {
-      if (!state.daemonOnline) {
-        state.daemonOnline = true;
-        state.processRunning = true;
-        state.connectFailures = 0;
-        connectRetries = 0;
-        stopOfflineCheck();
-        updateDaemonUI();
-        updateOpenBtn();
-        await syncDaemonSessions();
-        // GUI 的「默认自动保存」存在 gui.ini，是本地真相：连上后推给守护进程，
-        // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
-        window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
-        updateAutoSaveCheck(state.autoSaveHistory === true);
-        const t = getActiveTab();
-        state.currentMode = (t && t.mode) ? t.mode : 'single';
-        updateModeUI();
-        refreshPortsForce().then(() => _syncPortSelectsFromTab());
-        applyI18n();
+    _tlog('CheckDaemonStatus', Math.round(performance.now() - tConn), 'ok=' + ok);
+    if (ok && !state.daemonOnline) {
+      state.daemonOnline = true;
+      state.processRunning = true;
+      state.connectFailures = 0;
+      // 守护进程换了实例时进程号会被重新分配（pm.counter 每次从 1 开始），而旧标签
+      // 还记着上一实例的 sessionId —— 新实例的同号进程会被当成「还是那个会话」，
+      // 数据就串进旧标签了。能走到这里说明离线事件没送到（正常路径由 onDaemonGone
+      // 清标签），所以这里兜底：把这些绑定旧实例的会话标签整个销毁，让下面的同步
+      // 按新实例的进程表重建。宁可标签重建、重新拉一次历史，也不能让两实例的数据混在一起。
+      for (var _ci = state.tabs.length - 1; _ci >= 0; _ci--) {
+        var _ct = state.tabs[_ci];
+        if (!_ct.sessionId || _ct.type === 'settings' || _ct.type === 'stlog') continue;
+        if (_ct._page) { _ct._page.destroy(); _ct._page = null; }
+        state.tabs.splice(_ci, 1);
       }
-      _connecting = false;
-    } else {
-      connectRetries++;
-      if (connectRetries < 3 && !state.daemonOnline) {
-        // Quick retry before falling back to slow offline check
-        _connecting = false;
-        setTimeout(tryConnect, 500);
-      } else {
-        _connecting = false;
-        if (!state.daemonOnline) startOfflineCheck();
-      }
+      if (state.activeTab >= state.tabs.length) state.activeTab = state.tabs.length - 1;
+      updateDaemonUI();
+      updateOpenBtn();
+      // 先取显示设置默认值，再同步会话 —— 后面建标签页要用它初始化 disp
+      await loadDisplayDefaults();
+      await syncDaemonSessions();
+      // GUI 的「默认自动保存」存在 gui.ini，是本地真相：连上后推给守护进程，
+      // 而不是反过来读守护进程的值（否则 CLI 改过默认值就会覆盖 GUI 设置）。
+      window.go.main.App.SetHistoryEnabled(state.autoSaveHistory === true).catch(function() {});
+      updateAutoSaveCheck(state.autoSaveHistory === true);
+
+      const t = getActiveTab();
+      state.currentMode = (t && t.mode) ? t.mode : 'single';
+      updateModeUI();
+      refreshPortsForce().then(() => _syncPortSelectsFromTab());
+      applyI18n();
     }
   } catch (e) {
+    _tlog('tryConnect 异常', Math.round(performance.now() - tConn), String(e));
+  } finally {
     _connecting = false;
-    if (!state.daemonOnline) startOfflineCheck();
   }
 }
 
 function onDaemonGone(reason) {
+  _tlog('onDaemonGone', undefined, 'reason=' + reason);
   if (!state.daemonOnline) return;
   state.daemonOnline = false;
   state.connectFailures = 0;
   updateDaemonUI();
   handleDaemonOffline();
-  startOfflineCheck();
+  // 不再启动离线轮询：重连交给 daemon-ready 事件（Go 侧每 3s 重发一次）
 }
 
 // ---- session sync ----
@@ -2100,9 +2351,15 @@ function _applyDaemonSessionToTab(tab, ds) {
   const isConnected = ds.status === 'connected';
   const hasDeclared = !!ds.portName;
   tab.label = _daemonTabLabel(ds);
+  // 线程名：守护进程说了算（GUI 不再自己拼文案）。nameCustom 只是标记名字是
+  // 用户起的还是自动算的，右键菜单据此显示「恢复自动名」。
+  tab.name = ds.name || '';
+  tab.nameCustom = !!ds.nameCustom;
   tab.portOpen = isConnected;
   tab.mode = ds.mode || 'single';
   tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
+  // 工程会话才有值：标签上要显示工程目录名（而不是「单端口空闲」）
+  tab.sessionPath = ds.sessionPath || '';
   if (isConnected || hasDeclared) {
     tab.syncedParams = {
       portName: ds.portName, baud: ds.baud,
@@ -2158,9 +2415,10 @@ async function syncDaemonSessions(procData) {
   // Skip while a tab is being intentionally closed (suppress window to avoid
   // the process-changed event from the destroy triggering immediate re-creation).
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
-  // autoCreateSession: add a local tab (no daemon process) when no tabs exist
-  if (!suppress && state.autoCreateSession && daemonSessions.length === 0 && state.tabs.length === 0) {
-    await autoCreateIdleSession();  // 自动补一个单端口空闲会话（不弹选择页）
+  // autoCreateMode: add a local tab (no daemon process) when no tabs exist
+  var autoMode = state.autoCreateMode || 'single';
+  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0) {
+    await autoCreateIdleSession(autoMode);  // 按设置补一个单端 / 转发空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
     // 列表判断「会话还在不在」—— 列表一空，刚挂上去的 sessionId 立刻被当成已消失
@@ -2205,7 +2463,7 @@ async function syncDaemonSessions(procData) {
             guiSessionIds.add(ds.id);
             if (ds.id && state.daemonOnline) {
               window.go.main.App.StartTabDecoder(ds.id);
-              window.go.main.App.SetTabEncoding(ds.id, state.encoding);
+              window.go.main.App.SetTabEncoding(ds.id, _dispOf(orphan).encoding);
             }
             tabsChanged = true;
             return;
@@ -2219,7 +2477,12 @@ async function syncDaemonSessions(procData) {
         id: state.tabCounter++,
         label: label,
         sessionId: ds.id,
+        // 守护进程的线程名，以及「这名字是不是用户起的」。标签上显示它（见 _tabNameOf），
+        // 自动名在工程会话里会让位给目录名 —— 否则推送完工程，标签上只剩「会话 #3」。
+        name: ds.name || '',
+        nameCustom: !!ds.nameCustom,
         // 工程会话记下工程路径：同一个工程再点一次要能切回这一页，而不是再建一个
+        sessionPath: ds.sessionPath || '',
         _projectPath: ds.sessionPath || null,
         portOpen: isConnected,
         mode: ds.mode || 'single',
@@ -2230,6 +2493,9 @@ async function syncDaemonSessions(procData) {
           dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
           forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
         } : null,
+        // 工程会话带 settings.json 里的 display（打开旧工程看到的就是它当初的样子）；
+        // 普通会话用 daemon.ini 的默认值
+        disp: ds.display ? Object.assign({}, state._dispDefaults, ds.display) : _newTabDisp(),
         displayMode: state.displayMode,
         txDisplayMode: state.txDisplayMode,
         p1DisplayMode: 'text',
@@ -2246,7 +2512,7 @@ async function syncDaemonSessions(procData) {
       // Start per-tab Go decode worker
       if (ds.id && state.daemonOnline) {
         window.go.main.App.StartTabDecoder(ds.id);
-        window.go.main.App.SetTabEncoding(ds.id, state.encoding);
+        window.go.main.App.SetTabEncoding(ds.id, newTab.disp.encoding);
       }
       tabsChanged = true;
     }
@@ -2266,6 +2532,13 @@ async function syncDaemonSessions(procData) {
       const modeChanged = tab.mode !== newMode;
       tab.mode = newMode;
       tab.viewers = newViewers;
+      // 工程目录会跟着线程名改名。路径变了要跟着挪，否则「同一个工程再打开」
+      // 认不出这一页，会再建一个进程、录出两份（_projectPath 就是那个判据）。
+      const dsPath = ds.sessionPath || null;
+      if (dsPath && tab._projectPath !== dsPath) {
+        tab._projectPath = dsPath;
+        tabsChanged = true;
+      }
       if (tab.portOpen !== isConnected || tab.label !== newLabel || viewersChanged || modeChanged) {
         tab.portOpen = isConnected;
         tab.label = newLabel;
@@ -2553,8 +2826,23 @@ function handleDaemonOffline() {
     state.tabs.splice(i, 1);
   }
   state.activeTab = 0;
-  if (state.tabs.length === 0 && state._welcomePage) {
-    state._welcomePage.show();
+  if (state.tabs.length === 0) {
+    if (state._welcomePage) state._welcomePage.show();
+  } else {
+    // 留下来的标签（工程页 / 设置页）不归守护进程管，所以没被销毁。但它们的页面
+    // 此前多半是隐藏的 —— 刚才显示的是那个被销毁的会话页。不显出来，内容区就是
+    // 一片空白：实测「在会话页上关掉守护进程、而之前打开过工程」时，界面切到留下的
+    // 工程页，底下什么都没有。
+    state.tabs.forEach(function (t) { if (t._page) t._page.hide(); });
+    var keep = state.tabs[0];
+    if (keep._page) {
+      keep._page.show();
+      // 设置页的两块图标网格要重建一遍，否则显出来的是空槽位
+      if (keep.type === 'settings' && typeof renderSettingsThemeGrid === 'function') {
+        renderSettingsThemeGrid();
+        renderSettingsIconGrid();
+      }
+    }
   }
   state.knownDaemonSessions = {};
   state._pendingProjectPaths = {};
@@ -2563,6 +2851,9 @@ function handleDaemonOffline() {
   renderTabs();
   updateModeUI();
   loadTabHistory();
+  // activeTab 刚变过，遮罩的显示条件（按「活动标签是不是会话页」判定）得重算一次：
+  // 否则 onDaemonGone 那条路上，遮罩是照旧会话页算的，会一直盖在工程页上。
+  updateDaemonUI();
 }
 
 function updateSyncIndicator() {
@@ -2633,6 +2924,18 @@ function updateDaemonUI() {
   }
   // 「+」和「文件 → 新建会话」不再随守护进程状态置灰：离线也能进选择页，
   // 页内再按能力置灰（串口卡禁用、从文件打开可用）。
+  // 设置页里的「默认自动保存」跟着守护进程亮/灭（真正的开关在守护进程里）。
+  if (typeof setAutoSaveToggleAvailable === 'function') setAutoSaveToggleAvailable(state.daemonOnline);
+  // 设置页里「新标签页的默认值」那三块同样依赖守护进程（要写 daemon.ini）：
+  // 状态变了就重建设置页让置灰跟上。只在真的变化时做，别每次刷新都重建。
+  // 设置页里「新标签页的默认值」那三块同样依赖守护进程（要写 daemon.ini）：
+  // 状态变了就重建设置页让置灰跟上。只在真的变化时做，别每次刷新都重建。
+  if (_settingsDaemonOnline !== state.daemonOnline) {
+    _settingsDaemonOnline = state.daemonOnline;
+    if (typeof refreshSettingsPage === 'function' && document.querySelector('.settings-layout')) {
+      refreshSettingsPage();
+    }
+  }
   state.tabs.forEach(function (t) {
     if (t.type === 'new' && t._page && t._page.root && typeof _syncChooserAvailability === 'function') {
       _syncChooserAvailability(t._page.root);
@@ -2653,29 +2956,36 @@ async function toggleDaemon() {
   }
 }
 
+// _starting 是「用户主动启动」的互斥，和后台探测的 _connecting 分开 ——
+// 后台探测再频繁也不该把用户的点击吞掉（那正是「先开 GUI 后开守护进程连不上」的成因）。
+var _starting = false;
+
 async function startDaemon() {
-  if (_connecting) return;
-  _connecting = true;
+  if (_starting) { _tlog('startDaemon 被跳过：上一次启动还没结束'); return; }
+  _starting = true;
   if (_statusBar && _statusBar.daemon) _statusBar.daemon.setBusy(true);
-  stopOfflineCheck();
+  var tStart = performance.now();
   try {
     await window.go.main.App.StartDaemon();
+    _tlog('App.StartDaemon', Math.round(performance.now() - tStart));
     state.processRunning = true;
     state.daemonOnline = true;
     state.connectFailures = 0;
     updateDaemonUI();
     updateOpenBtn();
     await syncDaemonSessions();
+    _tlog('syncDaemonSessions 完成', Math.round(performance.now() - tStart));
   } catch (e) {
+    _tlog('startDaemon 失败', Math.round(performance.now() - tStart), String(e));
     console.error('startDaemon failed:', e);
     state.daemonOnline = false;
     state.processRunning = false;
     updateDaemonUI();
-    startOfflineCheck();
     showAlert(t('cli.error','错误'), t('serial.start_fail','启动失败: ') + e);
+  } finally {
+    _starting = false;
+    if (_statusBar && _statusBar.daemon) _statusBar.daemon.setBusy(false);
   }
-  _connecting = false;
-  if (_statusBar && _statusBar.daemon) _statusBar.daemon.setBusy(false);
 }
 
 async function stopDaemon() {
@@ -2692,7 +3002,6 @@ async function stopDaemon() {
   state.knownDaemonSessions = {};
   state.activeTab = 0;
   updateEmptyState();
-  startOfflineCheck();
   updateDaemonUI();
   updateOpenBtn();
   updateSyncIndicator();
@@ -2897,6 +3206,8 @@ function _sessionTabDefaults(mode, id) {
     source: 'gui',
     // 新页沿用当前全局的显示模式（否则一旦发生 tabsChanged，同步会拿这里的
     // 'text' 回填全局，把用户选好的 Hex 顶掉）
+    // 按标签页的显示设置（编码 / Hex / 控制字符 / 转义）：新标签页从默认值拷一份
+    disp: _newTabDisp(),
     displayMode: state.displayMode || 'text',
     txDisplayMode: state.txDisplayMode || 'text',
     p1DisplayMode: state.p1DisplayMode || 'text',
@@ -2968,7 +3279,7 @@ function _convertChooserToSession(tab, sid, mode) {
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
-    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, _dispOf(tab).encoding); } catch (e) {}
   }
 
   state.activeTab = idx;
@@ -2983,13 +3294,14 @@ function _convertChooserToSession(tab, sid, mode) {
 
 // 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
 // 这个时机用户不在交互中）。
-async function autoCreateIdleSession() {
+async function autoCreateIdleSession(mode) {
   if (!state.daemonOnline) return;
-  var sid = await _createIdleProcessOfMode('single');
+  var m = (mode === 'forward') ? 'forward' : 'single';
+  var sid = await _createIdleProcessOfMode(m);
   if (!sid) return;
   if (state.tabs.some(function(x) { return x.sessionId === sid; })) return;
 
-  var tab = _sessionTabDefaults('single');
+  var tab = _sessionTabDefaults(m);
   tab.sessionId = sid;
   tab.connectedAt = Date.now();
   tab._page = new TabPage(state.tabs.length, tab);
@@ -2999,7 +3311,7 @@ async function autoCreateIdleSession() {
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
-    try { window.go.main.App.SetTabEncoding(sid, state.encoding); } catch (e) {}
+    try { window.go.main.App.SetTabEncoding(sid, _dispOf(tab).encoding); } catch (e) {}
   }
   updateEmptyState();
   renderTabs();
@@ -3008,7 +3320,28 @@ async function autoCreateIdleSession() {
 }
 
 
+// 状态栏的 Tab / 编码 / 行尾 三项属于「某一条会话」：设置页、选择页这些没有会话的页面上
+// 显示它们只是噪音（还会显示成新标签页的默认值，容易被当成当前值）。
+function _syncStatusDispItems() {
+  var at = getActiveTab();
+  // .stlog 工程页也在渲染数据（文本 / Hex），编码、制表符、行尾对它同样有意义，
+  // 所以这一类页面也要显示；设置页、新建选择页这些真正没有数据的页面才隐藏。
+  var show = !!at && (isSessionTab(at) || at.type === 'stlog');
+  var els = document.querySelectorAll('.dsp-item');
+  for (var i = 0; i < els.length; i++) els[i].classList.toggle('is-hidden', !show);
+}
+
+// tabSize / eolSequence 也是每个标签页各自的：切完标签把状态栏和 tab-size
+// 样式同步到新标签页。延后一拍执行，免得在 activeTab 还没改的时候读到旧值。
+function _syncTabDisplayChrome() {
+  _syncStatusDispItems();
+  if (typeof _applyDisplayStyle === 'function') _applyDisplayStyle();
+  if (_statusBar) _statusBar.updateEol();
+}
+
 function switchTab(idx) {
+  closeTabSettings();   // 设置弹窗属于某一个标签页，切走就关掉
+  setTimeout(_syncTabDisplayChrome, 0);
   var oldTab = getActiveTab();
   var newTab = state.tabs[idx];
   if (!newTab) return;
@@ -3138,6 +3471,31 @@ function switchTab(idx) {
 function closeTab(idx) {
   const tab = state.tabs[idx];
   if (!tab) return;
+  // 「关闭标签页前确认」：只在该标签的串口开着时拦一道。空标签没什么可失去的，
+  // 每次都弹只会变成噪音。
+  if (state.tabCloseWarn && tab.portOpen && tab.sessionId) {
+    showConfirm(
+      t('confirm.tab_close_title', '关闭标签页'),
+      t('confirm.tab_close_msg', '这个标签的串口还开着，关闭会断开连接。确定关闭吗？'),
+      function() { _closeTabNow(tab); },
+      'confirm.tab_close_ok', 'confirm.cancel',
+      function() {
+        // 「不再提醒」= 把这个开关关掉，并立即落盘（不走 500ms 防抖）
+        state.tabCloseWarn = false;
+        saveSettingsNow();
+        if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
+      }
+    );
+    return;
+  }
+  _closeTabNow(tab);
+}
+
+// 真正执行关闭。按标签**对象**定位而不是下标：确认框弹出的这段时间里，标签数组
+// 可能已经被别的事件（守护进程广播、拖拽重排）改动过了，下标会指到别人身上。
+function _closeTabNow(tab) {
+  const idx = state.tabs.indexOf(tab);
+  if (idx < 0) return;
   // Suppress auto-create in syncDaemonSessions while we intentionally destroy a process.
   // Otherwise the process-changed event from the destroy triggers immediate re-creation.
   state._suppressAutoCreate = (Date.now() + 2000);
@@ -3188,16 +3546,9 @@ function _relabelIdleTabs() {
   }
 }
 
-// 标签页标题：tab.label 在标签页创建时就算好了，如果那一刻语言包还没装好，
-// 算出来就是空串，之后再渲染也补不回来。这里按标签页自身状态兜一个。
-function _tabLabelText(tb) {  if (tb.label) return tb.label;
-  var sp = tb.syncedParams;
-  if (sp && sp.portName) {
-    if (tb.mode === 'forward') return sp.portName;
-    return sp.baud ? (sp.portName + ' @ ' + sp.baud) : sp.portName;
-  }
-  return tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
-}
+// 标签页标题：0.8.4 起标签只显示**线程名**（守护进程 process.list 的 name），
+// 由 _tabNameOf() 从会话状态取。tab.label 仍然保留 —— 右键菜单、窗口标题、
+// 文件标签的默认名还在用它。
 
 // ---- 标签高级信息浮窗（设计稿 A：c-tabpop） ----
 //
@@ -3353,7 +3704,10 @@ function _tabPopSig() {
     tb.mode,
     (vw.gui || 0) + ',' + (vw.cli || 0) + ',' + (vw.mcp || 0),
     m.params,
-    m.ports.map(function (p) { return p.port; }).join(',')
+    m.ports.map(function (p) { return p.port; }).join(','),
+    // 线程名与保存开关也进签名：改名后卡片标题要跟着换
+    tb.name || '',
+    tb.histOn === true ? 'save' : (tb.histOn === false ? 'nosave' : '?')
   ].join('|');
 }
 
@@ -3537,11 +3891,17 @@ function _tabPopRender() {
 
   el.innerHTML =
     '<div class="c-tabpop__head">' +
-      '<span class="c-tabpop__title">' + _tabPopT('tabpop.title', '会话') + ' <span dir="ltr">#' + tab.id + '</span></span>' +
+      // 标题用线程名：它是这个会话唯一的标识，会话号退到悬浮卡的页脚信息里
+      '<span class="c-tabpop__title">' + escHtml(_tabNameOf(tab)) + '</span>' +
       '<span class="c-tabpop__badge ' + badgeCls + '"><i class="c-tabpop__dot"></i>' + badgeTxt + '</span>' +
     '</div>' +
     (portsHTML ? '<div class="c-tabpop__ports">' + portsHTML + '</div>' : '') +
     (m.params ? '<div class="c-tabpop__meta" dir="ltr">' + m.params + '</div>' : '') +
+    // 保存开关搬到这里：标签上已经不放磁盘图标了
+    '<div class="c-tabpop__save">' + _tabPopT('tabpop.save', '保存') + ' ' +
+      '<b data-role="save">' + (tab.histOn === true ? _tabPopT('tabpop.on', '开') : (tab.histOn === false ? _tabPopT('tabpop.off', '关') : '—')) + '</b>' +
+      '<span class="c-tabpop__sid" dir="ltr">#' + escHtml(String(tab.id)) + '</span>' +
+    '</div>' +
     '<div class="c-tabpop__sep"></div>' +
     lanes +
     ratioHTML +
@@ -3666,6 +4026,14 @@ function _tabPopOpen(tabEl, idx) {
   requestAnimationFrame(function () { if (_tabPop) el.classList.add('is-visible'); });
   _tabPopStartTick();
   if (!tab.sessionId) return;
+  // 保存开关搬进了悬浮卡：本地的 tab.histOn 可能还不知道，开卡时补问一次。
+  // 只问一次不会循环：拿到值就写回 tab，签名变了会重画一次卡。
+  if (tab.histOn === undefined) {
+    window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
+      tab.histOn = !!on;
+      if (_tabPop && _tabPop.tab === tab) _tabPopUpdate();
+    }).catch(function () {});
+  }
   window.go.main.App.GetSessionStats(tab.sessionId).then(function (res) {
     if (!_tabPop || _tabPop.sessionId !== tab.sessionId) return;
     if (res && res.stats) {
@@ -3694,7 +4062,10 @@ function _tabPopStopTick() {
   }
 }
 
-function _tabPopClose() {
+// immediate=true 表示「有东西要立刻顶上来」（右键菜单、改名输入框）：不要给淡出
+// 留那 130ms 的窗口。留了的话菜单和悬浮卡会在同一片区域共存一瞬间，看起来就是
+// 「菜单闪出来、卡片倏地没了」。鼠标自己移开时仍然走淡出。
+function _tabPopClose(immediate) {
   clearTimeout(_tabPopShowTimer);
   clearTimeout(_tabPopHideTimer);
   _tabPopShowTimer = null;
@@ -3704,11 +4075,15 @@ function _tabPopClose() {
   if (!_tabPopEl) return;
   var el = _tabPopEl;
   el.classList.remove('is-visible');
+  if (immediate) { el.classList.add('is-hidden'); return; }
   setTimeout(function () { if (!_tabPop) el.classList.add('is-hidden'); }, 130);
 }
 
 function _tabPopSchedule(tabEl, idx) {
   if (document.body.classList.contains('is-tab-dragging')) return;
+  // 右键菜单开着的时候不许再冒出来：鼠标在菜单和标签之间挪一下就会触发
+  // pointerenter，浮窗弹出来正好压在菜单旁边，看着就是「菜单上面又闪了一下」。
+  if (_tabMenuEl) return;
   // 刚点过标签：切换会重绘按钮，指针下的新按钮会再收到一次 pointerenter，
   // 不挡一下的话浮窗会在点击后 140ms 又自己弹出来。
   if (Date.now() - (window._tabPopClickedAt || 0) < 400) return;
@@ -3803,6 +4178,94 @@ function _tabMenuItem(label, opts) {
   return btn;
 }
 
+// ---- 标签就地改名 ----
+//
+// 标签上只有「图标 + 状态点 + 线程名」，所以改名就地把名字那段换成 input，
+// 不再另开对话框：
+//   回车 / 失焦 → 提交；Esc → 取消
+//   会话标签 → RenameSession（守护进程广播 process-changed 后重画）
+//   文件标签 → RenameStlogFile（改磁盘上的 .stlog 目录/文件名）
+var _tabRenaming = false;
+function _tabRenameStart(btn, idx) {
+  if (_tabRenaming) return;
+  var tab = state.tabs[idx];
+  if (!tab || tab.type === 'settings' || tab.type === 'new') return;
+  // 双击的第一下是「切标签」，switchTab 会重绘整个标签栏，传进来的按钮可能已经
+  // 不在文档里了。重新按索引找一枚当前挂在 DOM 上的。
+  if (!btn || !document.contains(btn)) {
+    btn = document.querySelector('.tab-btn[data-tab-idx="' + idx + '"]');
+  }
+  if (!btn) return;
+  var nameEl = btn.querySelector('.tab-port');
+  if (!nameEl || !nameEl.parentNode) return;
+  if (tab.type === 'stlog' && !tab.path) return;
+
+  _tabRenaming = true;
+  _tabPopClose(true);      // 悬停卡别挡住输入（立刻收，不要淡出）
+  _tabMenuClose();
+  var old = nameEl.textContent;
+  var input = document.createElement('input');
+  input.className = 'tab-rename';
+  input.type = 'text';
+  input.value = old;
+  input.setAttribute('spellcheck', 'false');
+  nameEl.parentNode.replaceChild(input, nameEl);
+  input.focus();
+  input.select();
+
+  var finished = false;
+  function restore() {
+    if (input.parentNode) input.parentNode.replaceChild(nameEl, input);
+    nameEl.textContent = old;
+  }
+  function finish(commit) {
+    if (finished) return;
+    finished = true;
+    _tabRenaming = false;
+    var val = String(input.value || '').trim();
+    if (!commit || val === old) { restore(); return; }
+
+    if (tab.type === 'stlog') {
+      // 文件标签：改磁盘名。失败要还原并把原因说出来（比如被占用 / 同名已存在）
+      window.go.main.App.RenameStlogFile(tab.path, val).then(function (newPath) {
+        if (!newPath) { restore(); return; }
+        tab.path = newPath;
+        tab.label = stlogBaseName(newPath);
+        if (tab._page && tab._page.root) {
+          var nameNode = tab._page.root.querySelector('.t-stlog-name');
+          var metaNode = tab._page.root.querySelector('.t-stlog-meta');
+          if (nameNode) nameNode.textContent = tab.label;
+          if (metaNode) metaNode.textContent = newPath;
+        }
+        renderTabs();
+      }).catch(function (err) {
+        restore();
+        showAlert(t('tabmenu.rename', '重命名'), String(err && err.message ? err.message : err));
+      });
+      return;
+    }
+
+    // 会话标签：名字归守护进程；本地先乐观更新，广播回来会再覆盖一次
+    tab.name = val;
+    tab.nameCustom = true;
+    renderTabs();
+    window.go.main.App.RenameSession(tab.sessionId, val).catch(function (err) {
+      // 守护进程拒绝（比如名字太长）就把本地乐观值撤回，别让界面显示一个没生效的名字
+      tab.name = old;
+      tab.nameCustom = false;
+      renderTabs();
+      showAlert(t('tabmenu.rename', '重命名'), String(err && err.message ? err.message : err));
+    });
+  }
+
+  input.addEventListener('keydown', function (e) {
+    e.stopPropagation();   // 别让全局快捷键（删除标签等）在输入时触发
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', function () { finish(true); });
+}
+
 function _tabMenuSep() {
   var sep = document.createElement('div');
   sep.className = 'menu-sep';
@@ -3841,14 +4304,33 @@ function _tabMenuItemT(key, fb) {
 
 function _tabMenuOpen(clientX, clientY, idx) {
   _tabMenuClose();
-  if (typeof _tabPopClose === 'function') _tabPopClose();   // 悬浮卡片让位给菜单
+  if (typeof _tabPopClose === 'function') _tabPopClose(true);   // 悬浮卡片立刻让位给菜单
   var tab = state.tabs[idx];
   if (!tab) return;
 
   var isSession = tab.type !== 'settings' && tab.type !== 'new' && !!tab.sessionId;
+  var isFileTab = tab.type === 'stlog';
   var menu = document.createElement('div');
   menu.className = 'menu-dropdown tab-menu';
   menu.setAttribute('role', 'menu');
+
+  // 「重命名」：会话改守护进程里的线程名，文件标签改磁盘文件名
+  if (isSession || isFileTab) {
+    menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.rename', '重命名'), {
+      onClick: function () {
+        var btn = document.querySelector('.tab-btn[data-tab-idx="' + idx + '"]');
+        if (btn) _tabRenameStart(btn, idx);
+      }
+    }));
+    if (isSession && tab.nameCustom) {
+      menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.reset_name', '恢复自动名'), {
+        onClick: function () {
+          window.go.main.App.RenameSession(tab.sessionId, '').catch(function () {});
+        }
+      }));
+    }
+    menu.appendChild(_tabMenuSep());
+  }
 
   if (isSession) {
     // 「保存历史」按进程生效（history.enable/status + processId）：勾选态先按
@@ -3858,12 +4340,16 @@ function _tabMenuOpen(clientX, clientY, idx) {
       checked: false,
       onClick: function () {
         saveOn = !saveOn;
+        // 标签上已经不再显示保存标记（它搬进悬浮卡了），这里只更新缓存，
+        // 下次打开卡片能立刻显示正确的开/关。
+        tab.histOn = saveOn;
         window.go.main.App.SetHistoryEnabledFor(tab.sessionId, saveOn).catch(function () {});
       }
     });
     menu.appendChild(saveItem);
     window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
       saveOn = !!on;
+      tab.histOn = saveOn;
       var chk = saveItem.querySelector('.menu-chk');
       if (chk) chk.classList.toggle('on', saveOn);
     }).catch(function () {});
@@ -3877,6 +4363,10 @@ function _tabMenuOpen(clientX, clientY, idx) {
         onClick: function () { _tabMenuCopy(portName); }
       }));
     }
+    // 编码 / Hex / 控制字符 / 转义 这几项按标签页走，入口就在这里
+    menu.appendChild(_tabMenuItem(_tabMenuItemT('tabmenu.settings', '标签页设置…'), {
+      onClick: function () { openTabSettings(tab); }
+    }));
     menu.appendChild(_tabMenuSep());
   }
 
@@ -3900,9 +4390,236 @@ function _tabMenuOpen(clientX, clientY, idx) {
   _tabMenuEl = menu;
   document.addEventListener('pointerdown', _tabMenuOnDown, true);
   document.addEventListener('keydown', _tabMenuOnKey, true);
-  document.addEventListener('scroll', _tabMenuClose, true);
+  // 这里**不能**监听 scroll 去关菜单：菜单是 position:fixed，页面怎么滚都不会错位，
+  // 而数据区刷屏时每一帧都在滚 —— 于是右键一次菜单刚出来就被自己的 scroll 监听关掉，
+  // 表现就是「刷屏时右键打不开」。这个坑只在有流量的时候才显形。
   window.addEventListener('blur', _tabMenuClose);
   window.addEventListener('resize', _tabMenuClose);
+}
+
+// ---- 标签栏内容：类型图标 + 状态点 + 信息槽 ----
+//
+// 设计稿 0.8.4-dev/tab-icon-preview-v2.html 的 P4 方案。要解决的是「六套信号说三件事」：
+// 以前一个标签上同时有 ●圆点、类型图标颜色、空闲斜体、转发绿加粗、未激活压暗、
+// viewers 数字，可它们只表达「已连接 / 空闲 / 转发」。现在分工是：
+//
+//   类型   → 左侧 14px 图标，中性灰，靠形状（terminal / swap / file / folder / settings / plus）
+//   状态   → 图标右下角 5px 点（绿=已连、紫=转发、半透明灰=空闲、空心环=只读）
+//   信息   → 参数、保存、速率；不拥挤才显示，按速率→保存→参数顺序退让
+//
+// 唯一的例外是只读标签：文件（.stlog）和没推给守护进程的工程，状态点画成空心环，
+// 另外整枚标签用虚线边框 —— 它们不是「会话状态」，不该占用彩色语义。
+
+// 类型图标：只有这六种
+function _tabIconKey(tb) {
+  if (tb.type === 'settings') return 'settings';
+  if (tb.type === 'new') return 'plus';
+  if (tb.type === 'stlog') return (tb._stlog && tb._stlog.isDir) ? 'folder' : 'file';
+  return tb.mode === 'forward' ? 'swap' : 'terminal';
+}
+
+// 状态：'' 表示不给点（设置页、新建页不是会话）
+function _tabStateClass(tb) {
+  if (tb.type === 'settings' || tb.type === 'new') return '';
+  if (tb.type === 'stlog') return 'is-ro';
+  if (!tb.portOpen) return 'is-idle';
+  return tb.mode === 'forward' ? 'is-fwd' : 'is-live';
+}
+
+// 标签上只剩三段：类型图标 / 状态点 / 线程名。
+//
+// 线程名归守护进程所有（process.list 的 name 字段）：GUI 不再自己拼
+// 「COM3 @ 115200」「端口转发空闲」这类文案，因为 CLI 和 MCP 也在看同一个名字，
+// 各端各拼一份必然对不上。名字为空时退回端口名/会话号。
+function _tabNameOf(tb) {
+  if (tb.type === 'settings' || tb.type === 'new') return tb.label || '';
+  if (tb.type === 'stlog') return tb.label || stlogBaseName(tb.path || '');
+  // 用户起的名字最优先。自动名（端口名 / 「会话 #N」）只在没有工程目录时用 ——
+  // 推送或打开一个工程后，标签上该显示工程文件夹名，而不是录制那一刻的「会话 #3」。
+  if (tb.name && (tb.nameCustom || !tb.sessionPath)) return tb.name;
+  if (tb.sessionPath) return stlogBaseName(tb.sessionPath);
+  if (tb.name) return tb.name;
+  var sp = tb.syncedParams;
+  if (sp && sp.portName) return sp.portName;
+  // 还没收到守护进程的 name（新建会话到第一条 process-changed 之间）：给个中性占位，
+  // 别再显示「单端口空闲」那种状态文案 —— 状态由图标右下角那枚点负责。
+  return '#' + tb.id;
+}
+
+// ---- 标签栏外观设置（设置 → 标签页）----
+//
+// 全部是 GUI 本地偏好（gui.ini），只影响标签栏怎么画。开关一变就调
+// _applyTabDisplaySettings() 把状态写到 body 的属性上（CSS 负责画），
+// 再重画标签 —— 第二行与客户端数字是 JS 拼出来的，必须重来一遍。
+
+function _applyTabDisplaySettings() {
+  var b = document.body;
+  if (!b) return;
+  b.setAttribute('data-tab-lines', state.tabTwoLines === true ? '2' : '1');
+  b.setAttribute('data-tab-dot', state.tabShowDot === false ? 'off' : 'on');
+  b.setAttribute('data-tab-cli', state.tabShowClients === false ? 'off' : 'on');
+  b.setAttribute('data-tab-collapse', state.tabCollapse === 'clients' ? 'clients' : 'sub');
+  b.style.setProperty('--tab-name-max', (state.tabNameMax || 170) + 'px');
+}
+
+// 客户端数字：0.8.3 原样是分来源彩色（GUI 蓝 / CLI 绿 / MCP 橙）。
+// 只有 GUI 自己一个时整块省略 —— 那是「我在看自己的会话」，写个 1 只是噪声。
+function _tabClientsNode(tb) {
+  if (state.tabShowClients === false) return null;
+  if (tb.type === 'settings' || tb.type === 'new') return null;
+  var v = tb.viewers || {};
+  var gui = v.gui || 0, cli = v.cli || 0, mcp = v.mcp || 0;
+  var total = gui + cli + mcp;
+  if (total <= 0) return null;
+  if (total === 1 && gui === 1) return null;
+
+  var el = document.createElement('span');
+  el.className = 'tab-cli';
+  el.setAttribute('dir', 'ltr');   // 阿拉伯语界面下数字顺序不能被翻转
+  if (state.tabClientStyle === 'total') {
+    el.textContent = String(total);
+    return el;
+  }
+  el.classList.add('tab-cli--src');
+  [['g', gui], ['c', cli], ['m', mcp]].forEach(function (pair) {
+    if (!pair[1]) return;
+    var i = document.createElement('i');
+    i.className = 'tab-cli__' + pair[0];
+    i.textContent = String(pair[1]);
+    el.appendChild(i);
+  });
+  return el;
+}
+
+// 第二行明细（仅双行标签）。三种组合由「第二行内容」设置决定：
+//   a 端口 · 参数    b 参数 · 速率    c 保存 · 客户端
+function _tabSubText(tb) {
+  if (state.tabTwoLines !== true) return '';
+  if (tb.type === 'settings' || tb.type === 'new') return '';
+
+  if (tb.type === 'stlog') {
+    var st = tb._stlog || {};
+    var info = st.info || {};
+    if (st.isDir) {
+      if (state.tabSubLine === 'b') {
+        var set = info.settings || {};
+        return set.port ? (set.port + (set.baud ? ' · ' + set.baud : '')) : _tabPopT('tab.sub_project', '工程');
+      }
+      if (state.tabSubLine === 'c') return _tabPopT('tab.sub_readonly', '只读') + ' · ' + _tabPopT('tab.sub_not_taken', '未接管');
+      return _tabPopT('tab.sub_project', '工程') + ' · ' + _tabPopT('tab.sub_not_taken', '未接管');
+    }
+    // 单个 .stlog：帧数 + 时长（都在已读到的索引里，不额外读盘）
+    var frames = st.total || 0;
+    var dur = '';
+    if (info.firstTs && info.lastTs && info.lastTs > info.firstTs) {
+      dur = _tabPopDuration((info.lastTs - info.firstTs) / 1000);
+    }
+    if (state.tabSubLine === 'b') {
+      var s2 = info.settings || {};
+      return (s2.port || '') + (dur ? (s2.port ? ' · ' : '') + dur : '');
+    }
+    if (state.tabSubLine === 'c') return _tabPopT('tab.sub_readonly', '只读') + ' · ' + frames + ' ' + _tabPopT('tabpop.frames', '帧');
+    return frames + ' ' + _tabPopT('tabpop.frames', '帧') + (dur ? ' · ' + dur : '');
+  }
+
+  var sp = tb.syncedParams;
+  if (!sp || !sp.portName) {
+    return state.tabSubLine === 'c'
+      ? (_tabPopT('tabpop.save', '保存') + ' ' + _tabPopT('tab.sub_unset', '未配置'))
+      : _tabPopT('tab.sub_unset', '未配置');
+  }
+  var name = _tabNameOf(tb);
+  var port = sp.portName;
+  var baud = sp.baud ? String(sp.baud) : '';
+  var fmt = (sp.dataBits || 8) + _tabPopParityLetter(sp.parity) + (sp.stopBits || 1);
+  var rate = '';
+  var base = state.statsBase && tb.sessionId ? state.statsBase[tb.sessionId] : null;
+  if (base) rate = _tabRateText((base.rxRate || 0) + (base.txRate || 0));
+  var saveTxt = tb.histOn === true ? _tabPopT('tabpop.on', '开') : (tb.histOn === false ? _tabPopT('tabpop.off', '关') : '—');
+  var cliTotal = 0;
+  var vw = tb.viewers || {};
+  cliTotal = (vw.gui || 0) + (vw.cli || 0) + (vw.mcp || 0);
+
+  if (state.tabSubLine === 'b') {
+    var parts2 = [baud ? (baud + (fmt ? ' ' + fmt : '')) : ''];
+    if (rate) parts2.push(rate);
+    return parts2.filter(Boolean).join(' · ');
+  }
+  if (state.tabSubLine === 'c') {
+    // 「保存 · 客户端」：客户端数已经在这行里，就不再单独挂数字
+    var parts3 = [_tabPopT('tabpop.save', '保存') + ' ' + saveTxt];
+    if (state.tabShowClients !== false && cliTotal > 0) parts3.push(_tabPopT('tabpop.clients', '客户端') + ' ' + cliTotal);
+    return parts3.join(' · ');
+  }
+  // a：端口 · 参数。名字本身就是端口时不重复
+  var parts = [];
+  if (port && port !== name) parts.push(port);
+  if (baud) parts.push(baud + (fmt ? ' ' + fmt : ''));
+  return parts.join(' · ');
+}
+
+// 紧凑速率：标签上一行放不下 "kB/s"，只留单位首字母
+function _tabRateText(bps) {
+  bps = Number(bps) || 0;
+  if (bps <= 0) return '';
+  if (bps >= 1048576) return (bps / 1048576).toFixed(1) + 'M';
+  if (bps >= 1024) return (bps / 1024).toFixed(bps < 10240 ? 1 : 0) + 'k';
+  return Math.round(bps) + 'B';
+}
+
+// 第二行是「参数 · 速率」时，速率每秒变：只改文本，不重建标签
+function _updateTabSubTexts() {
+  if (state.tabTwoLines !== true || state.tabSubLine !== 'b') return;
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+  var nodes = scroll.querySelectorAll('[data-role="sub"]');
+  for (var i = 0; i < nodes.length; i++) {
+    var btn = nodes[i].closest('.tab-btn');
+    if (!btn) continue;
+    var idx = parseInt(btn.getAttribute('data-tab-idx'), 10);
+    var tb = state.tabs[idx];
+    if (!tb) continue;
+    var txt = _tabSubText(tb);
+    if (nodes[i].textContent !== txt) nodes[i].textContent = txt;
+  }
+}
+
+// 「保存」开关是按进程的，只有右键菜单里能改。第二行选「保存 · 客户端」时要在标签上
+// 显示它，所以渲染后懒加载一次：拿到就写回 tab.histOn，签名变了自然会重画。
+// 只在真的要用时才问 —— 否则每次 renderTabs 都发一批 IPC。
+var _tabHistFetching = {};
+function _ensureTabsHist() {
+  if (state.tabTwoLines !== true || state.tabSubLine !== 'c') return;
+  if (!state.daemonOnline) return;
+  state.tabs.forEach(function (tb) {
+    if (!tb || tb.type || !tb.sessionId) return;
+    if (tb.histOn !== undefined || _tabHistFetching[tb.sessionId]) return;
+    _tabHistFetching[tb.sessionId] = true;
+    var sid = tb.sessionId;
+    window.go.main.App.GetHistoryStatusFor(sid).then(function (on) {
+      delete _tabHistFetching[sid];
+      tb.histOn = !!on;
+      if (state.tabs.indexOf(tb) >= 0) renderTabs();
+    }).catch(function () {
+      delete _tabHistFetching[sid];
+      tb.histOn = false;
+    });
+  });
+}
+
+// 标签栏密度：放不下就逐级收内容（顺序由「拥挤时先收起」决定）。
+// 尺子和 _updateTabArrows 同一把：scrollWidth vs clientWidth。
+var _tabBarWidth = -1;
+function _updateTabDensity(force) {
+  var scroll = document.getElementById('tabsScroll');
+  if (!scroll) return;
+  if (!force && scroll.clientWidth === _tabBarWidth) return;
+  _tabBarWidth = scroll.clientWidth;
+  for (var lvl = 0; lvl < 4; lvl++) {
+    scroll.setAttribute('data-lvl', String(lvl));
+    if (scroll.scrollWidth <= scroll.clientWidth) return;
+  }
+  scroll.setAttribute('data-lvl', '4');
 }
 
 function renderTabs() {
@@ -3913,11 +4630,10 @@ function renderTabs() {
   state.tabs.forEach((t, i) => {
     if (t._page && t._page.isWelcome) return;  // skip welcome tab
     const btn = document.createElement('button');
-    // 转发色只在**真的在转发**时加：`.tab-forward` 用 !important 压过 `.tab-idle`，
-    // 之前只要 mode=forward 就一直绿着，于是「端口转发空闲」看起来像在跑。
+    // 状态只体现在图标右下角那枚点上，颜色不再挂在文字上；只读标签另给虚线边框。
+    const stateCls = _tabStateClass(t);
     btn.className = 'tab-btn' + (i === state.activeTab ? ' is-active' : '')
-      + (t.mode === 'forward' && t.portOpen ? ' tab-forward' : '');
-    if (!t.portOpen) btn.className += ' tab-idle';
+      + (stateCls === 'is-ro' ? ' is-ro' : '');
     btn.dataset.tabIdx = i;
     btn.onclick = () => {
       if (window._tabClickSuppress) return;
@@ -3934,7 +4650,6 @@ function renderTabs() {
       e.stopPropagation();
       _tabMenuOpen(e.clientX, e.clientY, i);
     };
-    const isFwd = (t.mode === 'forward');
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
     // 会话标签：悬停出自绘浮窗（c-tabpop），不再挂原生 title
@@ -3953,26 +4668,45 @@ function renderTabs() {
       });
       btn.addEventListener('blur', function () { _tabPopScheduleClose(); });
     }
-    const tag = (isSettings || isChooser) ? '' : (isFwd ? ' ↔' : '');
-    // Status dot (gear icon for settings, plus icon for the new-session page)
-    const dot = document.createElement('span');
-    if (isSettings || isChooser) {
-      dot.innerHTML = icon(isSettings ? 'settings' : 'plus', 14, 14);
-      dot.style.cssText = 'display:flex;align-items:center;margin-right:2px;';
-    } else {
-      dot.className = 'tab-dot' + (t.portOpen ? ' live' : '');
+    // 类型图标 + 状态点（同一枚元素，点画在 ::after 上）
+    const ico = document.createElement('span');
+    ico.className = 'tab-ico' + (stateCls ? ' ' + stateCls : '');
+    ico.innerHTML = icon(_tabIconKey(t), 14, 14);
+    btn.appendChild(ico);
+
+    // 文字块：单行时只有名字；双行时名字 + 明细（客户端数字挂在明细末尾）。
+    // 单行的客户端数字挂在名字右边（和 0.8.3 一样），所以它在 .tab-txt 外面。
+    const txt = document.createElement('span');
+    txt.className = 'tab-txt';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'tab-port';
+    nameSpan.textContent = _tabNameOf(t);
+    txt.appendChild(nameSpan);
+
+    const twoLines = state.tabTwoLines === true;
+    if (twoLines) {
+      const subEl = document.createElement('span');
+      subEl.className = 'tab-sub';
+      const subTxt = document.createElement('span');
+      subTxt.className = 'tab-sub__txt';
+      subTxt.setAttribute('data-role', 'sub');
+      subTxt.textContent = _tabSubText(t);
+      subEl.appendChild(subTxt);
+      const cliInSub = _tabClientsNode(t);
+      // 「保存 · 客户端」这一档已经写了数字，别重复
+      if (cliInSub && !(state.tabSubLine === 'c' && !t.type)) subEl.appendChild(cliInSub);
+      txt.appendChild(subEl);
     }
-    btn.appendChild(dot);
-    // Label text
-    const labelSpan = document.createElement('span');
-    labelSpan.textContent = _tabLabelText(t) + tag;
-    btn.appendChild(labelSpan);
-    const v2 = t.viewers || {gui:0, cli:0, mcp:0};
-    [['gui','#4a9eff'],['cli','#4caf50'],['mcp','#ff9800']].forEach(function(s) {
-      const cnt = v2[s[0]] || 0;
-      if (cnt > 0 && !(s[0] === 'gui' && cnt === 1)) {
-        const vb = document.createElement("span"); vb.style.cssText = "color:"+s[1]+";font-size:11px;font-weight:bold"; vb.textContent = cnt; btn.appendChild(vb);
-      }
+    btn.appendChild(txt);
+    if (!twoLines) {
+      const cli = _tabClientsNode(t);
+      if (cli) btn.appendChild(cli);
+    }
+    // 双击改名：会话改守护进程里的线程名，文件标签改磁盘文件名
+    btn.addEventListener('dblclick', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      _tabRenameStart(btn, i);
     });
     if (isChooser) {
       btn.title = window.t('newtab.hint', '选择一种模式开始');
@@ -4011,8 +4745,11 @@ function renderTabs() {
     }
   }
 
-  // 重绘后标签总宽变了，箭头显隐要跟着重算（ResizeObserver 不会因为子节点
-  // 变多而触发）—— 见 bindTabsScroll / TODO #26。
+  // 重绘后：把外观设置写到 body（CSS 负责画），再按可用宽度定密度级别，
+  // 最后重算左右箭头（ResizeObserver 不会因为子节点变多而触发）
+  _applyTabDisplaySettings();
+  _ensureTabsHist();
+  _updateTabDensity(true);
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
 }
 
@@ -4317,6 +5054,162 @@ function _refreshSettingsI18n() {
   }).catch(function() {});
 }
 
+// ---- 标签页设置弹窗 ----
+//
+// 编码 / Hex / 控制字符 / 转义这 8 项从 0.8.4 起按**标签页**走：菜单里那三个子菜单、
+// 设置页和这个弹窗改的都是「当前这个标签页」。工程会话由守护进程写进工程目录的
+// settings.json；其余会话只活在内存里，关掉标签页就回默认值。
+var _tabSetEl = null;
+
+function closeTabSettings() {
+  if (_tabSetEl && _tabSetEl.parentNode) _tabSetEl.parentNode.removeChild(_tabSetEl);
+  _tabSetEl = null;
+}
+
+function openTabSettings(tab) {
+  tab = tab || getActiveTab();
+  if (!tab) return;
+  closeTabSettings();
+
+  var ov = document.createElement('div');
+  ov.className = 'o-overlay--modal';
+  ov.id = 'tabSetOverlay';
+  ov.addEventListener('click', function (e) { if (e.target === ov) closeTabSettings(); });
+
+  var pop = document.createElement('div');
+  pop.className = 'tabset-popup';
+
+  var head = document.createElement('div');
+  head.className = 'tabset-head';
+  var title = document.createElement('span');
+  title.className = 'tabset-title';
+  title.textContent = t('tabset.title', '标签页设置');
+  head.appendChild(title);
+  var sub = document.createElement('span');
+  sub.className = 'tabset-sub';
+  sub.textContent = (typeof _tabNameOf === 'function' ? _tabNameOf(tab) : '') || '';
+  head.appendChild(sub);
+  var close = document.createElement('button');
+  close.className = 'c-close-btn';
+  close.textContent = '✕';
+  close.addEventListener('click', closeTabSettings);
+  head.appendChild(close);
+  pop.appendChild(head);
+
+  var body = document.createElement('div');
+  body.className = 'tabset-body';
+
+  function row(label, ctl) {
+    var r = document.createElement('div');
+    r.className = 'tabset-row';
+    var l = document.createElement('span');
+    l.className = 'tabset-label';
+    l.textContent = label;
+    r.appendChild(l);
+    r.appendChild(ctl);
+    body.appendChild(r);
+    return r;
+  }
+  function sel(values, labels, cur, onChange) {
+    var s = document.createElement('select');
+    s.className = 'settings-select';
+    values.forEach(function (v, i) {
+      var o = document.createElement('option');
+      o.value = v; o.textContent = labels[i]; if (v === cur) o.selected = true;
+      s.appendChild(o);
+    });
+    s.addEventListener('change', function () { onChange(s.value); });
+    return s;
+  }
+  function tgl(cur, onChange) {
+    var lb = document.createElement('label');
+    lb.className = 'settings-toggle';
+    var inp = document.createElement('input');
+    inp.type = 'checkbox'; inp.checked = !!cur;
+    inp.addEventListener('change', function () { onChange(inp.checked); });
+    lb.appendChild(inp);
+    var sl = document.createElement('span');
+    sl.className = 'settings-toggle-slider';
+    lb.appendChild(sl);
+    return lb;
+  }
+
+  // 控件顺序与 syncTabSettingsPopup 里的下标一一对应，别插队
+  var d = _dispOf(tab);
+  row(t('settings.bubble_encoding', '编码格式'),
+    sel(['utf-8', 'gb2312', 'ascii'], ['UTF-8', 'GB2312', 'ASCII'], d.encoding,
+      function (v) { setEncoding(v); syncTabSettingsPopup(); }));
+  row(t('settings.tab_size', '制表符长度'),
+    sel(['1', '2', '3', '4', '5', '6', '7', '8'], ['1', '2', '3', '4', '5', '6', '7', '8'],
+      String(d.tabSize || 4),
+      function (v) { _setDisp('tabSize', parseInt(v, 10)); _applyDisplayStyle(); syncTabSettingsPopup(); }));
+  row(t('settings.eol_sequence', '行尾序列'),
+    sel(['lf', 'cr', 'crlf'], ['LF', 'CR', 'CRLF'], d.eolSequence || 'lf',
+      function (v) {
+        _setDisp('eolSequence', v);
+        if (_statusBar) _statusBar.updateEol();
+        syncTabSettingsPopup();
+      }));
+  row(t('settings.hex_prefix', 'Hex 前缀 (0x)'),
+    tgl(d.hexPrefix, function () { toggleHexPrefix(); syncTabSettingsPopup(); }));
+  // 开关语义与设置页一致：开 = 大写。别做成「大写/小写」下拉 —— 标题写着「Hex 大写」
+  // 而选项是「小写」，读起来是自相矛盾的。
+  row(t('settings.hex_case', 'Hex 大写'),
+    tgl(d.hexCase === 'upper', function () { toggleHexCase(); syncTabSettingsPopup(); }));
+  row(t('settings.hex_sep', 'Hex 分隔符'),
+    sel(['space', 'comma', 'none'],
+      [t('settings.sep_space', '空格'), t('settings.sep_comma', '逗号'), t('settings.sep_none', '无')], d.hexSep,
+      function (v) { setHexSep(v); syncTabSettingsPopup(); }));
+  row(t('settings.hex_escape', '转义字节'),
+    sel(['show', 'hide', 'raw'],
+      [t('settings.esc_show', '显示 /FF'), t('settings.esc_hide', '隐藏'), t('settings.esc_raw', '原始')], d.hexEscapeMode,
+      function (v) { setHexEscapeMode(v); syncTabSettingsPopup(); }));
+  row(t('settings.hex_escape_fmt', '转义格式'),
+    sel(['slash', 'backslash-x', '0x', 'angle', 'bracket'],
+      ['/FF', '\\xFF', '0xFF', '<FF>', '[FF]'], d.hexEscapeFormat || 'slash',
+      function (v) { setHexEscapeFormat(v); }));
+  row(t('settings.cr_visible', '可见控制字符'),
+    tgl(d.crVisible, function () { toggleCrVisible(); syncTabSettingsPopup(); }));
+  row(t('settings.copy_hex_escapes', '允许复制转义字节'),
+    tgl(d.copyHexEscapes, function () { _setDisp('copyHexEscapes', !_dispOf(tab).copyHexEscapes); syncTabSettingsPopup(); }));
+
+  // 落盘范围说清楚：只有工程会话会写进工程文件
+  var foot = document.createElement('div');
+  foot.className = 'tabset-foot';
+  foot.textContent = tab._projectPath
+    ? t('tabset.saved_project', '这些设置属于这个标签页，并会写进它的工程文件（settings.json）。')
+    : t('tabset.saved_memory', '这些设置只属于这个标签页，不会保存；只有工程会话才写进工程文件。');
+  body.appendChild(foot);
+
+  pop.appendChild(body);
+  ov.appendChild(pop);
+  document.getElementById('app').appendChild(ov);
+  _tabSetEl = ov;
+  syncTabSettingsPopup();
+}
+
+// 弹窗开着时，任一处改动后把控件状态同步一遍（菜单和设置页改的是同一份数据）。
+function syncTabSettingsPopup() {
+  if (!_tabSetEl) return;
+  var tab = getActiveTab();
+  if (!tab) return;
+  var d = _dispOf(tab);
+  var sels = _tabSetEl.querySelectorAll('select');
+  var inputs = _tabSetEl.querySelectorAll('input[type=checkbox]');
+  if (sels[0]) sels[0].value = d.encoding;
+  if (sels[1]) sels[1].value = String(d.tabSize || 4);
+  if (sels[2]) sels[2].value = d.eolSequence || 'lf';
+  if (sels[3]) sels[3].value = d.hexSep;
+  if (sels[4]) sels[4].value = d.hexEscapeMode;
+  if (sels[5]) sels[5].value = d.hexEscapeFormat || 'slash';
+  if (inputs[0]) inputs[0].checked = !!d.hexPrefix;
+  if (inputs[1]) inputs[1].checked = d.hexCase === 'upper';
+  if (inputs[2]) inputs[2].checked = !!d.crVisible;
+  if (inputs[3]) inputs[3].checked = !!d.copyHexEscapes;
+  var rows = _tabSetEl.querySelectorAll('.tabset-row');
+  if (rows[7]) rows[7].classList.toggle('is-hidden', d.hexEscapeMode !== 'show');
+}
+
 function openSettingsPage() {
   // Check if settings tab already exists
   var existingIdx = state.tabs.findIndex(function(t) { return t.type === 'settings'; });
@@ -4535,6 +5428,9 @@ function bindTabsScroll() {
   var right = bar.querySelector('.tabs-scroll-arrow--right');
   if (!left || !right) return;
   function update() {
+    // 标签栏宽度变了，能显示到哪一级也要重算（内部按 clientWidth 做了缓存，
+    // 滚动时不会反复重排）
+    if (typeof _updateTabDensity === 'function') _updateTabDensity();
     var max = scroll.scrollWidth - scroll.clientWidth;
     left.classList.toggle('is-hidden', scroll.scrollLeft <= 1);
     right.classList.toggle('is-hidden', scroll.scrollLeft >= max - 1);
@@ -4691,21 +5587,31 @@ function onStatsCount(data) {
 }
 
 function onStatsRate(data) {
-  // 同上：浮窗按自己的 processId 匹配，和活动标签互不影响
+  // 浮窗按自己的 processId 匹配，和活动标签互不影响
   if (_tabPop && data && _tabPop.sessionId && data.processId === _tabPop.sessionId) {
     if (!_tabPop.stats) _tabPop.stats = {};
     _tabPop.stats.readRateBps = data.readRateBps || 0;
     _tabPop.stats.writeRateBps = data.writeRateBps || 0;
     _tabPopUpdate();
   }
+  // 速率按会话缓存：以前只给活动标签记，于是标签栏根本拿不到非活动标签的速率。
+  // 事件本来是按 processId 全量推送的，顺手给所有会话记一份。
+  if (data && data.processId) {
+    if (!state.statsBase) state.statsBase = {};
+    const any = state.statsBase[data.processId]
+      || (state.statsBase[data.processId] = { tx: 0, rx: 0, p1: 0, p2: 0 });
+    any.txRate = data.writeRateBps || 0;
+    any.rxRate = data.readRateBps || 0;
+  }
+
+  // 双行标签的第二行选了「参数 · 速率」时，速率每秒变：只改文本，不重建标签
+  if (typeof _updateTabSubTexts === 'function') _updateTabSubTexts();
+
   const tab = getActiveTab();
-  if (!tab || !tab.sessionId || data.processId !== tab.sessionId) return;
+  if (!tab || !tab.sessionId || !data || data.processId !== tab.sessionId) return;
   const sid = tab.sessionId;
   if (!state.statsBase[sid]) { state.statsBase[sid] = { tx: 0, rx: 0, p1: 0, p2: 0 }; }
   const b = state.statsBase[sid];
-  // 速率也按会话缓存：此前只写进 DOM，切标签/重连后停在别人的最后一个速率上
-  b.txRate = data.writeRateBps || 0;
-  b.rxRate = data.readRateBps || 0;
   const isFwd = activeMode() === 'forward';
   if (_statusBar) {
     _statusBar.setStatsMode(isFwd);
@@ -4805,81 +5711,77 @@ function fmtSpeed(bps, tab) {
 }
 
 function toggleHexPrefix() {
-  state.hexPrefix = !state.hexPrefix;
-  updateHexMenu();
+  _setDisp('hexPrefix', !_dispOf().hexPrefix);
+  _syncDispUi();
   refreshHexDisplay();
-  saveSettings();
 }
 
 function toggleHexCase() {
-  state.hexCase = state.hexCase === 'upper' ? 'lower' : 'upper';
-  updateHexMenu();
+  _setDisp('hexCase', _dispOf().hexCase === 'upper' ? 'lower' : 'upper');
+  _syncDispUi();
   refreshHexDisplay();
-  saveSettings();
 }
 
 function setHexSep(val) {
-  if (state.hexSep === val) return;
-  state.hexSep = val;
-  updateHexMenu();
+  if (_dispOf().hexSep === val) return;
+  _setDisp('hexSep', val);
+  _syncDispUi();
   refreshHexDisplay();
-  saveSettings();
 }
 
 function updateHexMenu() {
+  const d = _dispOf();
   const setChk = (id, on) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     const chk = btn.querySelector('.chk');
     if (chk) chk.classList.toggle('on', on);
   };
-  setChk('menuHexPrefix', state.hexPrefix);
-  setChk('menuHexLower', state.hexCase === 'lower');
-  setChk('menuHexSepN', state.hexSep === 'none');
-  setChk('menuHexSepS', state.hexSep === 'space');
-  setChk('menuHexSepC', state.hexSep === 'comma');
+  setChk('menuHexPrefix', d.hexPrefix);
+  setChk('menuHexLower', d.hexCase === 'lower');
+  setChk('menuHexSepN', d.hexSep === 'none');
+  setChk('menuHexSepS', d.hexSep === 'space');
+  setChk('menuHexSepC', d.hexSep === 'comma');
 }
 
 function toggleCrVisible() {
-  state.crVisible = !state.crVisible;
-  updateTextMenu();
+  _setDisp('crVisible', !_dispOf().crVisible);
+  _syncDispUi();
   // Re-render to show/hide CR bubbles
   _rerenderHistoryKeepingView();
-  saveSettings();
 }
 
 function updateTextMenu() {
+  const d = _dispOf();
   const setChk = (id, on) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     const chk = btn.querySelector('.chk');
     if (chk) chk.classList.toggle('on', on);
   };
-  setChk('menuCrVisible', state.crVisible);
-  setChk('menuHexEscShow', state.hexEscapeMode === 'show');
-  setChk('menuHexEscHide', state.hexEscapeMode === 'hide');
-  setChk('menuHexEscRaw', state.hexEscapeMode === 'raw');
+  setChk('menuCrVisible', d.crVisible);
+  setChk('menuHexEscShow', d.hexEscapeMode === 'show');
+  setChk('menuHexEscHide', d.hexEscapeMode === 'hide');
+  setChk('menuHexEscRaw', d.hexEscapeMode === 'raw');
 }
 
 function setHexEscapeMode(mode) {
-  if (state.hexEscapeMode === mode) return;
-  state.hexEscapeMode = mode;
-  _updateHexEscFmtRow();
-  updateTextMenu();
+  if (_dispOf().hexEscapeMode === mode) return;
+  _setDisp('hexEscapeMode', mode);
+  _syncDispUi();
   _rerenderHistoryKeepingView();
-  saveSettings();
 }
 
 function setHexEscapeFormat(fmt) {
-  if (state.hexEscapeFormat === fmt) return;
-  state.hexEscapeFormat = fmt;
+  if (_dispOf().hexEscapeFormat === fmt) return;
+  _setDisp('hexEscapeFormat', fmt);
+  _syncDispUi();
   _rerenderHistoryKeepingView();
-  saveSettings();
 }
 
 function _updateHexEscFmtRow() {
   var row = document.getElementById('hexEscFmtRow');
-  if (row) row.classList.toggle('is-hidden', state.hexEscapeMode !== 'show');
+  if (row) row.classList.toggle('is-hidden', _dispOf().hexEscapeMode !== 'show');
 }
 
 function refreshHexDisplay() {
@@ -5096,6 +5998,8 @@ function updateSendInfo() {
 	let text = input ? input.value : '';
 	if (!text) { el.textContent = ''; return; }
 	let byteSize;
+	// 发送框的字节数按当前标签页的编码算（编码已按标签页走）
+	setDisplayContext(_dispOf());
 	if (ss.sendFormat === 'hex') {
 		text = _normalizeHexInput(text);
 		byteSize = Math.floor(text.length / 2);
@@ -5640,10 +6544,19 @@ function updateAutoSaveCheck(on) {
   }
 }
 
+// 菜单里的「启动时自动创建会话」仍是开关：勾上 = 上次选的模式（没选过就是单端），
+// 取消 = none。三选一（单端 / 转发）在设置页里选。
 function toggleAutoCreateSession() {
-  state.autoCreateSession = !state.autoCreateSession;
-  updateAutoCreateCheck(state.autoCreateSession);
+  if (state.autoCreateMode === 'none') {
+    state.autoCreateMode = state._lastCreateMode || 'single';
+  } else {
+    state._lastCreateMode = state.autoCreateMode;
+    state.autoCreateMode = 'none';
+  }
+  updateAutoCreateCheck(state.autoCreateMode !== 'none');
   saveSettings();
+  // 设置页若开着，把下拉同步过来（没开时 refreshSettingsPage 自己会 no-op）
+  if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
 }
 
 function updateAutoCreateCheck(on) {
@@ -5657,6 +6570,7 @@ function updateAutoCreateCheck(on) {
 }
 
 function updateEmptyState() {
+  _syncStatusDispItems();
   // Count real (non-welcome) tabs
   var realTabs = state.tabs.filter(function(t) { return !(t._page && t._page.isWelcome); });
   if (_statusBar) _statusBar.updateDaemon({online: state.daemonOnline, tabsCount: realTabs.length});
@@ -6166,6 +7080,8 @@ function openStlogTab(path, kind) {
     label: stlogBaseName(path),
     type: 'stlog',
     path: path,
+    // .stlog 页也有一份按页的显示设置（编码 / 制表符 / 行尾等），初始取默认值
+    disp: _newTabDisp(),
     portOpen: false,
     mode: 'single',
     source: 'gui',

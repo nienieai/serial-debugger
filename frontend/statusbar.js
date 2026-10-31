@@ -27,7 +27,9 @@ function createStatusDaemon(container) {
 				btn.title = t('btn.stop_daemon', '停止守护进程');
 			} else {
 				dot.className = 'status-dot is-offline';
-				text.textContent = t('status.detecting', '检测中...');
+				// 「未运行」而不是「检测中」：离线态没有任何轮询在跑，写「检测中」
+				// 会让人以为程序卡在探测里。
+				text.textContent = t('status.offline', '未运行');
 				btn.title = t('btn.start_daemon', '启动守护进程');
 			}
 		},
@@ -95,7 +97,8 @@ function createStatusCursor(container) {
 // ---- StatusTabSize: tab size display ----
 function createStatusTabSize(container) {
 	var span = document.createElement('span');
-	span.className = 'stat-item';
+	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	span.className = 'stat-item dsp-item';
 	span.textContent = 'Tab:4';
 	container.appendChild(span);
 
@@ -107,14 +110,15 @@ function createStatusTabSize(container) {
 // ---- StatusEol: line ending display ----
 function createStatusEol(container) {
 	var span = document.createElement('span');
-	span.className = 'stat-item';
+	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	span.className = 'stat-item dsp-item';
 	span.textContent = 'LF';
 	container.appendChild(span);
 
 	return {
 		update: function() {
 			var labels = { lf: 'LF', cr: 'CR', crlf: 'CRLF' };
-			var v = (typeof state !== 'undefined' && state.eolSequence) ? state.eolSequence : 'lf';
+			var v = (typeof _dispOf === 'function' ? _dispOf().eolSequence : 'lf') || 'lf';
 			span.textContent = labels[v] || v.toUpperCase();
 		},
 	};
@@ -123,7 +127,8 @@ function createStatusEol(container) {
 // ---- StatusEncoding: current encoding label ----
 function createStatusEncoding(container) {
 	var span = document.createElement('span');
-	span.className = 'stat-item';
+	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	span.className = 'stat-item dsp-item';
 	span.textContent = 'UTF-8';
 	container.appendChild(span);
 

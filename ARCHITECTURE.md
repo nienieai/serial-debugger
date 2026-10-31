@@ -23,7 +23,7 @@ Go + Wails 跨平台串口调试工具，3 管道 IPC 架构 + 共享内存环�
 - **守护进程**: 单实例（Windows 互斥体 `Global\serial-tool-daemon`），ProcessManager 管理 idle/connected 双状态 + mode(single/forward)，端口双向映射去重，日志跟随语言设置
 - **GUI**: Wails v2，3 管道持久连接 + 双重断连检测，纯事件驱动无轮询，转发模式双端口行+分栏设置，自定义下拉组件（圆角弹出窗+动态高度+箭头旋转），9 语言 UI（中/英/繁/法/西/俄/阿/日/韩）
 - **CLI**: 交互模式用 3 管道，命令行模式用 CallOnce 临时管道，34 条命令（含 declare、multistr、history-* 命令族）
-- **MCP**: Model Context Protocol over stdio，28 个工具覆盖全部功能（含 serial_declare、serial_multistr_save/load/status）
+- **MCP**: Model Context Protocol over stdio，29 个工具覆盖全部功能（含 serial_declare、serial_rename、serial_multistr_save/load/status）
 
 ### 系统架构图
 
@@ -196,14 +196,19 @@ sequenceDiagram
 {"event":"rx", "params":{"processId":"1","hex":"48656C6C6F","timestamp":"13:00:06.123"}}
 ```
 
-### 2.4.1 协议版本协商（v0.7.0）
+### 2.4.1 协议版本协商（v0.7.0，0.8.4 起改为语义版本）
 
 守护进程是机器级单例（`Global\serial-tool-daemon` 互斥体持有），而 GUI / CLI / MCP / 独立软件是各自独立升级的可执行文件，因此「新客户端 + 旧守护进程」是常态。协议层因此带有版本号：
 
-- `protocol.ProtocolVersion` 是当前协议版本常量。**任何破坏兼容性的改动都必须递增它**（方法改名或增删、参数形状变化、共享内存条目布局变化）。
+- `protocol.ProtocolVersion` 是当前协议版本常量，形如 **`0.2.0`**（MAJOR.MINOR.PATCH 字符串；0.8.4 之前是裸整数 `1`，那个号说不出「这次改动有多严重」）。
+  - **MINOR**：方法增删或改名、参数形状变化、共享内存条目布局变化 —— 即任何会让新旧两端互不理解的变化。
+  - **PATCH**：线路字节不变的修正（内部行为、日志、错误文案）。
+  - **MAJOR**：同一个号里出现两套不兼容语义时的兜底，目前用不到。
+- **兼容判定只看 MAJOR.MINOR**（`protocol.DaemonInfo.Compatible()`）：`0.2.0` 客户端可以连 `0.2.7` 守护进程，换 `0.3.x` 或 `1.x` 才拒绝。打一个守护进程补丁不该把所有客户端踢下线。任一侧的号解析不出来（例如旧守护进程回的整数 `1`）一律按不兼容处理。
 - 守护进程通过 `daemon.info` 返回 `{version, protocolVersion, pid, startTime, uptimeSec}`；`status` 结果中也带上 `version` 与 `protocolVersion`。
-- 客户端建立会话后**立即**调用 `daemon.info` 核对：协议号不一致、或对端版本过旧不认识该方法时，明确报错并给出可操作提示，而不是带病工作。
+- 客户端建立会话后**立即**调用 `daemon.info` 核对：不兼容、或对端版本过旧不认识该方法时，明确报错并给出可操作提示，而不是带病工作。旧守护进程回整数协议号时，客户端解码失败 —— 报错会点明「可能是旧版守护进程」而不是含糊的「解析失败」。
 - `client.StartDaemon()` 在发现版本不一致时会关闭旧守护进程、**等待它真正退出**（新实例靠 Global 互斥体判断单例，旧实例未释放锁时新实例会以「已在运行」退出而静默失败），再启动新实例，返回 `"restarted"`。
+- GUI 的「关于」页显示 `IPC <版本>`，值来自绑定 `GetProtocolVersion()`，不再在前端硬编码（以前写死 `IPC 1`，与守护进程实际报的号是两份数据，必然漂移）。
 
 ### 2.5 IPC 方法
 
@@ -219,7 +224,7 @@ sequenceDiagram
 | `ports` | — | `{"ports":[...]}` |
 | `ports.refresh` | — | `{"ports":[...]}` + 变化时广播 |
 | `ports.probe` | `ports? baudRates? rules? configPath?` | `{"results":[{port,baud,rule,description}]}` |
-| `process.create` | `mode? port? baud? ... portB? baudB? ... connect?` | `{"processId","connected","success"}` — `connect: false` 声明配置不打开端口 |
+| `process.create` | `mode? port? baud? ... portB? baudB? ... connect? name?` | `{"processId","name","connected","success"}` — `connect: false` 声明配置不打开端口；`name` 是线程名（留空用自动名） |
 | `process.destroy` | `processId` | `{"success"}` |
 | `process.connect` | `processId port baud? ...` | `{"success"}` |
 | `process.disconnect` | `processId` | `{"success"}` |
@@ -229,7 +234,8 @@ sequenceDiagram
 | `process.unwatch` | `processId` | `{"success"}` — 主动停止观察指定进程，移除查看计数 |
 | `process.watched` | — | `{"processIds":[...]}` — 查询当前 session 正在查看的进程 ID 列表 |
 | `forward.create` | `portA baudA portB baudB ...` | `{"processId","success"}`（向后兼容，内部转 process.create） |
-| `process.list` | — | `{"processes":[{processId,status,mode,...}]}` |
+| `process.rename` | `processId name` | `{"success","name"}` — 改线程名；`name` 空串退回自动名（端口名 / `会话 #N`）；工程会话会写回 `settings.json` 的 `label`（v0.8.4） |
+| `process.list` | — | `{"processes":[{processId,name,nameCustom,status,mode,...}]}` |
 | `session.send` | `processId data format` | `{"success"}`（异步入队） |
 | `session.history` | `processId limit? beforeTsMs? sameTsSkip?` | `{"history":[...],"sharedName","hasMore","older","oldestTsMs","oldestTs","historyFile"?,"ringDrops"?}` — `limit<=0` 整取（老行为）；`limit>0` 只回最后一页，`beforeTsMs`+`sameTsSkip` 是往更早翻的游标（v0.7.5.5） |
 | `session.stats` | `processId` | `{"stats":{...}}` |
@@ -439,8 +445,9 @@ var All = []Method{ Register, Subscribe, ..., ProcessCreate, ... }
 | `process.switch` | pm.SwitchPort — 关闭旧端口→打开新端口，保留进程 |
 | `process.setmode` | pm.SetMode — idle 状态下切换 single ↔ forward |
 | `process.watch` | pm.AddViewer — 记录客户端查看进程，切换/断开自动清理 |
-| `forward.create` | pm.ForwardCreate — 向后兼容，内部转 Create("forward", ...) |
-| `process.list` | pm.List() — 返回 mode 字段 |
+| `forward.create` | pm.CreateNamed("forward", ...) — 与 process.create 的 forward 分支同一条路 |
+| `process.list` | pm.List() — 返回 mode 与线程名 name / nameCustom |
+| `process.rename` | pm.Rename(id, name) — 名字按进程存；工程会话写回 settings.json 的 label |
 | `session.send` | pm.Send → sendCh 异步入队 |
 | `session.history` | pm.GetHistoryPage → 返回 sharedName + 一页数据 + hasMore/游标信息（limit<=0 时整取） |
 | `session.stats` | pm.GetStats |
@@ -1088,7 +1095,8 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `ports` | — | `ports`（缓存，不刷新） |
 | `refresh` | — | `ports.refresh` |
 | `probe` | `[ports...] [--config <path>]` | `ports.probe`（设备端口探测） |
-| `create` | `[port] [baud] [--mode forward] [--portB ...]` | `process.create` |
+| `create` | `[port] [baud] [--mode forward] [--portB ...] [--name <名称>]` | `process.create` |
+| `rename` | `<processId> [新名称]` | `process.rename`（名称留空 = 恢复自动名） |
 | `declare` | `<port> [baud] [--mode forward] [--portB ...]` | `process.create`（`connect:false` 声明配置，不打开串口） |
 | `open` | `<port> [baud]` | `process.create`（带 port） |
 | `connect` | `<pid> <port> [baud]` | `process.connect` |
@@ -1110,7 +1118,7 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `history-new` | `[pid]` | `history.new`（为进程新建历史文件） |
 | `history-detach` | `[pid]` | `history.detach`（分离历史文件） |
 | `stats` | `[pid]` | `session.stats` |
-| `sessions` | — | `process.list`（idle+connected） |
+| `sessions` | — | `process.list`（idle+connected，含线程名 name） |
 | `monitor` | `[timeout]` | 持久 DaemonClient 监听事件（3 管道） |
 | `threads` | — | `threads` |
 | `goroutines` | — | `goroutines` |
@@ -1179,7 +1187,7 @@ IPC 摘要：`来源:clientId rN 方法 → 结果 (耗时)`，`status` 和 `pin
 }
 ```
 
-### 6.3 28 个工具
+### 6.3 29 个工具
 
 | 工具 | 说明 |
 |------|------|
