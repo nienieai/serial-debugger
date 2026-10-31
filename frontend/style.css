@@ -245,11 +245,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 .header {
   display: flex; justify-content: space-between; align-items: center;
   padding: 0 4px;
-  /* 毛玻璃：底色半透明，菜单栏后面的内容（主题背景图）透出来并被模糊。
-     没有背景图的纯色主题下就是「比 bg2 略透一点」，不会变难读。 */
+  /* 半透明底，但**不加** backdrop-filter。
+     backdrop-filter 会把元素变成 "backdrop root"：它内部后代的 backdrop-filter
+     只能采样这个元素自己的内容。下拉菜单是 .header 的后代（position:absolute
+     只是溢出到 header 外面），一旦 header 也有 backdrop-filter，菜单采样到的
+     就是那 26px 高的菜单栏本身 → 模糊出来是空的，表现成「纯透明、背后文字
+     原样透过来」。标签悬浮卡 c-tabpop 挂在 body 下没有这层祖先，所以它正常。 */
   background: var(--menu-glass-bg);
-  -webkit-backdrop-filter: var(--menu-glass-blur);
-  backdrop-filter: var(--menu-glass-blur);
   border-bottom: 1px solid var(--menu-glass-border);
   flex-shrink: 0; user-select: none; height: 26px;
   /* 菜单下拉必须压在标签栏和页面之上。header 自身没有定位时，下拉的 z-index:100
