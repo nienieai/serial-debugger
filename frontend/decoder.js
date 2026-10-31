@@ -205,6 +205,7 @@ function hexToText(hex) {
 
 // ---- tolerant UTF-8 decoder ----
 function _decodeUTF8Tolerant(bytes) {
+  var d = _d();
   const out = [];
   let i = 0;
   while (i < bytes.length) {
@@ -259,6 +260,7 @@ function _decodeUTF8Tolerant(bytes) {
 
 // ---- tolerant GBK decoder ----
 function _decodeGBKTolerant(bytes) {
+  var d = _d();
   const out = [];
   let i = 0;
   while (i < bytes.length) {
@@ -338,6 +340,7 @@ function isAsciiText(text) {
 }
 
 function bytesToHexStr(bytes) {
+  var d = _d();
   return Array.from(bytes).map(b => b.toString(16).toUpperCase().padStart(2, '0')).join('');
 }
 
