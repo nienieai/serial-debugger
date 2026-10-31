@@ -507,7 +507,7 @@ function buildSettingsPage() {
 			  t('settings.tab_sub_c', '保存 · 客户端') ],
 			state.tabSubLine || 'a',
 			function(v) { _tabSet('tabSubLine', v); })));
-	bTabLayout.appendChild(_row(t('settings.tab_name_max', '名字最大宽度'),
+	bTabLayout.appendChild(_row(t('settings.tab_name_max', '标签名最大宽度'),
 		(function() {
 			// 输入框右边挂一个 px：单看「170」分不清是像素还是字符数
 			var wrap = document.createElement('span');
@@ -533,18 +533,18 @@ function buildSettingsPage() {
 		})()));
 	panelTabs.appendChild(bTabLayout);
 
-	var bTabInfo = _bubble(t('settings.bubble_tab_info', '标签上显示什么'));
-	bTabInfo.appendChild(_row(t('settings.tab_show_clients', '显示客户端数量'),
+	var bTabInfo = _bubble(t('settings.bubble_tab_info', '标签信息'));
+	bTabInfo.appendChild(_row(t('settings.tab_show_clients', '客户端数量'),
 		_buildToggle(function() { _tabSet('tabShowClients', !state.tabShowClients); }, state.tabShowClients !== false)));
-	bTabInfo.appendChild(_row(t('settings.tab_client_style', '客户端数字画法'),
+	bTabInfo.appendChild(_row(t('settings.tab_client_style', '客户端数字样式'),
 		_buildSelect(['source', 'total'],
 			[ t('settings.tab_cli_source', '分来源（GUI/CLI/MCP 三色）'),
 			  t('settings.tab_cli_total', '总数') ],
 			state.tabClientStyle || 'source',
 			function(v) { _tabSet('tabClientStyle', v); })));
-	bTabInfo.appendChild(_row(t('settings.tab_show_dot', '显示状态点'),
+	bTabInfo.appendChild(_row(t('settings.tab_show_dot', '状态点'),
 		_buildToggle(function() { _tabSet('tabShowDot', !state.tabShowDot); }, state.tabShowDot !== false)));
-	bTabInfo.appendChild(_row(t('settings.tab_collapse', '拥挤时先收起'),
+	bTabInfo.appendChild(_row(t('settings.tab_collapse', '拥挤时的收起顺序'),
 		_buildSelect(['sub', 'clients'],
 			[ t('settings.tab_collapse_sub', '先收第二行'),
 			  t('settings.tab_collapse_clients', '先收客户端数字') ],
