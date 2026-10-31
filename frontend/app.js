@@ -1,3 +1,30 @@
+// ---- 数据帧通道（per-window Stream）----
+//
+// 为什么不用事件：v3 的 window.EmitEvent 只是设 Sender 后走全局广播，做不了
+// 定向（见 app.go emitSession 的注释）。Stream 是每窗口一条连接，天然定向，
+// 还自带背压与窗口关闭清理。所有窗口（主窗口、会话窗口、probe）都连同一个
+// 名为 "frames" 的 stream，Go 侧按窗口名投递。
+function connectFrameStream(onFrame) {
+  var api = window.__wailsApi;
+  if (!api || !api.JSONStream) {
+    if (window.console) console.warn('[frames] 运行时不提供 JSONStream');
+    return null;
+  }
+  var sock = api.JSONStream('frames');
+  sock.onmessage = function (ev) {
+    var m = ev && ev.data;
+    if (!m || !m.e) return;
+    if (onFrame) onFrame(m.e, m.d);
+  };
+  sock.onclose = function () {
+    if (window.console) console.warn('[frames] 通道已关闭');
+  };
+  sock.onerror = function (err) {
+    if (window.console) console.warn('[frames] 通道错误', err);
+  };
+  return sock;
+}
+
 // ---- 多窗口原型 ----
 //
 // 独立窗口用 ?w=probe 打开（Go 侧见 app.go 的 OpenProbeWindow）。
@@ -46,15 +73,13 @@ function initProbeWindow() {
     window.wails.Events.On('probe-ping', function (ev) {
       set('probeMsg', (ev && ev.data) || '(空)');
     });
-    // 数据帧在 v3 里是全局广播（没有 per-window 定向），所以这里必然收到
-    // 别的会话的帧 —— 这不是 bug，是 v3 事件系统的限制。真正的定点投递要用
-    // Stream，见 app.go emitSession 的注释。
-    var seen = 0;
-    window.wails.Events.On('rx', function () {
-      seen++;
-      set('probeLeak', '收到 ' + seen + ' 帧（广播，预期内）');
+    // 定向验证：Stream 只往 main 和 session-<sid> 投递，probe 不该收到任何帧
+    var leaked = 0;
+    connectFrameStream(function () {
+      leaked++;
+      set('probeLeak', '收到 ' + leaked + ' 帧（不该发生）');
     });
-    set('probeLeak', '0 帧');
+    set('probeLeak', '0 帧（正常）');
   }
 }
 
@@ -107,23 +132,13 @@ function initSessionWindow(sid) {
     statEl.textContent = '已收 ' + count + ' 帧';
   }
 
-  if (window.wails && window.wails.Events) {
-    // v3 的事件是全局广播，没有 per-window 定向（见 app.go emitSession 的注释），
-    // 所以这里必须按 payload 里的 processId 自己过滤，只处理本窗口这个会话的。
-    function mine(d) {
-      return d && String(d.processId) === String(sid);
-    }
-    window.wails.Events.On('rx', function (ev) {
-      var d = (ev && ev.data) || {};
-      if (!mine(d)) return;
-      append('RX ' + (d.text || d.hex || JSON.stringify(d).slice(0, 120)));
-    });
-    window.wails.Events.On('tx', function (ev) {
-      var d = (ev && ev.data) || {};
-      if (!mine(d)) return;
-      append('TX ' + (d.text || d.hex || JSON.stringify(d).slice(0, 120)));
-    });
-  }
+  // 数据帧走 Stream：Go 侧只往「main」和「session-<sid>」两个连接投递，
+  // 所以这里收到的应该只有本窗口这个会话的帧。
+  connectFrameStream(function (name, d) {
+    if (name !== 'rx' && name !== 'tx') return;
+    if (d && d.processId !== undefined && String(d.processId) !== String(sid)) return;
+    append((name === 'rx' ? 'RX ' : 'TX ') + (d.text || d.hex || JSON.stringify(d).slice(0, 120)));
+  });
 
   document.getElementById('sessSend').addEventListener('click', function () {
     var input = document.getElementById('sessInput');
@@ -2290,10 +2305,6 @@ window.addEventListener('DOMContentLoaded', () => {
   renderTabs();
 
   try {
-    window.runtime.EventsOn('rx', (data) => appendLine('rx', data));
-    window.runtime.EventsOn('tx', (data) => appendLine('tx', data));
-    window.runtime.EventsOn('1', (data) => appendLine('1', data));
-    window.runtime.EventsOn('2', (data) => appendLine('2', data));
     window.runtime.EventsOn('ports-changed', () => refreshPorts());
     window.runtime.EventsOn('ports-list', (data) => updatePortList(data.ports));
     window.runtime.EventsOn('daemon-offline', () => onDaemonGone('offline'));
@@ -2316,6 +2327,13 @@ window.addEventListener('DOMContentLoaded', () => {
       else alert('probe: ' + data);
     });
   } catch {}
+
+  // 数据帧走 Stream（per-window 定向），不再走事件广播
+  connectFrameStream(function (name, d) {
+    if (name === 'rx' || name === 'tx' || name === '1' || name === '2') {
+      appendLine(name, d);
+    }
+  });
 
   initDividerDrag();
   startClientsRefresh();

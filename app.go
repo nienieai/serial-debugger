@@ -42,6 +42,14 @@ type App struct {
 	winMu   sync.Mutex
 	windows map[string]*application.WebviewWindow
 
+	// 数据帧的 per-window 通道：窗口名 → Stream 连接。
+	//
+	// 为什么不用事件：v3 的 window.EmitEvent 只是设 Sender 后走全局广播
+	// （见 emitSession 的注释），做不了定向。Stream 是每窗口一条连接，
+	// 天然定向，还自带背压和窗口关闭时的清理。
+	streamMu    sync.Mutex
+	streamConns map[string]*application.StreamConn
+
 	eventConn *client.DaemonClient
 	stopping  bool
 	checking  bool
@@ -212,24 +220,97 @@ func (a *App) WindowNames() []string {
 	return out
 }
 
-// emitSession 发一条会话数据帧。
+// emitSession 发一条会话数据帧 —— 走 Stream，按窗口定向。
 //
-// ⚠️ v3 的事件系统**没有 per-window 定向投递**：window.EmitEvent 只是把
-// event.Sender 设成窗口名，然后照样走全局广播（见 webview_window.go:248-261，
-// 最终是 EventManager.dispatch 遍历 wailsEventListeners）。实测：对一个窗口
-// EmitEvent，所有窗口都收到。
+// ⚠️ 这里**不能**用事件系统。v3 的 window.EmitEvent 只是把 event.Sender 设成
+// 窗口名，然后照样走全局广播（webview_window.go:248-261 → EventManager.dispatch
+// 遍历全局 wailsEventListeners）。实测：对一个窗口 EmitEvent，所有窗口都收到；
+// 按「main 发一次 + 会话窗口发一次」写，每个窗口就收到两份。
 //
-// 所以这里只能广播**一次**，由各窗口按 payload 里的 processId 自己过滤。
-// 第一版按「main 发一次 + 会话窗口发一次」写，结果是每个窗口都收到两份。
-//
-// 真正的定点投递要用 v3 的 Stream（per-window 连接、背压、窗口关闭自动清理），
-// 那是阶段 2 的事；在那之前数据帧走广播 + 前端过滤。
+// 所以数据帧改走 v3 的 Stream：每个窗口一条连接（HandleStream 的 handler 会
+// 拿到 StreamConn，连 c.Window() 都能查到），天然定向、自带背压、窗口关闭时
+// 连接跟着断 —— 正好是串口数据帧需要的形态。
 func (a *App) emitSession(sid, name string, data ...any) {
+	var payload any
+	switch len(data) {
+	case 0:
+	case 1:
+		payload = data[0]
+	default:
+		payload = data
+	}
+	frame := map[string]any{"e": name, "d": payload}
+
+	// 主窗口要维护所有标签的历史、统计、速率
+	a.sendFrame("main", frame)
+	// 绑定这个会话的独立窗口
+	if sid != "" {
+		a.sendFrame("session-"+sid, frame)
+	}
+}
+
+// sendFrame 把一帧交给指定窗口的 Stream 连接。
+//
+// 用 TrySend（非阻塞）而不是 Send：串口全速时如果某个窗口消费不过来，
+// 宁可丢它的帧也不能把 daemon 的事件循环卡住 —— 主窗口也会跟着卡。
+func (a *App) sendFrame(windowName string, frame map[string]any) {
+	a.streamMu.Lock()
+	conn := a.streamConns[windowName]
+	a.streamMu.Unlock()
+	if conn == nil {
+		return
+	}
+	b, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
+	// ErrStreamFull 表示该窗口读得慢，丢这一帧即可
+	_ = conn.TrySend(b)
+}
+
+func (a *App) setStreamConn(name string, c *application.StreamConn) {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streamConns == nil {
+		a.streamConns = make(map[string]*application.StreamConn)
+	}
+	a.streamConns[name] = c
+}
+
+func (a *App) clearStreamConn(name string, c *application.StreamConn) {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streamConns[name] == c {
+		delete(a.streamConns, name)
+	}
+}
+
+// setupStreams 注册数据帧的 Stream。每个窗口连上来时开一个 handler goroutine，
+// 把连接登记到「窗口名 → 连接」表里，供 emitSession 定向投递。
+func (a *App) setupStreams() {
 	if a.wailsApp == nil {
 		return
 	}
-	_ = sid // 保留参数：换成 Stream 实现时它就是投递目标
-	a.wailsApp.Event.Emit(name, data...)
+	a.wailsApp.HandleStream("frames", func(c *application.StreamConn) {
+		name := ""
+		if w := c.Window(); w != nil {
+			name = w.Name()
+		}
+		a.setStreamConn(name, c)
+		log.Printf("[stream] 数据帧通道已连接: %q", name)
+		defer func() {
+			a.clearStreamConn(name, c)
+			_ = c.Close()
+			log.Printf("[stream] 数据帧通道断开: %q", name)
+		}()
+		// 这个 goroutine 的生命周期就是这个连接的生命周期：一直读到对端关闭
+		// （页面刷新、窗口关闭、应用退出都会让它返回）。
+		for {
+			if _, err := c.Receive(); err != nil {
+				return
+			}
+		}
+	})
 }
 
 // OpenSessionWindow 把一个会话开成独立窗口（多窗口原型）。

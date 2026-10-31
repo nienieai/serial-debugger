@@ -9,7 +9,7 @@
 // 无构建链时 bindings 是和前端一起提交的，不参与构建；ID 会随 Go 方法增减而变，
 // 忘记重新生成就会静默调到错误的方法。名字不会。
 import * as AppService from './bindings/github.com/nienieai/serial-debugger/app.js';
-import { Events, Clipboard, Application } from '/wails/runtime.js';
+import { Events, Clipboard, Application, Stream, JSONStream } from '/wails/runtime.js';
 
 window.go = window.go || {};
 window.go.main = window.go.main || {};
@@ -51,6 +51,17 @@ window.runtime.Quit = function () {
 if (window.console) {
   console.log('[wails3] bindings 已挂载，方法数: ' + Object.keys(AppService).length);
 }
+
+// v3 的 Stream / JSONStream 用来做 per-window 定向数据帧（事件系统做不到，
+// 见 app.go emitSession 的注释）。window.wails 是只读 getter，不能往上加东西，
+// 所以单独开一个命名空间给需要定向通道的脚本用。
+window.__wailsApi = {
+  Stream: Stream,
+  JSONStream: JSONStream,
+  Events: Events,
+  Clipboard: Clipboard,
+  Application: Application
+};
 
 // 广播一个「bindings 就绪」信号。
 //

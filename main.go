@@ -65,6 +65,7 @@ func main() {
 	})
 
 	svc.attach(wailsApp, win)
+	svc.setupStreams()
 
 	// 拖入 .stlog：v3 由 Go 侧收原生 drop 事件再转给前端。
 	// v2 的等价物是前端 runtime.OnFileDrop，v3 没有对应接口。
