@@ -1,0 +1,36 @@
+{
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {}
+      }
+    }
+  },
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": "../assets/icon-gui.ico"
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "0.0.0.0",
+          "product_version": "0.0.0.0"
+        },
+        "info": {
+          "0409": {
+            "CompanyName": "nienieai",
+            "FileDescription": "串口调试工具 图形界面",
+            "FileVersion": "0.0.0.0",
+            "InternalName": "serial-gui",
+            "LegalCopyright": "Copyright (c) 2026 nienieai (Apache License 2.0)",
+            "OriginalFilename": "serial-gui.exe",
+            "ProductName": "串口调试工具",
+            "ProductVersion": "0.0.0.0"
+          }
+        }
+      }
+    }
+  }
+}

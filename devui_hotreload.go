@@ -24,7 +24,6 @@ package main
 // 文件，表现为“改了没生效”。所以这里显式关缓存。
 
 import (
-	"context"
 	"fmt"
 	"hash/fnv"
 	"io/fs"
@@ -34,8 +33,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // uiFrontendEnv 可用环境变量显式指定前端目录；不设时按 exe 同级、工作目录
@@ -62,7 +60,7 @@ func uiAssets() fs.FS {
 }
 
 // uiAssetMiddleware 关掉 WebView2 的缓存。
-func uiAssetMiddleware() assetserver.Middleware { return uiNoStore }
+func uiAssetMiddleware() application.Middleware { return uiNoStore }
 
 func uiNoStore(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,8 +76,8 @@ func uiNoStore(next http.Handler) http.Handler {
 //
 // 去抖：发现差异时先不刷新，把这一拍当成“还在写”，等下一拍确认目录已经稳定
 // （与上次记录一致）才真正重载。这样一次保存同时改动多个文件只会刷新一次。
-func uiStartHotReload(ctx context.Context) {
-	if ctx == nil {
+func uiStartHotReload(win *application.WebviewWindow) {
+	if win == nil {
 		return
 	}
 	dir, err := uiFrontendDir()
@@ -95,22 +93,18 @@ func uiStartHotReload(ctx context.Context) {
 		ticker := time.NewTicker(uiPollInterval)
 		defer ticker.Stop()
 		pending := false
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				cur := uiScanDir(dir)
-				if cur != last {
-					last = cur
-					pending = true
-					continue
-				}
-				if pending {
-					pending = false
-					log.Printf("[hotreload] 前端已变更，重载窗口")
-					runtime.WindowReloadApp(ctx)
-				}
+		for range ticker.C {
+			cur := uiScanDir(dir)
+			if cur != last {
+				last = cur
+				pending = true
+				continue
+			}
+			if pending {
+				pending = false
+				log.Printf("[hotreload] 前端已变更，重载窗口")
+				// v2 是 runtime.WindowReloadApp(ctx)，v3 是窗口对象自己的方法。
+				win.Reload()
 			}
 		}
 	}()

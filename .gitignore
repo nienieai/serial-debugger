@@ -3,6 +3,10 @@ build/bin/
 build/bin-linux/
 *.exe
 
+# Wails v3 构建在仓库根生成的 GUI 资源对象（Taskfile 用后即删，
+# 失败中断时会残留；daemon/ 和 cmd/*/ 下的 syso 是提交物，别一起忽略）
+/rsrc_windows_*.syso
+
 # 运行时生成数据
 settings.ini
 history/

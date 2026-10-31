@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,13 +22,19 @@ import (
 	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/version"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
 
 type App struct {
-	ctx       context.Context
+	ctx context.Context
+
+	// v3 的入口对象：wailsApp 用来发事件 / 弹对话框 / 退出，window 是主窗口。
+	// 多窗口阶段（方案里的阶段 2/3）这两个会扩成窗口注册表，现在先固定单窗口。
+	wailsApp *application.App
+	window   *application.WebviewWindow
+
 	eventConn *client.DaemonClient
 	stopping  bool
 	checking  bool
@@ -85,7 +92,7 @@ func (td *tabDecodeUnit) run() {
 			enc := td.encoding
 			td.encMu.RUnlock()
 			env.params["segments"] = decodeSegments(hex, enc)
-			runtime.EventsEmit(td.a.ctx, env.event, env.params)
+			td.a.emit(env.event, env.params)
 		case <-td.quit:
 			return
 		}
@@ -102,11 +109,64 @@ func NewApp() *App {
 	return &App{}
 }
 
-func (a *App) Startup(ctx context.Context) {
+// attach 把 v3 的 application / window 交给 service。
+// 必须在 application.New 和 Window.NewWithOptions 之后、app.Run() 之前调用。
+func (a *App) attach(wailsApp *application.App, win *application.WebviewWindow) {
+	a.wailsApp = wailsApp
+	a.window = win
+}
+
+// emit 是 v2 runtime.EventsEmit 的替身。
+//
+//	v2: runtime.EventsEmit(a.ctx, name, data...)
+//	v3: app.Event.Emit(name, data...)      —— 广播到所有窗口
+//
+// 多窗口阶段这里要按「这个事件该给谁」分流（数据帧只发给它所属的会话窗口，
+// 见方案里的事件归属表）。现在只有一个窗口，先一律广播。
+func (a *App) emit(name string, data ...any) {
+	if a.wailsApp == nil {
+		return
+	}
+	a.wailsApp.Event.Emit(name, data...)
+}
+
+// quit 是 v2 runtime.Quit 的替身。
+func (a *App) quit() {
+	if a.wailsApp == nil {
+		return
+	}
+	a.wailsApp.Quit()
+}
+
+// Log 让前端把诊断信息打到 Go 侧 stderr。
+//
+// production 构建不开 DevTools（v3 的 inspector 要 debug 模式），前端 console
+// 在发布版里等于黑洞；排查界面问题时用这个把关键状态带出来。
+func (a *App) Log(msg string) {
+	log.Printf("[js] %s", msg)
+}
+
+// onFilesDropped 把原生拖放的文件路径转给前端。
+// v3 没有前端侧的 OnFileDrop，原生 drop 只能在 Go 侧收。
+func (a *App) onFilesDropped(event *application.WindowEvent) {
+	files := event.Context().DroppedFiles()
+	if len(files) == 0 {
+		return
+	}
+	target := ""
+	if details := event.Context().DropTargetDetails(); details != nil {
+		target = details.ElementID
+	}
+	a.emit("files-dropped", map[string]any{"files": files, "target": target})
+}
+
+// ServiceStartup 是 v3 的 service 生命周期钩子（v2 里叫 Startup）。
+func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	a.ctx = ctx
 	// 守护进程就绪通知：阻塞等 OS 级「管道可连接」，就绪后立刻推给前端，
 	// 前端收到就能马上连，不必等 checkOffline 的 1s 轮询。
 	go a.watchDaemonReady(ctx)
+	return nil
 }
 
 // daemonReadyRepeat 是「守护进程就绪」事件的重发间隔（见 watchDaemonReady）。
@@ -131,24 +191,26 @@ func (a *App) watchDaemonReady(ctx context.Context) {
 			continue
 		}
 		// 端点从不可用变成可用：立刻通知，不用等下一个重发周期
-		runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
+		a.emit("daemon-ready", map[string]any{})
 		for ctx.Err() == nil {
 			// 端点消失（守护进程退出）就回外层，等它下次就绪时**立即**再通知
 			if !pipe.WaitReady(300 * time.Millisecond) {
 				break
 			}
 			time.Sleep(daemonReadyRepeat)
-			runtime.EventsEmit(ctx, "daemon-ready", map[string]any{})
+			a.emit("daemon-ready", map[string]any{})
 		}
 	}
 }
 
-func (a *App) Shutdown(ctx context.Context) {
+// ServiceShutdown 是 v3 的 service 退出钩子（v2 里叫 Shutdown）。
+func (a *App) ServiceShutdown() error {
 	a.StopAllTabDecoders()
 	if a.eventConn != nil {
 		a.eventConn.Close()
 		a.eventConn = nil
 	}
+	return nil
 }
 
 // ---- 关闭流程 ----
@@ -164,7 +226,18 @@ func (a *App) Shutdown(ctx context.Context) {
 // （wails 的 Frontend.Quit 里是 `if OnBeforeClose(...) { return }`，
 // 见 desktop/windows/frontend.go:453）。第一版按「true = 放行」写反了，
 // 症状是关窗口直接退、确认框根本不弹。
-func (a *App) BeforeClose(ctx context.Context) bool {
+func (a *App) onWindowClosing(event *application.WindowEvent) {
+	if a.shouldPreventClose() {
+		event.Cancel()
+	}
+}
+
+// shouldPreventClose 决定这次关窗口要不要先拦下来。
+//
+// v2 里它的返回值是 OnBeforeClose 的 **prevent** 语义（true = 拦住，见
+// wails v2 的 desktop/windows/frontend.go:453 `if OnBeforeClose(...) { return }`）。
+// v3 换成窗口事件 + event.Cancel()，语义一样：调 Cancel 就是拦住。
+func (a *App) shouldPreventClose() bool {
 	a.closeMu.Lock()
 	forced := a.forceQuit
 	a.closeMu.Unlock()
@@ -180,7 +253,7 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 		return false
 	case closeConfirm:
 		// 拦住这次关闭，交给前端弹框；用户点确定后由 QuitApp 再退一次。
-		runtime.EventsEmit(a.ctx, "app-close-confirm", map[string]any{"mode": cfg.ShutdownDaemonMode})
+		a.emit("app-close-confirm", map[string]any{"mode": cfg.ShutdownDaemonMode})
 		return true
 	default:
 		return false
@@ -228,7 +301,7 @@ func (a *App) QuitApp() {
 	a.forceQuit = true
 	a.closeMu.Unlock()
 	a.stopDaemonQuiet()
-	runtime.Quit(a.ctx)
+	a.quit()
 }
 
 // stopDaemonQuiet 与 StopDaemon 走同一条 IPC 路径，但不做那个 3 秒的 stopping
@@ -280,11 +353,11 @@ func (a *App) onDaemonDisconnected(ec *client.DaemonClient) {
 		// 告诉前端「又连上了」。这次重连是 Go 侧发起的，前端并不知道连接对象换了；
 		// 而 daemon 重启前的 daemon-shutdown 广播已经让前端进了离线态（还清掉了
 		// 会话页），不通知的话界面会一直停在离线，等下一次 daemon-ready 重发才醒。
-		runtime.EventsEmit(a.ctx, "daemon-ready", map[string]any{})
+		a.emit("daemon-ready", map[string]any{})
 		return
 	}
 
-	runtime.EventsEmit(a.ctx, "daemon-offline", map[string]any{"reason": "heartbeat"})
+	a.emit("daemon-offline", map[string]any{"reason": "heartbeat"})
 }
 
 // ---- daemon lifecycle ----
@@ -605,6 +678,22 @@ func (a *App) GetSessions() []map[string]any {
 		pmap := p.(map[string]any)
 		status, _ := pmap["status"].(string)
 		entry := map[string]any{"id": pmap["processId"], "status": status}
+		// 线程名 / 名字来源 / 工程目录 / 显示设置：标签栏直接用这些
+		// （见前端 _tabNameOf、_applyDaemonSessionToTab）。
+		// 这几项以前漏在这份白名单外面，后果是所有标签都退化成
+		// _tabNameOf 的最后一行兜底 "#<id>"，界面上显示成 "#0" 而不是「会话 #1」。
+		if v, ok := pmap["name"]; ok {
+			entry["name"] = v
+		}
+		if v, ok := pmap["nameCustom"]; ok {
+			entry["nameCustom"] = v
+		}
+		if v, ok := pmap["sessionPath"]; ok {
+			entry["sessionPath"] = v
+		}
+		if v, ok := pmap["display"]; ok {
+			entry["display"] = v
+		}
 		if viewers, ok := pmap["viewers"]; ok {
 			entry["viewers"] = viewers
 		}
@@ -1493,13 +1582,11 @@ func (a *App) ReadStlogFrames(path string, offset, limit int) (map[string]any, e
 // ReadStlogFrames 里：对话框是用户主动触发的动作，"新建会话 → 从文件打开"
 // 和拖入共用同一条打开路径。
 func (a *App) PickStlogFile() (string, error) {
-	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "打开 .stlog 会话文件",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "会话文件 (*.stlog)", Pattern: "*.stlog"},
-			{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
-		},
-	})
+	return a.wailsApp.Dialog.OpenFile().
+		SetTitle("打开 .stlog 会话文件").
+		AddFilter("会话文件 (*.stlog)", "*.stlog").
+		AddFilter("所有文件 (*.*)", "*.*").
+		PromptForSingleSelection()
 }
 
 // PickStlogDir 弹系统目录对话框选一个工程目录，返回绝对路径。
@@ -1508,9 +1595,11 @@ func (a *App) PickStlogFile() (string, error) {
 // 走 PickStlogFile。两个对话框分开是因为 Windows 的文件对话框选不了目录。
 // 用户取消时返回空串（不是错误）。
 func (a *App) PickStlogDir() (string, error) {
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "打开工程目录",
-	})
+	return a.wailsApp.Dialog.OpenFile().
+		SetTitle("打开工程目录").
+		CanChooseFiles(false).
+		CanChooseDirectories(true).
+		PromptForSingleSelection()
 }
 
 // ExportStlogText 弹保存对话框，把 .stlog 导成"一行一帧"的纯文本。
@@ -1523,13 +1612,15 @@ func (a *App) ExportStlogText(path string) (map[string]any, error) {
 		return nil, err
 	}
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	out, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "导出 .stlog 文本",
-		DefaultFilename: base + ".txt",
-		Filters: []runtime.FileFilter{
+	// 注意：v3 的 SaveFileDialogStruct 没有 SetTitle（OpenFile 有），
+	// 标题只能通过 SaveFileWithOptions 传 —— API 不对称，别照着 OpenFile 写。
+	out, err := a.wailsApp.Dialog.SaveFileWithOptions(&application.SaveFileDialogOptions{
+		Title:    "导出 .stlog 文本",
+		Filename: base + ".txt",
+		Filters: []application.FileFilter{
 			{DisplayName: "文本文件 (*.txt)", Pattern: "*.txt"},
 		},
-	})
+	}).PromptForSingleSelection()
 	if err != nil {
 		return nil, err
 	}
@@ -1803,9 +1894,9 @@ func (a *App) pollDaemonEvents(ec *client.DaemonClient) {
 					}
 				}
 				// No worker for this tab — emit without segments.
-				runtime.EventsEmit(a.ctx, msg.Event, msg.Params)
+				a.emit(msg.Event, msg.Params)
 			default:
-				runtime.EventsEmit(a.ctx, msg.Event, msg.Params)
+				a.emit(msg.Event, msg.Params)
 			}
 		case <-a.ctx.Done():
 			return

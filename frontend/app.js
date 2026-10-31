@@ -2539,6 +2539,20 @@ async function syncDaemonSessions(procData) {
         tab._projectPath = dsPath;
         tabsChanged = true;
       }
+      // 线程名也要跟着同步。以前这里只更新 label / portOpen，而 autoCreateIdleSession
+      // 建出来的标签根本没有 name —— 结果 _tabNameOf 永远掉到最后一行兜底
+      // "#<id>"，标签显示成 "#0" 而不是「会话 #1」。
+      const dsName = ds.name || '';
+      const dsNameCustom = !!ds.nameCustom;
+      if (tab.name !== dsName || tab.nameCustom !== dsNameCustom) {
+        tab.name = dsName;
+        tab.nameCustom = dsNameCustom;
+        tabsChanged = true;
+      }
+      if (!tab.sessionPath && ds.sessionPath) {
+        tab.sessionPath = ds.sessionPath;
+        tabsChanged = true;
+      }
       if (tab.portOpen !== isConnected || tab.label !== newLabel || viewersChanged || modeChanged) {
         tab.portOpen = isConnected;
         tab.label = newLabel;
@@ -7327,8 +7341,8 @@ function pickStlogFile() {
 
   function diag() {
     return [
-      'runtime = ' + (typeof window.runtime),
-      'OnFileDrop = ' + (window.runtime ? typeof window.runtime.OnFileDrop : 'n/a'),
+      'wails = ' + (typeof window.wails),
+      'Events = ' + (window.wails ? typeof window.wails.Events : 'n/a'),
       'go = ' + (typeof window.go),
       'App = ' + (window.go && window.go.main ? typeof window.go.main.App : 'n/a'),
       'OpenStlogFile = ' + (window.go && window.go.main && window.go.main.App
@@ -7394,16 +7408,21 @@ function pickStlogFile() {
 
   function install() {
     if (window[INSTALLED_KEY]) return true;
-    if (!window.runtime || typeof window.runtime.OnFileDrop !== 'function') return false;
+    // v3 没有前端侧 OnFileDrop：原生 drop 由 Go 侧收 WindowFilesDropped，
+    // 再 emit "files-dropped" 转过来。整窗口接收靠 body 上的 data-file-drop-target。
+    if (!window.wails || !window.wails.Events) return false;
     if (!window.go || !window.go.main || !window.go.main.App) return false;
     // 要求的是标签页真正用到的两个绑定：老 exe 只有 OpenStlogFile，
     // 配新前端时会因为缺 ReadStlogFrames 而开不出页签——这时宁可弹诊断框，
     // 也别让用户以为"拖放又没反应"。
     if (typeof window.go.main.App.ReadStlogFrames !== 'function') return false;
     if (typeof window.go.main.App.ExportStlogText !== 'function') return false;
-    window.runtime.OnFileDrop(onDrop, false); // false = 整窗口接收，不需要 drop-target 元素
+    window.wails.Events.On('files-dropped', function (ev) {
+      var d = (ev && ev.data) || {};
+      onDrop(0, 0, d.files || []);
+    });
     window[INSTALLED_KEY] = true;
-    if (window.console) console.log('[stlog] drag-and-drop registered');
+    if (window.console) console.log('[stlog] drag-and-drop registered (wails3 files-dropped)');
     return true;
   }
 

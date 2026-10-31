@@ -6,7 +6,7 @@
 <title>串口调试工具</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body data-file-drop-target>
 
 <div id="app">
   <div class="header">
@@ -135,11 +135,15 @@
 </div>
 
 <!--
-  注意：此处不要引入 /wailsjs/runtime/runtime.js。
-  该文件是 ES 模块（使用 export），以经典 <script> 引入会在加载时抛
-  "Unexpected token 'export'" 且永不执行；window.runtime 与 window.go
-  由 Wails 运行时自行注入，前端只使用 window.go.main.App.*。
+  Wails v3：bindings 是 ES module，由 bindings-global.js 挂回 window.go.main.App
+  （顺带提供 v2 的 window.runtime 兼容层）。它必须是唯一的 module，且要排在
+  下面这些普通 script 之前 —— module 是 deferred 的，会在 DOMContentLoaded
+  之前执行完，所以 app.js 里那些 DOMContentLoaded 回调访问 window.go 是安全的。
+
+  绝不能给普通 script 加 type="module"：那会把它们变成严格模式 + 独立作用域，
+  现在这些文件靠全局函数互相调用（如 openNewSessionTab）。
 -->
+<script type="module" src="/bindings-global.js"></script>
 <script src="/color-picker.js"></script>
 <script src="/i18n.js"></script>
 <script src="/icons.js"></script>
