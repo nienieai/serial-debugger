@@ -174,7 +174,8 @@ export function ExportStlogText(path) {
 }
 
 /**
- * FirstSessionID 返回守护进程上第一个会话的 ID（原型自动开窗用）。
+ * FirstSessionID 返回守护进程上一个会话的 ID（原型自动开窗用）。
+ * 优先挑已连接的 —— 只有连着的会话才有数据流，空闲会话开出来是空窗口。
  * @returns {$CancellablePromise<string>}
  */
 export function FirstSessionID() {

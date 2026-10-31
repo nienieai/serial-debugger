@@ -49,6 +49,7 @@ type App struct {
 	// 天然定向，还自带背压和窗口关闭时的清理。
 	streamMu    sync.Mutex
 	streamConns map[string]*application.StreamConn
+	frameDrops  int
 
 	eventConn *client.DaemonClient
 	stopping  bool
@@ -264,8 +265,17 @@ func (a *App) sendFrame(windowName string, frame map[string]any) {
 	if err != nil {
 		return
 	}
-	// ErrStreamFull 表示该窗口读得慢，丢这一帧即可
-	_ = conn.TrySend(b)
+	// ErrStreamFull 表示该窗口读得慢，丢这一帧即可。
+	// 计数 + 每 100 次记一条：串口全速时这一行会刷屏，但没有它就看不出背压有没触发。
+	if err := conn.TrySend(b); err != nil {
+		a.streamMu.Lock()
+		a.frameDrops++
+		n := a.frameDrops
+		a.streamMu.Unlock()
+		if n%100 == 1 {
+			log.Printf("[stream] %s 丢帧累计 %d（%v）", windowName, n, err)
+		}
+	}
 }
 
 func (a *App) setStreamConn(name string, c *application.StreamConn) {
@@ -338,9 +348,19 @@ func (a *App) OpenSessionWindow(sessionID string) string {
 	return name
 }
 
-// FirstSessionID 返回守护进程上第一个会话的 ID（原型自动开窗用）。
+// FirstSessionID 返回守护进程上一个会话的 ID（原型自动开窗用）。
+// 优先挑已连接的 —— 只有连着的会话才有数据流，空闲会话开出来是空窗口。
 func (a *App) FirstSessionID() string {
-	for _, s := range a.GetSessions() {
+	sessions := a.GetSessions()
+	for _, s := range sessions {
+		if st, _ := s["status"].(string); st != "connected" {
+			continue
+		}
+		if id, ok := s["id"].(string); ok && id != "" {
+			return id
+		}
+	}
+	for _, s := range sessions {
 		if id, ok := s["id"].(string); ok && id != "" {
 			return id
 		}
