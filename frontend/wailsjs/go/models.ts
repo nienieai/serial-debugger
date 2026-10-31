@@ -105,6 +105,9 @@ export namespace main {
 	    language: string;
 	    autoCreateMode: string;
 	    autoStartDaemon: boolean;
+	    shutdownDaemonMode: string;
+	    shutdownDaemonWarn: boolean;
+	    tabCloseWarn: boolean;
 	    autoSaveHistory: boolean;
 	    displayColors: string;
 	    stlogShowYear: boolean;
@@ -146,6 +149,9 @@ export namespace main {
 	        this.language = source["language"];
 	        this.autoCreateMode = source["autoCreateMode"];
 	        this.autoStartDaemon = source["autoStartDaemon"];
+	        this.shutdownDaemonMode = source["shutdownDaemonMode"];
+	        this.shutdownDaemonWarn = source["shutdownDaemonWarn"];
+	        this.tabCloseWarn = source["tabCloseWarn"];
 	        this.autoSaveHistory = source["autoSaveHistory"];
 	        this.displayColors = source["displayColors"];
 	        this.stlogShowYear = source["stlogShowYear"];

@@ -104,6 +104,8 @@ export function PickStlogFile():Promise<string>;
 
 export function ProbeDroppedPaths(arg1:Array<string>):Promise<Array<main.DropProbe>>;
 
+export function QuitApp():Promise<void>;
+
 export function ReadMultistrEntries(arg1:string):Promise<string>;
 
 export function ReadStlogFrames(arg1:string,arg2:number,arg3:number):Promise<Record<string, any>>;

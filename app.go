@@ -158,13 +158,18 @@ func (a *App) Shutdown(ctx context.Context) {
 // 前端弹框、点确定后调 QuitApp()，第二次进 BeforeClose 看到 forceQuit 直接放行。
 // 用户点取消则什么也不做，窗口留着，下次关闭时重新走一遍。
 
-// BeforeClose 决定这次关窗口要不要先停守护进程。返回 true = 放行。
+// BeforeClose 决定这次关窗口要不要先停守护进程。
+//
+// 注意返回值是 **prevent**，不是「放行」：返回 true 表示拦住这次关闭
+// （wails 的 Frontend.Quit 里是 `if OnBeforeClose(...) { return }`，
+// 见 desktop/windows/frontend.go:453）。第一版按「true = 放行」写反了，
+// 症状是关窗口直接退、确认框根本不弹。
 func (a *App) BeforeClose(ctx context.Context) bool {
 	a.closeMu.Lock()
 	forced := a.forceQuit
 	a.closeMu.Unlock()
 	if forced {
-		return true
+		return false // QuitApp 已经确认过了，放行
 	}
 
 	cfg := a.LoadAppSettings()
@@ -172,13 +177,13 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 	switch decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients)) {
 	case closeStopDaemon:
 		a.stopDaemonQuiet()
-		return true
+		return false
 	case closeConfirm:
 		// 拦住这次关闭，交给前端弹框；用户点确定后由 QuitApp 再退一次。
 		runtime.EventsEmit(a.ctx, "app-close-confirm", map[string]any{"mode": cfg.ShutdownDaemonMode})
-		return false
-	default:
 		return true
+	default:
+		return false
 	}
 }
 

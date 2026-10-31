@@ -202,6 +202,10 @@ export function ProbeDroppedPaths(arg1) {
   return window['go']['main']['App']['ProbeDroppedPaths'](arg1);
 }
 
+export function QuitApp() {
+  return window['go']['main']['App']['QuitApp']();
+}
+
 export function ReadMultistrEntries(arg1) {
   return window['go']['main']['App']['ReadMultistrEntries'](arg1);
 }
