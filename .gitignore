@@ -1,6 +1,7 @@
 # 构建产物
 build/bin/
 build/bin-linux/
+build/pkg/
 *.exe
 
 # Wails v3 构建在仓库根生成的 GUI 资源对象（Taskfile 用后即删，
