@@ -15,20 +15,20 @@
      .c-clear-btn 的 top 由本值倒推，改一处即可。 */
   --reserve-top: 82px;
 
-  /* 菜单毛玻璃（顶部菜单栏 + 下拉菜单 + 标签右键菜单）。
-     下拉/右键菜单压在**正文**上，标签悬浮卡只压在标签栏上 —— 场景不同，不再共用
-     一档底色（原先 --menu-glass-* 是 alias 到 --tabpop-*，10% 的底压在正文上完全
-     挡不住，背后代码块的对比度原样透上来把菜单文字吞掉）。
-     现在两件事分工：底色负责整体压住背后的内容，文字光晕负责字周围那一圈。
+  /* 压在正文上的浮层共用一档参数：下拉菜单、标签右键菜单、标签信息浮窗 c-tabpop。
+     底色 --tabpop-glass-bg 负责整体压住背后的内容，文字光晕 --glass-text-glow
+     负责字周围那一圈。原先 10% 的底压在正文上完全挡不住 —— 背后代码块的对比度
+     原样透上来把文字吞掉；标签信息浮窗弹下来同样压住正文，所以和菜单一起改。
      光晕颜色必须与主题的「背景」同向才算反色 —— 浅色白蒙版 + 白晕、深色提亮蒙版
      + 黑晕；反过来会变成一圈脏边。参考正运算范围 0.17.4（css/03-canvas.css:327）
      同一场景的取值，这里先取淡一档（.30）再按真机效果调。
-     想单独调顶部菜单栏就覆盖 --header-glass-bg（它背后是 body 纯色，不需要压）。 */
-  --menu-glass-bg: rgba(255, 255, 255, 0.30);
+     顶部菜单栏不跟着变实：它背后是 body 纯色、没有内容穿透，单独用
+     --header-glass-bg 维持原来那档。 */
+  --menu-glass-bg: var(--tabpop-glass-bg);
   --menu-glass-border: var(--tabpop-glass-border);
   --menu-glass-blur: var(--tabpop-glass-blur);
-  --menu-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
-  --header-glass-bg: var(--tabpop-glass-bg);
+  --glass-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+  --header-glass-bg: rgba(0, 0, 0, 0.10);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,12 +42,12 @@
     --hex-escape: #8b8b8b; --badge-cli: #10b981;
     --status-offline: #888; --tab-close: #888;
     /* 标签浮窗毛玻璃：参数对齐调色板（color-picker.html 的 transparency=glass） */
-    --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+    --tabpop-glass-bg: rgba(255, 255, 255, 0.14);
     --tabpop-glass-border: rgba(160, 160, 160, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #2d2d2d;
-    --menu-glass-bg: rgba(255, 255, 255, 0.14);
-    --menu-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
+    --glass-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
+    --header-glass-bg: rgba(255, 255, 255, 0.10);
     /* 拖入遮罩：半透明 + 模糊，透出下面的标签栏和内容 */
     --dropmask-bg: rgba(18, 18, 18, 0.55);
   }
@@ -63,12 +63,10 @@
     --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
     --hex-escape: #777; --badge-cli: #059669;
     --status-offline: #aaa; --tab-close: #999;
-    --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+    --tabpop-glass-bg: rgba(255, 255, 255, 0.30);
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
-    --menu-glass-bg: rgba(255, 255, 255, 0.30);
-    --menu-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
     --dropmask-bg: rgba(248, 248, 248, 0.55);
   }
 }
@@ -83,12 +81,12 @@
   --fwd-p1-hover: #2563eb; --fwd-p2-hover: #d97706;
   --hex-escape: #8b8b8b; --badge-cli: #10b981;
   --status-offline: #888; --tab-close: #888;
-  --tabpop-glass-bg: rgba(255, 255, 255, 0.10);
+  --tabpop-glass-bg: rgba(255, 255, 255, 0.14);
   --tabpop-glass-border: rgba(160, 160, 160, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #2d2d2d;
-  --menu-glass-bg: rgba(255, 255, 255, 0.14);
-  --menu-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
+  --glass-text-glow: 0 0 3px rgba(0, 0, 0, 0.90), 0 0 6px rgba(0, 0, 0, 0.55);
+  --header-glass-bg: rgba(255, 255, 255, 0.10);
   --dropmask-bg: rgba(18, 18, 18, 0.55);
 }
 
@@ -101,12 +99,10 @@
   --fwd-p1-hover: #1d4ed8; --fwd-p2-hover: #b45309;
   --hex-escape: #777; --badge-cli: #059669;
   --status-offline: #aaa; --tab-close: #999;
-  --tabpop-glass-bg: rgba(0, 0, 0, 0.10);
+  --tabpop-glass-bg: rgba(255, 255, 255, 0.30);
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
-  --menu-glass-bg: rgba(255, 255, 255, 0.30);
-  --menu-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
   --dropmask-bg: rgba(248, 248, 248, 0.55);
 }
 
@@ -302,7 +298,7 @@ button:disabled:active { transform: none; box-shadow: none; }
    `0 1px 2px` 那种投影，投影只往一个方向推，光晕要四周都裹住才隔得开。
    text-shadow 可继承，挂在容器上，按钮/快捷键/文字一起带上。
    顶部菜单栏不加：它背后是 body 纯色，没有内容穿透，加了只会让字发虚。 */
-.menu-dropdown, .menu-sub-dropdown { text-shadow: var(--menu-text-glow); }
+.menu-dropdown, .menu-sub-dropdown { text-shadow: var(--glass-text-glow); }
 
 /* Menu items: 4-zone grid (chk 22px | text 1fr | shortcut auto | arrow 22px) */
 .menu-dropdown button, .menu-sub-dropdown button, .menu-sub-trigger {
@@ -312,7 +308,7 @@ button:disabled:active { transform: none; box-shadow: none; }
   /* 光晕必须显式写：Chromium 的 UA 样式阻断 text-shadow 继承进 button / input
      （实测只挂在 .menu-dropdown 上时，button 算出来是 none），菜单项文字全在
      button 里，靠继承会静默失效。 */
-  text-shadow: var(--menu-text-glow);
+  text-shadow: var(--glass-text-glow);
 }
 .menu-dropdown button:hover, .menu-sub-dropdown button:hover, .menu-sub-trigger:hover {
   /* 悬停时菜单项是实色底，背后不再有东西要隔开，白晕/黑晕反而会显出一圈亮边 */
@@ -648,12 +644,13 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .c-tabpop {
   position: fixed; z-index: 4000;
   width: 264px; padding: 9px 11px 10px;
-  /* 毛玻璃参数与调色板一致（color-picker.html 的 transparency="glass"）：
-     深色 rgba(255,255,255,.10)、浅色 rgba(0,0,0,.10)，模糊 blur(20px)；
-     不支持 backdrop-filter 时由下面的 @supports 回退成不透明底色。 */
+  /* 与下拉菜单同一档（压在正文上的浮层）：底色负责压住背后的内容，文字光晕
+     负责字周围那一圈。不支持 backdrop-filter 时由下面的 @supports 回退成实色。 */
   background-color: var(--tabpop-glass-bg);
   backdrop-filter: var(--tabpop-glass-blur);
   -webkit-backdrop-filter: var(--tabpop-glass-blur);
+  /* 浮窗里的文字都在 div/span 上，继承即可（button 才需要显式设 —— 见 .menu-dropdown） */
+  text-shadow: var(--glass-text-glow);
   color: var(--fg);
   border: 1px solid var(--tabpop-glass-border); border-radius: 10px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .28);
