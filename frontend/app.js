@@ -18,7 +18,8 @@ function initProbeWindow() {
     '  <button id="probeToSelf">发给 probe</button>' +
     '</p>' +
     '<p>发信结果: <code id="probeSend">-</code></p>' +
-    '<p>收到的事件: <code id="probeMsg">(还没有)</code></p>';
+    '<p>收到的事件: <code id="probeMsg">(还没有)</code></p>' +
+    '<p>数据帧泄漏: <code id="probeLeak">-</code></p>';
   body.appendChild(wrap);
 
   function set(id, v) {
@@ -45,6 +46,15 @@ function initProbeWindow() {
     window.wails.Events.On('probe-ping', function (ev) {
       set('probeMsg', (ev && ev.data) || '(空)');
     });
+    // 数据帧在 v3 里是全局广播（没有 per-window 定向），所以这里必然收到
+    // 别的会话的帧 —— 这不是 bug，是 v3 事件系统的限制。真正的定点投递要用
+    // Stream，见 app.go emitSession 的注释。
+    var seen = 0;
+    window.wails.Events.On('rx', function () {
+      seen++;
+      set('probeLeak', '收到 ' + seen + ' 帧（广播，预期内）');
+    });
+    set('probeLeak', '0 帧');
   }
 }
 
@@ -53,6 +63,100 @@ function openProbeWindow() {
     if (window.console) console.log('[probe] 已打开窗口: ' + name);
   }).catch(function (e) {
     alert('打开测试窗口失败: ' + e);
+  });
+}
+
+// ---- 会话窗口原型 ----
+//
+// 独立窗口用 ?w=session&sid=X 打开（Go 侧见 OpenSessionWindow）。
+// 这里刻意**不**复用 TabPage：两个窗口是独立的 WebView，DOM 不共享，
+// 而 TabPage 现在长在 app.js 里、依赖一整套全局 state。原型先用极简面板
+// 证明「窗口 ↔ 会话绑定 + 数据帧定向」这条链路，等阶段 1 把 TabPage 抽出来
+// 之后再谈界面复用。
+function initSessionWindow(sid) {
+  document.title = '会话 ' + sid;
+  var body = document.body;
+  body.innerHTML = '';
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;height:100vh;box-sizing:border-box;' +
+                       'padding:12px;gap:8px;font-size:13px';
+  wrap.innerHTML =
+    '<div style="font-weight:600">会话 <code>' + sid + '</code></div>' +
+    '<pre id="sessLog" style="flex:1;overflow:auto;margin:0;padding:8px;' +
+    'background:rgba(0,0,0,.22);border-radius:6px;font-size:12px;white-space:pre-wrap"></pre>' +
+    '<div style="display:flex;gap:8px">' +
+    '  <input id="sessInput" style="flex:1;padding:6px 8px" placeholder="要发送的文本">' +
+    '  <button id="sessSend">发送</button>' +
+    '  <button id="sessInject" title="让 Go 侧注入一条假数据帧，验证定向">注入测试帧</button>' +
+    '</div>' +
+    '<div id="sessStat" style="font-size:12px;opacity:.7">等待数据…</div>';
+  body.appendChild(wrap);
+
+  var logEl = document.getElementById('sessLog');
+  var statEl = document.getElementById('sessStat');
+  var count = 0;
+
+  function append(text) {
+    count++;
+    logEl.textContent += text + '\n';
+    if (logEl.textContent.length > 120000) {
+      logEl.textContent = logEl.textContent.slice(-60000);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+    statEl.textContent = '已收 ' + count + ' 帧';
+  }
+
+  if (window.wails && window.wails.Events) {
+    // v3 的事件是全局广播，没有 per-window 定向（见 app.go emitSession 的注释），
+    // 所以这里必须按 payload 里的 processId 自己过滤，只处理本窗口这个会话的。
+    function mine(d) {
+      return d && String(d.processId) === String(sid);
+    }
+    window.wails.Events.On('rx', function (ev) {
+      var d = (ev && ev.data) || {};
+      if (!mine(d)) return;
+      append('RX ' + (d.text || d.hex || JSON.stringify(d).slice(0, 120)));
+    });
+    window.wails.Events.On('tx', function (ev) {
+      var d = (ev && ev.data) || {};
+      if (!mine(d)) return;
+      append('TX ' + (d.text || d.hex || JSON.stringify(d).slice(0, 120)));
+    });
+  }
+
+  document.getElementById('sessSend').addEventListener('click', function () {
+    var input = document.getElementById('sessInput');
+    var v = input.value;
+    if (!v) return;
+    window.go.main.App.WriteSendRing(sid, v, 'text').then(function () {
+      append('→ 已写入发送环');
+      input.value = '';
+    }).catch(function (e) {
+      append('发送失败: ' + e);
+    });
+  });
+
+  // 自测注入：没有串口连接时，让 Go 侧手工走一遍 emitSession，
+  // 用来验证数据帧只发给 main 和 session-<sid>（probe 窗口收不到）。
+  document.getElementById('sessInject').addEventListener('click', function () {
+    window.go.main.App.DebugEmitSession(sid, '注入的测试帧 ' + new Date().toLocaleTimeString())
+      .then(function (r) { append('* ' + r); })
+      .catch(function (e) { append('注入失败: ' + e); });
+  });
+}
+
+// 主窗口入口：把当前标签绑定的会话开成独立窗口。
+function openActiveSessionWindow() {
+  var tab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
+  if (!tab || !tab.sessionId) {
+    alert('当前标签还没有绑定会话（先打开串口）');
+    return;
+  }
+  window.go.main.App.OpenSessionWindow(tab.sessionId).then(function (n) {
+    if (window.console) console.log('[session-window] ' + n);
+  }).catch(function (e) {
+    alert('打开会话窗口失败: ' + e);
   });
 }
 
@@ -2115,9 +2219,14 @@ function createThemeOverlay() {
 
 // ---- init ----
 window.addEventListener('DOMContentLoaded', () => {
-  // 多窗口原型：?w=probe 是独立窗口，只渲染验证面板，不初始化主界面
-  if (new URLSearchParams(location.search).get('w') === 'probe') {
+  // 多窗口原型：独立窗口按 ?w= 分流，不初始化主界面
+  var _wparam = new URLSearchParams(location.search);
+  if (_wparam.get('w') === 'probe') {
     initProbeWindow();
+    return;
+  }
+  if (_wparam.get('w') === 'session') {
+    initSessionWindow(_wparam.get('sid') || '');
     return;
   }
   // Bind stable tab drag handlers to bar

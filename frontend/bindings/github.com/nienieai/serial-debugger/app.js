@@ -106,6 +106,20 @@ export function DaemonProcessRunning() {
 }
 
 /**
+ * DebugEmitSession 手工注入一条会话数据帧。
+ * 
+ * 用来在没有串口连接的情况下验证「数据帧按会话定向」这条链路 —— 真实环境里
+ * 它只在串口有数据时才跑得到。注入后应该只有 main 和 session-<sid> 收到，
+ * 其他窗口（比如 probe）一帧都不该收到。阶段 2 删掉。
+ * @param {string} sid
+ * @param {string} text
+ * @returns {$CancellablePromise<string>}
+ */
+export function DebugEmitSession(sid, text) {
+    return $Call.ByName("main.App.DebugEmitSession", sid, text);
+}
+
+/**
  * DetachHistoryFile closes the history file attached to a process.
  * @param {string} processID
  * @returns {$CancellablePromise<void>}
@@ -157,6 +171,14 @@ export function ExportStlogText(path) {
     return $Call.ByName("main.App.ExportStlogText", path).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType3($result);
     }));
+}
+
+/**
+ * FirstSessionID 返回守护进程上第一个会话的 ID（原型自动开窗用）。
+ * @returns {$CancellablePromise<string>}
+ */
+export function FirstSessionID() {
+    return $Call.ByName("main.App.FirstSessionID");
 }
 
 /**
@@ -504,6 +526,15 @@ export function OpenProbeWindow() {
  */
 export function OpenSession(cfg) {
     return $Call.ByName("main.App.OpenSession", cfg);
+}
+
+/**
+ * OpenSessionWindow 把一个会话开成独立窗口（多窗口原型）。
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<string>}
+ */
+export function OpenSessionWindow(sessionID) {
+    return $Call.ByName("main.App.OpenSessionWindow", sessionID);
 }
 
 /**

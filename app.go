@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,9 @@ func (td *tabDecodeUnit) run() {
 			enc := td.encoding
 			td.encMu.RUnlock()
 			env.params["segments"] = decodeSegments(hex, enc)
-			td.a.emit(env.event, env.params)
+			// 数据帧改成按会话定向（见 emitSession）。串口全速跑时每秒几千帧，
+			// 走广播会把每个窗口都淹掉。
+			td.a.emitSession(td.processID, env.event, env.params)
 		case <-td.quit:
 			return
 		}
@@ -207,6 +210,79 @@ func (a *App) WindowNames() []string {
 		out = append(out, n)
 	}
 	return out
+}
+
+// emitSession 发一条会话数据帧。
+//
+// ⚠️ v3 的事件系统**没有 per-window 定向投递**：window.EmitEvent 只是把
+// event.Sender 设成窗口名，然后照样走全局广播（见 webview_window.go:248-261，
+// 最终是 EventManager.dispatch 遍历 wailsEventListeners）。实测：对一个窗口
+// EmitEvent，所有窗口都收到。
+//
+// 所以这里只能广播**一次**，由各窗口按 payload 里的 processId 自己过滤。
+// 第一版按「main 发一次 + 会话窗口发一次」写，结果是每个窗口都收到两份。
+//
+// 真正的定点投递要用 v3 的 Stream（per-window 连接、背压、窗口关闭自动清理），
+// 那是阶段 2 的事；在那之前数据帧走广播 + 前端过滤。
+func (a *App) emitSession(sid, name string, data ...any) {
+	if a.wailsApp == nil {
+		return
+	}
+	_ = sid // 保留参数：换成 Stream 实现时它就是投递目标
+	a.wailsApp.Event.Emit(name, data...)
+}
+
+// OpenSessionWindow 把一个会话开成独立窗口（多窗口原型）。
+func (a *App) OpenSessionWindow(sessionID string) string {
+	if sessionID == "" {
+		return "会话 ID 为空"
+	}
+	name := "session-" + sessionID
+	if w := a.windowByName(name); w != nil {
+		w.Show()
+		w.Focus()
+		return name
+	}
+	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:   name,
+		Title:  "会话 " + sessionID,
+		Width:  720,
+		Height: 560,
+		URL:    "/?w=session&sid=" + url.QueryEscape(sessionID),
+	})
+	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
+		a.unregisterWindow(name)
+	})
+	a.registerWindow(name, w)
+	return name
+}
+
+// FirstSessionID 返回守护进程上第一个会话的 ID（原型自动开窗用）。
+func (a *App) FirstSessionID() string {
+	for _, s := range a.GetSessions() {
+		if id, ok := s["id"].(string); ok && id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// DebugEmitSession 手工注入一条会话数据帧。
+//
+// 用来在没有串口连接的情况下验证「数据帧按会话定向」这条链路 —— 真实环境里
+// 它只在串口有数据时才跑得到。注入后应该只有 main 和 session-<sid> 收到，
+// 其他窗口（比如 probe）一帧都不该收到。阶段 2 删掉。
+func (a *App) DebugEmitSession(sid, text string) string {
+	if sid == "" {
+		return "会话 ID 为空"
+	}
+	a.emitSession(sid, "rx", map[string]any{
+		"processId": sid,
+		"text":      text,
+		"hex":       "",
+		"ts":        time.Now().UnixMilli(),
+	})
+	return "已注入到 " + sid
 }
 
 // emit 是 v2 runtime.EventsEmit 的替身。

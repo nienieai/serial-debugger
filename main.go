@@ -94,6 +94,18 @@ func main() {
 		}()
 	}
 
+	// 会话窗口原型：SERIAL_SESSION_WINDOW=1 时把第一个会话开成独立窗口。
+	if os.Getenv("SERIAL_SESSION_WINDOW") == "1" {
+		go func() {
+			time.Sleep(3000 * time.Millisecond)
+			if sid := svc.FirstSessionID(); sid != "" {
+				log.Printf("[probe] 会话窗口已打开: %s", svc.OpenSessionWindow(sid))
+			} else {
+				log.Printf("[probe] 守护进程上没有可用会话")
+			}
+		}()
+	}
+
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
