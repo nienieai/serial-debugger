@@ -52,6 +52,13 @@ const state = {
   autoCreateMode: 'single',
   // 「随 GUI 启动守护进程」：GUI 启动时若守护进程没在跑就自动拉起。
   autoStartDaemon: false,
+  // 「关闭 GUI 时」怎么处理守护进程：never 不动 / last 最后一个 GUI 关闭时关 /
+  // always 总是关。守卫判断在 Go 侧（BeforeClose），这里只负责持久化和设置页。
+  shutdownDaemonMode: 'last',
+  // 关 GUI 前要不要弹确认（会断开所有串口）。只在 last / always 下有作用。
+  shutdownDaemonWarn: true,
+  // 关闭标签页前确认：只在那个标签的串口开着时才拦。
+  tabCloseWarn: false,
   // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
   autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
@@ -123,6 +130,9 @@ function saveSettings() {
       language: state.language,
       autoCreateMode: state.autoCreateMode || 'single',
       autoStartDaemon: state.autoStartDaemon === true,
+      shutdownDaemonMode: state.shutdownDaemonMode || 'last',
+      shutdownDaemonWarn: state.shutdownDaemonWarn !== false,
+      tabCloseWarn: state.tabCloseWarn === true,
       autoSaveHistory: state.autoSaveHistory === true,
       tabTwoLines: state.tabTwoLines === true,
       tabSubLine: state.tabSubLine || 'a',
@@ -220,6 +230,11 @@ async function loadSettings() {
       // 旧默认正是「开 + 单端」，行为不变。
       updateAutoCreateCheck(state.autoCreateMode !== 'none');
       if (typeof s.autoStartDaemon === 'boolean') state.autoStartDaemon = s.autoStartDaemon;
+      if (s.shutdownDaemonMode === 'never' || s.shutdownDaemonMode === 'last' || s.shutdownDaemonMode === 'always') {
+        state.shutdownDaemonMode = s.shutdownDaemonMode;
+      }
+      if (typeof s.shutdownDaemonWarn === 'boolean') state.shutdownDaemonWarn = s.shutdownDaemonWarn;
+      if (typeof s.tabCloseWarn === 'boolean') state.tabCloseWarn = s.tabCloseWarn;
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
@@ -561,6 +576,23 @@ function closeAlert(ok) {
   document.getElementById('alertOverlay').classList.add('is-hidden');
   if (ok && _alertCallback) _alertCallback();
   _alertCallback = null;
+}
+
+// Go 的 BeforeClose 判定「这次关窗口要停守护进程、且用户开了确认」时发这个事件。
+// 此刻窗口**还没关掉**（BeforeClose 返回了 false）—— 确认后调 QuitApp 再退一次，
+// 取消就什么都不做，窗口留着。
+function onAppCloseConfirm(data) {
+  var mode = (data && data.mode) || 'last';
+  showConfirm(
+    t('confirm.quit_title', '退出串口调试工具'),
+    mode === 'always'
+      ? t('confirm.quit_always', '退出将停止守护进程，所有串口连接都会断开（包括其它 GUI / CLI / MCP 客户端）。确定退出吗？')
+      : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？'),
+    function() {
+      window.go.main.App.QuitApp().catch(function(e) { console.error('QuitApp failed:', e); });
+    },
+    'confirm.quit_ok', 'confirm.cancel'
+  );
 }
 
 // ---- theme ----
@@ -1965,6 +1997,8 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));
     window.runtime.EventsOn('clients-changed', (data) => onClientsChanged(data));
+    // 关窗口时 Go 侧判定「要停守护进程、且用户开了确认」→ 拦住关闭并让前端弹框
+    window.runtime.EventsOn('app-close-confirm', (data) => onAppCloseConfirm(data));
     window.runtime.EventsOn('multistr-changed', (data) => onMultistrChanged(data));
   } catch {}
 
@@ -3219,6 +3253,25 @@ function switchTab(idx) {
 function closeTab(idx) {
   const tab = state.tabs[idx];
   if (!tab) return;
+  // 「关闭标签页前确认」：只在该标签的串口开着时拦一道。空标签没什么可失去的，
+  // 每次都弹只会变成噪音。
+  if (state.tabCloseWarn && tab.portOpen && tab.sessionId) {
+    showConfirm(
+      t('confirm.tab_close_title', '关闭标签页'),
+      t('confirm.tab_close_msg', '这个标签的串口还开着，关闭会断开连接。确定关闭吗？'),
+      function() { _closeTabNow(tab); },
+      'confirm.tab_close_ok', 'confirm.cancel'
+    );
+    return;
+  }
+  _closeTabNow(tab);
+}
+
+// 真正执行关闭。按标签**对象**定位而不是下标：确认框弹出的这段时间里，标签数组
+// 可能已经被别的事件（守护进程广播、拖拽重排）改动过了，下标会指到别人身上。
+function _closeTabNow(tab) {
+  const idx = state.tabs.indexOf(tab);
+  if (idx < 0) return;
   // Suppress auto-create in syncDaemonSessions while we intentionally destroy a process.
   // Otherwise the process-changed event from the destroy triggers immediate re-creation.
   state._suppressAutoCreate = (Date.now() + 2000);

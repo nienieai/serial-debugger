@@ -33,6 +33,13 @@ type App struct {
 	checking  bool
 	daemonMu  sync.Mutex
 
+	// 关闭流程（OnBeforeClose）用的标志。
+	//
+	// forceQuit 由 QuitApp 置位：前端确认后那次 BeforeClose 必须直接放行，
+	// 否则会再弹一次确认框 —— 用户点了「确定」却关不掉窗口。
+	closeMu   sync.Mutex
+	forceQuit bool
+
 	// Tab decode workers — one goroutine per tab.
 	tabDecoders   map[string]*tabDecodeUnit // processId → worker
 	tabDecodersMu sync.Mutex
@@ -142,6 +149,96 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.eventConn.Close()
 		a.eventConn = nil
 	}
+}
+
+// ---- 关闭流程 ----
+//
+// Wails 的 OnBeforeClose 是同步返回 bool 的（true = 放行），而「要不要停守护进程」
+// 需要问用户。所以分两段：第一次进 BeforeClose 判定需要确认时，发事件把关闭拦住；
+// 前端弹框、点确定后调 QuitApp()，第二次进 BeforeClose 看到 forceQuit 直接放行。
+// 用户点取消则什么也不做，窗口留着，下次关闭时重新走一遍。
+
+// BeforeClose 决定这次关窗口要不要先停守护进程。返回 true = 放行。
+func (a *App) BeforeClose(ctx context.Context) bool {
+	a.closeMu.Lock()
+	forced := a.forceQuit
+	a.closeMu.Unlock()
+	if forced {
+		return true
+	}
+
+	cfg := a.LoadAppSettings()
+	clients := a.GetClients()
+	switch decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients)) {
+	case closeStopDaemon:
+		a.stopDaemonQuiet()
+		return true
+	case closeConfirm:
+		// 拦住这次关闭，交给前端弹框；用户点确定后由 QuitApp 再退一次。
+		runtime.EventsEmit(a.ctx, "app-close-confirm", map[string]any{"mode": cfg.ShutdownDaemonMode})
+		return false
+	default:
+		return true
+	}
+}
+
+// closeAction 是「关窗口时怎么处理守护进程」的判定结果。
+type closeAction int
+
+const (
+	closeProceed    closeAction = iota // 直接放行，不动守护进程
+	closeStopDaemon                    // 先停守护进程再放行
+	closeConfirm                       // 拦住关闭，让前端弹确认框
+)
+
+// decideClose 是 BeforeClose 的判定核心，单独拆出来是为了能直接测各种组合。
+//
+// mode: never 从不 / last 最后一个客户端才关 / always 总是关。
+// connected: 本次是否真的连着守护进程（没连上就没什么可关的）。
+// clientCount: 守护进程上的客户端总数（含自己）。
+//
+// 注意 clientCount 数的是**全部**客户端，不是只数 gui：否则「只剩一个 GUI、
+// 旁边还有个 CLI/MCP 连着」时关窗口会把它们一起断掉。当前 source 只有
+// gui / cli / mcp 三种（protocol.go:91），这里不按 source 过滤，将来加 web
+// 客户端也自动算进来。
+func decideClose(mode string, warn, connected bool, clientCount int) closeAction {
+	if mode != "last" && mode != "always" {
+		return closeProceed // never（含旧配置缺这个键）
+	}
+	if !connected {
+		return closeProceed
+	}
+	if mode == "last" && clientCount > 1 {
+		return closeProceed // 还有别的客户端，它/它们还要用
+	}
+	if !warn {
+		return closeStopDaemon
+	}
+	return closeConfirm
+}
+
+// QuitApp 由前端在用户确认退出后调用：先停守护进程，再真正退出。
+func (a *App) QuitApp() {
+	a.closeMu.Lock()
+	a.forceQuit = true
+	a.closeMu.Unlock()
+	a.stopDaemonQuiet()
+	runtime.Quit(a.ctx)
+}
+
+// stopDaemonQuiet 与 StopDaemon 走同一条 IPC 路径，但不做那个 3 秒的 stopping
+// 复位 —— 进程马上要退了，不需要再允许重连。
+func (a *App) stopDaemonQuiet() {
+	a.daemonMu.Lock()
+	a.stopping = true
+	ec := a.eventConn
+	a.eventConn = nil
+	a.daemonMu.Unlock()
+	if ec == nil {
+		return
+	}
+	client.CallOnce(contract.Shutdown, nil, "gui")
+	ec.Close()
 }
 
 // onDaemonDisconnected is called by the heartbeat goroutine when the

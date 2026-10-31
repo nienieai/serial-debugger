@@ -562,6 +562,32 @@ function buildSettingsPage() {
 			state.autoStartDaemon = !state.autoStartDaemon;
 			saveSettings();
 		}, state.autoStartDaemon === true)));
+	// 「关闭 GUI 时」怎么处理守护进程。真正判定在 Go 侧（app.go 的 BeforeClose），
+	// 这里只负责存值：last = 自己是最后一个客户端时才关，always = 每次都关。
+	bStorage.appendChild(_row(t('settings.shutdown_daemon','关闭 GUI 时'),
+		_buildSelect(['never', 'last', 'always'],
+			[ t('settings.shutdown_never', '不处理守护进程'),
+			  t('settings.shutdown_last', '最后一个客户端关闭时关闭'),
+			  t('settings.shutdown_always', '总是关闭守护进程') ],
+			state.shutdownDaemonMode || 'last',
+			function(v) {
+				state.shutdownDaemonMode = v;
+				saveSettings();
+				// 「关闭 GUI 前确认」只在真要关守护进程时才有意义
+				setShutdownWarnAvailable(v !== 'never');
+			})));
+	var warnToggle = _buildToggle(function() {
+		state.shutdownDaemonWarn = !state.shutdownDaemonWarn;
+		saveSettings();
+	}, state.shutdownDaemonWarn !== false, (state.shutdownDaemonMode || 'last') === 'never');
+	var warnInput = warnToggle.querySelector('input');
+	if (warnInput) warnInput.setAttribute('data-toggle', 'shutdownWarn');
+	bStorage.appendChild(_row(t('settings.shutdown_daemon_warn','关闭 GUI 前确认'), warnToggle));
+	bStorage.appendChild(_row(t('settings.tab_close_warn','关闭标签页前确认'),
+		_buildToggle(function() {
+			state.tabCloseWarn = !state.tabCloseWarn;
+			saveSettings();
+		}, state.tabCloseWarn === true)));
 	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）。守护进程
 	// 没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由
 	// setAutoSaveToggleAvailable() 恢复。
@@ -1849,6 +1875,15 @@ function setAutoSaveToggleAvailable(online) {
 	input.disabled = !online;
 	var label = input.closest('.settings-toggle');
 	if (label) label.classList.toggle('is-disabled', !online);
+}
+
+// 「关闭 GUI 前确认」只在关闭模式真的会停守护进程时才有意义（never 下置灰）。
+function setShutdownWarnAvailable(available) {
+	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="shutdownWarn"]');
+	if (!input) return;
+	input.disabled = !available;
+	var label = input.closest('.settings-toggle');
+	if (label) label.classList.toggle('is-disabled', !available);
 }
 
 // ---- check if settings tab is active ----

@@ -44,6 +44,14 @@ type AppSettings struct {
 	// AutoStartDaemon 是「随 GUI 启动守护进程」：GUI 本地偏好。打开后 GUI 启动时
 	// 若守护进程没在跑就自动拉起；默认关，保持「由用户点菜单启停」的旧行为。
 	AutoStartDaemon bool `json:"autoStartDaemon" ini:"auto_start_daemon"`
+	// ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」：
+	// never 不动 / last 最后一个 GUI 关闭时关 / always 总是关。
+	ShutdownDaemonMode string `json:"shutdownDaemonMode" ini:"shutdown_daemon_mode"`
+	// ShutdownDaemonWarn 控制关闭 GUI 前要不要先弹确认（会断开所有串口）。
+	// 只在 last / always 下有作用，never 下设置页置灰。
+	ShutdownDaemonWarn bool `json:"shutdownDaemonWarn" ini:"shutdown_daemon_warn"`
+	// TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
+	TabCloseWarn bool `json:"tabCloseWarn" ini:"tab_close_warn"`
 	// AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
 	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
 	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
@@ -94,27 +102,29 @@ var iniSectionOrder = []string{"display", "serial", "autosend", "append"}
 
 func defaultSettings() *AppSettings {
 	return &AppSettings{
-		DisplayMode:       "text",
-		SendRatio:         0.3,
-		QuickPanelRatio:   0,
-		Encoding:          "utf-8",
-		HexCase:           "upper",
-		HexPrefix:         true,
-		HexSep:            "space",
-		CrVisible:         true,
-		HexEscapeMode:     "show",
-		HexEscapeFormat:   "slash",
-		CopyHexEscapes:    true,
-		DisplayFontFamily: "Consolas",
-		DisplayFontSize:   14,
-		TabSize:           4,
-		EolSequence:       "lf",
-		Theme:             "auto",
-		ColorThemeID:      "theme-default",
-		IconThemeID:       "",
-		Language:          "zh",
-		AutoCreateMode:    "single",
-		StlogShowYear:     true,
+		DisplayMode:        "text",
+		SendRatio:          0.3,
+		QuickPanelRatio:    0,
+		Encoding:           "utf-8",
+		HexCase:            "upper",
+		HexPrefix:          true,
+		HexSep:             "space",
+		CrVisible:          true,
+		HexEscapeMode:      "show",
+		HexEscapeFormat:    "slash",
+		CopyHexEscapes:     true,
+		DisplayFontFamily:  "Consolas",
+		DisplayFontSize:    14,
+		TabSize:            4,
+		EolSequence:        "lf",
+		Theme:              "auto",
+		ColorThemeID:       "theme-default",
+		IconThemeID:        "",
+		Language:           "zh",
+		AutoCreateMode:     "single",
+		ShutdownDaemonMode: "last",
+		ShutdownDaemonWarn: true,
+		StlogShowYear:      true,
 		// 标签栏：默认单行（保持 0.8.4 现状），客户端数字按 0.8.3 原样分来源彩色
 		TabTwoLines:    false,
 		TabSubLine:     "a",
