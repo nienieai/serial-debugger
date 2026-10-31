@@ -123,6 +123,17 @@ export function DisconnectSession(processID) {
 }
 
 /**
+ * EmitTo 把事件定向发给某一个窗口（不是广播）。
+ * @param {string} target
+ * @param {string} event
+ * @param {string} msg
+ * @returns {$CancellablePromise<string>}
+ */
+export function EmitTo(target, event, msg) {
+    return $Call.ByName("main.App.EmitTo", target, event, msg);
+}
+
+/**
  * EncodeTextForSend converts a text string to a hex-encoded byte sequence
  * according to the given encoding ("utf-8", "ascii", "gb2312"). For ASCII
  * mode, any character outside 0x00-0x7F triggers a silent fallback to UTF-8.
@@ -477,6 +488,14 @@ export function NewHistoryFile(processID) {
  */
 export function OpenDevTools() {
     return $Call.ByName("main.App.OpenDevTools");
+}
+
+/**
+ * OpenProbeWindow 打开（或聚焦）多窗口验证窗口。
+ * @returns {$CancellablePromise<string>}
+ */
+export function OpenProbeWindow() {
+    return $Call.ByName("main.App.OpenProbeWindow");
 }
 
 /**
@@ -875,6 +894,28 @@ export function UnwatchSession(processID) {
  */
 export function WatchSession(processID) {
     return $Call.ByName("main.App.WatchSession", processID);
+}
+
+/**
+ * WhoAmI 返回「调用这个方法的窗口名」。
+ * 
+ * 靠的是 v3 的约定：Service 方法第一个参数是 context.Context 时，框架会把
+ * 调用方的窗口塞进 ctx（application.WindowKey）。这是多窗口按来源分流的
+ * 基础 —— 不用前端手动传窗口 ID。
+ * @returns {$CancellablePromise<string>}
+ */
+export function WhoAmI() {
+    return $Call.ByName("main.App.WhoAmI");
+}
+
+/**
+ * WindowNames 列出当前注册的窗口，供原型面板显示。
+ * @returns {$CancellablePromise<string[]>}
+ */
+export function WindowNames() {
+    return $Call.ByName("main.App.WindowNames").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
 }
 
 /**

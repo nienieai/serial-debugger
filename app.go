@@ -23,6 +23,7 @@ import (
 	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -34,6 +35,11 @@ type App struct {
 	// 多窗口阶段（方案里的阶段 2/3）这两个会扩成窗口注册表，现在先固定单窗口。
 	wailsApp *application.App
 	window   *application.WebviewWindow
+
+	// 多窗口原型的窗口注册表：窗口名 → 窗口。
+	// 阶段 2 会把它扩成完整的窗口管理器（含每个窗口绑定了哪个会话）。
+	winMu   sync.Mutex
+	windows map[string]*application.WebviewWindow
 
 	eventConn *client.DaemonClient
 	stopping  bool
@@ -114,6 +120,93 @@ func NewApp() *App {
 func (a *App) attach(wailsApp *application.App, win *application.WebviewWindow) {
 	a.wailsApp = wailsApp
 	a.window = win
+	a.registerWindow(win.Name(), win)
+}
+
+// ---- 多窗口原型 ----
+//
+// 只验证三件事，验证完就扩成阶段 2 的正式实现：
+//   1. 窗口注册表：按名字找回窗口
+//   2. v3 的 service 方法能不能知道「是哪个窗口在调我」（ctx 里带 WindowKey）
+//   3. window.EmitEvent 定向发事件（相比 app.Event.Emit 的广播）
+
+func (a *App) registerWindow(name string, w *application.WebviewWindow) {
+	if name == "" || w == nil {
+		return
+	}
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	if a.windows == nil {
+		a.windows = make(map[string]*application.WebviewWindow)
+	}
+	a.windows[name] = w
+}
+
+func (a *App) unregisterWindow(name string) {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	delete(a.windows, name)
+}
+
+func (a *App) windowByName(name string) *application.WebviewWindow {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	return a.windows[name]
+}
+
+// WhoAmI 返回「调用这个方法的窗口名」。
+//
+// 靠的是 v3 的约定：Service 方法第一个参数是 context.Context 时，框架会把
+// 调用方的窗口塞进 ctx（application.WindowKey）。这是多窗口按来源分流的
+// 基础 —— 不用前端手动传窗口 ID。
+func (a *App) WhoAmI(ctx context.Context) string {
+	if w, ok := ctx.Value(application.WindowKey).(*application.WebviewWindow); ok && w != nil {
+		return w.Name()
+	}
+	return "(unknown)"
+}
+
+// OpenProbeWindow 打开（或聚焦）多窗口验证窗口。
+func (a *App) OpenProbeWindow() string {
+	const name = "probe"
+	if w := a.windowByName(name); w != nil {
+		w.Show()
+		w.Focus()
+		return name
+	}
+	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:   name,
+		Title:  "多窗口原型",
+		Width:  560,
+		Height: 480,
+		URL:    "/?w=probe",
+	})
+	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
+		a.unregisterWindow(name)
+	})
+	a.registerWindow(name, w)
+	return name
+}
+
+// EmitTo 把事件定向发给某一个窗口（不是广播）。
+func (a *App) EmitTo(target, event, msg string) string {
+	w := a.windowByName(target)
+	if w == nil {
+		return "没有名为 " + target + " 的窗口"
+	}
+	w.EmitEvent(event, msg)
+	return "已定向发给 " + target
+}
+
+// WindowNames 列出当前注册的窗口，供原型面板显示。
+func (a *App) WindowNames() []string {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	out := make([]string, 0, len(a.windows))
+	for n := range a.windows {
+		out = append(out, n)
+	}
+	return out
 }
 
 // emit 是 v2 runtime.EventsEmit 的替身。

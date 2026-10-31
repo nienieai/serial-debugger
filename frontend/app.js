@@ -1,3 +1,61 @@
+// ---- 多窗口原型 ----
+//
+// 独立窗口用 ?w=probe 打开（Go 侧见 app.go 的 OpenProbeWindow）。
+// 这个面板只验证三件事：窗口注册表、ctx 拿调用窗口、window.EmitEvent 定向。
+function initProbeWindow() {
+  document.title = '多窗口原型';
+  var body = document.body;
+  body.innerHTML = '';
+
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:20px;line-height:2';
+  wrap.innerHTML =
+    '<h2 style="margin:0 0 14px">多窗口原型</h2>' +
+    '<p>WhoAmI()（ctx 里的调用窗口）: <code id="probeWho">…</code></p>' +
+    '<p>注册表中的窗口: <code id="probeNames">…</code></p>' +
+    '<p style="margin:16px 0 8px">' +
+    '  <button id="probeToMain">发给 main</button> ' +
+    '  <button id="probeToSelf">发给 probe</button>' +
+    '</p>' +
+    '<p>发信结果: <code id="probeSend">-</code></p>' +
+    '<p>收到的事件: <code id="probeMsg">(还没有)</code></p>';
+  body.appendChild(wrap);
+
+  function set(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = String(v);
+  }
+
+  var App = window.go.main.App;
+  App.WhoAmI().then(function (n) { set('probeWho', n); })
+    .catch(function (e) { set('probeWho', 'ERR ' + e); });
+  App.WindowNames().then(function (n) { set('probeNames', (n || []).join(', ')); })
+    .catch(function (e) { set('probeNames', 'ERR ' + e); });
+
+  document.getElementById('probeToMain').addEventListener('click', function () {
+    App.EmitTo('main', 'probe-ping', '来自 probe 窗口的问候').then(function (r) { set('probeSend', r); })
+      .catch(function (e) { set('probeSend', 'ERR ' + e); });
+  });
+  document.getElementById('probeToSelf').addEventListener('click', function () {
+    App.EmitTo('probe', 'probe-ping', '自测：发给自己的事件').then(function (r) { set('probeSend', r); })
+      .catch(function (e) { set('probeSend', 'ERR ' + e); });
+  });
+
+  if (window.wails && window.wails.Events) {
+    window.wails.Events.On('probe-ping', function (ev) {
+      set('probeMsg', (ev && ev.data) || '(空)');
+    });
+  }
+}
+
+function openProbeWindow() {
+  window.go.main.App.OpenProbeWindow().then(function (name) {
+    if (window.console) console.log('[probe] 已打开窗口: ' + name);
+  }).catch(function (e) {
+    alert('打开测试窗口失败: ' + e);
+  });
+}
+
 // ---- state ----
 const state = {
   daemonOnline: false,
@@ -2057,6 +2115,11 @@ function createThemeOverlay() {
 
 // ---- init ----
 window.addEventListener('DOMContentLoaded', () => {
+  // 多窗口原型：?w=probe 是独立窗口，只渲染验证面板，不初始化主界面
+  if (new URLSearchParams(location.search).get('w') === 'probe') {
+    initProbeWindow();
+    return;
+  }
   // Bind stable tab drag handlers to bar
   var bar = document.getElementById('tabsBar');
   if (bar) {
@@ -2138,6 +2201,11 @@ window.addEventListener('DOMContentLoaded', () => {
     // 关窗口时 Go 侧判定「要停守护进程、且用户开了确认」→ 拦住关闭并让前端弹框
     window.runtime.EventsOn('app-close-confirm', (data) => onAppCloseConfirm(data));
     window.runtime.EventsOn('multistr-changed', (data) => onMultistrChanged(data));
+    // 多窗口原型：probe 窗口定向发过来的事件
+    window.runtime.EventsOn('probe-ping', (data) => {
+      if (typeof showAlert === 'function') showAlert('收到 probe 事件', String(data), null, true);
+      else alert('probe: ' + data);
+    });
   } catch {}
 
   initDividerDrag();

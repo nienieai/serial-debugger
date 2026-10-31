@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 	"time"
 
 	"github.com/nienieai/serial-debugger/version"
@@ -53,6 +54,7 @@ func main() {
 	})
 
 	win := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:           "main",
 		Title:          "串口调试工具 v" + version.Version,
 		Width:          1200,
 		Height:         780,
@@ -79,6 +81,16 @@ func main() {
 		go func() {
 			time.Sleep(1200 * time.Millisecond)
 			win.OpenDevTools()
+		}()
+	}
+
+	// 多窗口原型开关：SERIAL_PROBE_WINDOW=1 时启动后自动开一个验证窗口。
+	// 窗口管理器要等 app.Run() 之后才就绪，所以这里用 goroutine + 延时。
+	// 阶段 2 做出正式的窗口菜单后删掉这个开关。
+	if os.Getenv("SERIAL_PROBE_WINDOW") == "1" {
+		go func() {
+			time.Sleep(2500 * time.Millisecond)
+			log.Printf("[probe] 自动打开验证窗口: %s", svc.OpenProbeWindow())
 		}()
 	}
 
