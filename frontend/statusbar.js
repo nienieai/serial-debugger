@@ -97,7 +97,8 @@ function createStatusCursor(container) {
 // ---- StatusTabSize: tab size display ----
 function createStatusTabSize(container) {
 	var span = document.createElement('span');
-	span.className = 'stat-item';
+	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	span.className = 'stat-item dsp-item';
 	span.textContent = 'Tab:4';
 	container.appendChild(span);
 
@@ -109,7 +110,8 @@ function createStatusTabSize(container) {
 // ---- StatusEol: line ending display ----
 function createStatusEol(container) {
 	var span = document.createElement('span');
-	span.className = 'stat-item';
+	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	span.className = 'stat-item dsp-item';
 	span.textContent = 'LF';
 	container.appendChild(span);
 
@@ -125,7 +127,8 @@ function createStatusEol(container) {
 // ---- StatusEncoding: current encoding label ----
 function createStatusEncoding(container) {
 	var span = document.createElement('span');
-	span.className = 'stat-item';
+	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	span.className = 'stat-item dsp-item';
 	span.textContent = 'UTF-8';
 	container.appendChild(span);
 

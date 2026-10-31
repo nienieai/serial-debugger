@@ -222,7 +222,7 @@ function buildSettingsPage() {
 	body.className = 'settings-body';
 
 
-	// ── Panel: 编码与显示 ──
+	// ── Panel: 界面（字体 / 行为 / 高级；编码与显示已按标签页走）──
 	var panelDisplay = document.createElement('div');
 	panelDisplay.className = 'settings-panel';
 	panelDisplay.setAttribute('data-panel', 'display');
@@ -745,7 +745,9 @@ function buildSettingsPage() {
 
 	// Nav items + panels
 	var sections = [
-		{ key: 'display',    i18n: 'settings.nav_display',    fb: '编码与显示', panel: panelDisplay },
+		// 里面已经没有编码 / Hex / 文本那些了（它们按标签页走 / 放 daemon.ini），
+		// 剩下的是字体、行为、高级，叫「界面」。
+		{ key: 'display',    i18n: 'settings.nav_display',    fb: '界面', panel: panelDisplay },
 		{ key: 'colors',     i18n: 'settings.nav_colors',     fb: '数据高亮',   panel: panelColors },
 		{ key: 'appearance', i18n: 'settings.nav_appearance', fb: '外观',       panel: panelAppear },
 		{ key: 'tabs',       i18n: 'settings.nav_tabs',       fb: '标签页',     panel: panelTabs },

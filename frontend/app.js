@@ -3278,9 +3278,19 @@ async function autoCreateIdleSession(mode) {
 }
 
 
+// 状态栏的 Tab / 编码 / 行尾 三项属于「某一条会话」：设置页、选择页这些没有会话的页面上
+// 显示它们只是噪音（还会显示成新标签页的默认值，容易被当成当前值）。
+function _syncStatusDispItems() {
+  var at = getActiveTab();
+  var show = !!at && isSessionTab(at);
+  var els = document.querySelectorAll('.dsp-item');
+  for (var i = 0; i < els.length; i++) els[i].classList.toggle('is-hidden', !show);
+}
+
 // tabSize / eolSequence 也是每个标签页各自的：切完标签把状态栏和 tab-size
 // 样式同步到新标签页。延后一拍执行，免得在 activeTab 还没改的时候读到旧值。
 function _syncTabDisplayChrome() {
+  _syncStatusDispItems();
   if (typeof _applyDisplayStyle === 'function') _applyDisplayStyle();
   if (_statusBar) _statusBar.updateEol();
 }
@@ -6504,6 +6514,7 @@ function updateAutoCreateCheck(on) {
 }
 
 function updateEmptyState() {
+  _syncStatusDispItems();
   // Count real (non-welcome) tabs
   var realTabs = state.tabs.filter(function(t) { return !(t._page && t._page.isWelcome); });
   if (_statusBar) _statusBar.updateDaemon({online: state.daemonOnline, tabsCount: realTabs.length});
