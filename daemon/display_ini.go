@@ -57,7 +57,8 @@ func mergeDisplaySection(body string, kv map[string]string) string {
 		sb.WriteString("# 单个标签页可以各自改，工程会话会把它写进工程目录的 settings.json。\n")
 		sb.WriteString("[display]\n")
 		for _, k := range []string{"encoding", "hex_case", "hex_prefix", "hex_sep",
-			"cr_visible", "hex_escape_mode", "hex_escape_format", "copy_hex_escapes"} {
+			"cr_visible", "hex_escape_mode", "hex_escape_format", "copy_hex_escapes",
+			"tab_size", "eol_sequence"} {
 			if v, ok := kv[k]; ok {
 				sb.WriteString(k + " = " + v + "\n")
 			}
@@ -89,7 +90,8 @@ func mergeDisplaySection(body string, kv map[string]string) string {
 	// 缺的键补到段尾
 	var add []string
 	for _, k := range []string{"encoding", "hex_case", "hex_prefix", "hex_sep",
-		"cr_visible", "hex_escape_mode", "hex_escape_format", "copy_hex_escapes"} {
+		"cr_visible", "hex_escape_mode", "hex_escape_format", "copy_hex_escapes",
+		"tab_size", "eol_sequence"} {
 		if v, ok := kv[k]; ok && !seen[k] {
 			add = append(add, k+" = "+v)
 		}

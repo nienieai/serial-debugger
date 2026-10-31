@@ -192,7 +192,7 @@ function TabPage(tabIndex, tabData) {
 	sendInput.addEventListener('mouseenter', function() { if (typeof _hintCurrentSendInput === 'function') _hintCurrentSendInput(); });
 	sendInput.addEventListener('keydown', function(e) {
 		if (e.key === 'Enter') {
-			var seq = (typeof state !== 'undefined' && state.eolSequence) ? state.eolSequence : 'lf';
+			var seq = (typeof _dispOf === 'function' ? _dispOf().eolSequence : 'lf') || 'lf';
 			if (seq === 'lf') return; // default
 			e.preventDefault();
 			var st = this.selectionStart, ed = this.selectionEnd;

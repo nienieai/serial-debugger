@@ -116,7 +116,7 @@ function createStatusEol(container) {
 	return {
 		update: function() {
 			var labels = { lf: 'LF', cr: 'CR', crlf: 'CRLF' };
-			var v = (typeof state !== 'undefined' && state.eolSequence) ? state.eolSequence : 'lf';
+			var v = (typeof _dispOf === 'function' ? _dispOf().eolSequence : 'lf') || 'lf';
 			span.textContent = labels[v] || v.toUpperCase();
 		},
 	};

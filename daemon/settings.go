@@ -40,6 +40,9 @@ var displayKeys = []struct{ ini, json, def string }{
 	{"hex_escape_mode", "hexEscapeMode", "show"},
 	{"hex_escape_format", "hexEscapeFormat", "slash"},
 	{"copy_hex_escapes", "copyHexEscapes", "true"},
+	// 制表符长度与行尾序列也是「怎么看 / 怎么发」的一部分，同样按标签页走
+	{"tab_size", "tabSize", "4"},
+	{"eol_sequence", "eolSequence", "lf"},
 }
 
 func defaultDaemonSettings() daemonSettings {

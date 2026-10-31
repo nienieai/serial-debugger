@@ -27,7 +27,9 @@ const state = {
   // 每个会话标签页有自己的 disp（见 _newTabDisp），默认值从这里拷。
   _dispDefaults: {
     encoding: 'utf-8', hexCase: 'upper', hexPrefix: true, hexSep: 'space',
-    crVisible: true, hexEscapeMode: 'show', hexEscapeFormat: 'slash', copyHexEscapes: true
+    crVisible: true, hexEscapeMode: 'show', hexEscapeFormat: 'slash', copyHexEscapes: true,
+    // 制表符长度与行尾序列同样按标签页走（状态栏那行 Tab:4 UTF-8 LF 三样都跟标签页）
+    tabSize: 4, eolSequence: 'lf'
   },
   displayFontFamily: 'Consolas',
   displayFontSize: 14,
@@ -167,6 +169,9 @@ function _applyDisplayDefaults(raw) {
   pick('hexEscapeMode', null, function(v) { return v === 'show' || v === 'hide' || v === 'raw'; });
   pick('hexEscapeFormat', null, function(v) { return typeof v === 'string' && v !== ''; });
   pick('copyHexEscapes', toBool, isBool);
+  pick('tabSize', function(v) { return parseInt(v, 10); },
+    function(v) { return typeof v === 'number' && !isNaN(v) && v >= 1 && v <= 8; });
+  pick('eolSequence', null, function(v) { return v === 'lf' || v === 'cr' || v === 'crlf'; });
   _syncDispUi();
 }
 
@@ -240,8 +245,8 @@ function _collectSettings() {
       // 默认值来自守护进程的 daemon.ini，工程会话写进工程目录的 settings.json。
       displayFontFamily: state.displayFontFamily,
       displayFontSize: state.displayFontSize,
-      tabSize: state.tabSize,
-      eolSequence: state.eolSequence,
+      tabSize: state._dispDefaults.tabSize,
+      eolSequence: state._dispDefaults.eolSequence,
       theme: state.colorThemeMode,
       colorThemeId: state.colorThemeId,
       colorThemeMode: state.colorThemeMode,
@@ -353,8 +358,8 @@ async function loadSettings() {
       if (s.language && typeof s.language === 'string') state.language = s.language;
       if (typeof s.displayFontFamily === 'string') state.displayFontFamily = s.displayFontFamily;
       if (typeof s.displayFontSize === 'number') state.displayFontSize = s.displayFontSize;
-      if (typeof s.tabSize === 'number') state.tabSize = s.tabSize;
-      if (typeof s.eolSequence === 'string') state.eolSequence = s.eolSequence;
+      // tabSize / eolSequence 0.8.4 起按标签页走，默认值由 loadDisplayDefaults 从
+      // 守护进程的 daemon.ini 拉，不再从 gui.ini 读。
       // 历史渲染窗口：null/缺失 = 按视口推导
       if (typeof s.historyWindowRows === 'number' && s.historyWindowRows > 0) {
         state.historyWindowRows = s.historyWindowRows;
@@ -555,8 +560,9 @@ function _applyDisplayStyle() {
     el.id = 'display-font-style';
     document.head.appendChild(el);
   }
-  el.textContent = '.display-content,#sendInput,#sendMirror,.c-color-preview{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + state.tabSize + ';}';
-  if (_statusBar) _statusBar.updateTabSize({tabSize: state.tabSize});
+  var _tsz = _dispOf().tabSize;
+  el.textContent = '.display-content,#sendInput,#sendMirror,.c-color-preview{font-family:"' + state.displayFontFamily + '",monospace;font-size:' + state.displayFontSize + 'px;tab-size:' + _tsz + ';}';
+  if (_statusBar) _statusBar.updateTabSize({tabSize: _tsz});
 }
 
 function updateEncodingDisplay() {
@@ -3272,8 +3278,16 @@ async function autoCreateIdleSession(mode) {
 }
 
 
+// tabSize / eolSequence 也是每个标签页各自的：切完标签把状态栏和 tab-size
+// 样式同步到新标签页。延后一拍执行，免得在 activeTab 还没改的时候读到旧值。
+function _syncTabDisplayChrome() {
+  if (typeof _applyDisplayStyle === 'function') _applyDisplayStyle();
+  if (_statusBar) _statusBar.updateEol();
+}
+
 function switchTab(idx) {
   closeTabSettings();   // 设置弹窗属于某一个标签页，切走就关掉
+  setTimeout(_syncTabDisplayChrome, 0);
   var oldTab = getActiveTab();
   var newTab = state.tabs[idx];
   if (!newTab) return;
@@ -5059,6 +5073,17 @@ function openTabSettings(tab) {
   row(t('settings.bubble_encoding', '编码格式'),
     sel(['utf-8', 'gb2312', 'ascii'], ['UTF-8', 'GB2312', 'ASCII'], d.encoding,
       function (v) { setEncoding(v); syncTabSettingsPopup(); }));
+  row(t('settings.tab_size', '制表符长度'),
+    sel(['1', '2', '3', '4', '5', '6', '7', '8'], ['1', '2', '3', '4', '5', '6', '7', '8'],
+      String(d.tabSize || 4),
+      function (v) { _setDisp('tabSize', parseInt(v, 10)); _applyDisplayStyle(); syncTabSettingsPopup(); }));
+  row(t('settings.eol_sequence', '行尾序列'),
+    sel(['lf', 'cr', 'crlf'], ['LF', 'CR', 'CRLF'], d.eolSequence || 'lf',
+      function (v) {
+        _setDisp('eolSequence', v);
+        if (_statusBar) _statusBar.updateEol();
+        syncTabSettingsPopup();
+      }));
   row(t('settings.hex_prefix', 'Hex 前缀 (0x)'),
     tgl(d.hexPrefix, function () { toggleHexPrefix(); syncTabSettingsPopup(); }));
   // 开关语义与设置页一致：开 = 大写。别做成「大写/小写」下拉 —— 标题写着「Hex 大写」
@@ -5106,15 +5131,17 @@ function syncTabSettingsPopup() {
   var sels = _tabSetEl.querySelectorAll('select');
   var inputs = _tabSetEl.querySelectorAll('input[type=checkbox]');
   if (sels[0]) sels[0].value = d.encoding;
-  if (sels[1]) sels[1].value = d.hexSep;
-  if (sels[2]) sels[2].value = d.hexEscapeMode;
-  if (sels[3]) sels[3].value = d.hexEscapeFormat || 'slash';
+  if (sels[1]) sels[1].value = String(d.tabSize || 4);
+  if (sels[2]) sels[2].value = d.eolSequence || 'lf';
+  if (sels[3]) sels[3].value = d.hexSep;
+  if (sels[4]) sels[4].value = d.hexEscapeMode;
+  if (sels[5]) sels[5].value = d.hexEscapeFormat || 'slash';
   if (inputs[0]) inputs[0].checked = !!d.hexPrefix;
   if (inputs[1]) inputs[1].checked = d.hexCase === 'upper';
   if (inputs[2]) inputs[2].checked = !!d.crVisible;
   if (inputs[3]) inputs[3].checked = !!d.copyHexEscapes;
   var rows = _tabSetEl.querySelectorAll('.tabset-row');
-  if (rows[5]) rows[5].classList.toggle('is-hidden', d.hexEscapeMode !== 'show');
+  if (rows[7]) rows[7].classList.toggle('is-hidden', d.hexEscapeMode !== 'show');
 }
 
 function openSettingsPage() {

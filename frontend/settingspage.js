@@ -232,16 +232,8 @@ function buildSettingsPage() {
 	panelColors.className = 'settings-panel is-hidden';
 	panelColors.setAttribute('data-panel', 'colors');
 
-	// 编码格式 0.8.4 起改按标签页设置（标签右键菜单 →「标签页设置」）。
-	// 设置页只保留与「当前是哪个标签页」无关的排版项。
-	var bInput = _bubble(t('settings.bubble_typography','排版'));
-	bInput.appendChild(_row(t('settings.tab_size','制表符长度'),
-		_buildSelect([1,2,3,4,5,6,7,8], ['1','2','3','4','5','6','7','8'], state.tabSize, function(v) { state.tabSize = parseInt(v); _applyDisplayStyle(); saveSettings(); })
-	));
-	bInput.appendChild(_row(t('settings.eol_sequence','行尾序列'),
-		_buildSelect(['lf','cr','crlf'], ['LF','CR','CRLF'], state.eolSequence, function(v) { state.eolSequence = v; saveSettings(); if(_statusBar)_statusBar.updateEol(); })
-	));
-	panelDisplay.appendChild(bInput);
+	// 制表符长度 / 行尾序列 / 编码 0.8.4 起都按标签页走，
+	// 在「标签页设置」弹窗里改；设置页这一气泡已经没有剩下的项了。
 
 	var bFont = _bubble(t('settings.bubble_font','显示字体'));
 	bFont.appendChild(_row(t('settings.font_family','字体'),
