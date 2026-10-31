@@ -243,6 +243,7 @@ async function loadSettings() {
         try { state.displayColors = JSON.parse(s.displayColors); } catch(e) {}
       }
       if (!state.displayColors) state.displayColors = _defaultDisplayColors();
+      else _migrateColorDefaults();
       if (typeof _applyDisplayColors === 'function') _applyDisplayColors();
     }
     // Always initialize UI regardless of whether settings exist
@@ -880,11 +881,11 @@ function _defaultDisplayColors() {
     hexEsc:  { dark: '#e91e63', light: '#c2185b', bgDark: T, bgLight: T, bold: false, italic: false },
     hexInv:  { dark: '#ff5c5c', light: '#dc2626', bgDark: T, bgLight: T, bold: false, italic: false },
     ctrlBg:  { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
-    ctrlFg:  { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    ctrlFg:  { dark: '#8a8a8a', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
     stat:    { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false },
     fhexEsc: { dark: '#e91e63', light: '#c2185b', bgDark: T, bgLight: T, bold: false, italic: false },
     fctrlBg: { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
-    fctrlFg: { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    fctrlFg: { dark: '#8a8a8a', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
     fstat:   { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false },
     // ── 发送框（输入区）独立配色 ──
     // 0.8.4 之前发送框没有自己的键，全是借历史流的：hex 字节吃 --dc-hexTx、
@@ -895,9 +896,26 @@ function _defaultDisplayColors() {
     sendHexBad: { dark: '#ff5c5c', light: '#dc2626', bgDark: T, bgLight: T, bold: false, italic: false },
     sendPrefix: { dark: '#808080', light: '#9a9a9a', bgDark: T, bgLight: T, bold: false, italic: false },
     sendCtrlBg: { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
-    sendCtrl:   { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendCtrl:   { dark: '#8a8a8a', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
     sendPh:     { dark: '#808080', light: '#9a9a9a', bgDark: T, bgLight: T, bold: false, italic: false }
   };
+}
+
+// 0.8.4：控制字符的深色默认值原来是 #cccccc —— 在 #1e1e1e 背景上跟正文白字
+// （#ffffff）几乎同亮度，`·` `←↵` `→` 这些标记看着就像普通字符。改暗一档。
+// 改默认值只对「没保存过的配置」生效，所以已经写进 gui.ini 的旧值要迁移 ——
+// 但只迁移「值仍是旧默认」的那些，用户自己调过的颜色不动。
+var _CTRL_FG_OLD_DARK = '#cccccc';
+function _migrateColorDefaults() {
+  var dc = state.displayColors;
+  if (!dc) return;
+  var dflt = _defaultDisplayColors();
+  ['ctrlFg', 'fctrlFg', 'sendCtrl'].forEach(function(k) {
+    var v = dc[k];
+    if (v && typeof v.dark === 'string' && v.dark.toLowerCase() === _CTRL_FG_OLD_DARK) {
+      v.dark = dflt[k].dark;
+    }
+  });
 }
 
 function applyI18n() {
