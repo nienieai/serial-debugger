@@ -1645,16 +1645,19 @@ function _renderColorPreview(items, container, kind) {
 	if (!container) return;
 	container.innerHTML = '';
 	var isFwd = kind ? kind === 'fwd' : items[0].key === 'ts1';
+	// 样本文案要让人一眼看到「空格」和「Tab」：空格走 renderSegments 的
+	// text 段（state.crVisible 时画成 ·），Tab 必须单独成段（t:'tab'）——
+	// text 段只按空格切分，夹在文字里的 \t 会原样输出、看不出制表位。
 	var samples = isFwd ? [
 		{ dir: '1', ts: '13:00:02.100', hex: 'E8AFB7E6B182020D0A',
 		  segs: [{ t: 'text', v: '请求' }, { t: 'hex', v: '02' }, { t: 'cr' }, { t: 'lf' }] },
 		{ dir: '2', ts: '13:00:02.200', hex: 'E7A1AEE8AEA4030D0A',
 		  segs: [{ t: 'text', v: '确认' }, { t: 'hex', v: '03' }, { t: 'cr' }, { t: 'lf' }] }
 	] : [
-		{ dir: 'rx', ts: '13:00:01.100', hex: '4869010D0A',
-		  segs: [{ t: 'text', v: 'Hi' }, { t: 'hex', v: '01' }, { t: 'cr' }, { t: 'lf' }] },
-		{ dir: 'tx', ts: '13:00:01.200', hex: '4F4BFF0D0A',
-		  segs: [{ t: 'text', v: 'OK' }, { t: 'hex', v: 'FF' }, { t: 'cr' }, { t: 'lf' }] }
+		{ dir: 'rx', ts: '13:00:01.100', hex: '41542B2043574D4F44450D0A',
+		  segs: [{ t: 'text', v: 'AT+ CWMODE' }, { t: 'crlf' }] },
+		{ dir: 'tx', ts: '13:00:01.200', hex: '095253540D0A',
+		  segs: [{ t: 'tab' }, { t: 'text', v: 'RST' }, { t: 'crlf' }] }
 	];
 	var modes = ['dark', 'light'];
 	for (var m = 0; m < 2; m++) {
@@ -1697,17 +1700,40 @@ function _renderSendPreview(container) {
 			return r;
 		}
 
-		// 文本模式：普通字符 + 控制字符标记（←↵）
+		// 文本模式：普通字符 + 控制字符标记（· ←↵），第二行示范 Tab（→，占 4 字符位）
 		var r1 = makeRow(t('settings.send_preview_text', '文本'));
 		var w1 = document.createElement('span');
 		w1.className = 'c-send-preview__text';
-		w1.textContent = 'AT+CWMODE=1';
+		w1.textContent = 'AT+';
 		r1.appendChild(w1);
+		var sp1 = document.createElement('span');
+		sp1.className = 'c-send-preview__ctrl';
+		sp1.textContent = '·';
+		r1.appendChild(sp1);
+		var w2 = document.createElement('span');
+		w2.className = 'c-send-preview__text';
+		w2.textContent = 'CWMODE=1';
+		r1.appendChild(w2);
 		var c1 = document.createElement('span');
 		c1.className = 'c-send-preview__ctrl';
 		c1.textContent = '←↵';
 		r1.appendChild(c1);
 		box.appendChild(r1);
+
+		var r1b = makeRow('');
+		var tab = document.createElement('span');
+		tab.className = 'c-send-preview__ctrl c-send-preview__tab';
+		tab.textContent = '→';
+		r1b.appendChild(tab);
+		var w3 = document.createElement('span');
+		w3.className = 'c-send-preview__text';
+		w3.textContent = 'RST';
+		r1b.appendChild(w3);
+		var c1b = document.createElement('span');
+		c1b.className = 'c-send-preview__ctrl';
+		c1b.textContent = '←↵';
+		r1b.appendChild(c1b);
+		box.appendChild(r1b);
 
 		// Hex 模式：0x 前缀弱化、合法字节、非法字节（波浪线）
 		var r2 = makeRow(t('settings.send_preview_hex', 'Hex'));

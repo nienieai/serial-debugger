@@ -922,6 +922,8 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .c-send-preview__prefix { color: var(--dc-sendPrefix, var(--placeholder)); }
 .c-send-preview__ctrl   { color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg)));
                           background: var(--dc-sendCtrlBg, transparent); }
+/* Tab：真实发送框里 → 叠在制表位上，宽度由 tab-size 撑开；预览里用 4ch 模拟 */
+.c-send-preview__tab    { display: inline-block; width: 4ch; }
 .c-send-preview__ph     { color: var(--dc-sendPh, var(--placeholder)); }
 
 /* Close × button */
