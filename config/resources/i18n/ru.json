@@ -519,5 +519,15 @@
   "tab.sub_not_taken": "Не подключён",
   "tab.sub_project": "Проект",
   "tab.sub_readonly": "Только чтение",
-  "tab.sub_unset": "Не настроено"
+  "tab.sub_unset": "Не настроено",
+  "settings.color_group_stream": "Поток истории",
+  "settings.color_group_send": "Поле отправки",
+  "settings.color_send_text": "Вводимый текст",
+  "settings.color_send_hex": "Hex-байты",
+  "settings.color_send_hex_bad": "Неверный Hex",
+  "settings.color_send_prefix": "Префикс 0x",
+  "settings.color_send_ph": "Подсказка",
+  "settings.send_preview_text": "Текст",
+  "settings.send_preview_hex": "Hex",
+  "settings.send_preview_empty": "Пусто"
 }

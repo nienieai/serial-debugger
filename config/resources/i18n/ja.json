@@ -519,5 +519,15 @@
   "tab.sub_not_taken": "未接続",
   "tab.sub_project": "プロジェクト",
   "tab.sub_readonly": "読み取り専用",
-  "tab.sub_unset": "未設定"
+  "tab.sub_unset": "未設定",
+  "settings.color_group_stream": "履歴ストリーム",
+  "settings.color_group_send": "送信ボックス",
+  "settings.color_send_text": "入力テキスト",
+  "settings.color_send_hex": "Hex バイト",
+  "settings.color_send_hex_bad": "無効な Hex",
+  "settings.color_send_prefix": "0x プレフィックス",
+  "settings.color_send_ph": "プレースホルダー",
+  "settings.send_preview_text": "テキスト",
+  "settings.send_preview_hex": "Hex",
+  "settings.send_preview_empty": "空"
 }

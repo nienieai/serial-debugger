@@ -885,7 +885,18 @@ function _defaultDisplayColors() {
     fhexEsc: { dark: '#e91e63', light: '#c2185b', bgDark: T, bgLight: T, bold: false, italic: false },
     fctrlBg: { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
     fctrlFg: { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
-    fstat:   { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false }
+    fstat:   { dark: '#888888', light: '#999999', bgDark: T, bgLight: T, bold: false, italic: false },
+    // ── 发送框（输入区）独立配色 ──
+    // 0.8.4 之前发送框没有自己的键，全是借历史流的：hex 字节吃 --dc-hexTx、
+    // 非法字节吃 --dc-hexInv、控制字符吃 --dc-ctrlFg/Bg、普通字符吃 --fg。
+    // 于是「改发送框 Hex 颜色」会连带改掉记录区里 Tx 行的 Hex，反过来也一样。
+    sendText:   { dark: '#ffffff', light: '#000000', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendHex:    { dark: '#f59e0b', light: '#d97706', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendHexBad: { dark: '#ff5c5c', light: '#dc2626', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendPrefix: { dark: '#808080', light: '#9a9a9a', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendCtrlBg: { dark: T, light: T, bgDark: T, bgLight: T, bold: false, italic: false },
+    sendCtrl:   { dark: '#cccccc', light: '#bbbbbb', bgDark: T, bgLight: T, bold: false, italic: false },
+    sendPh:     { dark: '#808080', light: '#9a9a9a', bgDark: T, bgLight: T, bold: false, italic: false }
   };
 }
 

@@ -519,5 +519,15 @@
   "tab.sub_not_taken": "未接管",
   "tab.sub_project": "工程",
   "tab.sub_readonly": "唯讀",
-  "tab.sub_unset": "未設定"
+  "tab.sub_unset": "未設定",
+  "settings.color_group_stream": "歷史流",
+  "settings.color_group_send": "傳送框",
+  "settings.color_send_text": "輸入文字",
+  "settings.color_send_hex": "Hex 位元組",
+  "settings.color_send_hex_bad": "無效 Hex",
+  "settings.color_send_prefix": "0x 前綴",
+  "settings.color_send_ph": "佔位提示",
+  "settings.send_preview_text": "文字",
+  "settings.send_preview_hex": "Hex",
+  "settings.send_preview_empty": "空"
 }

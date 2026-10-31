@@ -519,5 +519,15 @@
   "tab.sub_not_taken": "غير مُدار",
   "tab.sub_project": "مشروع",
   "tab.sub_readonly": "للقراءة فقط",
-  "tab.sub_unset": "غير مُهيّأ"
+  "tab.sub_unset": "غير مُهيّأ",
+  "settings.color_group_stream": "سجل التدفق",
+  "settings.color_group_send": "صندوق الإرسال",
+  "settings.color_send_text": "نص الإدخال",
+  "settings.color_send_hex": "بايتات Hex",
+  "settings.color_send_hex_bad": "Hex غير صالح",
+  "settings.color_send_prefix": "بادئة 0x",
+  "settings.color_send_ph": "نص العنصر النائب",
+  "settings.send_preview_text": "نص",
+  "settings.send_preview_hex": "Hex",
+  "settings.send_preview_empty": "فارغ"
 }

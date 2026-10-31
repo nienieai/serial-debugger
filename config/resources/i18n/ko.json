@@ -519,5 +519,15 @@
   "tab.sub_not_taken": "미연결",
   "tab.sub_project": "프로젝트",
   "tab.sub_readonly": "읽기 전용",
-  "tab.sub_unset": "미설정"
+  "tab.sub_unset": "미설정",
+  "settings.color_group_stream": "기록 스트림",
+  "settings.color_group_send": "전송 상자",
+  "settings.color_send_text": "입력 텍스트",
+  "settings.color_send_hex": "Hex 바이트",
+  "settings.color_send_hex_bad": "잘못된 Hex",
+  "settings.color_send_prefix": "0x 접두사",
+  "settings.color_send_ph": "자리 표시자",
+  "settings.send_preview_text": "텍스트",
+  "settings.send_preview_hex": "Hex",
+  "settings.send_preview_empty": "비어 있음"
 }

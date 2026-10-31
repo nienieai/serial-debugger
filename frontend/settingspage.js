@@ -332,7 +332,10 @@ function buildSettingsPage() {
 	// Display color overrides — new layout: [name] [bg-color:dark|light] [fg-color:dark|light]
 	var bColor = _bubble(t('settings.bubble_colors_display','数据高亮'), _buildColorResetBtn());
 	var colorGroups = [
-		{ title: t('settings.color_group_single','单端口'), items: [
+		// kind 决定用哪个预览渲染器：stream = 主显示区那条路径（makeDataRow），
+		// send = 发送框预览，fwd = 端口转发。历史流那一组就是原来的「单端口」，
+		// 只是改了名 —— 这些颜色本来就只出现在记录区。
+		{ title: t('settings.color_group_stream','历史流'), kind: 'stream', items: [
 			{ key: 'tsTx',   i18n: 'settings.color_ts_tx',   fb: '发送时间戳' },
 			{ key: 'tsRx',   i18n: 'settings.color_ts_rx',   fb: '接收时间戳' },
 			{ key: 'stat',   i18n: 'settings.color_stat',    fb: '字符统计' },
@@ -344,7 +347,17 @@ function buildSettingsPage() {
 			{ key: 'hexEsc', i18n: 'settings.color_hex_esc', fb: '转义字节' },
 			{ key: 'ctrl',   i18n: 'settings.color_ctrl',    fb: '控制字符', bgKey: 'ctrlBg', fgKey: 'ctrlFg' }
 		]},
-		{ title: t('settings.color_group_forward','端口转发'), items: [
+		// 发送框这套是 0.8.4 新拆出来的：以前它借历史流的 hexTx / hexInv / ctrlFg，
+		// 改一头会连带改另一头。
+		{ title: t('settings.color_group_send','发送框'), kind: 'send', items: [
+			{ key: 'sendText',   i18n: 'settings.color_send_text',    fb: '输入文本' },
+			{ key: 'sendHex',    i18n: 'settings.color_send_hex',     fb: 'Hex 字节' },
+			{ key: 'sendHexBad', i18n: 'settings.color_send_hex_bad', fb: '非法 Hex' },
+			{ key: 'sendPrefix', i18n: 'settings.color_send_prefix',  fb: '0x 前缀' },
+			{ key: 'sendCtrl',   i18n: 'settings.color_ctrl',         fb: '控制字符', bgKey: 'sendCtrlBg', fgKey: 'sendCtrl' },
+			{ key: 'sendPh',     i18n: 'settings.color_send_ph',      fb: '占位提示' }
+		]},
+		{ title: t('settings.color_group_forward','端口转发'), kind: 'fwd', items: [
 			{ key: 'ts1',    i18n: 'settings.color_ts_1',    fb: 'P1时间戳' },
 			{ key: 'ts2',    i18n: 'settings.color_ts_2',    fb: 'P2时间戳' },
 			{ key: 'fstat',  i18n: 'settings.color_stat',    fb: '字符统计' },
@@ -371,6 +384,7 @@ function buildSettingsPage() {
 		preview.className = 'c-color-preview-wrap';
 		preview.id = 'colorPreview_' + grp.items[0].key;
 		preview._colorItems = grp.items;
+		preview._colorKind = grp.kind || 'stream';
 		group.appendChild(preview);
 		// Two-layer column header: 设置项 | 加粗 | 背景颜色 | 字体颜色
 		// 加粗/斜体用 B / I 符号，深浅用月亮/太阳图标：这两列只有 26/28px 宽，
@@ -406,7 +420,10 @@ function buildSettingsPage() {
 		grp.items.forEach(function(cfg) { group.appendChild(_buildColorRow(cfg)); });
 		bColor.appendChild(group);
 		// Render preview after DOM attached
-		setTimeout(function() { _renderColorPreview(grp.items, preview); }, 10);
+		setTimeout(function() {
+			if ((grp.kind || 'stream') === 'send') _renderSendPreview(preview);
+			else _renderColorPreview(grp.items, preview, grp.kind);
+		}, 10);
 	});
 	panelColors.appendChild(bColor);
 
@@ -685,7 +702,9 @@ function buildSettingsPage() {
 				_measureBubbleHeads(sec.panel);
 				if (sec.key === 'colors') {
 					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
-						if (el._colorItems) _renderColorPreview(el._colorItems, el);
+						if (!el._colorItems) return;
+						if (el._colorKind === 'send') _renderSendPreview(el);
+						else _renderColorPreview(el._colorItems, el, el._colorKind);
 					});
 				}
 			}, 50);
@@ -1368,7 +1387,10 @@ function _openColorPicker(trigger, defaultColor, onApply, title) {
 }
 
 // Apply display color overrides as CSS custom properties on :root
-var _displayColorKeys = ['tsRx','tsTx','ts1','ts2','textRx','textTx','text1','text2','hexRx','hexTx','hex1','hex2','hexEsc','hexInv','ctrlBg','ctrlFg','stat','fhexEsc','fctrlBg','fctrlFg','fstat'];
+// 这里必须手工列全：`_applyDisplayColors()` 与 `_applyPreviewVars()` 都按这个数组
+// 派生 `--dc-<key>`，漏一个键就等于「设置里能改、界面上不生效」。新增颜色键时
+// 同时改 `app.js` 的 `_defaultDisplayColors()` 和这里。
+var _displayColorKeys = ['tsRx','tsTx','ts1','ts2','textRx','textTx','text1','text2','hexRx','hexTx','hex1','hex2','hexEsc','hexInv','ctrlBg','ctrlFg','stat','fhexEsc','fctrlBg','fctrlFg','fstat','sendText','sendHex','sendHexBad','sendPrefix','sendCtrlBg','sendCtrl','sendPh'];
 
 function _applyDisplayColors() {
 	var colors = state.displayColors || _defaultDisplayColors();
@@ -1582,7 +1604,13 @@ function _refreshColorPreview(key) {
 			if (!items) continue;
 			for (var ii = 0; ii < items.length; ii++) {
 				var it = items[ii];
-				if (it.key === key || it.bgKey === key || it.fgKey === key) { _renderColorPreview(items, pv); return; }
+				if (it.key === key || it.bgKey === key || it.fgKey === key) {
+					// 发送框那组要用它自己的渲染器重画；套用 _renderColorPreview 会
+					// 把预览变成历史流的数据行（改个发送框颜色，框就长得不像输入框了）
+					if (pv._colorKind === 'send') _renderSendPreview(pv);
+					else _renderColorPreview(items, pv, pv._colorKind);
+					return;
+				}
 			}
 		}
 	}
@@ -1613,10 +1641,10 @@ function _applyPreviewVars(box, mode) {
 // 这样看到的就是真实显示框里的样子（时间戳行、字符统计、控制字符标记、转义字节、
 // 字号字体都跟 `state.displayFontSize` / `displayFontFamily` 一致）。
 // `opts.displayMode` 让同一栏里既能画文本行也能画 Hex 行，不必动全局 state。
-function _renderColorPreview(items, container) {
+function _renderColorPreview(items, container, kind) {
 	if (!container) return;
 	container.innerHTML = '';
-	var isFwd = items[0].key === 'ts1';
+	var isFwd = kind ? kind === 'fwd' : items[0].key === 'ts1';
 	var samples = isFwd ? [
 		{ dir: '1', ts: '13:00:02.100', hex: 'E8AFB7E6B182020D0A',
 		  segs: [{ t: 'text', v: '请求' }, { t: 'hex', v: '02' }, { t: 'cr' }, { t: 'lf' }] },
@@ -1640,6 +1668,71 @@ function _renderColorPreview(items, container) {
 			makeDataRow(box, sm.dir, sm.ts, sm.hex, sm.segs, { displayMode: 'text' });
 			makeDataRow(box, sm.dir, sm.ts, sm.hex, null, { displayMode: 'hex' });
 		}
+		container.appendChild(box);
+	}
+}
+
+// 发送框预览：和真实发送框吃同一组变量（`--dc-send*`），但**不复用**
+// `.send-input-mirror` —— 那套是「透明 textarea 叠绝对定位镜像层」的结构
+// （inset:0 + 42px 上下内边距），塞进设置页的 96px 小框里会撑爆。这里用独立类，
+// 颜色规则在 CSS 里与真实发送框写在同一条选择器上，避免两边漂移。
+function _renderSendPreview(container) {
+	if (!container) return;
+	container.innerHTML = '';
+	var modes = ['dark', 'light'];
+	for (var m = 0; m < 2; m++) {
+		var mode = modes[m];
+		var box = document.createElement('div');
+		box.className = 'c-send-preview ' + (m === 0 ? 'c-preview-dark' : 'c-preview-light');
+		box.setAttribute('data-preview-theme', mode);
+		_applyPreviewVars(box, mode);
+
+		function makeRow(tagText) {
+			var r = document.createElement('div');
+			r.className = 'c-send-preview__row';
+			var tag = document.createElement('span');
+			tag.className = 'c-send-preview__tag';
+			tag.textContent = tagText;
+			r.appendChild(tag);
+			return r;
+		}
+
+		// 文本模式：普通字符 + 控制字符标记（←↵）
+		var r1 = makeRow(t('settings.send_preview_text', '文本'));
+		var w1 = document.createElement('span');
+		w1.className = 'c-send-preview__text';
+		w1.textContent = 'AT+CWMODE=1';
+		r1.appendChild(w1);
+		var c1 = document.createElement('span');
+		c1.className = 'c-send-preview__ctrl';
+		c1.textContent = '←↵';
+		r1.appendChild(c1);
+		box.appendChild(r1);
+
+		// Hex 模式：0x 前缀弱化、合法字节、非法字节（波浪线）
+		var r2 = makeRow(t('settings.send_preview_hex', 'Hex'));
+		[['prefix', '0x'], ['hex', 'FF'], [null, ' '],
+		 ['prefix', '0x'], ['hex', 'AA'], [null, ' '],
+		 ['bad', '0xG1']].forEach(function(seg) {
+			if (!seg[0]) {
+				r2.appendChild(document.createTextNode(seg[1]));
+				return;
+			}
+			var s = document.createElement('span');
+			s.className = 'c-send-preview__' + seg[0];
+			s.textContent = seg[1];
+			r2.appendChild(s);
+		});
+		box.appendChild(r2);
+
+		// 空态：占位提示
+		var r3 = makeRow(t('settings.send_preview_empty', '空'));
+		var ph = document.createElement('span');
+		ph.className = 'c-send-preview__ph';
+		ph.textContent = t('send.placeholder', '输入要发送的数据...');
+		r3.appendChild(ph);
+		box.appendChild(r3);
+
 		container.appendChild(box);
 	}
 }

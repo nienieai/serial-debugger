@@ -519,5 +519,15 @@
   "tab.sub_not_taken": "Not attached",
   "tab.sub_project": "Project",
   "tab.sub_readonly": "Read-only",
-  "tab.sub_unset": "Not configured"
+  "tab.sub_unset": "Not configured",
+  "settings.color_group_stream": "History stream",
+  "settings.color_group_send": "Send box",
+  "settings.color_send_text": "Input text",
+  "settings.color_send_hex": "Hex bytes",
+  "settings.color_send_hex_bad": "Invalid Hex",
+  "settings.color_send_prefix": "0x prefix",
+  "settings.color_send_ph": "Placeholder",
+  "settings.send_preview_text": "Text",
+  "settings.send_preview_hex": "Hex",
+  "settings.send_preview_empty": "Empty"
 }

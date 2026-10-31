@@ -898,6 +898,32 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .c-preview-dark  { color: #d4d4d4; background: #1e1e1e; border: 1px solid var(--border); }
 .c-preview-light { color: #1a1a1a; background: #f3f3f3; border: 1px solid var(--border); }
 
+/* 发送框预览（设置 → 数据高亮 → 发送框）。
+   不复用 `.send-input-mirror`：那套是「透明 textarea + 绝对定位镜像层」（inset:0、
+   42px 上下内边距），塞进设置页这个小框会撑爆。这里只借用同一组 `--dc-send*` 变量，
+   回退链与真实发送框逐字一致，避免预览和实物漂移。 */
+.c-send-preview {
+  padding: 7px 9px; border-radius: 6px; flex: 1 1 0; min-width: 0;
+  font-size: 12px; line-height: 1.55;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow: hidden;
+}
+.c-send-preview__row { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.c-send-preview__row + .c-send-preview__row { margin-top: 4px; }
+.c-send-preview__tag {
+  flex: none; width: 22px;
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 10px;
+  color: var(--placeholder); letter-spacing: 0.02em;
+}
+.c-send-preview__text   { color: var(--dc-sendText, var(--fg)); }
+.c-send-preview__hex    { color: var(--dc-sendHex, var(--dc-hexTx, var(--fg))); }
+.c-send-preview__bad    { color: var(--dc-sendHexBad, var(--dc-hexInv, var(--red)));
+                          text-decoration: underline; text-decoration-style: wavy; text-underline-offset: 2px; }
+.c-send-preview__prefix { color: var(--dc-sendPrefix, var(--placeholder)); }
+.c-send-preview__ctrl   { color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg)));
+                          background: var(--dc-sendCtrlBg, transparent); }
+.c-send-preview__ph     { color: var(--dc-sendPh, var(--placeholder)); }
+
 /* Close × button */
 .c-close-btn { background: transparent; border: none; font-size: 16px; padding: 0 4px; cursor: pointer; color: var(--fg); opacity: 0.6; }
 .c-close-btn:hover { opacity: 1; background: transparent; }
@@ -1160,8 +1186,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .ctrl-fchar[data-ws="tab"] .ctrl-real::after {
   content: '→';
   position: absolute; left: 0; top: 0;
-  color: var(--dc-ctrlFg, var(--fg));
-  font-weight: inherit; font-style: inherit;
+  color: var(--dc-ctrlFg, var(--fg)); font-weight: inherit; font-style: inherit;
   pointer-events: none;
 }
 .ctrl-mark {
@@ -1278,7 +1303,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   padding: 42px 12px 40px 12px; font-size: 15px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   line-height: 1.5; white-space: pre-wrap; word-break: break-all;
-  color: var(--fg); background: var(--input-bg);
+  color: var(--dc-sendText, var(--fg)); background: var(--input-bg);
 }
 .send-input-mirror .send-mirror-placeholder { color: var(--placeholder); }
 /* ── 镜像层必须与 textarea 逐格同宽 ────────────────────────────────────────
@@ -1303,7 +1328,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .send-input-mirror .ctrl-char[data-ws="tab"] .ctrl-real::after,
 .send-input-mirror .ctrl-fchar[data-ws="tab"] .ctrl-real::after {
   content: '→'; position: absolute; left: 0; top: 0;
-  color: var(--dc-ctrlFg, var(--fg)); font-weight: inherit; font-style: inherit;
+  color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg))); font-weight: inherit; font-style: inherit;
   pointer-events: none;
 }
 /* Send hint — 发送框校验/失败提示（悬浮，不参与布局、不挡操作）。
@@ -1315,12 +1340,19 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   border: 1px solid var(--red); border-radius: 6px; padding: 3px 9px;
   font-size: 12px; line-height: 1.5; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
-/* Send mirror hex coloring */
-.send-input-mirror .send-hex-ok { color: var(--dc-hexTx, var(--fg)); }
-.send-input-mirror .send-hex-bad { color: var(--dc-hexInv, var(--red)); text-decoration: underline; text-decoration-color: var(--dc-hexInv, var(--red)); text-underline-offset: 2px; text-decoration-style: wavy; }
+/* Send mirror hex coloring —— 0.8.4 起发送框有自己的键，不再借历史流的：
+   以前 hex 字节吃 --dc-hexTx、非法字节吃 --dc-hexInv、控制字符吃 --dc-ctrlFg/Bg，
+   改发送框会连带改记录区里 Tx 行的颜色，反之亦然。
+   var() 的第二参保留旧键：样式可能比设置先到，那一瞬间回退到旧行为。 */
+.send-input-mirror .send-hex-ok { color: var(--dc-sendHex, var(--dc-hexTx, var(--fg))); }
+.send-input-mirror .send-hex-bad { color: var(--dc-sendHexBad, var(--dc-hexInv, var(--red))); text-decoration: underline; text-decoration-color: var(--dc-sendHexBad, var(--dc-hexInv, var(--red))); text-underline-offset: 2px; text-decoration-style: wavy; }
 /* 0x 前缀用弱化色：原来和 .send-hex-ok 同一个 --dc-hexTx，等于没有区分作用
    （TODO #47）。前缀只是分隔符，压暗一档既不再抢字节的视觉，也仍然看得见。 */
-.send-input-mirror .send-hex-prefix { color: var(--placeholder); }
+.send-input-mirror .send-hex-prefix { color: var(--dc-sendPrefix, var(--placeholder)); }
+/* 发送框自己的控制字符/占位符：与历史流的 .ctrl-char 分开，否则两边同色 */
+.send-input-mirror .send-mirror-placeholder { color: var(--dc-sendPh, var(--placeholder)); }
+.send-input-mirror .ctrl-mark { color: var(--dc-sendCtrl, var(--dc-ctrlFg, var(--fg))); }
+.send-input-mirror .ctrl-char { background: var(--dc-sendCtrlBg, var(--dc-ctrlBg, transparent)); }
 #sendInput {
   position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
   background: transparent; color: transparent; border: none; border-radius: 0;
@@ -2346,6 +2378,8 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 }
 .settings-panel[data-panel="colors"] > .settings-bubble > .settings-bubble-head { grid-column: 1 / -1; }
 .c-color-group { min-width: 0; }
+/* 三组：历史流 | 发送框 一行，端口转发独占一行（它 9 项，摆半列会挤成两半） */
+.settings-panel[data-panel="colors"] > .settings-bubble > .c-color-group:last-child { grid-column: 1 / -1; }
 .c-color-head { gap: 6px; }
 .c-color-head__chk { width: 26px; }
 .c-color-head__grp { width: 62px; }
