@@ -3282,7 +3282,9 @@ async function autoCreateIdleSession(mode) {
 // 显示它们只是噪音（还会显示成新标签页的默认值，容易被当成当前值）。
 function _syncStatusDispItems() {
   var at = getActiveTab();
-  var show = !!at && isSessionTab(at);
+  // .stlog 工程页也在渲染数据（文本 / Hex），编码、制表符、行尾对它同样有意义，
+  // 所以这一类页面也要显示；设置页、新建选择页这些真正没有数据的页面才隐藏。
+  var show = !!at && (isSessionTab(at) || at.type === 'stlog');
   var els = document.querySelectorAll('.dsp-item');
   for (var i = 0; i < els.length; i++) els[i].classList.toggle('is-hidden', !show);
 }
@@ -7024,6 +7026,8 @@ function openStlogTab(path, kind) {
     label: stlogBaseName(path),
     type: 'stlog',
     path: path,
+    // .stlog 页也有一份按页的显示设置（编码 / 制表符 / 行尾等），初始取默认值
+    disp: _newTabDisp(),
     portOpen: false,
     mode: 'single',
     source: 'gui',
