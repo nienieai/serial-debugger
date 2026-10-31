@@ -1654,8 +1654,11 @@ function _renderColorPreview(items, container, kind) {
 		{ dir: '2', ts: '13:00:02.200', hex: 'E7A1AEE8AEA4030D0A',
 		  segs: [{ t: 'text', v: '确认' }, { t: 'hex', v: '03' }, { t: 'cr' }, { t: 'lf' }] }
 	] : [
-		{ dir: 'rx', ts: '13:00:01.100', hex: '41542B2043574D4F44450D0A',
-		  segs: [{ t: 'text', v: 'AT+ CWMODE' }, { t: 'crlf' }] },
+		// 三段缺一不可：空格（text 段按空格切分 → ·）、转义字节（hex 段 → /01，
+		// 吃 hexEsc 颜色）、Tab（独立 tab 段 → →，吃控制字符颜色）。少一段，
+		// 对应的那个颜色项在预览里就没有实例，调了也看不见效果。
+		{ dir: 'rx', ts: '13:00:01.100', hex: '41542B2043574D4F4445010D0A',
+		  segs: [{ t: 'text', v: 'AT+ CWMODE' }, { t: 'hex', v: '01' }, { t: 'crlf' }] },
 		{ dir: 'tx', ts: '13:00:01.200', hex: '095253540D0A',
 		  segs: [{ t: 'tab' }, { t: 'text', v: 'RST' }, { t: 'crlf' }] }
 	];
