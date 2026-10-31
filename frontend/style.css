@@ -67,6 +67,11 @@
     --tabpop-glass-border: rgba(128, 128, 128, 0.28);
     --tabpop-glass-blur: blur(20px);
     --tabpop-bg-solid: #e8e8e8;
+    /* 光晕与 header 底色必须在四个主题块里都写全：只写 :root 的话，「系统深色 +
+       应用浅色」会命中 @media (prefers-color-scheme: dark) 那份、而
+       [data-theme="light"] 不覆盖它 —— 浅色界面上画出来就是黑阴影。 */
+    --glass-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+    --header-glass-bg: rgba(0, 0, 0, 0.10);
     --dropmask-bg: rgba(248, 248, 248, 0.55);
   }
 }
@@ -103,6 +108,8 @@
   --tabpop-glass-border: rgba(128, 128, 128, 0.28);
   --tabpop-glass-blur: blur(20px);
   --tabpop-bg-solid: #e8e8e8;
+  --glass-text-glow: 0 0 3px rgba(255, 255, 255, 0.92), 0 0 6px rgba(255, 255, 255, 0.60);
+  --header-glass-bg: rgba(0, 0, 0, 0.10);
   --dropmask-bg: rgba(248, 248, 248, 0.55);
 }
 
