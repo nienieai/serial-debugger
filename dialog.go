@@ -14,6 +14,7 @@ package main
 // 结果回传走已有的 stream 帧通道（sendFrame），不新增 IPC 协议。
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync/atomic"
@@ -46,6 +47,9 @@ type dialogEntry struct {
 	spec     DialogSpec
 	win      *application.WebviewWindow
 	resolved bool
+	// owner 是发起这次弹窗的窗口名。结果帧必须发回**它**：多窗口之后窗口各有一份
+	// app.js，发给别的窗口等于把 Promise 挂死（见 finishDialog）。
+	owner string
 }
 
 const (
@@ -54,16 +58,25 @@ const (
 	dialogMaxH  = 620
 )
 
-// OpenDialog 建一个对话框窗口并挂到主窗口上。
+// OpenDialog 建一个对话框窗口，挂在**发起调用的那个窗口**上。
 //
 // 返回的 id 由前端用来等待结果：前端收到 dialog-result 帧后按 id 找到自己的
 // Promise 并 resolve。
-func (a *App) OpenDialog(spec DialogSpec) (string, error) {
+func (a *App) OpenDialog(ctx context.Context, spec DialogSpec) (string, error) {
 	if a.wailsApp == nil {
 		return "", fmt.Errorf("窗口系统尚未就绪")
 	}
 	if len(spec.Buttons) == 0 {
 		return "", fmt.Errorf("对话框至少要有一个按钮")
+	}
+
+	// 多窗口之后每个窗口都能弹框，对话框要跟着「谁弹的」走：
+	// owned window 挂错父窗口的话，弹窗可能跑到另一个窗口所在的屏幕上。
+	ownerName := winNameFromCtx(ctx)
+	owner := a.windowByName(ownerName)
+	if owner == nil {
+		owner = a.window
+		ownerName = "main"
 	}
 
 	id := fmt.Sprintf("dlg%d", atomic.AddUint64(&a.dialogSeq, 1))
@@ -81,7 +94,7 @@ func (a *App) OpenDialog(spec DialogSpec) (string, error) {
 		return "", fmt.Errorf("创建对话框窗口失败")
 	}
 
-	entry := &dialogEntry{spec: spec, win: w}
+	entry := &dialogEntry{spec: spec, win: w, owner: ownerName}
 	a.dialogMu.Lock()
 	if a.dialogs == nil {
 		a.dialogs = make(map[string]*dialogEntry)
@@ -100,20 +113,20 @@ func (a *App) OpenDialog(spec DialogSpec) (string, error) {
 	w.SetMaximiseButtonState(application.ButtonHidden)
 	w.SetMinimiseButtonState(application.ButtonHidden)
 
-	// 居中到主窗口上方，而不是居中到屏幕 —— 主窗口可能已经挪到副屏了。
-	if a.window != nil {
-		w.SetPosition(a.dialogCenter(dialogWidth, h))
+	// 居中到发起窗口上方，而不是居中到屏幕 —— 那个窗口可能已经挪到副屏了。
+	if owner != nil {
+		w.SetPosition(a.dialogCenter(owner, dialogWidth, h))
 	}
 
-	// owned window：浮在主窗口之上、跟着主窗口移动。
-	if a.window != nil {
-		a.window.AttachModal(w)
+	// owned window：浮在父窗口之上、跟着父窗口移动。
+	if owner != nil {
+		owner.AttachModal(w)
 	}
 
 	a.registerWindow("dialog-"+id, w)
 	w.Show()
 	w.Focus()
-	log.Printf("[dialog] 打开 %s（%s，%d 个按钮）", id, spec.Kind, len(spec.Buttons))
+	log.Printf("[dialog] 打开 %s（%s，%d 个按钮，父窗口 %q）", id, spec.Kind, len(spec.Buttons), ownerName)
 	return id, nil
 }
 
@@ -159,18 +172,24 @@ func (a *App) finishDialog(id, action string, dontAsk bool) *dialogEntry {
 	delete(a.dialogs, id)
 	a.dialogMu.Unlock()
 
-	a.sendFrame("main", map[string]any{
+	// 结果发回**发起弹窗的那个窗口**：多窗口下每个窗口各有一份 app.js，
+	// 发给 main 会让别的窗口的 Promise 永远挂着（之前只有 main 时没这个问题）。
+	target := e.owner
+	if target == "" {
+		target = "main"
+	}
+	a.sendFrame(target, map[string]any{
 		"e": "dialog-result",
 		"d": map[string]any{"id": id, "action": action, "dontAsk": dontAsk},
 	})
-	log.Printf("[dialog] 结算 %s -> %s（不再提醒=%v）", id, action, dontAsk)
+	log.Printf("[dialog] 结算 %s -> %s（不再提醒=%v，发往 %q）", id, action, dontAsk, target)
 	return e
 }
 
-// dialogCenter 让对话框居中于主窗口。
-func (a *App) dialogCenter(w, h int) (int, int) {
-	mx, my := a.window.Position()
-	mw, mh := a.window.Size()
+// dialogCenter 让对话框居中于父窗口。
+func (a *App) dialogCenter(owner *application.WebviewWindow, w, h int) (int, int) {
+	mx, my := owner.Position()
+	mw, mh := owner.Size()
 	x := mx + (mw-w)/2
 	y := my + (mh-h)/2
 	if x < 0 {

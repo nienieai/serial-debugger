@@ -945,7 +945,9 @@ function showAlert(title, message, okKey, mono) {
   });
 }
 
-function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
+// onCancel 可选：用户点了「取消」/按 Esc/关掉对话框时调用。关窗口确认必须用它 ——
+// 不回调的话 Go 侧的「待确认」标记不会清，下次再点 X 会被当成重复请求直接吞掉。
+function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel) {
   var text = String(message === null || message === undefined ? '' : message);
   _openDialog({
     kind: 'confirm',
@@ -958,13 +960,13 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
     dontAsk: !!onDontAsk,
     dontAskLabel: t('confirm.dont_ask', '不再提醒')
   }).then(function (r) {
-    if (r.action !== 'ok') return;
+    if (r.action !== 'ok') { if (onCancel) onCancel(r.action); return; }
     // 顺序要紧：「不再提醒」先把设置落盘，再执行 onOk —— 退出确认那条
     // onOk 是 QuitApp，反过来就来不及写盘（页内版本同样的约束，见 closeAlert）
     if (r.dontAsk && onDontAsk) onDontAsk();
     if (onOk) onOk();
   }).catch(function () {
-    _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk);
+    _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel);
   });
 }
 
@@ -989,23 +991,47 @@ function showChoice(title, message, options) {
 }
 
 // Go 的 BeforeClose 判定「这次关窗口要停守护进程、且用户开了确认」时发这个事件。
-// 此刻窗口**还没关掉**（BeforeClose 返回了 false）—— 确认后调 QuitApp 再退一次，
-// 取消就什么都不做，窗口留着。
-function onAppCloseConfirm(data) {
-  var mode = (data && data.mode) || 'last';
-  showConfirm(
-    t('confirm.quit_title', '退出串口调试工具'),
-    mode === 'always'
+// 关窗口前的确认（Go 侧 allowWindowClose 通过数据帧定向发来）。
+//
+// 新模型下关窗口 = 销毁这个窗口名下的所有会话，所以这里必须问清楚：用户可能只是
+// 想清掉界面，结果把几条串口连接一起断了。确认后调 ConfirmWindowClose 再关一次，
+// 这次 Go 侧看到 forcedWindows 就放行。
+// 此刻窗口**还没关掉**（event.Cancel 拦住了）。
+function _onWindowCloseConfirm(d) {
+  var n = (d && d.sessions) || 0;
+  var stopDaemon = !!(d && d.stopDaemon);
+  var mode = (d && d.mode) || 'last';
+  var msg = '';
+  if (n > 0) {
+    msg += t('confirm.win_close_sessions', '关闭窗口会停止这个窗口里的会话（共 {n} 个），对应串口连接将断开。')
+      .replace('{n}', String(n));
+  }
+  if (stopDaemon) {
+    if (msg) msg += ' ';
+    msg += mode === 'always'
       ? t('confirm.quit_always', '退出将停止守护进程，所有串口连接都会断开（包括其它 GUI / CLI / MCP 客户端）。确定退出吗？')
-      : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？'),
+      : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？');
+  }
+  if (!msg) msg = t('confirm.win_close_bare', '确定关闭这个窗口吗？');
+  showConfirm(
+    t('confirm.win_close_title', '关闭窗口'),
+    msg,
     function() {
-      window.go.main.App.QuitApp().catch(function(e) { console.error('QuitApp failed:', e); });
+      window.go.main.App.ConfirmWindowClose(stopDaemon).catch(function(e) {
+        console.error('ConfirmWindowClose failed:', e);
+      });
     },
-    'confirm.quit_ok', 'confirm.cancel',
-    function() {
-      // 「不再提醒」必须在 QuitApp 之前落盘，否则进程先退了设置就丢了
+    // 按钮文案用「关闭」而不是「退出」：这里关的是一个窗口，不是整个程序
+    'confirm.tab_close_ok', 'confirm.cancel',
+    // 「不再提醒」只和「要不要停守护进程」有关；单纯关窗口时不该出现这个勾选框
+    stopDaemon ? function() {
+      // 必须在关窗之前落盘，否则进程先退了设置就丢了
       state.shutdownDaemonWarn = false;
       saveSettingsNow();
+    } : null,
+    function() {
+      // 用户取消了：清掉 Go 侧的待确认标记，否则下次点 X 会被当成重复请求
+      window.go.main.App.CancelWindowClose().catch(function() {});
     }
   );
 }
@@ -2162,7 +2188,6 @@ function _flipShift(el, dx, dy) {
 // 算屏幕坐标 + SetWindowPosition 模拟，限流到约 8ms 一次。
 
 function _tabCanTearOff(st) {
-  if (state._soloSessionId) return false;          // 单会话窗口里不再往外拖
   var tab = state.tabs[st.idx];
   return !!(tab && tab.sessionId && state.daemonOnline);
 }
@@ -2436,12 +2461,8 @@ window.addEventListener('DOMContentLoaded', () => {
     initSessionWindow(_wparam.get('sid') || '');
     return;
   }
-  // 单会话窗口（拖标签出来 / 菜单开新窗口）：**不 return**，继续走主界面初始化，
-  // 只是把标签同步限制成这一个会话，并把标签栏藏起来（见 _applySoloWindowUi）。
-  if (_wparam.get('w') === 'solo') {
-    state._soloSessionId = _wparam.get('sid') || '';
-  }
-  if (state._soloSessionId) _applySoloWindowUi();
+  // 普通窗口（含从标签拖出来的窗口）一律跑完整界面：没有主/从之分，窗口里
+  // 显示哪些标签页由 Go 侧的会话归属表决定（见 GetSessionsForWindow）。
   // Bind stable tab drag handlers to bar
   var bar = document.getElementById('tabsBar');
   if (bar) {
@@ -2471,6 +2492,9 @@ window.addEventListener('DOMContentLoaded', () => {
   initTabPopup();
   // Fetch version once
   window.go.main.App.GetVersion().then(function(v) { window._appVersion = v || '0.6.1'; document.title = '串口调试工具 v' + window._appVersion; }).catch(function() { window._appVersion = '0.6.1'; });
+  // 本窗口的名字（main / win-1 / win-3……）。Go 侧已按调用方窗口分流，前端只有
+  // 少数「全局广播」的地方需要自己过滤（目前是原生拖放）。
+  window.go.main.App.WhoAmI().then(function(n) { window.__winName = n; }).catch(function() {});
   // Create global overlays (moved from static HTML to JS)
   createOfflineOverlay();
   createAlertOverlay();
@@ -2516,29 +2540,26 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));
     window.runtime.EventsOn('clients-changed', (data) => onClientsChanged(data));
-    // 关窗口时 Go 侧判定「要停守护进程、且用户开了确认」→ 拦住关闭并让前端弹框
-    window.runtime.EventsOn('app-close-confirm', (data) => onAppCloseConfirm(data));
+    // 关窗口的确认由 Go 侧通过数据帧定向发来（window-close-confirm，见下面对
+    // frames 流的分流）—— 不能用事件：v3 的事件是全局广播，一个窗口关窗会让
+    // 所有窗口都弹确认框。
     window.runtime.EventsOn('multistr-changed', (data) => onMultistrChanged(data));
     // 多窗口原型：probe 窗口定向发过来的事件
     window.runtime.EventsOn('probe-ping', (data) => {
       showAlert('收到 probe 事件', String(data), null, true);
     });
-    // 被拖出去的窗口关掉了：把会话收回主窗口（清掉「已摘掉」标记并重新同步）
-    window.runtime.EventsOn('solo-closed', (data) => {
-      var sid = data && data.sid;
-      if (!sid) return;
-      if (state._detached) delete state._detached[sid];
-      if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
-    });
-    // 拖出窗口完成（Go 判定鼠标已松开）：把会话从本窗口摘掉，不销毁会话
+    // 拖出窗口完成（Go 判定鼠标已松开）：这个会话的归属已经转给新窗口了，
+    // 本窗口把标签摘掉即可 —— **不销毁会话**，它在新窗口里继续活着。
     window.runtime.EventsOn('tearoff-done', (data) => {
       var sid = data && data.sid;
-      if (!sid || state._soloSessionId) return;
+      if (!sid) return;
+      // 事件是全局广播：只有**源窗口**该摘标签（新窗口的那个标签是它的，得留着）。
+      // 新窗口刚加载时 __winName 可能还没取回来，取不到就靠下面的「找不到标签」
+      // 自然跳过，不会误删。
+      if (data.from && window.__winName && String(data.from) !== String(window.__winName)) return;
       // 注意 sessionId 可能是数字、事件里是字符串，必须宽松比较
       var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
       if (!tab) return;
-      state._detached = state._detached || {};
-      state._detached[sid] = true;
       _detachTab(tab);
     });
   } catch {}
@@ -2549,6 +2570,8 @@ window.addEventListener('DOMContentLoaded', () => {
       appendLine(name, d);
     } else if (name === 'dialog-result') {
       _onDialogFrame(d);
+    } else if (name === 'window-close-confirm') {
+      _onWindowCloseConfirm(d);
     }
   });
 
@@ -2744,8 +2767,11 @@ function _clampActiveTab() {
     state.activeTab = 0;
     return;
   }
-  if (state.activeTab < 0 || state.activeTab >= state.tabs.length) {
-    _clampActiveTab();
+  // 这里必须**真的改值**：以前写的是再调一次自己，条件不变 → 无限递归
+  // （RangeError: Maximum call stack size exceeded）。拖标签出去时正好会走到
+  // 「删掉的正好是最后一个标签」这条路上，症状是标签栏不重画、被拖走的那页还留着。
+  if (state.activeTab >= state.tabs.length) {
+    state.activeTab = state.tabs.length - 1;
   }
 }
 
@@ -2819,34 +2845,15 @@ async function syncDaemonSessions(procData) {
   }
   if (!state.daemonOnline) return;
 
+  // process-changed 只当「有变化了」的通知用：它的载荷是**全量**的（别的窗口的
+  // 会话也在里面），而且可能陈旧（实测出现过 `processes: []` 落在某个标签页刚拿到
+  // sessionId 之后，把它清掉 → 看起来是空闲的 → 又建一个进程 → 多出一个标签页）。
+  // 所以一律向 Go 要一份「本窗口视角」的最新列表：归属过滤 + 权威状态一次到位。
   let daemonSessions;
-  // Accept process-changed push data or fetch explicitly
-  if (procData && procData.processes) {
-    daemonSessions = _normalizeSessions(procData.processes);
-  } else {
-    try {
-      daemonSessions = _normalizeSessions(await window.go.main.App.GetSessions());
-    } catch { return; }
-  }
+  try {
+    daemonSessions = _normalizeSessions(await window.go.main.App.GetSessionsForWindow());
+  } catch { return; }
   if (!daemonSessions) daemonSessions = [];
-
-  // ⚠️ 事件载荷可能是**陈旧**的：它可能是在某个进程创建之前发出的（实测出现过
-  // `processes: []` 落在某个标签页刚拿到 sessionId 之后）。仅凭这样一份载荷就把
-  // 活着的会话清掉，后果是连锁的：
-  //   sessionId 被清 → 标签页看起来是空闲的 → 点「打开串口」时**又建一个进程** →
-  //   旧进程随后被第 1 步补成一个多余标签页（用户实测的「启动串口后自动多了一个
-  //   标签页」，daemon.log 里是 create idle #1 → create idle #2 → connect #2）。
-  // 所以只要这份载荷会**移除**某个在线标签页的会话，就先向守护进程核实一次。
-  if (procData && procData.processes) {
-    const payloadIds = new Set(daemonSessions.map(s => s.id));
-    const wouldDrop = state.tabs.some(t => t.sessionId && !payloadIds.has(t.sessionId));
-    if (wouldDrop) {
-      try {
-        const fresh = _normalizeSessions(await window.go.main.App.GetSessions());
-        if (fresh && fresh.length >= 0) daemonSessions = fresh;
-      } catch {}
-    }
-  }
 
   // Auto-create idle process if daemon just came online with no processes.
   // Skip while a tab is being intentionally closed (suppress window to avoid
@@ -2854,7 +2861,7 @@ async function syncDaemonSessions(procData) {
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
   // autoCreateMode: add a local tab (no daemon process) when no tabs exist
   var autoMode = state.autoCreateMode || 'single';
-  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0 && !state._soloSessionId) {
+  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0) {
     await autoCreateIdleSession(autoMode);  // 按设置补一个单端 / 转发空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
@@ -2865,17 +2872,9 @@ async function syncDaemonSessions(procData) {
     //   r4 create idle #1 → 5.2s → r8 create idle #2 → r9 history #1
     // 正确做法：重新取一份权威列表，让第 1/3 步都看到真实状态。
     try {
-      const refreshed = _normalizeSessions(await window.go.main.App.GetSessions());
+      const refreshed = _normalizeSessions(await window.go.main.App.GetSessionsForWindow());
       if (refreshed && refreshed.length > 0) daemonSessions = refreshed;
     } catch {}
-  }
-
-  // 单会话窗口只认自己那一个会话；主窗口里「被拖出去」的会话也不再建标签
-  // （否则会跟新窗口抢同一个会话：两个窗口各建一个标签页）。
-  if (state._soloSessionId) {
-    daemonSessions = daemonSessions.filter(function (s) { return s.id === state._soloSessionId; });
-  } else if (state._detached && Object.keys(state._detached).length) {
-    daemonSessions = daemonSessions.filter(function (s) { return !state._detached[s.id]; });
   }
 
   const dsMap = {};
@@ -3925,13 +3924,7 @@ function switchTab(idx) {
   }
 }
 
-// 单会话窗口：只有一个会话，标签栏没有意义，整块高度让给内容区。
-// （不删节点，只隐藏 —— 保留 DOM 结构和事件绑定，切回多会话时不用重建）
-function _applySoloWindowUi() {
-  var bar = document.getElementById('tabsBar');
-  if (bar) bar.style.display = 'none';
-  document.body.classList.add('is-solo-window');
-}
+// 单会话窗口专用 UI 已删除：现在每个窗口都是完整界面（见 GetSessionsForWindow）。
 
 // 只有会话标签能拖出去成窗口：设置页/选择页/文件页没有对应的守护进程会话
 var TEAR_OFF_DY = 42;   // 垂直拖出阈值（像素）
@@ -7072,8 +7065,10 @@ function _syncWelcome() {
 // 不要用 window.runtime.Quit()（= Application.Quit）：那是强制退出，会绕过
 // 这道判定，mode=never 的用户也会被顺手停掉守护进程。
 function quitApp() {
-  window.go.main.App.CloseMainWindow().catch(function (e) {
-    if (window.console) console.error('CloseMainWindow failed:', e);
+  // 「文件 → 退出」只关掉**当前窗口**：新模型下每个窗口都是平等的，关一个窗口
+  // 不该带走别的窗口。窗口自己的会话由 Go 侧销毁（走和点 X 完全一样的确认路径）。
+  window.go.main.App.CloseCurrentWindow().catch(function (e) {
+    if (window.console) console.error('CloseCurrentWindow failed:', e);
   });
 }
 
@@ -7882,6 +7877,9 @@ function pickStlogFile() {
     if (typeof window.go.main.App.ExportStlogText !== 'function') return false;
     window.wails.Events.On('files-dropped', function (ev) {
       var d = (ev && ev.data) || {};
+      // 事件是全局广播：只处理拖到**本窗口**的那次。不判断的话往 win-2 拖一个
+      // .stlog，每个窗口都会各开一个页签（多窗口实测）。
+      if (d.win && window.__winName && String(d.win) !== String(window.__winName)) return;
       onDrop(0, 0, d.files || []);
     });
     window[INSTALLED_KEY] = true;

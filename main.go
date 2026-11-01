@@ -69,7 +69,7 @@ func main() {
 
 	// 拖入 .stlog：v3 由 Go 侧收原生 drop 事件再转给前端。
 	// v2 的等价物是前端 runtime.OnFileDrop，v3 没有对应接口。
-	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.onFilesDropped)
+	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.onFilesDroppedFor("main"))
 
 	// 关窗口前先问一句「要不要一起停守护进程」（设置里可选三种模式）。
 	//
@@ -80,7 +80,11 @@ func main() {
 	//   - 只有 Hook 会先于监听器执行，且事件被 Cancel 后**不再派发给监听器**
 	//     （events.go:151-160 的 dispatch 顺序）。
 	// 用 OnWindowEvent 的症状是：确认框根本不弹、窗口直接关掉。
-	win.RegisterHook(events.Common.WindowClosing, svc.onWindowClosing)
+	//
+	// 「关窗口 = 销毁本窗口的会话」这件事对每个窗口都生效，所以后续新建的窗口
+	// 在 createWindowNamed 里各自注册一份（v3 的 WindowEvent 不带窗口，
+	// 只能按注册时绑定的名字区分）。
+	win.RegisterHook(events.Common.WindowClosing, svc.onWindowClosingFor("main"))
 
 	uiStartHotReload(win)
 

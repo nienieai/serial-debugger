@@ -40,6 +40,14 @@ export function BatchDecodeForTab(hexStrings, encoding) {
 }
 
 /**
+ * CancelWindowClose 由前端在用户点了「取消」后调用，清掉待确认标记。
+ * @returns {$CancellablePromise<void>}
+ */
+export function CancelWindowClose() {
+    return $Call.ByName("main.App.CancelWindowClose");
+}
+
+/**
  * CheckDaemonStatus returns true if the GUI is connected to a live daemon.
  * It does NOT poll the daemon with IPC calls; connection health is tracked
  * by the DaemonClient heartbeat. This method only establishes the initial
@@ -69,10 +77,18 @@ export function CloseAllDialogs() {
 }
 
 /**
- * CloseMainWindow 由前端「文件 → 退出」调用。
+ * CloseCurrentWindow 由前端「文件 → 退出」调用：走和点窗口 X 完全一样的路径
+ * （照样弹关窗确认、照样销毁本窗口的会话）。
  * 
- * 它故意**不**直接 Application.Quit：那会强制关窗，绕过 WindowClosing Hook 里
- * 「要不要先停守护进程」的判定。这里走正常关闭，和用户点窗口 X 完全同一条路径。
+ * 它故意**不**直接 Application.Quit：那会强制关窗，绕过 WindowClosing Hook。
+ * @returns {$CancellablePromise<void>}
+ */
+export function CloseCurrentWindow() {
+    return $Call.ByName("main.App.CloseCurrentWindow");
+}
+
+/**
+ * CloseMainWindow 兼容旧调用：关掉第一个窗口。
  * @returns {$CancellablePromise<void>}
  */
 export function CloseMainWindow() {
@@ -85,6 +101,16 @@ export function CloseMainWindow() {
  */
 export function CloseSession(processID) {
     return $Call.ByName("main.App.CloseSession", processID);
+}
+
+/**
+ * ConfirmWindowClose 由前端在用户确认关闭窗口后调用：销毁本窗口的会话，
+ * 需要的话停掉守护进程，然后真正关窗。
+ * @param {boolean} stopDaemon
+ * @returns {$CancellablePromise<void>}
+ */
+export function ConfirmWindowClose(stopDaemon) {
+    return $Call.ByName("main.App.ConfirmWindowClose", stopDaemon);
 }
 
 /**
@@ -381,10 +407,31 @@ export function GetSessionStats(processID) {
 }
 
 /**
+ * GetSessions 返回守护进程上的**全部**会话。
+ * 
+ * 这是给「不区分窗口」的调用方用的（FirstSessionID 这类探测）以及兜底路径；
+ * 界面上的标签同步必须用 GetSessionsForWindow —— 否则每个窗口都会看到所有标签页。
  * @returns {$CancellablePromise<{ [_ in string]?: any }[]>}
  */
 export function GetSessions() {
     return $Call.ByName("main.App.GetSessions").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
+}
+
+/**
+ * GetSessionsForWindow 只返回「归调用窗口所有」的会话。
+ * 
+ * 规则（对应「没有主窗口，每个窗口都是主窗口」这个模型）：
+ *   - 归属我的 → 给我
+ *   - 没人认领的 → 由第一个来同步、且**手上一个会话都没有**的窗口认领
+ *     （CLI / MCP 建的会话就靠这条进入界面；不让所有窗口都认领，否则同一个会话
+ *     会在每个窗口各长出一个标签页，然后被两个窗口各关一次）
+ *   - 归别人的 → 看不见
+ * @returns {$CancellablePromise<{ [_ in string]?: any }[]>}
+ */
+export function GetSessionsForWindow() {
+    return $Call.ByName("main.App.GetSessionsForWindow").then(/** @type {($result: any) => any} */(($result) => {
         return $$createType5($result);
     }));
 }
@@ -536,6 +583,17 @@ export function NewHistoryFile(processID) {
 }
 
 /**
+ * NewWindow 开一个新的空窗口（菜单「窗口 → 新建窗口」用）。
+ * 
+ * 新窗口没有任何会话，前端会按 autoCreateMode 自动补一个空闲会话 ——
+ * 和主窗口刚启动时的行为一致。
+ * @returns {$CancellablePromise<string>}
+ */
+export function NewWindow() {
+    return $Call.ByName("main.App.NewWindow");
+}
+
+/**
  * OpenDevTools toggles the WebView2 DevTools window.
  * Requires the GUI to be built with `wails build -devtools`.
  * @returns {$CancellablePromise<void>}
@@ -545,7 +603,7 @@ export function OpenDevTools() {
 }
 
 /**
- * OpenDialog 建一个对话框窗口并挂到主窗口上。
+ * OpenDialog 建一个对话框窗口，挂在**发起调用的那个窗口**上。
  * 
  * 返回的 id 由前端用来等待结果：前端收到 dialog-result 帧后按 id 找到自己的
  * Promise 并 resolve。
@@ -579,22 +637,6 @@ export function OpenSession(cfg) {
  */
 export function OpenSessionWindow(sessionID) {
     return $Call.ByName("main.App.OpenSessionWindow", sessionID);
-}
-
-/**
- * OpenSoloWindow 把一个会话开成「单会话窗口」。
- * 
- * 和 OpenSessionWindow 的区别：那个是调试面板（日志 + 注入测试帧），
- * 这个跑完整界面，只是把标签同步限制成这一个会话（前端 ?w=solo）。
- * 
- * 窗口关掉时广播 solo-closed，主窗口据此把这个会话收回去 —— 否则会话在守护
- * 进程里还活着，主窗口却因为「已摘掉」的标记一直不建标签页，等于丢了。
- * @param {string} sessionID
- * @param {boolean} dragging
- * @returns {$CancellablePromise<string>}
- */
-export function OpenSoloWindow(sessionID, dragging) {
-    return $Call.ByName("main.App.OpenSoloWindow", sessionID, dragging);
 }
 
 /**
@@ -666,7 +708,10 @@ export function ProbeDroppedPaths(paths) {
 }
 
 /**
- * QuitApp 由前端在用户确认退出后调用：先停守护进程，再真正退出。
+ * QuitApp 退出整个程序（所有窗口一起关），保留给「彻底退出」这类入口。
+ * 
+ * 常规的「文件 → 退出」不走这里：那只是关掉当前窗口，其它窗口（如果有）应该
+ * 继续活着 —— 新模型下没有主窗口，关一个窗口不该带走别的。
  * @returns {$CancellablePromise<void>}
  */
 export function QuitApp() {
@@ -953,12 +998,16 @@ export function StartTabDecoder(processID) {
 }
 
 /**
- * StartTearOffDrag 由前端在「拖出标签」时调用：建窗口，然后由 Go 自己跟随鼠标
- * 直到左键松开。
+ * StartTearOffDrag 由前端在「拖出标签」时调用：建一个空窗口、把会话转交给它，
+ * 然后由 Go 自己跟随鼠标直到左键松开。
  * 
  * 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
  * 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
  * 所以这里用 GetCursorPos 轮询 + GetAsyncKeyState 判松开，全程不依赖前端事件。
+ * 
+ * 转交顺序是关键：**先**把会话归属改成新窗口的名字，**再**建窗口。反过来的话
+ * 新窗口第一次同步时这个会话还归源窗口，它一个会话都看不到，于是按 autoCreate
+ * 又补一个空闲会话，用户会看到「拖出来一个窗口，里面是个空标签」。
  * @param {string} sessionID
  * @param {number} offX
  * @param {number} offY
@@ -1040,10 +1089,6 @@ export function WatchSession(processID) {
 
 /**
  * WhoAmI 返回「调用这个方法的窗口名」。
- * 
- * 靠的是 v3 的约定：Service 方法第一个参数是 context.Context 时，框架会把
- * 调用方的窗口塞进 ctx（application.WindowKey）。这是多窗口按来源分流的
- * 基础 —— 不用前端手动传窗口 ID。
  * @returns {$CancellablePromise<string>}
  */
 export function WhoAmI() {
