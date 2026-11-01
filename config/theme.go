@@ -120,10 +120,6 @@ func LoadTheme(id string) map[string]any {
 	return inlineThemeImages(m, id)
 }
 
-func ListThemeIDs() []string {
-	return themeIDs()
-}
-
 // isBuiltinTheme 判断主题属于内置层（resources-system 目录，或编译进 exe 的那份）。
 func isBuiltinTheme(id string) bool {
 	if d := builtinResourceDir(); d != "" && fileExists(filepath.Join(d, "themes", id, "theme.json")) {

@@ -1898,11 +1898,6 @@ func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cf
 	return proc, nil
 }
 
-// ForwardCreate is a backward-compatible wrapper that creates a forward process.
-func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, error) {
-	return pm.Create("forward", cfgA.Port, cfgA, &cfgB, true)
-}
-
 // Rename 改一个进程的线程名。传空串表示退回自动名（端口名 / 会话号）。
 //
 // 名字只有两种持久化方式，刻意不做第三种：
@@ -2678,17 +2673,6 @@ func (pm *ProcessManager) ListConnected() []map[string]any {
 	return result
 }
 
-func (pm *ProcessManager) FirstConnectedID() string {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	for _, p := range pm.processes {
-		if p.status == "connected" {
-			return p.id
-		}
-	}
-	return ""
-}
-
 // SetDefaultHistorySave 修改新进程的默认落盘开关，并作用到所有未单独设置过的
 // 进程——老行为是全局开关立即生效，这里保持兼容；显式设置过的进程不被覆盖。
 func (pm *ProcessManager) SetDefaultHistorySave(v bool) {
@@ -2837,15 +2821,6 @@ func parseHistoryPackets(packets [][]byte) []HistoryEntry {
 		}
 	}
 	return entries
-}
-
-// GetHistorySharedName returns the shared memory name for a process.
-func (pm *ProcessManager) GetHistorySharedName(id string) string {
-	proc := pm.Get(id)
-	if proc == nil {
-		return ""
-	}
-	return proc.historyName
 }
 
 func (pm *ProcessManager) GetStats(id string) (*ProcessStats, error) {

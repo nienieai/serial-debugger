@@ -118,17 +118,25 @@ func (p *Process) openStlogFile() {
 		logOp("错误", "建会话目录失败 (进程 #%s): %v", p.id, err)
 		return
 	}
-	p.stlog = sess
-	p.stlogName = filepath.Base(sess.Dir())
-	p.stlogPending = false
-	p.stlogStop = make(chan struct{})
-	p.startStlogTicker(p.stlogStop)
+	p.attachStlogLocked(sess)
 	// 记下「这个工程在录」：推送回守护进程时据此决定要不要接着录（见 OpenSession）。
 	// 只改 save 一个字段，别整份写回 —— 那会冲掉之后改的 label / display。
 	if err := sess.SetSaveFlag(true); err != nil {
 		logOp("错误", "进程 #%s 写 save 标记失败: %v", p.id, err)
 	}
 	logOp("历史", "进程 #%s 开始录制 %s", p.id, sess.Dir())
+}
+
+// attachStlogLocked 把一个已打开的会话挂到进程上，并起 flush 定时器。
+//
+// 调用方必须持有 stlogMu，且已经确认 p.stlog == nil —— 「新建会话」和「续写
+// 工程」这两条的收尾完全一样，只有选目录和写 save 标记不同。
+func (p *Process) attachStlogLocked(sess *sessionfile.Session) {
+	p.stlog = sess
+	p.stlogName = filepath.Base(sess.Dir())
+	p.stlogPending = false
+	p.stlogStop = make(chan struct{})
+	p.startStlogTicker(p.stlogStop)
 }
 
 // startStlogTicker 起定时 flush 协程；stlogFlushMS <= 0 时不启动（省盘模式）。
@@ -268,11 +276,7 @@ func (p *Process) resumeRecording(dir string) {
 		_ = sess.Close()
 		return
 	}
-	p.stlog = sess
-	p.stlogName = filepath.Base(sess.Dir())
-	p.stlogPending = false
-	p.stlogStop = make(chan struct{})
-	p.startStlogTicker(p.stlogStop)
+	p.attachStlogLocked(sess)
 	p.stlogMu.Unlock()
 	// 把「这个工程在录」写回工程文件 —— 和 openStlogFile 一样。少了这一句，
 	// 「推送后手动开保存」录着录着关掉，下次推送又不会续录了（意图没落盘）。

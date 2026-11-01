@@ -198,18 +198,6 @@ func WriteAllEntries(rb *ringbuf.RingBuffer, entries []MultistrEntry) error {
 	return nil
 }
 
-// WriteOneEntry writes a single entry to the send queue.
-func WriteOneEntry(rb *ringbuf.RingBuffer, e MultistrEntry) error {
-	if rb == nil {
-		return fmt.Errorf("ring buffer is nil")
-	}
-	pkt := EncodeEntry(e)
-	if !rb.Write(pkt) {
-		return fmt.Errorf("send queue full")
-	}
-	return nil
-}
-
 // ── persistence ──
 
 func multistrDir() string {

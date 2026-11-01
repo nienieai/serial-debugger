@@ -19,18 +19,8 @@ const (
 	keyeventfKeyup = 0x0002
 )
 
-func hideWindow(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-}
-
 func openFolder(dir string) error {
 	return exec.Command("explorer", dir).Start()
-}
-
-func forceKillDaemon() {
-	cmd := exec.Command("taskkill", "/F", "/IM", "serial-daemon.exe")
-	hideWindow(cmd)
-	cmd.Run()
 }
 
 // openDevToolsWindow simulates Ctrl+Shift+F12 to toggle DevTools in WebView2.

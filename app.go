@@ -1954,12 +1954,6 @@ type ExternalI18nInfo struct {
 	Dir      string `json:"dir"`
 }
 
-// i18nDir 返回优先级最高的磁盘语言包目录：<exe>/resources-system/i18n 或
-// <exe>/resources/i18n（见 config/resources.go）。
-func i18nDir() string {
-	return config.I18nDir()
-}
-
 // ListExternalI18n 扫描各资源层的 i18n/ 目录，返回每份语言文件的元数据。
 // 同名语言按优先级只取第一份（内置 resources-system > 外置 resources）。
 func (a *App) ListExternalI18n() []ExternalI18nInfo {

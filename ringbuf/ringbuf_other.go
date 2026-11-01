@@ -149,12 +149,6 @@ func CreateSharedRing(name string, ringDataSize uint32) (*RingBuffer, error) {
 	return openRing(name, ringDataSize, true)
 }
 
-// OpenSharedRing 打开已存在的环。调用方需保证后续不写（见 Windows 版注释：
-// 该路径从未接通，保留以维持 API 对称）。
-func OpenSharedRing(name string) (*RingBuffer, error) {
-	return openRing(name, 0, false)
-}
-
 // OpenSharedRingForWrite 打开已存在的环用于读写。
 func OpenSharedRingForWrite(name string) (*RingBuffer, error) {
 	return openRing(name, 0, false)
