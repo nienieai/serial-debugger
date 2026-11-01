@@ -582,6 +582,22 @@ export function OpenSessionWindow(sessionID) {
 }
 
 /**
+ * OpenSoloWindow 把一个会话开成「单会话窗口」。
+ * 
+ * 和 OpenSessionWindow 的区别：那个是调试面板（日志 + 注入测试帧），
+ * 这个跑完整界面，只是把标签同步限制成这一个会话（前端 ?w=solo）。
+ * 
+ * 窗口关掉时广播 solo-closed，主窗口据此把这个会话收回去 —— 否则会话在守护
+ * 进程里还活着，主窗口却因为「已摘掉」的标记一直不建标签页，等于丢了。
+ * @param {string} sessionID
+ * @param {boolean} dragging
+ * @returns {$CancellablePromise<string>}
+ */
+export function OpenSoloWindow(sessionID, dragging) {
+    return $Call.ByName("main.App.OpenSoloWindow", sessionID, dragging);
+}
+
+/**
  * OpenStlogFile 读取一个 .stlog 会话文件（v1.4 格式），返回给前端展示的摘要。
  * 
  * 离线只读：不经过守护进程，也不修改文件。目前只做到"拖进来能看见内容"这一层，
@@ -864,6 +880,20 @@ export function SetTabEncoding(processID, encoding) {
 }
 
 /**
+ * SetWindowPosition 供「拖出来的窗口跟随鼠标」使用（前端在 pointermove 里调用）。
+ * 
+ * v3 的 startDrag 不是公开 API，拿不到原生拖窗循环，所以退一步：前端自己算
+ * 屏幕坐标，这里直接 SetPosition；调用频率由前端限流。
+ * @param {string} name
+ * @param {number} x
+ * @param {number} y
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetWindowPosition(name, x, y) {
+    return $Call.ByName("main.App.SetWindowPosition", name, x, y);
+}
+
+/**
  * SettingsDir 返回设置目录，供前端「打开设置文件夹」与关于页展示。
  * @returns {$CancellablePromise<string>}
  */
@@ -920,6 +950,22 @@ export function StartQueueSend(processID, loop, roundIntervalMs) {
  */
 export function StartTabDecoder(processID) {
     return $Call.ByName("main.App.StartTabDecoder", processID);
+}
+
+/**
+ * StartTearOffDrag 由前端在「拖出标签」时调用：建窗口，然后由 Go 自己跟随鼠标
+ * 直到左键松开。
+ * 
+ * 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
+ * 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
+ * 所以这里用 GetCursorPos 轮询 + GetAsyncKeyState 判松开，全程不依赖前端事件。
+ * @param {string} sessionID
+ * @param {number} offX
+ * @param {number} offY
+ * @returns {$CancellablePromise<string>}
+ */
+export function StartTearOffDrag(sessionID, offX, offY) {
+    return $Call.ByName("main.App.StartTearOffDrag", sessionID, offX, offY);
 }
 
 /**

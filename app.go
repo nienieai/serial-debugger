@@ -354,6 +354,104 @@ func (a *App) OpenSessionWindow(sessionID string) string {
 	return name
 }
 
+// OpenSoloWindow 把一个会话开成「单会话窗口」。
+//
+// 和 OpenSessionWindow 的区别：那个是调试面板（日志 + 注入测试帧），
+// 这个跑完整界面，只是把标签同步限制成这一个会话（前端 ?w=solo）。
+//
+// 窗口关掉时广播 solo-closed，主窗口据此把这个会话收回去 —— 否则会话在守护
+// 进程里还活着，主窗口却因为「已摘掉」的标记一直不建标签页，等于丢了。
+func (a *App) OpenSoloWindow(sessionID string, dragging bool) (string, error) {
+	if sessionID == "" {
+		return "", fmt.Errorf("会话 ID 为空")
+	}
+	name := "solo-" + sessionID
+	if w := a.windowByName(name); w != nil {
+		if !dragging {
+			w.Show()
+			w.Focus()
+		}
+		return name, nil
+	}
+	if a.wailsApp == nil {
+		return "", fmt.Errorf("窗口系统尚未就绪")
+	}
+	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:      name,
+		Title:     "串口调试工具 v" + version.Version,
+		Width:     900,
+		Height:    640,
+		MinWidth:  640,
+		MinHeight: 480,
+		Hidden:    dragging, // 拖动中先隐藏，设好 no-activate 再显示，避免闪一下抢焦点
+		URL:       "/?w=solo&sid=" + url.QueryEscape(sessionID),
+	})
+	if w == nil {
+		return "", fmt.Errorf("创建窗口失败")
+	}
+	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
+		a.unregisterWindow(name)
+		a.emit("solo-closed", map[string]any{"sid": sessionID})
+	})
+	a.registerWindow(name, w)
+	if dragging {
+		// 关键：拖动期间不能抢焦点，否则源窗口的 pointer capture 断掉，
+		// pointermove 停供，窗口只跟随一次就卡住（见 window_noactivate_windows.go）
+		setNoActivate(w, true)
+	}
+	w.Show()
+	if !dragging {
+		w.Focus()
+	}
+	return name, nil
+}
+
+// StartTearOffDrag 由前端在「拖出标签」时调用：建窗口，然后由 Go 自己跟随鼠标
+// 直到左键松开。
+//
+// 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
+// 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
+// 所以这里用 GetCursorPos 轮询 + GetAsyncKeyState 判松开，全程不依赖前端事件。
+func (a *App) StartTearOffDrag(sessionID string, offX, offY int) (string, error) {
+	name, err := a.OpenSoloWindow(sessionID, true)
+	if err != nil {
+		return "", err
+	}
+	w := a.windowByName(name)
+	if w == nil {
+		return name, nil
+	}
+	go func() {
+		for {
+			x, y := cursorPos()
+			w.SetPosition(x-offX, y-offY)
+			if !leftButtonDown() {
+				break
+			}
+			time.Sleep(16 * time.Millisecond)
+		}
+		setNoActivate(w, false)
+		w.Focus()
+		// 通知源窗口：可以把这个会话从自己这里摘掉了
+		a.emit("tearoff-done", map[string]any{"sid": sessionID})
+	}()
+	return name, nil
+}
+
+// SetWindowPosition 供「拖出来的窗口跟随鼠标」使用（前端在 pointermove 里调用）。
+//
+// v3 的 startDrag 不是公开 API，拿不到原生拖窗循环，所以退一步：前端自己算
+// 屏幕坐标，这里直接 SetPosition；调用频率由前端限流。
+func (a *App) SetWindowPosition(name string, x, y int) {
+	w := a.windowByName(name)
+	if w == nil {
+		log.Printf("[solo] SetWindowPosition 找不到窗口 %q", name)
+		return
+	}
+	log.Printf("[solo] SetWindowPosition %q -> (%d,%d)", name, x, y)
+	w.SetPosition(x, y)
+}
+
 // FirstSessionID 返回守护进程上一个会话的 ID（原型自动开窗用）。
 // 优先挑已连接的 —— 只有连着的会话才有数据流，空闲会话开出来是空窗口。
 func (a *App) FirstSessionID() string {

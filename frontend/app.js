@@ -2153,12 +2153,79 @@ function _flipShift(el, dx, dy) {
   }, 220);
 }
 
+// ---- 拖出来成新窗口（tear-off）----
+//
+// 多标签时，把标签**垂直**拖出标签栏一定距离就开一个单会话窗口，并让那个窗口
+// 跟着鼠标走、直到松开；松开后源窗口把标签摘掉（但**不销毁会话**）。
+//
+// 为什么不用 v3 的原生拖窗（startDrag）：它不是公开 API。这里用 pointermove
+// 算屏幕坐标 + SetWindowPosition 模拟，限流到约 8ms 一次。
+
+function _tabCanTearOff(st) {
+  if (state._soloSessionId) return false;          // 单会话窗口里不再往外拖
+  var tab = state.tabs[st.idx];
+  return !!(tab && tab.sessionId && state.daemonOnline);
+}
+
+function _tabTearOffStart(st, e) {
+  var tab = state.tabs[st.idx];
+  if (!tab || !tab.sessionId) return;
+  var App = window.go && window.go.main && window.go.main.App;
+  if (!App || typeof App.StartTearOffDrag !== 'function') return;
+  st.tearing = true;
+  st.sid = tab.sessionId;
+  _tabPopClose();
+  st.btn.classList.add('tab-tearing');
+  // 建窗 + 跟随全部交给 Go：窗口一旦盖住光标，源页面的 pointermove 就断了
+  // （实测只走 4 步），所以跟随只能由 Go 轮询光标来做。见 app.go StartTearOffDrag。
+  App.StartTearOffDrag(tab.sessionId, 140, 18).catch(function (err) {
+    if (window.console) console.error('[tearoff] 打开单会话窗口失败', err);
+    st.tearing = false;
+    st.btn.classList.remove('tab-tearing');
+  });
+}
+
+// 松开鼠标只做界面收尾：摘标签由 Go 的 tearoff-done 广播触发（它才知道
+// 真正的松手时机，前端此时可能已经收不到事件了）。
+function _tabTearOffFinish(st) {
+  st.finished = true;
+}
+
+// 只从本窗口摘掉标签：不调 CloseSession，会话在守护进程里继续活着
+function _detachTab(tab) {
+  var idx = state.tabs.indexOf(tab);
+  if (idx < 0) return;
+  if (tab._page) { tab._page.destroy(); tab._page = null; }
+  if (tab.sessionId) {
+    delete state.historyCache[tab.sessionId];
+    delete state.statsBase[tab.sessionId];
+  }
+  state.tabs.splice(idx, 1);
+  _clampActiveTab();
+  var nt = getActiveTab();
+  if (nt && nt._page) nt._page.show();
+  else if (state._welcomePage) state._welcomePage.show();
+  renderTabs();
+}
+
 function _tabDragMove(e) {
   var st = _tabDrag;
   if (!st) return;
+  if (st.tearing) { return; }
   if (!st.started) {
-    if (Math.abs(e.clientX - st.startX) < 4 && Math.abs(e.clientY - st.startY) < 4) return;
-    _tabDragStart(st);
+    var mdx = Math.abs(e.clientX - st.startX);
+    var mdy = Math.abs(e.clientY - st.startY);
+    // 方向判定必须在「启动排序」之前做：排序的启动阈值只有 4px，一旦先启动，
+    // 后面的垂直位移就再也进不了 tear-off 分支了（实测就是这么丢的）。
+    // 规则：横向占优 → 排序；纵向但不到阈值 → 先不动作，等拖够。
+    if (mdx >= 4 && mdx >= mdy) {
+      _tabDragStart(st);
+    } else if (mdy >= TEAR_OFF_DY && mdy > mdx && _tabCanTearOff(st)) {
+      _tabTearOffStart(st, e);
+      return;
+    } else {
+      return;
+    }
   }
   if (e.cancelable) e.preventDefault();
   st.lastX = e.clientX;
@@ -2189,6 +2256,15 @@ function _tabDragMove(e) {
 function _tabDragFinish(commit) {
   var st = _tabDrag;
   if (!st) return;
+  if (st.tearing) {
+    _tabDrag = null;
+    _tabDragStopAutoScroll();
+    try { st.btn.releasePointerCapture(st.pid); } catch (_) {}
+    document.body.classList.remove('is-tab-dragging');
+    st.btn.classList.remove('tab-tearing');
+    _tabTearOffFinish(st);
+    return;
+  }
   _tabDrag = null;
   _tabDragStopAutoScroll();
   try { st.btn.releasePointerCapture(st.pid); } catch (_) {}
@@ -2360,6 +2436,12 @@ window.addEventListener('DOMContentLoaded', () => {
     initSessionWindow(_wparam.get('sid') || '');
     return;
   }
+  // 单会话窗口（拖标签出来 / 菜单开新窗口）：**不 return**，继续走主界面初始化，
+  // 只是把标签同步限制成这一个会话，并把标签栏藏起来（见 _applySoloWindowUi）。
+  if (_wparam.get('w') === 'solo') {
+    state._soloSessionId = _wparam.get('sid') || '';
+  }
+  if (state._soloSessionId) _applySoloWindowUi();
   // Bind stable tab drag handlers to bar
   var bar = document.getElementById('tabsBar');
   if (bar) {
@@ -2440,6 +2522,24 @@ window.addEventListener('DOMContentLoaded', () => {
     // 多窗口原型：probe 窗口定向发过来的事件
     window.runtime.EventsOn('probe-ping', (data) => {
       showAlert('收到 probe 事件', String(data), null, true);
+    });
+    // 被拖出去的窗口关掉了：把会话收回主窗口（清掉「已摘掉」标记并重新同步）
+    window.runtime.EventsOn('solo-closed', (data) => {
+      var sid = data && data.sid;
+      if (!sid) return;
+      if (state._detached) delete state._detached[sid];
+      if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+    });
+    // 拖出窗口完成（Go 判定鼠标已松开）：把会话从本窗口摘掉，不销毁会话
+    window.runtime.EventsOn('tearoff-done', (data) => {
+      var sid = data && data.sid;
+      if (!sid || state._soloSessionId) return;
+      // 注意 sessionId 可能是数字、事件里是字符串，必须宽松比较
+      var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
+      if (!tab) return;
+      state._detached = state._detached || {};
+      state._detached[sid] = true;
+      _detachTab(tab);
     });
   } catch {}
 
@@ -2754,7 +2854,7 @@ async function syncDaemonSessions(procData) {
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
   // autoCreateMode: add a local tab (no daemon process) when no tabs exist
   var autoMode = state.autoCreateMode || 'single';
-  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0) {
+  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0 && !state._soloSessionId) {
     await autoCreateIdleSession(autoMode);  // 按设置补一个单端 / 转发空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份
@@ -2768,6 +2868,14 @@ async function syncDaemonSessions(procData) {
       const refreshed = _normalizeSessions(await window.go.main.App.GetSessions());
       if (refreshed && refreshed.length > 0) daemonSessions = refreshed;
     } catch {}
+  }
+
+  // 单会话窗口只认自己那一个会话；主窗口里「被拖出去」的会话也不再建标签
+  // （否则会跟新窗口抢同一个会话：两个窗口各建一个标签页）。
+  if (state._soloSessionId) {
+    daemonSessions = daemonSessions.filter(function (s) { return s.id === state._soloSessionId; });
+  } else if (state._detached && Object.keys(state._detached).length) {
+    daemonSessions = daemonSessions.filter(function (s) { return !state._detached[s.id]; });
   }
 
   const dsMap = {};
@@ -3816,6 +3924,17 @@ function switchTab(idx) {
     }
   }
 }
+
+// 单会话窗口：只有一个会话，标签栏没有意义，整块高度让给内容区。
+// （不删节点，只隐藏 —— 保留 DOM 结构和事件绑定，切回多会话时不用重建）
+function _applySoloWindowUi() {
+  var bar = document.getElementById('tabsBar');
+  if (bar) bar.style.display = 'none';
+  document.body.classList.add('is-solo-window');
+}
+
+// 只有会话标签能拖出去成窗口：设置页/选择页/文件页没有对应的守护进程会话
+var TEAR_OFF_DY = 42;   // 垂直拖出阈值（像素）
 
 function closeTab(idx) {
   const tab = state.tabs[idx];
