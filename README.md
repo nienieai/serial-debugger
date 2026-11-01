@@ -38,7 +38,7 @@
 
 ## 🚀 快速开始 / Quick Start
 
-> 📦 **下载**：见 [Releases](https://github.com/nienieai/serial-debugger/releases)（推送 `v*` tag 或手动触发 Actions 即产出，解压即用；Windows 需已安装 WebView2 Runtime）。
+> 📦 **下载**：见 [Releases](https://github.com/nienieai/serial-debugger/releases)（推送 `v*` tag 或手动触发 Actions 即产出）。Windows 是四个 `.exe`，解压即用（需已安装 WebView2 Runtime）；Linux 是 `serial-tool-<版本>-linux-amd64.run`（单文件自解压，装到 `~/.local`）与同名 `.tar.gz`。
 
 > ⚠️ **使用须知**
 > - **安全**：本工具当前无安全相关设计（无认证、加密、访问控制等），仅限在受信任的本地环境使用，请勿用于安全敏感场景——详见[安全说明](#安全说明)。
@@ -189,7 +189,8 @@ graph LR
 
 ### 下载
 
-获取对应平台的构建产物压缩包，解压即用。Windows 需系统已安装 WebView2 Runtime。
+Windows：四个 `.exe` 解压即用（需系统已安装 WebView2 Runtime）。
+Linux：`serial-tool-<版本>-linux-amd64.run` 是单文件自解压安装包（解压后跑 `install.sh`，装到 `~/.local`，不写系统目录）；同目录的 `.tar.gz` 内容相同，解开后手动执行 `install.sh`。运行需要 `libgtk-4-1 libwebkitgtk-6.0-4 libsoup-3.0-0`（Ubuntu 24.04 及以上自带）。
 
 ### 从源码构建
 
