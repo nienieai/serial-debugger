@@ -1412,6 +1412,9 @@ func (p *Process) shouldSaveHistory() bool {
 //
 // 开启时立即建文件，不等第一条数据——用户能马上看到文件名；关闭时把当前文件
 // 关掉，已写入的内容保留，之后的帧不再追加。环形缓冲与界面显示完全不受影响。
+//
+// 关闭这一路还要把「别录了」写回工程（markSessionNotSaving）：封存本身不清
+// save 标记（见 closeStlogLocked），这里是唯一能表达「我不想录」的地方。
 func (p *Process) SetSaveHistory(enabled bool) {
 	p.saveHistory.Store(enabled)
 	p.saveHistorySet.Store(true)
@@ -1419,10 +1422,14 @@ func (p *Process) SetSaveHistory(enabled bool) {
 		p.openHistoryFile()
 		return
 	}
+	p.markSessionNotSaving()
 	p.detachHistoryFile()
 }
 
 // applyDefaultSaveHistory 把全局默认作用到「没有单独设置过」的进程上。
+//
+// 这里走 detachHistoryFile 而不是 SetSaveHistory(false)：全局默认变了不等于
+// 用户对这个工程说过「别录」，所以不能顺手把工程的 save 标记写掉。
 func (p *Process) applyDefaultSaveHistory() {
 	if p.saveHistorySet.Load() {
 		return

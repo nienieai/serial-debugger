@@ -252,7 +252,32 @@ func (p *Process) resumeRecording(dir string) {
 	logOp("历史", "进程 #%s 接着录制 %s", p.id, dir)
 }
 
+// markSessionNotSaving 把「这个工程别录了」写回它的 settings.json。
+//
+// 只在用户显式关掉保存时调用（SetSaveHistory(false)），必须赶在 Close 之前写：
+// Close 会把目录封存、文件关掉。
+//
+// 锁内只取指针、锁外写盘 —— SetSaveFlag 是「读文件 → 改一个字段 → 写回」，
+// 毫秒级 IO，不该压着 stlogMu（appendStlog 每收一帧都要拿它）。
+func (p *Process) markSessionNotSaving() {
+	p.stlogMu.Lock()
+	w, name := p.stlog, p.stlogName
+	p.stlogMu.Unlock()
+	if w == nil {
+		return
+	}
+	if err := w.SetSaveFlag(false); err != nil {
+		logOp("错误", "清除工程的 save 标记失败 (进程 #%s, %s): %v", p.id, name, err)
+	}
+}
+
 // closeStlogLocked 关掉当前录制文件并清空状态；调用方必须持有 stlogMu。
+//
+// ⚠️ 这里**不清** settings.json 的 save 标记。那个字段记的是「这个工程要不要
+// 录」（用户意图），不是「现在正在录」（运行时状态）：封存发生在关标签、关 GUI、
+// 守护进程退出这条链上，清掉它等于「正常关过一次的工程永远不再自动录」，也就是
+// 用户报的「推送后没启动保存」。真要表达「别录了」只有一条路：用户在标签里手动
+// 关掉保存（SetSaveHistory(false) → markSessionNotSaving）。
 func (p *Process) closeStlogLocked() {
 	w := p.stlog
 	name := p.stlogName
@@ -261,11 +286,6 @@ func (p *Process) closeStlogLocked() {
 	p.stlogPending = false
 	if w == nil {
 		return
-	}
-	// 清掉「在录」标记：这个工程现在是停着的，推送回来不该自动开录。
-	// 必须在 Close 之前写 —— 那个调用会把目录封存、文件关掉。
-	if err := w.SetSaveFlag(false); err != nil {
-		logOp("错误", "清除工程的在录标记失败 (进程 #%s, %s): %v", p.id, name, err)
 	}
 	if err := w.Close(); err != nil {
 		logOp("错误", "关闭 .stlog 失败 (进程 #%s, %s): %v", p.id, name, err)
