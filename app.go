@@ -43,6 +43,16 @@ type App struct {
 	windows map[string]*application.WebviewWindow
 	winSeq  int
 
+	// 单实例：又启动了一份 GUI 时，v3 把通知交给我们（见 onSecondInstanceLaunch）。
+	//
+	// secondPending 是「要开的窗口」的队列（每项是那次启动的命令行参数，目前只用于
+	// 日志），secondWorker 表示消费 goroutine 已在跑，secondReady 表示窗口系统已就绪
+	// （attach 之后才为 true）。
+	secondMu      sync.Mutex
+	secondPending [][]string
+	secondWorker  bool
+	secondReady   bool
+
 	// 会话归属：会话 ID → 窗口名。
 	//
 	// 每个窗口都是平等的「主窗口」，没有哪个窗口能看见别人的标签页。谁建的会话就
@@ -163,6 +173,14 @@ func (a *App) attach(wailsApp *application.App, win *application.WebviewWindow) 
 	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		a.unregisterWindow(win.Name())
 	})
+
+	// 窗口系统就绪。单实例通知可能**比这里更早**到（v3 在 application.New 内部
+	// 就建好了收消息的窗口，见 single_instance.go:112），那时只能先攒着，
+	// 这里补踢一次把它放出来。
+	a.secondMu.Lock()
+	a.secondReady = true
+	a.secondMu.Unlock()
+	a.kickSecondInstance()
 }
 
 // ---- 多窗口原型 ----
@@ -562,10 +580,81 @@ func (a *App) NewWindow() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// 新窗口别精确盖在前一个窗口上：位置、大小完全重合时，用户看到的还是「刚才那
+	// 一份」，会以为再启动一次没反应（实测连开三个窗口全落在 410,160）。
+	// 按已经开着的窗口数错开一档（28px，8 档循环），第一档就是系统给的默认位置。
+	//
+	// 放在这里而不是 createWindowNamed：拖标签也走 createWindowNamed，那个窗口的
+	// 位置是拖动过程中由光标决定的，不该在这里先挪一次。
+	if n := a.countAppWindows() - 1; n > 0 {
+		// Position() 在窗口还没真正建出来（Run 之前）返回 0,0，这时不挪。
+		if x, y := w.Position(); x != 0 || y != 0 {
+			w.SetPosition(x+28*(n%8), y+28*(n%8))
+		}
+	}
 	w.Show()
 	w.Focus()
 	log.Printf("[window] 新窗口 %q", name)
 	return name, nil
+}
+
+// ---- 单实例：再启动一次 GUI 就是在当前进程里再开一个窗口 ----
+//
+// 第二份进程根本不会走到这里：v3 在 application.New 里发现互斥体已被占用，发一条
+// WM_COPYDATA 通知就 os.Exit 了（application.go:204-218），所以界面上只会多出一个
+// 窗口，任务管理器里始终只有一个 serial-gui。
+
+// onSecondInstanceLaunch 由 v3 在「又启动了一份 GUI」时回调。
+//
+// ⚠️ 这里**只入队，不能直接建窗口**：回调跑在 v3 的 COPYDATA 消费 goroutine 上
+// （single_instance.go:77-101），而那条 channel 容量只有 1。消费侧一旦阻塞，
+// 主线程的 wndProc 就卡在塞数据上；建窗口却要 InvokeSync 回主线程 —— 两边互等，
+// 连点两下必死锁。入队后立刻返回，真正的窗口由 worker 去建。
+func (a *App) onSecondInstanceLaunch(data application.SecondInstanceData) {
+	log.Printf("[second-instance] 又启动了一次 GUI（args=%v，工作目录 %s）→ 在新窗口打开",
+		data.Args, data.WorkingDir)
+	a.secondMu.Lock()
+	a.secondPending = append(a.secondPending, data.Args)
+	a.secondMu.Unlock()
+	a.kickSecondInstance()
+}
+
+// kickSecondInstance 在「窗口系统已就绪 + 队列非空 + 没有 worker」时启动一个 worker。
+//
+// 重复调用是安全的：它自己会判断要不要起，worker 也只会在队列取空时退出，
+// 退出与入队之间由 secondMu 和 secondWorker 标记兜住。
+func (a *App) kickSecondInstance() {
+	a.secondMu.Lock()
+	start := a.secondReady && len(a.secondPending) > 0 && !a.secondWorker
+	if start {
+		a.secondWorker = true
+	}
+	a.secondMu.Unlock()
+	if start {
+		go a.runSecondInstanceWorker()
+	}
+}
+
+// runSecondInstanceWorker 按到达顺序把队列里的每次启动变成一个窗口。
+//
+// 走 NewWindow（而不是自己拼窗口参数）：它和菜单「新建窗口」是同一条路，
+// 窗口的注册、关闭确认、文件拖放、按会话分流都跟着一起就位。
+func (a *App) runSecondInstanceWorker() {
+	for {
+		a.secondMu.Lock()
+		if len(a.secondPending) == 0 {
+			a.secondWorker = false
+			a.secondMu.Unlock()
+			return
+		}
+		args := a.secondPending[0]
+		a.secondPending = a.secondPending[1:]
+		a.secondMu.Unlock()
+
+		if _, err := a.NewWindow(); err != nil {
+			log.Printf("[second-instance] 打开新窗口失败（args=%v）: %v", args, err)
+		}
+	}
 }
 
 // StartTearOffDrag 由前端在「多标签窗口里把标签纵向拖出标签栏」时调用：

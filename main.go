@@ -51,6 +51,19 @@ func main() {
 			Middleware: uiAssetMiddleware(),
 		},
 		Icon: appIcon,
+		// 单实例：再启动一次 GUI = 在**已经在跑的那个进程**里新开一个窗口，而不是
+		// 起第二个进程（两个进程会各自连守护进程、各自认领会话，界面看着像两份）。
+		//
+		// v3 的判定与通知全在内部：命名互斥体判重（Windows 走
+		// single_instance_windows.go:45），第二份进程发现已在运行就发一条
+		// WM_COPYDATA 然后自己 os.Exit（application.go:204-218）。这里只需要
+		// 处理「第一份收到通知之后做什么」，见 app.go 的 onSecondInstanceLaunch。
+		//
+		// UniqueID 按 exe 路径分组（instance.go）：开发版与部署版可以同时开着。
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID:               guiInstanceID(),
+			OnSecondInstanceLaunch: svc.onSecondInstanceLaunch,
+		},
 	})
 
 	win := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
