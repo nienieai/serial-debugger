@@ -1453,7 +1453,12 @@ func (p *Process) openHistoryFile() {
 	}
 	// 先把上一个会话读回环形缓冲：重启后打开「保存历史」还能接着看上次的录制。
 	// 必须在建新会话之前——新建的空目录会成为「最近的会话」，把真数据挡掉。
-	p.restoreLatestSession()
+	//
+	// 工程会话跳过这一步：它的历史在 OpenSession 打开工程时已经从**这个工程**
+	// 灌进环了，再去 history/ 找「最近一个会话」只会把不相干的另一条会话读进来。
+	if p.sessionDir() == "" {
+		p.restoreLatestSession()
+	}
 	if err := p.ensureStlogSession(); err != nil {
 		logOp("错误", "开启录制失败 (进程 #%s): %v", p.id, err)
 	}

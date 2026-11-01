@@ -50,8 +50,32 @@ var (
 // 不会堆出一串空目录。
 func (p *Process) openStlogFile() {
 	p.stlogMu.Lock()
+	has := p.stlog != nil
+	p.stlogMu.Unlock()
+	if has {
+		return
+	}
+
+	// 工程会话（session.open 打开的项目）：录进这个工程，不另建目录。
+	// 「打开了工程又另起一个文件录」只会让历史散成两处，也是用户明确否掉的形态。
+	//
+	// 这里必须先放锁：resumeRecording 自己要拿 stlogMu。中间那段窗口里别人把
+	// 录制建起来了也无所谓，下面拿到锁后会重新判一次。
+	if dir := p.sessionDir(); dir != "" {
+		p.resumeRecording(dir)
+		p.stlogMu.Lock()
+		rec := p.stlog != nil
+		p.stlogMu.Unlock()
+		if rec {
+			return
+		}
+		// 工程目录读不出来（被删/损坏）才退回新建，免得用户点了保存却什么都不录。
+		logOp("错误", "进程 #%s 续写工程 %s 没成功，改为新建会话", p.id, dir)
+	}
+
+	p.stlogMu.Lock()
 	defer p.stlogMu.Unlock()
-	if p.stlog != nil {
+	if p.stlog != nil { // 拿到锁后重新判：这段时间里可能已经被建好了
 		return
 	}
 
@@ -226,8 +250,9 @@ func (p *Process) detachStlogFile() {
 
 // resumeRecording 把一个已存在工程的录制接回来：同一个目录、接着往最后一个包里写。
 //
-// 只在 OpenSession 用 —— settings.json 的 save=true 说明上次是开着保存关掉的。
-// 和 SetSaveHistory(true) 的区别就在这点：那个会新建一个会话目录，这个续写旧的。
+// 两个调用点：OpenSession 见到 settings.json 的 save=true（上次是开着保存关掉的），
+// 以及工程会话上用户重新打开保存（openStlogFile）。和 SetSaveHistory(true) 的区别
+// 就在这点：那个会新建一个会话目录，这个续写旧的。
 func (p *Process) resumeRecording(dir string) {
 	sess, err := sessionfile.OpenSessionDir(dir)
 	if err != nil {
@@ -249,6 +274,12 @@ func (p *Process) resumeRecording(dir string) {
 	p.stlogStop = make(chan struct{})
 	p.startStlogTicker(p.stlogStop)
 	p.stlogMu.Unlock()
+	// 把「这个工程在录」写回工程文件 —— 和 openStlogFile 一样。少了这一句，
+	// 「推送后手动开保存」录着录着关掉，下次推送又不会续录了（意图没落盘）。
+	// 必须在解锁之后写：SetSaveFlag 是整份读改写，不该压着 stlogMu。
+	if err := sess.SetSaveFlag(true); err != nil {
+		logOp("错误", "进程 #%s 写 save 标记失败: %v", p.id, err)
+	}
 	logOp("历史", "进程 #%s 接着录制 %s", p.id, dir)
 }
 
