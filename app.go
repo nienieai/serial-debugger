@@ -2585,7 +2585,7 @@ func probeDropPath(p string) DropProbe {
 // 单个 .stlog 不行：包文件没有设置文档、没有索引，也不会再追加，守护进程那边
 // 直接拒绝（daemon/serial.go 的 OpenSession）。返回的 processId 之后走常规会话
 // 接口读数据。
-func (a *App) OpenStlogSession(path string) (map[string]any, error) {
+func (a *App) OpenStlogSession(ctx context.Context, path string) (map[string]any, error) {
 	if path == "" {
 		return nil, fmt.Errorf("路径为空")
 	}
@@ -2595,6 +2595,16 @@ func (a *App) OpenStlogSession(path string) (map[string]any, error) {
 	}
 	if result == nil {
 		return nil, fmt.Errorf("守护进程没有返回会话信息")
+	}
+	// 谁建的会话就归谁 —— 和 OpenSession / CreateIdleProcess / ConnectSession 一样。
+	//
+	// 少了这一句，推送工程只在**空窗口**里能用：会话入库时是无主的，而
+	// GetSessionsForWindow 只在「本窗口名下一条都没有」时才认领无主会话
+	// （app.go 的 claimUnowned）。窗口里但凡开着串口或挂着空闲标签，新建出来的
+	// 工程会话就一直是「无主」，本窗口的标签同步永远看不到它，前端轮询 5 秒后报
+	// 「守护进程没有把这个工程挂上来（进程可能创建失败）」—— 而守护进程其实建好了。
+	if pid, _ := result["processId"].(string); pid != "" {
+		a.sessClaim(pid, winNameFromCtx(ctx))
 	}
 	return result, nil
 }
