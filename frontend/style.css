@@ -443,21 +443,22 @@ button:disabled:active { transform: none; box-shadow: none; }
   align-self: stretch; flex: 1 1 auto; min-width: 0;
 }
 .tabs-scroll::-webkit-scrollbar { display: none; /* Chrome/Safari */ }
-/* 只有一个标签时，标签栏整体当作窗口拖动区（v3 运行时认这个自定义属性，
-   见 runtime 的 drag.ts：只有真的发生拖动才抑制 click/右键，
-   单纯点一下仍然按正常点击处理）。
+/* 只有一个标签时，整条标签栏（**连标签本身**）都当作窗口拖动区：
+   单标签窗口里那一页就是窗口，拖标签 = 拖窗口，没有「把它拖出去」的含义；
+   拖到别的窗口的标签栏上松手，Go 侧会把这一页转过去并关掉这个窗口
+   （见 app.go 的 BeginWindowTabDrag）。多标签窗口不加这个类，标签走 JS 的
+   排序 / 纵向拖出逻辑。
 
    ⚠️ --wails-draggable 是**继承**的，而 v3 只看鼠标下方那个元素的**计算值**：
-   只给 .tabs-scroll 设 drag，标签按钮会继承到 drag，按在标签上也会拖窗口 ——
-   于是单标签窗口里的标签再也拖不出来。所以这里给标签本体显式覆盖成 no-drag：
-   按标签 = 拖标签（拖出/拖到别的窗口），按标签栏空白 = 拖窗口。
+   给 scroll/bar 设 drag，标签按钮就继承到 drag —— 单标签时这正是要的效果。
+   多标签时这里没有 drag，标签按钮拿到默认值，不会拖窗口。
    空白处命中的是 #tabsBar（不是 scroll），所以两个元素都要挂。 */
 .tabs-scroll.is-window-drag,
 .tabs-bar.is-window-drag {
   --wails-draggable: drag;
 }
-.tabs-scroll.is-window-drag .tab-btn,
-.tabs-bar.is-window-drag .tab-btn {
+/* 关闭按钮不是拖动把手：单标签时会从标签继承到 drag，按着它移动会把窗口拖走 */
+.tab-btn .close-tab {
   --wails-draggable: no-drag;
 }
 /* 标签栏左右「还能滚」提示：复用发送区的 .send-scroll-arrow（绝对定位、不吃

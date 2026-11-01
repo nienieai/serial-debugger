@@ -158,7 +158,8 @@ func (a *App) attach(wailsApp *application.App, win *application.WebviewWindow) 
 	a.registerWindow(win.Name(), win)
 	// 主窗口关闭时也要从窗口表里摘掉：多窗口之后 main 可能先于别的窗口关（比如
 	// 把它唯一那个标签拖到别的窗口去）。不摘的话窗口表里会留着一个已销毁的窗口，
-	// appWindowAt 还会把它的矩形当落点，会话就被转给一个不存在的窗口了。
+	// 拖标签的落点判定（tabBandWindowAt）还会把它的矩形当落点，会话就被转给
+	// 一个不存在的窗口了。
 	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		a.unregisterWindow(win.Name())
 	})
@@ -503,14 +504,18 @@ func (a *App) nextWindowName(prefix string) string {
 //
 // 普通窗口 = 和 main 完全同等：一样跑整套界面、一样能开标签页、一样能再拖出窗口。
 // 这正是「没有主窗口概念」的落地方式 —— main 只是第一个建出来的那个而已。
-// 窗口默认尺寸；拖标签时先用小尺寸预览（见 dragWindowW/H）。
+// 窗口默认尺寸。拖出来的窗口一开始就是这个尺寸（见 StartTearOffDrag）。
 const (
 	appWindowWidth  = 1100
 	appWindowHeight = 720
-	// 拖动标签时那个「跟随窗」的尺寸。小窗的目的是让光标周围能看见目标窗口 ——
-	// 以前用整窗（1100×720）跟随，光标整个被盖住，跨窗口拖放根本没法瞄。
-	dragWindowWidth  = 360
-	dragWindowHeight = 240
+	// 拖出标签时，光标停在**被拖出来的那个窗口**里的哪个位置。
+	//
+	// 要落在标签上：按下标签时鼠标在标签上，窗口跟过来以后光标也应该还在标签上，
+	// 否则一拖出来光标就跑到标题栏/内容区，手感是「页面从手里飞了」。
+	// 窗口内坐标 = 标题栏（约 31px）+ 标签栏顶部 + 半个标签高度；
+	// x 取第一个标签的左侧内缩，避免落在横向滚动箭头上。
+	tearOffGrabX = 24
+	tearOffGrabY = 76
 )
 
 func (a *App) createWindowNamed(name, title string, hidden bool, width, height int) (*application.WebviewWindow, error) {
@@ -563,8 +568,8 @@ func (a *App) NewWindow() (string, error) {
 	return name, nil
 }
 
-// StartTearOffDrag 由前端在「拖出标签」时调用：建一个小的「跟随窗」、把会话
-// 转交给它，然后由 Go 自己跟随鼠标直到左键松开。
+// StartTearOffDrag 由前端在「多标签窗口里把标签纵向拖出标签栏」时调用：
+// 建一个**完整尺寸**的窗口、把会话转交给它，然后由 Go 自己跟随鼠标直到左键松开。
 //
 // 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
 // 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
@@ -574,18 +579,21 @@ func (a *App) NewWindow() (string, error) {
 // 新窗口第一次同步时这个会话还归源窗口，它一个会话都看不到，于是按 autoCreate
 // 又补一个空闲会话，用户会看到「拖出来一个窗口，里面是个空标签」。
 //
+// 窗口尺寸和正常窗口一致，不是小预览窗：拖出来的东西**当场就是一个窗口**，
+// 光标停在它的标签上（见 tearOffGrabX/Y），松手就留在原地，不用再长大一次。
+//
 // 松手时按光标位置决定归宿（见 finishTabDrag）：
-//   - 落在**别的窗口**上  → 会话转交给那个窗口，跟随窗关掉
-//   - 落回源窗口自己      → 当取消：归属退回，标签留在原位
-//   - 落在空白处          → 跟随窗就地长大成正常窗口
-func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY int) (string, error) {
+//   - 落在**别的窗口的标签栏**一带 → 会话转交给那个窗口，新窗口关掉
+//   - 落回源窗口自己的标签栏   → 当取消：归属退回，标签留在原位
+//   - 落在别处                → 新窗口留下
+func (a *App) StartTearOffDrag(ctx context.Context, sessionID string) (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("会话 ID 为空")
 	}
 	from := winNameFromCtx(ctx)
 	name := a.nextWindowName("win")
 	a.sessSet(sessionID, name)
-	w, err := a.createWindowNamed(name, "串口调试工具 v"+version.Version, true, dragWindowWidth, dragWindowHeight)
+	w, err := a.createWindowNamed(name, "串口调试工具 v"+version.Version, true, appWindowWidth, appWindowHeight)
 	if err != nil {
 		a.sessSet(sessionID, from) // 窗口没建起来，归属退回去
 		return "", err
@@ -597,7 +605,7 @@ func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY
 	go func() {
 		for {
 			x, y := cursorPos()
-			w.SetPosition(x-offX, y-offY)
+			w.SetPosition(x-tearOffGrabX, y-tearOffGrabY)
 			if !leftButtonDown() {
 				break
 			}
@@ -612,67 +620,124 @@ func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY
 
 // finishTabDrag 处理「松手」：并入别的窗口 / 放回标签栏 / 就地成窗。
 //
-// 「松手还在源窗口里」**不能**一律当成取消：拖出阈值只有 42px，松手位置几乎
-// 必然还在源窗口的内容区里 —— 那样就永远建不出新窗口（实测：每次都判成
-// 「拖回源窗口，取消」，用户看到的是一闪而过的跟随窗）。
-// 只有落回**标签栏那一带**才算放回去，落内容区照旧建新窗口。
+// 判定用**光标**落在哪个窗口的**标签栏带**里（不是整个窗口矩形）：
+// 拖到标签栏 = 把这一页插到那排标签里，拖到内容区 = 只是路过，不该并入。
+//
+// 源窗口优先判：松手还在源窗口自己的标签栏带上，一律当取消 —— 新窗口跟手，
+// 光标总是压在它自己的标签上，两个窗口的标签栏一重合就分不清是谁的了，
+// 这种时候当成「放回去」是安全的那一边。
 func (a *App) finishTabDrag(name, sessionID, from string, w *application.WebviewWindow, x, y int) {
-	target := a.appWindowAt(x, y, name)
-	switch {
-	case target != "" && target != from:
-		// 并入目标窗口：转交归属，关掉跟随窗，两边各自重同步
-		a.sessSet(sessionID, target)
-		log.Printf("[tearoff] 会话 %s 拖入窗口 %q（源 %q）", sessionID, target, from)
-		w.Close()
-		// tearoff-done 让**源窗口**把这个标签摘掉；源窗口如果没有别的标签了，
-		// 它自己会关掉（见 app.js 的 tearoff-done 处理）—— 「拖到别的窗口的
-		// 标签栏就变成那边的标签，这个窗口整个收掉」就是这条。
-		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
-		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
-	case target == from && a.inTabBand(from, x, y):
+	if a.inTabBand(from, x, y) {
 		// 拖回自己的标签栏：等于放回原位
 		a.sessSet(sessionID, from)
 		log.Printf("[tearoff] 会话 %s 放回源窗口 %q 的标签栏，取消", sessionID, from)
 		w.Close()
 		a.emit("sessions-changed", map[string]any{"reason": "cancel", "sid": sessionID})
-	default:
-		// 落在空白处：这个窗口就留下，恢复成正常大小
-		w.SetSize(appWindowWidth, appWindowHeight)
-		// 拖到屏幕右下角松手时，1100×720 会有一半跑到屏幕外 —— 按所在屏幕的
-		// 工作区把左上角推回来（用窗口自己的 GetScreen，多屏也对）。
-		if px, py := w.Position(); true {
-			maxX, maxY := 1<<30, 1<<30
-			minX, minY := -1<<30, -1<<30
-			if scr, err := w.GetScreen(); err == nil && scr != nil {
-				wa := scr.WorkArea
-				minX, minY = wa.X, wa.Y
-				maxX = wa.X + wa.Width - appWindowWidth
-				maxY = wa.Y + wa.Height - appWindowHeight
-			}
-			if px > maxX {
-				px = maxX
-			}
-			if py > maxY {
-				py = maxY
-			}
-			if px < minX {
-				px = minX
-			}
-			if py < minY {
-				py = minY
-			}
-			w.SetPosition(px, py)
-		}
-		w.Focus()
-		log.Printf("[tearoff] 会话 %s 就地成窗 %q", sessionID, name)
-		// 通知源窗口：这个会话已经转交给新窗口了，可以把自己的标签摘掉
-		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
+		return
 	}
+	if target := a.tabBandWindowAt(x, y, name); target != "" {
+		// 并入目标窗口：转交归属，关掉跟随窗，两边各自重同步
+		a.sessSet(sessionID, target)
+		log.Printf("[tearoff] 会话 %s 拖入窗口 %q 的标签栏（源 %q）", sessionID, target, from)
+		w.Close()
+		// tearoff-done 让**源窗口**把这个标签摘掉；源窗口如果没有别的标签了，
+		// 它自己会关掉（见 app.js 的 tearoff-done 处理）—— 「拖到别的窗口的
+		// 标签栏就变成那边的标签，这个窗口整个收掉」就是这条。
+		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": target, "from": from})
+		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
+		return
+	}
+	// 落在别处：这个窗口就留下。尺寸本来就是整窗的，只把跑出屏幕的部分推回来。
+	clampWindowToScreen(w, appWindowWidth, appWindowHeight)
+	w.Focus()
+	log.Printf("[tearoff] 会话 %s 就地成窗 %q", sessionID, name)
+	// 通知源窗口：这个会话已经转交给新窗口了，可以把自己的标签摘掉
+	a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
+}
+
+// BeginWindowTabDrag 由前端在「单标签窗口里按下标签」时调用。
+//
+// 单标签窗口没有「把这一页拆出去」的意思：那一页就是这个窗口，所以拖标签
+// 等于拖窗口本身 —— 移动交给系统原生拖窗（见 style.css 的 .is-window-drag），
+// 这里只负责**松手时的落点**。原生拖动期间前端拿不到事件（系统模态循环），
+// 只能轮询左键状态等松手。
+//
+// 松手时：光标压在**另一个窗口的标签栏带**里 → 这一页转给那个窗口，本窗口
+// 随之关闭（前端收到 tearoff-done 后会自己关，和拖出成窗走同一条路）。
+func (a *App) BeginWindowTabDrag(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("会话 ID 为空")
+	}
+	self := winNameFromCtx(ctx)
+	w := a.windowByName(self)
+	if w == nil {
+		return fmt.Errorf("找不到窗口 %q", self)
+	}
+	startX, startY := w.Position()
+	go func() {
+		for leftButtonDown() {
+			time.Sleep(16 * time.Millisecond)
+		}
+		// 只是点了一下标签（没真的拖）：窗口没挪窝就不做落点判断，
+		// 否则「窗口正好压在别人标签栏上时点一下标签」会把页面甩走。
+		if px, py := w.Position(); absInt(px-startX) < 4 && absInt(py-startY) < 4 {
+			return
+		}
+		x, y := cursorPos()
+		target := a.tabBandWindowAt(x, y, self)
+		if target == "" {
+			return
+		}
+		a.sessSet(sessionID, target)
+		log.Printf("[tabdrag] 会话 %s 随窗口并入 %q 的标签栏（源 %q）", sessionID, target, self)
+		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": target, "from": self})
+		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
+	}()
+	return nil
+}
+
+// clampWindowToScreen 把窗口左上角推回它所在屏幕的工作区里。
+//
+// 拖到屏幕右下角松手时，1100×720 会有一半跑到屏幕外 —— 用窗口自己的
+// GetScreen，多屏也对。
+func clampWindowToScreen(w *application.WebviewWindow, width, height int) {
+	if w == nil {
+		return
+	}
+	px, py := w.Position()
+	maxX, maxY := 1<<30, 1<<30
+	minX, minY := -1<<30, -1<<30
+	if scr, err := w.GetScreen(); err == nil && scr != nil {
+		wa := scr.WorkArea
+		minX, minY = wa.X, wa.Y
+		maxX = wa.X + wa.Width - width
+		maxY = wa.Y + wa.Height - height
+	}
+	if px > maxX {
+		px = maxX
+	}
+	if py > maxY {
+		py = maxY
+	}
+	if px < minX {
+		px = minX
+	}
+	if py < minY {
+		py = minY
+	}
+	w.SetPosition(px, py)
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // tabBandHeight 是「窗口顶部属于标签栏的那一带」的高度（标题栏 + 菜单栏 + 标签栏）。
 //
-// 拖拽落点落在这条带子里 = 放回标签栏（取消）；落在下面（内容区）就是拖出来。
+// 拖拽落点落在这条带子里 = 插到那排标签里；落在下面（内容区）不算。
 // 96 px 是按现有布局量的：标题栏 ~40 + 菜单栏 ~22 + 标签栏 ~34。
 // 这里没法做精确的 DOM 命中（松手时源页面拿不到坐标），所以用布局常量近似。
 const tabBandHeight = 96
@@ -688,12 +753,14 @@ func (a *App) inTabBand(name string, x, y int) bool {
 	return x >= px && x < px+pw && y >= py && y < py+tabBandHeight
 }
 
-// appWindowAt 返回「屏幕坐标 (x,y) 落在哪个应用窗口里」，没有则返回空。
+// tabBandWindowAt 返回「屏幕坐标 (x,y) 落在哪个窗口的标签栏带上」，没有则返回空。
 //
-// 用窗口矩形判断，不用 WindowFromPoint：v3 没暴露 HWND（webview_window_windows.go
+// 拖标签的落点用它，而不是整个窗口矩形：拖到内容区只是路过，不该把页面塞进去。
+//
+// 用矩形判断，不用 WindowFromPoint：v3 没暴露 HWND（webview_window_windows.go
 // 里的 hwnd 是私有字段），拿不到「这个 HWND 是哪个窗口」的映射。
 // 多个窗口重叠时取面积最小的那个 —— 叠在上面的通常是小的那个。
-func (a *App) appWindowAt(x, y int, exclude string) string {
+func (a *App) tabBandWindowAt(x, y int, exclude string) string {
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
 	best := ""
@@ -707,7 +774,7 @@ func (a *App) appWindowAt(x, y int, exclude string) string {
 		}
 		px, py := w.Position()
 		pw, ph := w.Size()
-		if x < px || x >= px+pw || y < py || y >= py+ph {
+		if x < px || x >= px+pw || y < py || y >= py+tabBandHeight {
 			continue
 		}
 		if area := pw * ph; best == "" || area < bestArea {

@@ -40,6 +40,23 @@ export function BatchDecodeForTab(hexStrings, encoding) {
 }
 
 /**
+ * BeginWindowTabDrag 由前端在「单标签窗口里按下标签」时调用。
+ * 
+ * 单标签窗口没有「把这一页拆出去」的意思：那一页就是这个窗口，所以拖标签
+ * 等于拖窗口本身 —— 移动交给系统原生拖窗（见 style.css 的 .is-window-drag），
+ * 这里只负责**松手时的落点**。原生拖动期间前端拿不到事件（系统模态循环），
+ * 只能轮询左键状态等松手。
+ * 
+ * 松手时：光标压在**另一个窗口的标签栏带**里 → 这一页转给那个窗口，本窗口
+ * 随之关闭（前端收到 tearoff-done 后会自己关，和拖出成窗走同一条路）。
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<void>}
+ */
+export function BeginWindowTabDrag(sessionID) {
+    return $Call.ByName("main.App.BeginWindowTabDrag", sessionID);
+}
+
+/**
  * CancelWindowClose 由前端在用户点了「取消」后调用，清掉待确认标记。
  * @returns {$CancellablePromise<void>}
  */
@@ -1011,8 +1028,8 @@ export function StartTabDecoder(processID) {
 }
 
 /**
- * StartTearOffDrag 由前端在「拖出标签」时调用：建一个小的「跟随窗」、把会话
- * 转交给它，然后由 Go 自己跟随鼠标直到左键松开。
+ * StartTearOffDrag 由前端在「多标签窗口里把标签纵向拖出标签栏」时调用：
+ * 建一个**完整尺寸**的窗口、把会话转交给它，然后由 Go 自己跟随鼠标直到左键松开。
  * 
  * 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
  * 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
@@ -1022,17 +1039,18 @@ export function StartTabDecoder(processID) {
  * 新窗口第一次同步时这个会话还归源窗口，它一个会话都看不到，于是按 autoCreate
  * 又补一个空闲会话，用户会看到「拖出来一个窗口，里面是个空标签」。
  * 
+ * 窗口尺寸和正常窗口一致，不是小预览窗：拖出来的东西**当场就是一个窗口**，
+ * 光标停在它的标签上（见 tearOffGrabX/Y），松手就留在原地，不用再长大一次。
+ * 
  * 松手时按光标位置决定归宿（见 finishTabDrag）：
- *   - 落在**别的窗口**上  → 会话转交给那个窗口，跟随窗关掉
- *   - 落回源窗口自己      → 当取消：归属退回，标签留在原位
- *   - 落在空白处          → 跟随窗就地长大成正常窗口
+ *   - 落在**别的窗口的标签栏**一带 → 会话转交给那个窗口，新窗口关掉
+ *   - 落回源窗口自己的标签栏   → 当取消：归属退回，标签留在原位
+ *   - 落在别处                → 新窗口留下
  * @param {string} sessionID
- * @param {number} offX
- * @param {number} offY
  * @returns {$CancellablePromise<string>}
  */
-export function StartTearOffDrag(sessionID, offX, offY) {
-    return $Call.ByName("main.App.StartTearOffDrag", sessionID, offX, offY);
+export function StartTearOffDrag(sessionID) {
+    return $Call.ByName("main.App.StartTearOffDrag", sessionID);
 }
 
 /**

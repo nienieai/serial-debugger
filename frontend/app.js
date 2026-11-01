@@ -2073,12 +2073,25 @@ var _tabDrag = null;   // { btn, idx, started, ph, pid, ... }
 
 function _tabDragDown(e) {
   if (e.button !== 0) return;
-  // 单标签窗口也允许拖标签：要能把唯一那页拖到别的窗口去（窗口拖动交给
-  // 标签栏空白处，见 style.css 里 .tab-btn 的 --wails-draggable: no-drag）。
   var btn = e.currentTarget;
   if (e.target && e.target.closest && e.target.closest('.close-tab')) return;
   var idx = parseInt(btn.dataset.tabIdx, 10);
   if (isNaN(idx)) return;
+
+  // 单标签窗口：这一页就是窗口本身，拖标签 = 拖窗口，没有「拖出去」的含义。
+  // 移动交给系统原生拖窗（CSS 见 style.css 的 .is-window-drag），这里只通知 Go
+  // 去盯松手时的落点 —— 原生拖动期间前端收不到事件，只能由 Go 轮询左键。
+  if (state.tabs.length <= 1) {
+    var only = state.tabs[idx];
+    var App0 = window.go && window.go.main && window.go.main.App;
+    if (only && only.sessionId && App0 && typeof App0.BeginWindowTabDrag === 'function') {
+      App0.BeginWindowTabDrag(only.sessionId).catch(function (err) {
+        if (window.console) console.error('[tabdrag] 开始监视落点失败', err);
+      });
+    }
+    return;
+  }
+
   var r = btn.getBoundingClientRect();
   _tabDrag = {
     btn: btn, idx: idx, started: false, pid: e.pointerId,
@@ -2233,8 +2246,9 @@ function _tabTearOffStart(st, e) {
   st.btn.classList.add('tab-tearing');
   // 建窗 + 跟随全部交给 Go：窗口一旦盖住光标，源页面的 pointermove 就断了
   // （实测只走 4 步），所以跟随只能由 Go 轮询光标来做。见 app.go StartTearOffDrag。
-  // 松手时 Go 按落点决定：并入别的窗口 / 退回原位 / 就地成窗。
-  App.StartTearOffDrag(tab.sessionId, TEAR_OFF_OFFSET_X, TEAR_OFF_OFFSET_Y).catch(function (err) {
+  // 新窗口**当场就是整窗尺寸**，光标停在它的标签上；松手时 Go 按落点决定：
+  // 并入别的窗口的标签栏 / 退回原位 / 留在原地。
+  App.StartTearOffDrag(tab.sessionId).catch(function (err) {
     if (window.console) console.error('[tearoff] 打开单会话窗口失败', err);
     st.tearing = false;
     st.btn.classList.remove('tab-tearing');
@@ -2585,9 +2599,12 @@ window.addEventListener('DOMContentLoaded', () => {
       var sid = data && data.sid;
       if (!sid) return;
       // 事件是全局广播：只有**源窗口**该摘标签（新窗口的那个标签是它的，得留着）。
-      // 新窗口刚加载时 __winName 可能还没取回来，取不到就靠下面的「找不到标签」
-      // 自然跳过，不会误删。
-      if (data.from && window.__winName && String(data.from) !== String(window.__winName)) return;
+      // 新窗口刚建出来时 __winName 还没取回来，这时候**什么都不能做**：它手里
+      // 正好就是被拖出来的那个会话，判断不出「我是源还是目标」就会把自己的标签
+      // 摘掉，接着按「标签空了」把自己关掉（实测：新窗口刚成窗就弹关窗确认）。
+      var me = window.__winName;
+      if (!me) return;
+      if (data.from && String(data.from) !== String(me)) return;
       // 注意 sessionId 可能是数字、事件里是字符串，必须宽松比较
       var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
       if (tab) _detachTab(tab);
@@ -3972,10 +3989,7 @@ function switchTab(idx) {
 // 只有会话标签能拖出去成窗口：设置页/选择页/文件页没有对应的守护进程会话
 var TEAR_OFF_DY = 42;   // 垂直拖出阈值（像素）
 
-// 拖出时那个「跟随窗」用小尺寸跟着鼠标，好让用户看见底下的目标窗口。
-// 偏移取负值 = 窗口放在光标右下（光标本身不被盖住），否则落点根本看不清。
-var TEAR_OFF_OFFSET_X = -16;
-var TEAR_OFF_OFFSET_Y = -16;
+// 拖出来的窗口是整窗尺寸，光标停在它的标签上（偏移由 Go 侧给，见 tearOffGrabX/Y）。
 
 function closeTab(idx) {
   const tab = state.tabs[idx];
@@ -5261,8 +5275,9 @@ function renderTabs() {
   _updateTabDensity(true);
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
 
-  // 只有一个标签时，整条标签栏兼作窗口拖动区（见 style.css 的 .is-window-drag）。
-  // 多标签时不加：那种情况下标签栏要用于拖动排序。
+  // 只有一个标签时，整条标签栏（**连标签本身**）都当作窗口拖动区：
+  // 单标签窗口里那一页就是窗口，拖标签 = 拖窗口（见 style.css 的 .is-window-drag）。
+  // 多标签时不加：那种情况下标签要用来排序 / 纵向拖出成新窗口。
   // 注意要连 #tabsBar 一起加：空白处点上去命中的是 bar，不是 scroll ——
   // 只加在 scroll 上时，单标签窗口在标签栏空白处拖不动窗口。
   var oneTab = scroll.querySelectorAll('.tab-btn').length === 1;
