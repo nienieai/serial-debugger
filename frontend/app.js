@@ -799,7 +799,7 @@ function _resetAlertButtons() {
 
 // okKey / cancelKey: optional i18n keys for context-specific button labels
 // mono: 等宽 + 保留换行，用于多行或按列对齐的文本（如 .stlog 摘要）
-function showAlert(title, message, okKey, mono) {
+function _alertInPage(title, message, okKey, mono) {
   _resetAlertButtons();
   _alertCallback = null;
   document.getElementById('alertTitle').textContent = title;
@@ -811,7 +811,7 @@ function showAlert(title, message, okKey, mono) {
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
-function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
+function _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk) {
   _resetAlertButtons();
   _alertCallback = onOk;
   document.getElementById('alertTitle').textContent = title;
@@ -835,7 +835,7 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
 //
 // 只有「打开工程目录 / 打开 .stlog 文件」用它：拿确认框做二选一的话，取消键
 // 就变成了第二个选项，语义是歪的。
-function showChoice(title, message, options) {
+function _choiceInPage(title, message, options) {
   _resetAlertButtons();
   _alertCallback = null;
   document.getElementById('alertTitle').textContent = title;
@@ -873,6 +873,119 @@ function closeAlert(ok) {
   if (ok && inp && inp.checked && dontAsk) dontAsk();
   if (inp) inp.checked = false;
   if (ok && cb) cb();
+}
+
+// ---- 独立窗口对话框 ----
+//
+// 提示 / 确认 / 选择不再画在主窗口的 WebView 里，而是各开一个真正的窗口：
+// Go 侧 dialog.go 建窗口并 AttachModal 到主窗口（owned window），结果通过
+// frames 流回一条 dialog-result 帧。
+//
+// 页内 overlay 的实现保留为降级路径（_alertInPage / _confirmInPage /
+// _choiceInPage）——窗口创建失败时功能不能整个挂掉。
+//
+// 对话框窗口用的是独立的 dialog.html，不是 index.html：绝不能让第二个窗口
+// 把整套 app.js（state、i18n、守护进程连接、Stream）再初始化一遍。
+
+var _dlgPending = {};   // 对话框 id -> resolve
+
+// 取一份当前主题的 CSS 变量快照，塞给对话框窗口对齐配色。
+// 每次弹窗重新取，这样切过主题之后立刻生效。
+function _dialogVars() {
+  var cs = getComputedStyle(document.documentElement);
+  var names = ['--bg', '--bg2', '--bg3', '--fg', '--border', '--input-bg',
+               '--accent', '--green', '--red', '--yellow'];
+  var out = {};
+  for (var i = 0; i < names.length; i++) {
+    var v = cs.getPropertyValue(names[i]);
+    if (v && v.trim()) out[names[i]] = v.trim();
+  }
+  return out;
+}
+
+// 开一个对话框窗口，返回 Promise<{action, dontAsk}>。
+function _openDialog(spec) {
+  var App = window.go && window.go.main && window.go.main.App;
+  if (!App || typeof App.OpenDialog !== 'function') {
+    return Promise.reject(new Error('没有 OpenDialog 绑定'));
+  }
+  spec.vars = _dialogVars();
+  return App.OpenDialog(spec).then(function (id) {
+    return new Promise(function (resolve) {
+      _dlgPending[id] = resolve;
+      // 兜底：窗口异常关闭导致结果帧丢失时，别让调用方的 Promise 永远挂着
+      setTimeout(function () {
+        if (_dlgPending[id]) {
+          delete _dlgPending[id];
+          resolve({ action: 'cancel', dontAsk: false });
+        }
+      }, 180000);
+    });
+  });
+}
+
+// Go 侧结算后经 frames 流回调到这里。
+function _onDialogFrame(d) {
+  if (!d || !d.id) return;
+  var fn = _dlgPending[d.id];
+  delete _dlgPending[d.id];
+  if (fn) fn({ action: d.action || 'cancel', dontAsk: !!d.dontAsk });
+}
+
+function showAlert(title, message, okKey, mono) {
+  var text = String(message === null || message === undefined ? '' : message);
+  _openDialog({
+    kind: 'alert',
+    title: String(title || ''),
+    message: text,
+    mono: !!mono,
+    buttons: [{ key: 'ok', label: t(okKey || 'confirm.ok', '确定'), kind: 'primary' }]
+  }).catch(function () {
+    _alertInPage(title, message, okKey, mono);
+  });
+}
+
+function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk) {
+  var text = String(message === null || message === undefined ? '' : message);
+  _openDialog({
+    kind: 'confirm',
+    title: String(title || ''),
+    message: text,
+    buttons: [
+      { key: 'ok', label: t(okKey || 'confirm.ok', '确定'), kind: 'primary' },
+      { key: 'cancel', label: t(cancelKey || 'confirm.cancel', '取消'), kind: 'default' }
+    ],
+    dontAsk: !!onDontAsk,
+    dontAskLabel: t('confirm.dont_ask', '不再提醒')
+  }).then(function (r) {
+    if (r.action !== 'ok') return;
+    // 顺序要紧：「不再提醒」先把设置落盘，再执行 onOk —— 退出确认那条
+    // onOk 是 QuitApp，反过来就来不及写盘（页内版本同样的约束，见 closeAlert）
+    if (r.dontAsk && onDontAsk) onDontAsk();
+    if (onOk) onOk();
+  }).catch(function () {
+    _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk);
+  });
+}
+
+function showChoice(title, message, options) {
+  var opts = options || [];
+  var buttons = opts.map(function (o, i) {
+    return { key: 'c' + i, label: o.label, kind: i === 0 ? 'primary' : 'default' };
+  });
+  _openDialog({
+    kind: 'choice',
+    title: String(title || ''),
+    message: String(message === null || message === undefined ? '' : message),
+    buttons: buttons
+  }).then(function (r) {
+    var m = /^c(\d+)$/.exec(r.action || '');
+    if (!m) return;
+    var opt = opts[parseInt(m[1], 10)];
+    if (opt && opt.onPick) opt.onPick();
+  }).catch(function () {
+    _choiceInPage(title, message, options);
+  });
 }
 
 // Go 的 BeforeClose 判定「这次关窗口要停守护进程、且用户开了确认」时发这个事件。
@@ -2332,6 +2445,8 @@ window.addEventListener('DOMContentLoaded', () => {
   connectFrameStream(function (name, d) {
     if (name === 'rx' || name === 'tx' || name === '1' || name === '2') {
       appendLine(name, d);
+    } else if (name === 'dialog-result') {
+      _onDialogFrame(d);
     }
   });
 

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    对话框窗口（提示 / 确认 / 选择）。
+    由 Go 侧 dialog.go 的 OpenDialog 打开，内容自己用 GetDialog(id) 取。
+    刻意不复用 index.html：那里会跑整套 app.js，第二个窗口会把 state、i18n、
+    守护进程连接和 frames 流全部再初始化一遍。
+  -->
+  <title>串口调试工具</title>
+  <link rel="stylesheet" href="/dialog.css">
+</head>
+<body>
+  <main class="o-dialog-col">
+    <p class="c-dialog__msg" id="dlgMsg">加载中…</p>
+    <label class="c-dialog__opt is-hidden" id="dlgDontAsk">
+      <input type="checkbox" id="dlgDontAskInput">
+      <span id="dlgDontAskText">不再提醒</span>
+    </label>
+    <div class="o-dialog-actions" id="dlgActions"></div>
+  </main>
+  <script type="module" src="/bindings-global.js"></script>
+  <script type="module" src="/dialog.js"></script>
+</body>
+</html>

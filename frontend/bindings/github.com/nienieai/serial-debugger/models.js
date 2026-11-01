@@ -385,6 +385,146 @@ export class AutoSendDefaults {
 }
 
 /**
+ * DialogButton 是对话框上的一个按钮。
+ */
+export class DialogButton {
+    /**
+     * Creates a new DialogButton instance.
+     * @param {Partial<DialogButton>} [$$source = {}] - The source object to create the DialogButton.
+     */
+    constructor($$source = {}) {
+        if (!("key" in $$source)) {
+            /**
+             * 回传给前端的结果标识（ok / cancel / c0 / c1 …）
+             * @member
+             * @type {string}
+             */
+            this["key"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * 已由主窗口翻译好的文案
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+        if (!("kind" in $$source)) {
+            /**
+             * primary / default
+             * @member
+             * @type {string}
+             */
+            this["kind"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DialogButton instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DialogButton}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DialogButton(/** @type {Partial<DialogButton>} */($$parsedSource));
+    }
+}
+
+/**
+ * DialogSpec 描述一次提示 / 确认 / 选择。
+ */
+export class DialogSpec {
+    /**
+     * Creates a new DialogSpec instance.
+     * @param {Partial<DialogSpec>} [$$source = {}] - The source object to create the DialogSpec.
+     */
+    constructor($$source = {}) {
+        if (!("kind" in $$source)) {
+            /**
+             * alert / confirm / choice
+             * @member
+             * @type {string}
+             */
+            this["kind"] = "";
+        }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["message"] = "";
+        }
+        if (!("mono" in $$source)) {
+            /**
+             * 等宽 + 保留换行（多行摘要用）
+             * @member
+             * @type {boolean}
+             */
+            this["mono"] = false;
+        }
+        if (!("buttons" in $$source)) {
+            /**
+             * @member
+             * @type {DialogButton[]}
+             */
+            this["buttons"] = [];
+        }
+        if (!("dontAsk" in $$source)) {
+            /**
+             * 是否显示「不再提醒」勾选框
+             * @member
+             * @type {boolean}
+             */
+            this["dontAsk"] = false;
+        }
+        if (!("dontAskLabel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dontAskLabel"] = "";
+        }
+        if (!("vars" in $$source)) {
+            /**
+             * 主窗口的 CSS 变量快照，用来对齐主题
+             * @member
+             * @type {{ [_ in string]?: string }}
+             */
+            this["vars"] = {};
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DialogSpec instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DialogSpec}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType4;
+        const $$createField7_0 = $$createType5;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("buttons" in $$parsedSource) {
+            $$parsedSource["buttons"] = $$createField4_0($$parsedSource["buttons"]);
+        }
+        if ("vars" in $$parsedSource) {
+            $$parsedSource["vars"] = $$createField7_0($$parsedSource["vars"]);
+        }
+        return new DialogSpec(/** @type {Partial<DialogSpec>} */($$parsedSource));
+    }
+}
+
+/**
  * DropProbe 是拖放预检的结果。Kind 取 "session" / "file" / "unknown"。
  */
 export class DropProbe {
@@ -597,3 +737,6 @@ export class SerialDefaults {
 const $$createType0 = SerialDefaults.createFrom;
 const $$createType1 = AutoSendDefaults.createFrom;
 const $$createType2 = AppendDefaults.createFrom;
+const $$createType3 = DialogButton.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = $Create.Map($Create.Any, $Create.Any);

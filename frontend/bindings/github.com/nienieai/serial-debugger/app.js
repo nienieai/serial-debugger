@@ -60,6 +60,15 @@ export function ClearHistory(processID) {
 }
 
 /**
+ * CloseAllDialogs 在主窗口退出时兜底清场（owned window 通常会被系统一起关，
+ * 这里只是防止某些平台上残留窗口卡住退出）。
+ * @returns {$CancellablePromise<void>}
+ */
+export function CloseAllDialogs() {
+    return $Call.ByName("main.App.CloseAllDialogs");
+}
+
+/**
  * @param {string} processID
  * @returns {$CancellablePromise<void>}
  */
@@ -237,6 +246,17 @@ export function GetClients() {
 }
 
 /**
+ * GetDialog 供对话框页面取自己的内容。
+ * @param {string} id
+ * @returns {$CancellablePromise<$models.DialogSpec>}
+ */
+export function GetDialog(id) {
+    return $Call.ByName("main.App.GetDialog", id).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
+}
+
+/**
  * GetDisplayDefaults 返回 daemon.ini 的 [display] 段：新标签页的显示设置初始值。
  * 守护进程没在跑时返回 nil，由前端用内置默认值兜底（离线也得能建标签页）。
  * @returns {$CancellablePromise<{ [_ in string]?: any }>}
@@ -390,7 +410,7 @@ export function GetVersion() {
  */
 export function GetWatchedSessions() {
     return $Call.ByName("main.App.GetWatchedSessions").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -399,7 +419,7 @@ export function GetWatchedSessions() {
  */
 export function ListExternalColorThemes() {
     return $Call.ByName("main.App.ListExternalColorThemes").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType9($result);
     }));
 }
 
@@ -410,7 +430,7 @@ export function ListExternalColorThemes() {
  */
 export function ListExternalI18n() {
     return $Call.ByName("main.App.ListExternalI18n").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType10($result);
+        return $$createType11($result);
     }));
 }
 
@@ -419,7 +439,7 @@ export function ListExternalI18n() {
  */
 export function ListExternalIconThemes() {
     return $Call.ByName("main.App.ListExternalIconThemes").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType9($result);
     }));
 }
 
@@ -438,7 +458,7 @@ export function ListHistoryFiles() {
  */
 export function ListThemes() {
     return $Call.ByName("main.App.ListThemes").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType13($result);
     }));
 }
 
@@ -449,7 +469,7 @@ export function ListThemes() {
  */
 export function LoadAppSettings() {
     return $Call.ByName("main.App.LoadAppSettings").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType15($result);
     }));
 }
 
@@ -511,6 +531,18 @@ export function NewHistoryFile(processID) {
  */
 export function OpenDevTools() {
     return $Call.ByName("main.App.OpenDevTools");
+}
+
+/**
+ * OpenDialog 建一个对话框窗口并挂到主窗口上。
+ * 
+ * 返回的 id 由前端用来等待结果：前端收到 dialog-result 帧后按 id 找到自己的
+ * Promise 并 resolve。
+ * @param {$models.DialogSpec} spec
+ * @returns {$CancellablePromise<string>}
+ */
+export function OpenDialog(spec) {
+    return $Call.ByName("main.App.OpenDialog", spec);
 }
 
 /**
@@ -602,7 +634,7 @@ export function PickStlogFile() {
  */
 export function ProbeDroppedPaths(paths) {
     return $Call.ByName("main.App.ProbeDroppedPaths", paths).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType17($result);
     }));
 }
 
@@ -675,6 +707,27 @@ export function RenameSession(processID, name) {
  */
 export function RenameStlogFile(path, newName) {
     return $Call.ByName("main.App.RenameStlogFile", path, newName);
+}
+
+/**
+ * ResizeDialog 由对话框页面在渲染完成后调用，把窗口高度贴合内容。
+ * @param {string} id
+ * @param {number} height
+ * @returns {$CancellablePromise<void>}
+ */
+export function ResizeDialog(id, height) {
+    return $Call.ByName("main.App.ResizeDialog", id, height);
+}
+
+/**
+ * ResolveDialog 由对话框页面调用：把结果送回主窗口并关掉自己。
+ * @param {string} id
+ * @param {string} action
+ * @param {boolean} dontAsk
+ * @returns {$CancellablePromise<void>}
+ */
+export function ResolveDialog(id, action, dontAsk) {
+    return $Call.ByName("main.App.ResolveDialog", id, action, dontAsk);
 }
 
 /**
@@ -946,7 +999,7 @@ export function WhoAmI() {
  */
 export function WindowNames() {
     return $Call.ByName("main.App.WindowNames").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -979,14 +1032,15 @@ const $$createType2 = $Create.Array($$createType1);
 const $$createType3 = $Create.Map($Create.Any, $Create.Any);
 const $$createType4 = $Create.Map($Create.Any, $Create.Any);
 const $$createType5 = $Create.Array($$createType3);
-const $$createType6 = $Create.Array($Create.Any);
-const $$createType7 = config$0.ExternalThemeInfo.createFrom;
-const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = $models.ExternalI18nInfo.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = config$0.ThemeInfo.createFrom;
-const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = $models.AppSettings.createFrom;
-const $$createType14 = $Create.Nullable($$createType13);
-const $$createType15 = $models.DropProbe.createFrom;
-const $$createType16 = $Create.Array($$createType15);
+const $$createType6 = $models.DialogSpec.createFrom;
+const $$createType7 = $Create.Array($Create.Any);
+const $$createType8 = config$0.ExternalThemeInfo.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = $models.ExternalI18nInfo.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = config$0.ThemeInfo.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = $models.AppSettings.createFrom;
+const $$createType15 = $Create.Nullable($$createType14);
+const $$createType16 = $models.DropProbe.createFrom;
+const $$createType17 = $Create.Array($$createType16);

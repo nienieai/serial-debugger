@@ -72,7 +72,15 @@ func main() {
 	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.onFilesDropped)
 
 	// 关窗口前先问一句「要不要一起停守护进程」（设置里可选三种模式）。
-	win.OnWindowEvent(events.Common.WindowClosing, svc.onWindowClosing)
+	//
+	// 必须用 RegisterHook 而不是 OnWindowEvent：
+	//   - v3 在窗口创建时就挂了一个 OnWindowEvent(WindowClosing) 监听器，
+	//     里面无条件 destroy + close（webview_window.go:367-378），
+	//     event.Cancel() 对它无效；
+	//   - 只有 Hook 会先于监听器执行，且事件被 Cancel 后**不再派发给监听器**
+	//     （events.go:151-160 的 dispatch 顺序）。
+	// 用 OnWindowEvent 的症状是：确认框根本不弹、窗口直接关掉。
+	win.RegisterHook(events.Common.WindowClosing, svc.onWindowClosing)
 
 	uiStartHotReload(win)
 

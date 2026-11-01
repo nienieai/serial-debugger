@@ -11,6 +11,8 @@ export {
     AppSettings,
     AppendDefaults,
     AutoSendDefaults,
+    DialogButton,
+    DialogSpec,
     DropProbe,
     ExternalI18nInfo,
     SerialConfig,

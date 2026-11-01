@@ -42,6 +42,12 @@ type App struct {
 	winMu   sync.Mutex
 	windows map[string]*application.WebviewWindow
 
+	// 对话框窗口（提示/确认/选择）注册表：id → 内容 + 窗口。
+	// 见 dialog.go —— 提示类弹层已改成独立窗口（AttachModal 做 owned window）。
+	dialogMu  sync.Mutex
+	dialogSeq uint64
+	dialogs   map[string]*dialogEntry
+
 	// 数据帧的 per-window 通道：窗口名 → Stream 连接。
 	//
 	// 为什么不用事件：v3 的 window.EmitEvent 只是设 Sender 后走全局广播
@@ -476,6 +482,7 @@ func (a *App) watchDaemonReady(ctx context.Context) {
 // ServiceShutdown 是 v3 的 service 退出钩子（v2 里叫 Shutdown）。
 func (a *App) ServiceShutdown() error {
 	a.StopAllTabDecoders()
+	a.CloseAllDialogs()
 	if a.eventConn != nil {
 		a.eventConn.Close()
 		a.eventConn = nil
@@ -485,17 +492,22 @@ func (a *App) ServiceShutdown() error {
 
 // ---- 关闭流程 ----
 //
-// Wails 的 OnBeforeClose 是同步返回 bool 的（true = 放行），而「要不要停守护进程」
-// 需要问用户。所以分两段：第一次进 BeforeClose 判定需要确认时，发事件把关闭拦住；
-// 前端弹框、点确定后调 QuitApp()，第二次进 BeforeClose 看到 forceQuit 直接放行。
-// 用户点取消则什么也不做，窗口留着，下次关闭时重新走一遍。
-
-// BeforeClose 决定这次关窗口要不要先停守护进程。
+// 「要不要停守护进程」需要问用户，而窗口关闭事件是同步派发的，所以要分两段：
+// 第一次关闭被拦下 → 由前端弹确认窗 → 用户点「退出」后调 QuitApp()，
+// 第二次关闭看到 forceQuit 直接放行。点「取消」则什么都不做，窗口留着。
 //
-// 注意返回值是 **prevent**，不是「放行」：返回 true 表示拦住这次关闭
-// （wails 的 Frontend.Quit 里是 `if OnBeforeClose(...) { return }`，
-// 见 desktop/windows/frontend.go:453）。第一版按「true = 放行」写反了，
-// 症状是关窗口直接退、确认框根本不弹。
+// v3 的拦法（和 v2 完全不是一回事，迁移时踩过）：
+//   - 必须用 win.RegisterHook(WindowClosing, ...) + event.Cancel()；
+//   - 用 win.OnWindowEvent 挂监听器**拦不住**：v3 在窗口创建时自己挂了一个
+//     OnWindowEvent(WindowClosing) 监听器，里面无条件 destroy + close
+//     （webview_window.go:367-378），而 Cancel 只对 Hook 生效——
+//     Hook 先跑，事件被 Cancel 后不再派发给监听器（events.go:151-160）。
+//     症状：确认框根本不弹，点 X 直接退出。
+
+// onWindowClosing 是 WindowClosing 的 **Hook**（见 main.go 里为什么必须用
+// RegisterHook 而不是 OnWindowEvent）。
+//
+// 注意 event.Cancel() 的语义是 **拦住**，不是放行。
 func (a *App) onWindowClosing(event *application.WindowEvent) {
 	if a.shouldPreventClose() {
 		event.Cancel()
@@ -517,7 +529,12 @@ func (a *App) shouldPreventClose() bool {
 
 	cfg := a.LoadAppSettings()
 	clients := a.GetClients()
-	switch decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients)) {
+	action := decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients))
+	// 关窗口的判定结果只在这里出现一次，不打日志的话「为什么没弹确认框」
+	// 完全无从查起（实测踩过：clients 多一个就会静默放行）。
+	log.Printf("[close] mode=%s warn=%v connected=%v clients=%d -> action=%d",
+		cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients), action)
+	switch action {
 	case closeStopDaemon:
 		a.stopDaemonQuiet()
 		return false
