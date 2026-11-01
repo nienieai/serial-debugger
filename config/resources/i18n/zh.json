@@ -317,7 +317,7 @@
   "settings.about_notes": "说明",
   "settings.about_p1": "支持多标签页同步管理、文本与十六进制双模收发、端口转发双向透传，提供守护进程统一调度与全客户端互操作能力。",
   "settings.about_p2": "内置自动发送引擎、设备端口探测、文件驱动主题系统，涵盖 GUI / CLI / MCP 三套交互界面，适配 9 种语言国际化。",
-  "settings.about_p3": "基于 Go + Wails 构建，采用 3 管道 IPC 架构与共享内存环形缓冲区，运行于 Windows 平台。",
+  "settings.about_p3": "基于 Go + Wails 构建，采用 3 管道 IPC 架构与共享内存环形缓冲区，运行于 Windows 与 Linux 平台。",
   "settings.about_runtime": "运行信息",
   "settings.about_version": "版本",
   "settings.append": "尾部追加",

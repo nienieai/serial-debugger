@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -2492,6 +2493,22 @@ func (a *App) GetAppDir() string {
 		return ""
 	}
 	return filepath.Dir(exe)
+}
+
+// GetRenderEngine 返回当前平台真正用的 WebView 实现，关于页「渲染」一行显示它。
+//
+// 这行以前在前端写死成 'WebView2'，Linux 版上就是句假话 —— Wails v3 的 Linux
+// 后端是 WebKitGTK。纯字符串判断，用 runtime.GOOS 就够，不必再拆平台文件。
+func (a *App) GetRenderEngine() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "WebView2"
+	case "linux":
+		return "WebKitGTK"
+	case "darwin":
+		return "WKWebView"
+	}
+	return runtime.GOOS
 }
 
 // GetProtocolVersion 返回本客户端使用的 IPC 协议版本（MAJOR.MINOR.PATCH）。

@@ -13,6 +13,8 @@ import { Create as $Create } from "/wails/runtime.js";
  * 	""          成功（或本来就不需要授权）
  * 	cancel      没拿到授权（用户点了取消，或 polkit 直接拒绝）
  * 	no_pkexec   系统里没有 pkexec，弹不出授权窗口
+ * 	no_agent    当前进程不在桌面会话里，系统授权窗口调不出来（典型：从 SSH 或
+ * 	            终端启动的 GUI）。不是权限问题，换个启动方式就行
  * 	no_device   当前没有可授权的设备
  * 	unsupported 非 Linux
  * 	failed      其它失败，Detail 带原始错误

@@ -317,7 +317,7 @@
   "settings.about_notes": "説明",
   "settings.about_p1": "マルチタブセッション管理、テキスト/Hexデュアルモード送受信、双方向ポート転送、デーモン統合スケジューリングと全クライアント相互運用。",
   "settings.about_p2": "自動送信エンジン、デバイス検出、ファイル駆動テーマシステム、GUI/CLI/MCPの三インターフェース、9言語国際化対応。",
-  "settings.about_p3": "Go + Wailsで構築、3パイプIPCアーキテクチャと共有メモリリングバッファを採用、Windowsプラットフォームで動作。",
+  "settings.about_p3": "Go + Wailsで構築、3パイプIPCアーキテクチャと共有メモリリングバッファを採用、WindowsとLinuxで動作。",
   "settings.about_runtime": "実行環境",
   "settings.about_version": "バージョン",
   "settings.append": "末尾付加",

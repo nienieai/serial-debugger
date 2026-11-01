@@ -1568,3 +1568,20 @@ for os in windows linux darwin freebsd; do
   GOOS=$os go list -f '{{.ImportPath}}: {{join .GoFiles " "}}' ./...
 done
 ```
+
+### 13.6 串口权限（Linux）
+
+Windows 的 COM 口不需要提权（忙是占用，不是权限），macOS 的 `/dev/cu.*` 归当前用户；**只有 Linux** 的 `/dev/ttyUSB*`、`/dev/ttyACM*` 默认是 `root:dialout 0660`，普通用户不在 `dialout` 组里就打不开。这块逻辑单独放在 `sysperm/`（`sysperm_linux.go` + `sysperm_other.go`），GUI / CLI 共用，MCP 不引用（stdio 协议里弹密码框会卡死）。
+
+**检测只认事实**：`access(2)`（`syscall.Access`）判 R_OK|W_OK。不能看 mode 位 —— `uaccess` 与 `setfacl` 下发的是 **ACL**，加过 ACL 的节点仍然是 `crw-rw----`，按 mode 位判断会误报「没权限」。也不落任何状态文件：能读了自然就不报，拔插后重新探测也是同一套判据。
+
+**修复分两种发布形态**：
+
+| 形态 | 做法 | 代价 |
+| --- | --- | --- |
+| 分体版（解压即用） | 只做**临时授权**：pkexec 对当前节点执行固定脚本（`setfacl -m u:<uid>:rw`，没有 setfacl 就 `chmod 0666`），成功后复探确认 | 拔插 / 重启后节点重建、ACL 消失，要再授权一次 |
+| 聚合版（安装式） | 安装时写 `/etc/udev/rules.d/60-serial-tool.rules` 的 `uaccess` 规则（`build/linux/install.sh --fix-permissions`） | 一次授权，之后永不打扰；但这是改系统，得用户自己决定 |
+
+**红线**：pkexec 只执行**编译进二进制的固定脚本**，绝不执行安装目录里的 `.sh` —— `~/.local/lib/serial-tool/` 在当前用户可写范围内，pkexec 它等于给本机开提权后门；也不写 polkit 免密规则（`result.yes` 会让任意本地用户无声提权）。
+
+**为什么会有 `no_agent`**：polkit 的图形代理是按 **logind 会话**注册的（GNOME Shell 只为自己那个会话注册）。从 SSH / 后台启动的 GUI 落在别的会话里，pkexec 找不到代理就退回构造「文本代理」，再因为拿不到控制终端而失败（退出码 127，报 `Error creating textual authentication agent`）。所以 `FixTemp` 在 126 / 127 之前先认这条，单独返回 `no_agent`，界面给的是一句人话 + 手动修法，而不是 pkexec 的英文原文。

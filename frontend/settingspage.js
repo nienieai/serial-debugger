@@ -720,11 +720,12 @@ function buildSettingsPage() {
 	kv.className = 'settings-about-kv';
 	var protoValEl = null;
 	var dirValEl = null;
+	var renderValEl = null;
 	[['settings.about_kv_proto', '协议号', ''],
 	 ['settings.about_kv_dir', '程序目录', ''],
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
 	 ['settings.about_kv_back', '后端', 'Go / Wails v3'],
-	 ['settings.about_kv_render', '渲染', 'WebView2'],
+	 ['settings.about_kv_render', '渲染', 'WebView'],
 	 ['settings.about_kv_conf', '配置文件', 'settings/gui.ini']].forEach(function(row) {
 		var k = document.createElement('span');
 		k.className = 'settings-about-k';
@@ -735,6 +736,7 @@ function buildSettingsPage() {
 		v.textContent = row[2];
 		if (row[0] === 'settings.about_kv_proto') protoValEl = v;
 		if (row[0] === 'settings.about_kv_dir') dirValEl = v;
+		if (row[0] === 'settings.about_kv_render') renderValEl = v;
 		kv.appendChild(k);
 		kv.appendChild(v);
 	});
@@ -749,6 +751,12 @@ function buildSettingsPage() {
 	try {
 		window.go.main.App.GetAppDir().then(function(dir) {
 			if (dir && dirValEl) dirValEl.textContent = dir;
+		}).catch(function() {});
+	} catch (e) { /* 同上 */ }
+	// 渲染引擎同理：Windows 是 WebView2，Linux 是 WebKitGTK，写死必错一个平台。
+	try {
+		window.go.main.App.GetRenderEngine().then(function(eng) {
+			if (eng && renderValEl) renderValEl.textContent = eng;
 		}).catch(function() {});
 	} catch (e) { /* 同上 */ }
 	colA.appendChild(kv);

@@ -422,6 +422,17 @@ export function GetProtocolVersion() {
 }
 
 /**
+ * GetRenderEngine 返回当前平台真正用的 WebView 实现，关于页「渲染」一行显示它。
+ * 
+ * 这行以前在前端写死成 'WebView2'，Linux 版上就是句假话 —— Wails v3 的 Linux
+ * 后端是 WebKitGTK。纯字符串判断，用 runtime.GOOS 就够，不必再拆平台文件。
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetRenderEngine() {
+    return $Call.ByName("main.App.GetRenderEngine");
+}
+
+/**
  * GetSerialPermission 体检本机 USB 串口节点的访问权限（Linux 才有意义）。
  * 
  * 非 Linux 返回 supported=false：界面据此不再提横幅，也不必解释「为什么没有」。

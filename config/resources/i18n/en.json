@@ -317,7 +317,7 @@
   "settings.about_notes": "Notes",
   "settings.about_p1": "Multi-tab session management, text and hexadecimal dual-mode send/receive, port forwarding with bidirectional pass-through, unified daemon scheduling with cross-client interoperability.",
   "settings.about_p2": "Built-in auto-send engine, device port probing, file-driven theme system, covering GUI / CLI / MCP interfaces with 9-language internationalization.",
-  "settings.about_p3": "Built with Go + Wails, featuring 3-pipe IPC architecture and shared-memory ring buffer, running on Windows.",
+  "settings.about_p3": "Built with Go + Wails, featuring 3-pipe IPC architecture and shared-memory ring buffer, running on Windows and Linux.",
   "settings.about_runtime": "Runtime",
   "settings.about_version": "Version",
   "settings.append": "Append",

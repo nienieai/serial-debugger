@@ -317,7 +317,7 @@
   "settings.about_notes": "說明",
   "settings.about_p1": "支援多標籤頁同步管理、文字與十六進位雙模收發、連接埠轉送雙向透傳，提供守護行程統一排程與全客戶端互操作能力。",
   "settings.about_p2": "內建自動傳送引擎、裝置連接埠探測、檔案驅動主題系統，涵蓋 GUI / CLI / MCP 三套互動介面，適配 9 種語言國際化。",
-  "settings.about_p3": "基於 Go + Wails 構建，採用 3 管線 IPC 架構與共享記憶體環形緩衝區，運行於 Windows 平台。",
+  "settings.about_p3": "基於 Go + Wails 構建，採用 3 管線 IPC 架構與共享記憶體環形緩衝區，運行於 Windows 與 Linux 平台。",
   "settings.about_runtime": "執行資訊",
   "settings.about_version": "版本",
   "settings.append": "尾部追加",
