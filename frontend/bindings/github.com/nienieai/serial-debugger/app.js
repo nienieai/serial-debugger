@@ -104,13 +104,16 @@ export function CloseSession(processID) {
 }
 
 /**
- * ConfirmWindowClose 由前端在用户确认关闭窗口后调用：销毁本窗口的会话，
- * 需要的话停掉守护进程，然后真正关窗。
+ * ConfirmWindowClose 由前端在用户确认关闭窗口后调用。
+ * 
+ * mode: destroy 销毁本窗口的会话 / transfer 把它们转到别的窗口 —— 后者不销毁
+ * 任何会话，串口连接不断，只是换了个窗口显示。
+ * @param {string} mode
  * @param {boolean} stopDaemon
  * @returns {$CancellablePromise<void>}
  */
-export function ConfirmWindowClose(stopDaemon) {
-    return $Call.ByName("main.App.ConfirmWindowClose", stopDaemon);
+export function ConfirmWindowClose(mode, stopDaemon) {
+    return $Call.ByName("main.App.ConfirmWindowClose", mode, stopDaemon);
 }
 
 /**
@@ -556,6 +559,16 @@ export function Log(msg) {
 }
 
 /**
+ * 把会话挪到另一个窗口（供右键菜单等入口复用；拖拽走 finishTabDrag）。
+ * @param {string} sessionID
+ * @param {string} target
+ * @returns {$CancellablePromise<void>}
+ */
+export function MoveSessionToWindow(sessionID, target) {
+    return $Call.ByName("main.App.MoveSessionToWindow", sessionID, target);
+}
+
+/**
  * MultistrLoad loads entries from disk into sendq, returns as JSON.
  * @param {string} processID
  * @returns {$CancellablePromise<string>}
@@ -998,8 +1011,8 @@ export function StartTabDecoder(processID) {
 }
 
 /**
- * StartTearOffDrag 由前端在「拖出标签」时调用：建一个空窗口、把会话转交给它，
- * 然后由 Go 自己跟随鼠标直到左键松开。
+ * StartTearOffDrag 由前端在「拖出标签」时调用：建一个小的「跟随窗」、把会话
+ * 转交给它，然后由 Go 自己跟随鼠标直到左键松开。
  * 
  * 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
  * 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
@@ -1008,6 +1021,11 @@ export function StartTabDecoder(processID) {
  * 转交顺序是关键：**先**把会话归属改成新窗口的名字，**再**建窗口。反过来的话
  * 新窗口第一次同步时这个会话还归源窗口，它一个会话都看不到，于是按 autoCreate
  * 又补一个空闲会话，用户会看到「拖出来一个窗口，里面是个空标签」。
+ * 
+ * 松手时按光标位置决定归宿（见 finishTabDrag）：
+ *   - 落在**别的窗口**上  → 会话转交给那个窗口，跟随窗关掉
+ *   - 落回源窗口自己      → 当取消：归属退回，标签留在原位
+ *   - 落在空白处          → 跟随窗就地长大成正常窗口
  * @param {string} sessionID
  * @param {number} offX
  * @param {number} offY
@@ -1093,6 +1111,16 @@ export function WatchSession(processID) {
  */
 export function WhoAmI() {
     return $Call.ByName("main.App.WhoAmI");
+}
+
+/**
+ * WindowList 列出当前所有「真正的应用窗口」（main / win-N），供界面做选择。
+ * @returns {$CancellablePromise<string[]>}
+ */
+export function WindowList() {
+    return $Call.ByName("main.App.WindowList").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
 }
 
 /**

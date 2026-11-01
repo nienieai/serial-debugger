@@ -197,6 +197,18 @@ export class AppSettings {
              */
             this["tabCloseWarn"] = false;
         }
+        if (!("windowCloseAction" in $$source)) {
+            /**
+             * WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
+             *   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
+             *   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
+             *   transfer 转到别的窗口去（不问；没有别的窗口时退化成销毁确认）
+             * 注意这和 ShutdownDaemonMode 是两件事：那个管守护进程，这个管会话本身。
+             * @member
+             * @type {string}
+             */
+            this["windowCloseAction"] = "";
+        }
         if (!("autoSaveHistory" in $$source)) {
             /**
              * AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
@@ -311,18 +323,18 @@ export class AppSettings {
      * @returns {AppSettings}
      */
     static createFrom($$source = {}) {
-        const $$createField34_0 = $$createType0;
-        const $$createField35_0 = $$createType1;
-        const $$createField36_0 = $$createType2;
+        const $$createField35_0 = $$createType0;
+        const $$createField36_0 = $$createType1;
+        const $$createField37_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("serial" in $$parsedSource) {
-            $$parsedSource["serial"] = $$createField34_0($$parsedSource["serial"]);
+            $$parsedSource["serial"] = $$createField35_0($$parsedSource["serial"]);
         }
         if ("autoSend" in $$parsedSource) {
-            $$parsedSource["autoSend"] = $$createField35_0($$parsedSource["autoSend"]);
+            $$parsedSource["autoSend"] = $$createField36_0($$parsedSource["autoSend"]);
         }
         if ("append" in $$parsedSource) {
-            $$parsedSource["append"] = $$createField36_0($$parsedSource["append"]);
+            $$parsedSource["append"] = $$createField37_0($$parsedSource["append"]);
         }
         return new AppSettings(/** @type {Partial<AppSettings>} */($$parsedSource));
     }

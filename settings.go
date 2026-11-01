@@ -52,6 +52,12 @@ type AppSettings struct {
 	ShutdownDaemonWarn bool `json:"shutdownDaemonWarn" ini:"shutdown_daemon_warn"`
 	// TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
 	TabCloseWarn bool `json:"tabCloseWarn" ini:"tab_close_warn"`
+	// WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
+	//   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
+	//   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
+	//   transfer 转到别的窗口去（不问；没有别的窗口时退化成销毁确认）
+	// 注意这和 ShutdownDaemonMode 是两件事：那个管守护进程，这个管会话本身。
+	WindowCloseAction string `json:"windowCloseAction" ini:"window_close_action"`
 	// AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
 	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
 	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
@@ -124,6 +130,7 @@ func defaultSettings() *AppSettings {
 		AutoCreateMode:     "single",
 		ShutdownDaemonMode: "last",
 		ShutdownDaemonWarn: true,
+		WindowCloseAction:  "ask",
 		StlogShowYear:      true,
 		// 标签栏：默认单行（保持 0.8.4 现状），客户端数字按 0.8.3 原样分来源彩色
 		TabTwoLines:    false,

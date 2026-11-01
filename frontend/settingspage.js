@@ -572,6 +572,29 @@ function buildSettingsPage() {
 			state.tabCollapse || 'sub',
 			function(v) { _tabSet('tabCollapse', v); })));
 	panelTabs.appendChild(bTabInfo);
+
+	// 「关窗口时，窗口里的会话怎么办」：每次问 / 直接销毁 / 转到其他窗口。
+	// 判定在 Go 侧（app.go allowWindowClose + ConfirmWindowClose），这里只存取。
+	// 注意和下面「存储与行为」里的 shutdown_daemon 区分：那个管守护进程，
+	// 这个管窗口里的会话本身。
+	var bTabClose = _bubble(t('settings.bubble_tab_close', '关闭窗口'));
+	bTabClose.appendChild(_row(t('settings.window_close_action', '窗口里的会话'),
+		_buildSelect(['ask', 'destroy', 'transfer'],
+			[ t('settings.window_close_ask', '每次询问'),
+			  t('settings.window_close_destroy', '直接销毁（会断串口）'),
+			  t('settings.window_close_transfer', '转到其他窗口') ],
+			state.windowCloseAction || 'ask',
+			function(v) {
+				state.windowCloseAction = v;
+				saveSettings();
+			})));
+	// 「关闭标签页前确认」按内容挪到这里（原来在「存储与行为」面板）
+	bTabClose.appendChild(_row(t('settings.tab_close_warn', '关闭标签页前确认'),
+		_buildToggle(function() {
+			state.tabCloseWarn = !state.tabCloseWarn;
+			saveSettings();
+		}, state.tabCloseWarn === true)));
+	panelTabs.appendChild(bTabClose);
 	// ── Panel: 存储与行为 ──
 	var panelStorage = document.createElement('div');
 	panelStorage.className = 'settings-panel is-hidden';
@@ -604,11 +627,7 @@ function buildSettingsPage() {
 	var warnInput = warnToggle.querySelector('input');
 	if (warnInput) warnInput.setAttribute('data-toggle', 'shutdownWarn');
 	bStorage.appendChild(_row(t('settings.shutdown_daemon_warn','关闭 GUI 前确认'), warnToggle));
-	bStorage.appendChild(_row(t('settings.tab_close_warn','关闭标签页前确认'),
-		_buildToggle(function() {
-			state.tabCloseWarn = !state.tabCloseWarn;
-			saveSettings();
-		}, state.tabCloseWarn === true)));
+	// （「关闭标签页前确认」已经挪到「标签页」面板的「关闭窗口」气泡里）
 	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）。守护进程
 	// 没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由
 	// setAutoSaveToggleAvailable() 恢复。

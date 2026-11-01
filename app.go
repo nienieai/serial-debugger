@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -491,17 +492,33 @@ func (a *App) nextWindowName(prefix string) string {
 //
 // 普通窗口 = 和 main 完全同等：一样跑整套界面、一样能开标签页、一样能再拖出窗口。
 // 这正是「没有主窗口概念」的落地方式 —— main 只是第一个建出来的那个而已。
-func (a *App) createWindowNamed(name, title string, hidden bool) (*application.WebviewWindow, error) {
+// 窗口默认尺寸；拖标签时先用小尺寸预览（见 dragWindowW/H）。
+const (
+	appWindowWidth  = 1100
+	appWindowHeight = 720
+	// 拖动标签时那个「跟随窗」的尺寸。小窗的目的是让光标周围能看见目标窗口 ——
+	// 以前用整窗（1100×720）跟随，光标整个被盖住，跨窗口拖放根本没法瞄。
+	dragWindowWidth  = 360
+	dragWindowHeight = 240
+)
+
+func (a *App) createWindowNamed(name, title string, hidden bool, width, height int) (*application.WebviewWindow, error) {
 	if a.wailsApp == nil {
 		return nil, fmt.Errorf("窗口系统尚未就绪")
+	}
+	if width <= 0 {
+		width = appWindowWidth
+	}
+	if height <= 0 {
+		height = appWindowHeight
 	}
 	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      name,
 		Title:     title,
-		Width:     1100,
-		Height:    720,
-		MinWidth:  640,
-		MinHeight: 480,
+		Width:     width,
+		Height:    height,
+		MinWidth:  320,
+		MinHeight: 200,
 		Hidden:    hidden, // 拖动中先隐藏，设好 no-activate 再显示，避免闪一下抢焦点
 		URL:       "/",
 	})
@@ -525,7 +542,7 @@ func (a *App) createWindowNamed(name, title string, hidden bool) (*application.W
 // 和主窗口刚启动时的行为一致。
 func (a *App) NewWindow() (string, error) {
 	name := a.nextWindowName("win")
-	w, err := a.createWindowNamed(name, "串口调试工具 v"+version.Version, false)
+	w, err := a.createWindowNamed(name, "串口调试工具 v"+version.Version, false, appWindowWidth, appWindowHeight)
 	if err != nil {
 		return "", err
 	}
@@ -535,8 +552,8 @@ func (a *App) NewWindow() (string, error) {
 	return name, nil
 }
 
-// StartTearOffDrag 由前端在「拖出标签」时调用：建一个空窗口、把会话转交给它，
-// 然后由 Go 自己跟随鼠标直到左键松开。
+// StartTearOffDrag 由前端在「拖出标签」时调用：建一个小的「跟随窗」、把会话
+// 转交给它，然后由 Go 自己跟随鼠标直到左键松开。
 //
 // 为什么跟随不放在前端：窗口一旦被拖到光标下面，鼠标事件就派发给新窗口了，
 // 源页面收不到 pointermove —— 实测只看得到前 4 次移动，窗口随即卡住。
@@ -545,6 +562,11 @@ func (a *App) NewWindow() (string, error) {
 // 转交顺序是关键：**先**把会话归属改成新窗口的名字，**再**建窗口。反过来的话
 // 新窗口第一次同步时这个会话还归源窗口，它一个会话都看不到，于是按 autoCreate
 // 又补一个空闲会话，用户会看到「拖出来一个窗口，里面是个空标签」。
+//
+// 松手时按光标位置决定归宿（见 finishTabDrag）：
+//   - 落在**别的窗口**上  → 会话转交给那个窗口，跟随窗关掉
+//   - 落回源窗口自己      → 当取消：归属退回，标签留在原位
+//   - 落在空白处          → 跟随窗就地长大成正常窗口
 func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY int) (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("会话 ID 为空")
@@ -552,7 +574,7 @@ func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY
 	from := winNameFromCtx(ctx)
 	name := a.nextWindowName("win")
 	a.sessSet(sessionID, name)
-	w, err := a.createWindowNamed(name, "串口调试工具 v"+version.Version, true)
+	w, err := a.createWindowNamed(name, "串口调试工具 v"+version.Version, true, dragWindowWidth, dragWindowHeight)
 	if err != nil {
 		a.sessSet(sessionID, from) // 窗口没建起来，归属退回去
 		return "", err
@@ -570,13 +592,119 @@ func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY
 			}
 			time.Sleep(16 * time.Millisecond)
 		}
+		x, y := cursorPos()
 		setNoActivate(w, false)
-		w.Focus()
-		// 通知源窗口：这个会话已经转交给新窗口了，可以把自己的标签摘掉
-		log.Printf("[tearoff] 会话 %s 已转交给窗口 %q，广播 tearoff-done", sessionID, name)
-		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
+		a.finishTabDrag(name, sessionID, from, w, x, y)
 	}()
 	return name, nil
+}
+
+// finishTabDrag 处理「松手」：并入别的窗口 / 退回源窗口 / 就地成窗。
+func (a *App) finishTabDrag(name, sessionID, from string, w *application.WebviewWindow, x, y int) {
+	target := a.appWindowAt(x, y, name)
+	switch {
+	case target != "" && target != from:
+		// 并入目标窗口：转交归属，关掉跟随窗，两边各自重同步
+		a.sessSet(sessionID, target)
+		log.Printf("[tearoff] 会话 %s 拖入窗口 %q（源 %q）", sessionID, target, from)
+		w.Close()
+		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
+	case target == from && from != "":
+		// 拖回自己：等于取消，什么都不变
+		a.sessSet(sessionID, from)
+		log.Printf("[tearoff] 会话 %s 拖回源窗口 %q，取消", sessionID, from)
+		w.Close()
+		a.emit("sessions-changed", map[string]any{"reason": "cancel", "sid": sessionID})
+	default:
+		// 落在空白处：这个窗口就留下，恢复成正常大小
+		w.SetSize(appWindowWidth, appWindowHeight)
+		// 拖到屏幕右下角松手时，1100×720 会有一半跑到屏幕外 —— 按所在屏幕的
+		// 工作区把左上角推回来（用窗口自己的 GetScreen，多屏也对）。
+		if px, py := w.Position(); true {
+			maxX, maxY := 1<<30, 1<<30
+			minX, minY := -1<<30, -1<<30
+			if scr, err := w.GetScreen(); err == nil && scr != nil {
+				wa := scr.WorkArea
+				minX, minY = wa.X, wa.Y
+				maxX = wa.X + wa.Width - appWindowWidth
+				maxY = wa.Y + wa.Height - appWindowHeight
+			}
+			if px > maxX {
+				px = maxX
+			}
+			if py > maxY {
+				py = maxY
+			}
+			if px < minX {
+				px = minX
+			}
+			if py < minY {
+				py = minY
+			}
+			w.SetPosition(px, py)
+		}
+		w.Focus()
+		log.Printf("[tearoff] 会话 %s 就地成窗 %q", sessionID, name)
+		// 通知源窗口：这个会话已经转交给新窗口了，可以把自己的标签摘掉
+		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
+	}
+}
+
+// appWindowAt 返回「屏幕坐标 (x,y) 落在哪个应用窗口里」，没有则返回空。
+//
+// 用窗口矩形判断，不用 WindowFromPoint：v3 没暴露 HWND（webview_window_windows.go
+// 里的 hwnd 是私有字段），拿不到「这个 HWND 是哪个窗口」的映射。
+// 多个窗口重叠时取面积最小的那个 —— 叠在上面的通常是小的那个。
+func (a *App) appWindowAt(x, y int, exclude string) string {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	best := ""
+	bestArea := 0
+	for name, w := range a.windows {
+		if name == exclude {
+			continue
+		}
+		if name != "main" && !strings.HasPrefix(name, "win-") {
+			continue // 对话框、调试窗口不算落点
+		}
+		px, py := w.Position()
+		pw, ph := w.Size()
+		if x < px || x >= px+pw || y < py || y >= py+ph {
+			continue
+		}
+		if area := pw * ph; best == "" || area < bestArea {
+			best, bestArea = name, area
+		}
+	}
+	return best
+}
+
+// 把会话挪到另一个窗口（供右键菜单等入口复用；拖拽走 finishTabDrag）。
+func (a *App) MoveSessionToWindow(sessionID, target string) error {
+	if sessionID == "" || target == "" {
+		return fmt.Errorf("会话 ID 与目标窗口都不能为空")
+	}
+	if a.windowByName(target) == nil {
+		return fmt.Errorf("窗口 %q 不存在", target)
+	}
+	a.sessSet(sessionID, target)
+	log.Printf("[window] 会话 %s 移动到窗口 %q", sessionID, target)
+	a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
+	return nil
+}
+
+// WindowList 列出当前所有「真正的应用窗口」（main / win-N），供界面做选择。
+func (a *App) WindowList() []string {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	out := make([]string, 0, len(a.windows))
+	for name := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SetWindowPosition 供「拖出来的窗口跟随鼠标」使用（前端在 pointermove 里调用）。
@@ -803,13 +931,38 @@ func (a *App) allowWindowClose(name string) bool {
 	// 要停守护进程但用户没让「不再提醒」：停下来即可，但会话也要跟着没了，
 	// 这时若窗口里还有会话，下面照样要确认。
 	stopDaemon := action == closeStopDaemon || action == closeConfirm
-	needConfirm := len(sids) > 0 || action == closeConfirm
+
+	// 「关窗口时会话怎么处理」的默认动作（设置 → 标签页）。
+	// transfer 只有在确实还有别的窗口时才成立，否则退化成 destroy。
+	closeMode := cfg.WindowCloseAction
+	if closeMode != "destroy" && closeMode != "transfer" {
+		closeMode = "ask"
+	}
+	canTransfer := a.pickTransferTarget(name) != ""
+	if closeMode == "transfer" && !canTransfer {
+		closeMode = "destroy"
+	}
+
+	// destroy / transfer 是用户在设置里明确选过的：destroy 还要再确认一次
+	// （会断串口），transfer 不破坏任何东西，直接办。
+	needConfirm := action == closeConfirm || (len(sids) > 0 && closeMode != "transfer")
 
 	if !needConfirm {
+		if len(sids) > 0 && closeMode == "transfer" {
+			a.transferWindowSessions(name)
+		}
 		if stopDaemon {
 			a.stopDaemonQuiet()
 		}
 		a.windowClosingCleanup(name)
+		// 这里是「放行这次关闭」，不要再调 Close()（会二次触发关闭）；
+		// 但最后一个窗口还是要显式退程序，否则窗口没了进程还在。
+		if lastWindow {
+			go func() {
+				time.Sleep(300 * time.Millisecond)
+				a.quit()
+			}()
+		}
 		return true
 	}
 
@@ -829,21 +982,33 @@ func (a *App) allowWindowClose(name string) bool {
 	a.closeWinMu.Unlock()
 
 	a.sendFrame(name, map[string]any{"e": "window-close-confirm", "d": map[string]any{
-		"sessions":   len(sids),
-		"stopDaemon": stopDaemon,
-		"mode":       cfg.ShutdownDaemonMode,
+		"sessions":    len(sids),
+		"stopDaemon":  stopDaemon,
+		"mode":        cfg.ShutdownDaemonMode,
+		"closeAction": closeMode, // ask / destroy
+		"canTransfer": canTransfer,
 	}})
 	return false
 }
 
-// ConfirmWindowClose 由前端在用户确认关闭窗口后调用：销毁本窗口的会话，
-// 需要的话停掉守护进程，然后真正关窗。
-func (a *App) ConfirmWindowClose(ctx context.Context, stopDaemon bool) error {
+// ConfirmWindowClose 由前端在用户确认关闭窗口后调用。
+//
+// mode: destroy 销毁本窗口的会话 / transfer 把它们转到别的窗口 —— 后者不销毁
+// 任何会话，串口连接不断，只是换了个窗口显示。
+func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bool) error {
 	name := winNameFromCtx(ctx)
 	if name == "" {
 		return fmt.Errorf("无法确定发起调用的窗口")
 	}
-	n := a.destroyWindowSessions(name)
+	n := 0
+	transferredTo := ""
+	if mode == "transfer" {
+		transferredTo = a.transferWindowSessions(name)
+	}
+	if transferredTo == "" {
+		// 没别的地方可去（或者用户选的就是销毁）：照旧销毁
+		n = a.destroyWindowSessions(name)
+	}
 	if stopDaemon {
 		a.stopDaemonQuiet()
 	}
@@ -860,8 +1025,8 @@ func (a *App) ConfirmWindowClose(ctx context.Context, stopDaemon bool) error {
 	a.forcedWindows[name] = true
 	delete(a.pendingCloseWin, name)
 	a.closeWinMu.Unlock()
-	log.Printf("[close] 窗口 %q 确认关闭：销毁会话 %d 个，停守护进程=%v，最后一个窗口=%v",
-		name, n, stopDaemon, lastWindow)
+	log.Printf("[close] 窗口 %q 确认关闭：mode=%s 销毁会话 %d 个，转到窗口 %q，停守护进程=%v，最后一个窗口=%v",
+		name, mode, n, transferredTo, stopDaemon, lastWindow)
 
 	// 异步关：这个调用是从该窗口的 JS 里发出来的，同步 Close 会把正在回包的
 	// IPC 连接一起带走，前端可能连回执都收不到。
@@ -932,6 +1097,52 @@ func (a *App) destroyWindowSessions(name string) int {
 		log.Printf("[close] 窗口 %q 销毁会话 %d/%d: %v", name, n, len(sids), sids)
 	}
 	return n
+}
+
+// pickTransferTarget 选一个「接盘」窗口：优先 main，否则编号最小的 win-N。
+//
+// 为什么优先 main：它是启动就在的那个，用户对它的位置最熟；转过去的标签
+// 出现在最稳的窗口里，不会跟着某个临时窗口一起被关掉。
+func (a *App) pickTransferTarget(from string) string {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	if from != "main" {
+		if _, ok := a.windows["main"]; ok {
+			return "main"
+		}
+	}
+	best := ""
+	for name := range a.windows {
+		if name == from || !strings.HasPrefix(name, "win-") {
+			continue
+		}
+		if best == "" || name < best {
+			best = name
+		}
+	}
+	return best
+}
+
+// transferWindowSessions 把某个窗口名下的会话整体转给另一个窗口，返回目标窗口名。
+//
+// 和 destroyWindowSessions 的区别：**不销毁任何会话**，串口连接不断，只是换了个
+// 窗口显示。转完之后两边都要重同步：目标窗口会为新会话建标签，源窗口（如果还活着）
+// 会把自己的标签摘掉。
+func (a *App) transferWindowSessions(from string) string {
+	target := a.pickTransferTarget(from)
+	if target == "" {
+		log.Printf("[close] 窗口 %q 没有可转交的目标窗口", from)
+		return ""
+	}
+	sids := a.sessDropWindow(from)
+	for _, sid := range sids {
+		a.sessSet(sid, target)
+	}
+	if len(sids) > 0 {
+		log.Printf("[close] 窗口 %q 的 %d 个会话转到窗口 %q: %v", from, len(sids), target, sids)
+	}
+	a.emit("sessions-changed", map[string]any{"reason": "transfer", "from": from, "to": target})
+	return target
 }
 
 // closeAction 是「关窗口时怎么处理守护进程」的判定结果。

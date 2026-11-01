@@ -237,6 +237,9 @@ const state = {
   shutdownDaemonWarn: true,
   // 关闭标签页前确认：只在那个标签的串口开着时才拦。
   tabCloseWarn: false,
+  // 「关窗口时，这个窗口里的会话怎么处理」：ask 每次问 / destroy 直接销毁 /
+  // transfer 转到别的窗口。判定在 Go 侧（allowWindowClose），这里只管存取。
+  windowCloseAction: 'ask',
   // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
   autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
@@ -434,6 +437,7 @@ function _collectSettings() {
       shutdownDaemonMode: state.shutdownDaemonMode || 'last',
       shutdownDaemonWarn: state.shutdownDaemonWarn !== false,
       tabCloseWarn: state.tabCloseWarn === true,
+      windowCloseAction: state.windowCloseAction || 'ask',
       autoSaveHistory: state.autoSaveHistory === true,
       tabTwoLines: state.tabTwoLines === true,
       tabSubLine: state.tabSubLine || 'a',
@@ -518,6 +522,9 @@ async function loadSettings() {
       }
       if (typeof s.shutdownDaemonWarn === 'boolean') state.shutdownDaemonWarn = s.shutdownDaemonWarn;
       if (typeof s.tabCloseWarn === 'boolean') state.tabCloseWarn = s.tabCloseWarn;
+      if (s.windowCloseAction === 'destroy' || s.windowCloseAction === 'transfer' || s.windowCloseAction === 'ask') {
+        state.windowCloseAction = s.windowCloseAction;
+      }
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
@@ -990,17 +997,23 @@ function showChoice(title, message, options) {
   });
 }
 
-// Go 的 BeforeClose 判定「这次关窗口要停守护进程、且用户开了确认」时发这个事件。
 // 关窗口前的确认（Go 侧 allowWindowClose 通过数据帧定向发来）。
 //
-// 新模型下关窗口 = 销毁这个窗口名下的所有会话，所以这里必须问清楚：用户可能只是
+// 新模型下关窗口会处理掉这个窗口名下的会话，所以这里必须问清楚：用户可能只是
 // 想清掉界面，结果把几条串口连接一起断了。确认后调 ConfirmWindowClose 再关一次，
 // 这次 Go 侧看到 forcedWindows 就放行。
 // 此刻窗口**还没关掉**（event.Cancel 拦住了）。
+//
+// d.closeAction（设置 → 标签页 →「关闭窗口时会话」）：
+//   destroy → 只给「销毁」一个选择（仍然确认一次，会断串口）
+//   ask     → 三选一：销毁并关闭 / 转到其他窗口 / 取消
+//   transfer 不会走到这里（Go 直接转交，除非没有别的窗口，那时也会改成 destroy）
 function _onWindowCloseConfirm(d) {
   var n = (d && d.sessions) || 0;
   var stopDaemon = !!(d && d.stopDaemon);
   var mode = (d && d.mode) || 'last';
+  var canTransfer = !!(d && d.canTransfer);
+  var closeAction = (d && d.closeAction) || 'ask';
   var msg = '';
   if (n > 0) {
     msg += t('confirm.win_close_sessions', '关闭窗口会停止这个窗口里的会话（共 {n} 个），对应串口连接将断开。')
@@ -1013,26 +1026,44 @@ function _onWindowCloseConfirm(d) {
       : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？');
   }
   if (!msg) msg = t('confirm.win_close_bare', '确定关闭这个窗口吗？');
+
+  function doClose(closeMode) {
+    window.go.main.App.ConfirmWindowClose(closeMode, stopDaemon).catch(function(e) {
+      console.error('ConfirmWindowClose failed:', e);
+    });
+  }
+  function cancel() {
+    // 用户取消了：清掉 Go 侧的待确认标记，否则下次点 X 会被当成重复请求
+    window.go.main.App.CancelWindowClose().catch(function() {});
+  }
+  // 「不再提醒」只和「要不要停守护进程」有关；单纯关窗口时不该出现这个勾选框
+  var onDontAsk = stopDaemon ? function() {
+    // 必须在关窗之前落盘，否则进程先退了设置就丢了
+    state.shutdownDaemonWarn = false;
+    saveSettingsNow();
+  } : null;
+
+  if (n > 0 && canTransfer && closeAction === 'ask') {
+    // 两个选项都是「真的关窗」，所以用三选一：销毁 / 转交 / 取消
+    showChoice(
+      t('confirm.win_close_title', '关闭窗口'),
+      msg,
+      [
+        { label: t('confirm.win_close_transfer_btn', '转到其他窗口'), onPick: function() { doClose('transfer'); } },
+        { label: t('confirm.win_close_destroy_btn', '销毁并关闭'), onPick: function() { doClose('destroy'); } },
+        { label: t('confirm.cancel', '取消'), onPick: cancel }
+      ]
+    );
+    return;
+  }
   showConfirm(
     t('confirm.win_close_title', '关闭窗口'),
     msg,
-    function() {
-      window.go.main.App.ConfirmWindowClose(stopDaemon).catch(function(e) {
-        console.error('ConfirmWindowClose failed:', e);
-      });
-    },
+    function() { doClose('destroy'); },
     // 按钮文案用「关闭」而不是「退出」：这里关的是一个窗口，不是整个程序
     'confirm.tab_close_ok', 'confirm.cancel',
-    // 「不再提醒」只和「要不要停守护进程」有关；单纯关窗口时不该出现这个勾选框
-    stopDaemon ? function() {
-      // 必须在关窗之前落盘，否则进程先退了设置就丢了
-      state.shutdownDaemonWarn = false;
-      saveSettingsNow();
-    } : null,
-    function() {
-      // 用户取消了：清掉 Go 侧的待确认标记，否则下次点 X 会被当成重复请求
-      window.go.main.App.CancelWindowClose().catch(function() {});
-    }
+    onDontAsk,
+    cancel
   );
 }
 
@@ -2203,7 +2234,8 @@ function _tabTearOffStart(st, e) {
   st.btn.classList.add('tab-tearing');
   // 建窗 + 跟随全部交给 Go：窗口一旦盖住光标，源页面的 pointermove 就断了
   // （实测只走 4 步），所以跟随只能由 Go 轮询光标来做。见 app.go StartTearOffDrag。
-  App.StartTearOffDrag(tab.sessionId, 140, 18).catch(function (err) {
+  // 松手时 Go 按落点决定：并入别的窗口 / 退回原位 / 就地成窗。
+  App.StartTearOffDrag(tab.sessionId, TEAR_OFF_OFFSET_X, TEAR_OFF_OFFSET_Y).catch(function (err) {
     if (window.console) console.error('[tearoff] 打开单会话窗口失败', err);
     st.tearing = false;
     st.btn.classList.remove('tab-tearing');
@@ -2561,6 +2593,11 @@ window.addEventListener('DOMContentLoaded', () => {
       var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
       if (!tab) return;
       _detachTab(tab);
+    });
+    // 会话归属变了（标签被拖进/拖出别的窗口、关窗口时转交）：重新同步一次。
+    // 会话本身没销毁，所以这里不能用 daemon-offline 那条重路径。
+    window.runtime.EventsOn('sessions-changed', () => {
+      if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
     });
   } catch {}
 
@@ -3928,6 +3965,11 @@ function switchTab(idx) {
 
 // 只有会话标签能拖出去成窗口：设置页/选择页/文件页没有对应的守护进程会话
 var TEAR_OFF_DY = 42;   // 垂直拖出阈值（像素）
+
+// 拖出时那个「跟随窗」用小尺寸跟着鼠标，好让用户看见底下的目标窗口。
+// 偏移取负值 = 窗口放在光标右下（光标本身不被盖住），否则落点根本看不清。
+var TEAR_OFF_OFFSET_X = -16;
+var TEAR_OFF_OFFSET_Y = -16;
 
 function closeTab(idx) {
   const tab = state.tabs[idx];
