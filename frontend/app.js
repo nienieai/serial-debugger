@@ -2593,6 +2593,21 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('probe-ping', (data) => {
       showAlert('收到 probe 事件', String(data), null, true);
     });
+    // 拖出开始（Go 已经建好那个窗口、会话归属也转过去了）：源窗口**当场**把标签
+    // 摘掉，不等松手 —— 拖出来的东西已经是一个窗口了，原来那一页再留在源窗口里
+    // 就是重影。拖到一半又放回去的话 Go 会发 sessions-changed，归属退回后重新
+    // 同步会把标签补回来。
+    window.runtime.EventsOn('tearoff-start', (data) => {
+      var sid = data && data.sid;
+      if (!sid) return;
+      // 全局广播：新窗口也会收到，而它的 __winName 可能还没取回来 —— 这时什么都
+      // 不能做（它手里正好就是被拖出来的那个会话，判断不出自己是不是源窗口）。
+      var me = window.__winName;
+      if (!me) return;
+      if (data.from && String(data.from) !== String(me)) return;
+      var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
+      if (tab) _detachTab(tab);
+    });
     // 拖出窗口完成（Go 判定鼠标已松开）：这个会话的归属已经转给新窗口了，
     // 本窗口把标签摘掉即可 —— **不销毁会话**，它在新窗口里继续活着。
     window.runtime.EventsOn('tearoff-done', (data) => {
@@ -2632,6 +2647,12 @@ window.addEventListener('DOMContentLoaded', () => {
       _onDialogFrame(d);
     } else if (name === 'window-close-confirm') {
       _onWindowCloseConfirm(d);
+    } else if (name === 'activate-session') {
+      // 目标窗口马上拉一次会话列表：这一页刚从别的窗口转过来，本地还没有它的标签。
+      // 走帧而不是只靠 sessions-changed 广播：那个窗口正在被拖着关掉，广播不一定
+      // 送得出去（实测：标签转过来却没出现）。同步完 _tryActivatePending 会切过去。
+      _activateSessionSoon(d && d.sid);
+      if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
     }
   });
 
@@ -2804,7 +2825,13 @@ function onDaemonGone(reason) {
 }
 
 // ---- session sync ----
+// syncAgain：同步进行中又来了新的同步请求（拖标签并入时 sessions-changed 和
+// activate-session 帧可能前后脚到）。以前直接 return 把请求丢掉，那一轮要是
+// 刚好没看到新会话，标签就再也不会出现（实测：标签转过来却没显示）。
 let syncPending = false;
+let syncAgain = false;
+// 取会话列表失败时的重试计数（见 syncDaemonSessions 的 catch）
+let syncRetry = 0;
 
 // 事件载荷用 "processId"，GetSessions 用 "id"；统一成 "id"。
 // _normalizeSessions 把守护进程的进程表整理成标签页用的形状。
@@ -2841,6 +2868,31 @@ function _normalizeSessions(list) {
     if (e.processId !== undefined && e.id === undefined) e.id = e.processId;
     return e;
   });
+}
+
+// 「别的窗口拖过来的那一页要变成打开的页面」：Go 会定向发一帧 activate-session。
+//
+// 帧可能比 sessions-changed 先到（那时候标签还没建出来），所以先记下来，
+// 由 syncDaemonSessions 的末尾再试一次 —— 两边谁先到都能切过去。
+var _pendingActivateSid = null;
+
+function _activateSessionSoon(sid) {
+  if (!sid) return;
+  _pendingActivateSid = String(sid);
+  _tryActivatePending();
+}
+
+function _tryActivatePending() {
+  if (!_pendingActivateSid) return;
+  var want = _pendingActivateSid;
+  for (var i = 0; i < state.tabs.length; i++) {
+    if (state.tabs[i] && String(state.tabs[i].sessionId) === want) {
+      _pendingActivateSid = null;
+      if (i !== state.activeTab) switchTab(i);
+      return;
+    }
+  }
+  // 标签还没建出来：留着，等下一次同步末尾再试
 }
 
 // _daemonTabLabel 算会话标签的文案。
@@ -2895,7 +2947,7 @@ function _applyDaemonSessionToTab(tab, ds) {
 }
 
 async function syncDaemonSessions(procData) {
-  if (syncPending) return;
+  if (syncPending) { syncAgain = true; return; }
   syncPending = true;
   try {
   // 守护进程事件可能比语言包先到：这时建出来的标签页/快捷面板会拿到空文案
@@ -2912,7 +2964,16 @@ async function syncDaemonSessions(procData) {
   let daemonSessions;
   try {
     daemonSessions = _normalizeSessions(await window.go.main.App.GetSessionsForWindow());
-  } catch { return; }
+    syncRetry = 0;
+  } catch {
+    // 取列表失败（窗口正在被销毁的那一瞬间会这样）：过一会儿再试。直接丢掉这一轮
+    // 的话就再也没人重建那些标签了 —— 实测「拖标签并过去，标签不出现」就是这条。
+    if (syncRetry < 3) {
+      syncRetry++;
+      setTimeout(function () { syncDaemonSessions(); }, 300);
+    }
+    return;
+  }
   if (!daemonSessions) daemonSessions = [];
 
   // Auto-create idle process if daemon just came online with no processes.
@@ -3165,8 +3226,15 @@ async function syncDaemonSessions(procData) {
     syncAutoSendState(daemonSessions);
     await loadTabHistory();
   }
+  // 别的窗口拖过来的那一页（见 _activateSessionSoon）：标签这次同步才建出来的话，
+  // 到这里就能切过去了。
+  _tryActivatePending();
   } finally {
     syncPending = false;
+    if (syncAgain) {
+      syncAgain = false;
+      setTimeout(function () { syncDaemonSessions(); }, 0);
+    }
   }
 }
 

@@ -602,6 +602,10 @@ func (a *App) StartTearOffDrag(ctx context.Context, sessionID string) (string, e
 	// 窗口只跟随一次就卡住（见 window_noactivate_windows.go）
 	setNoActivate(w, true)
 	w.Show()
+	// 源窗口的标签**当场摘掉**，不等松手：拖出来的东西已经是一个窗口了，
+	// 原来那一页再留在源窗口里就是重影。拖到一半又放回去的话，finishTabDrag
+	// 会把归属退回并发 sessions-changed，源窗口重新同步会把标签补回来。
+	a.emit("tearoff-start", map[string]any{"sid": sessionID, "win": name, "from": from})
 	go func() {
 		for {
 			x, y := cursorPos()
@@ -640,11 +644,9 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 		a.sessSet(sessionID, target)
 		log.Printf("[tearoff] 会话 %s 拖入窗口 %q 的标签栏（源 %q）", sessionID, target, from)
 		w.Close()
-		// tearoff-done 让**源窗口**把这个标签摘掉；源窗口如果没有别的标签了，
-		// 它自己会关掉（见 app.js 的 tearoff-done 处理）—— 「拖到别的窗口的
-		// 标签栏就变成那边的标签，这个窗口整个收掉」就是这条。
-		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": target, "from": from})
-		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
+		// 关窗之后再通知：tearoff-done 让源窗口收尾、activate-session 让目标窗口
+		// 重同步并把这一页切到前台（用户要求「新标签变成打开的页面」）。
+		a.notifyAfterClose(target, sessionID, from)
 		return
 	}
 	// 落在别处：这个窗口就留下。尺寸本来就是整窗的，只把跑出屏幕的部分推回来。
@@ -658,12 +660,11 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 // BeginWindowTabDrag 由前端在「单标签窗口里按下标签」时调用。
 //
 // 单标签窗口没有「把这一页拆出去」的意思：那一页就是这个窗口，所以拖标签
-// 等于拖窗口本身 —— 移动交给系统原生拖窗（见 style.css 的 .is-window-drag），
-// 这里只负责**松手时的落点**。原生拖动期间前端拿不到事件（系统模态循环），
-// 只能轮询左键状态等松手。
+// 等于拖窗口本身 —— 移动交给系统原生拖窗（见 style.css 的 .is-window-drag）。
+// 原生拖动期间前端拿不到事件（系统模态循环），所以落点只能由这里轮询。
 //
-// 松手时：光标压在**另一个窗口的标签栏带**里 → 这一页转给那个窗口，本窗口
-// 随之关闭（前端收到 tearoff-done 后会自己关，和拖出成窗走同一条路）。
+// **不等松手**：光标一进到别的窗口的标签栏带，这一页当场就并过去、本窗口
+// 跟着收掉。松手才判的话，用户得把窗口端端正正停在人家标签栏上再松，手感很别扭。
 func (a *App) BeginWindowTabDrag(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("会话 ID 为空")
@@ -676,24 +677,53 @@ func (a *App) BeginWindowTabDrag(ctx context.Context, sessionID string) error {
 	startX, startY := w.Position()
 	go func() {
 		for leftButtonDown() {
+			// 窗口还没挪窝 = 只是按了一下标签：这时候不做落点判断，否则
+			// 「窗口正好压在别人标签栏上时点一下标签」会把页面甩走。
+			if px, py := w.Position(); absInt(px-startX) >= 4 || absInt(py-startY) >= 4 {
+				x, y := cursorPos()
+				if target := a.tabBandWindowAt(x, y, self); target != "" {
+					a.mergeWindowIntoTab(self, w, sessionID, target)
+					return
+				}
+			}
 			time.Sleep(16 * time.Millisecond)
 		}
-		// 只是点了一下标签（没真的拖）：窗口没挪窝就不做落点判断，
-		// 否则「窗口正好压在别人标签栏上时点一下标签」会把页面甩走。
-		if px, py := w.Position(); absInt(px-startX) < 4 && absInt(py-startY) < 4 {
-			return
-		}
-		x, y := cursorPos()
-		target := a.tabBandWindowAt(x, y, self)
-		if target == "" {
-			return
-		}
-		a.sessSet(sessionID, target)
-		log.Printf("[tabdrag] 会话 %s 随窗口并入 %q 的标签栏（源 %q）", sessionID, target, self)
-		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": target, "from": self})
-		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
 	}()
 	return nil
+}
+
+// mergeWindowIntoTab 把单标签窗口里那一页并到另一个窗口的标签栏，并收掉本窗口。
+//
+// 顺序有讲究：先转归属（目标窗口同步时才看得到它），再用**数据帧**通知目标窗口
+// （事件是全局广播，而且下面这扇窗口正在被拖着关掉，广播不一定送得出去），
+// 最后才关本窗口并把收尾广播发出去。
+func (a *App) mergeWindowIntoTab(self string, w *application.WebviewWindow, sessionID, target string) {
+	a.sessSet(sessionID, target)
+	log.Printf("[tabdrag] 会话 %s 随窗口并入 %q 的标签栏（源 %q）", sessionID, target, self)
+	// 这一页已经转走了，本窗口直接收掉。手还按着也没关系 —— 窗口没了，
+	// 系统那边的拖动循环自己会结束。
+	w.Close()
+	// 关窗之后再通知（见 notifyAfterClose）：紧跟着发的话，目标窗口那一轮同步
+	// 正好撞上窗口销毁，会失败而且没有第二次机会 —— 实测标签转过去却不出现。
+	a.notifyAfterClose(target, sessionID, self)
+}
+
+// notifyAfterClose 在源窗口关掉之后过一小会儿，通知目标窗口和其余窗口。
+//
+// 为什么不能立刻发：窗口销毁是异步的，紧跟其后的 GetSessionsForWindow 有可能
+// 正好落在销毁过程中间而失败，那一轮同步就白跑了（实测：标签转过去却没出现，
+// 手动触发一次同步才回来）。
+//
+// 两件事：
+//   - activate-session 定向帧：目标窗口重同步，并把这一页切到前台
+//   - sessions-changed 广播：其余窗口重排标签（源窗口已经不在了）
+func (a *App) notifyAfterClose(target, sessionID, from string) {
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		a.sendFrame(target, map[string]any{"e": "activate-session", "d": map[string]any{"sid": sessionID}})
+		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": target, "from": from})
+		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
+	}()
 }
 
 // clampWindowToScreen 把窗口左上角推回它所在屏幕的工作区里。
@@ -1719,6 +1749,11 @@ func (a *App) GetSessionsForWindow(ctx context.Context) []map[string]any {
 		// 没有来源窗口（脚本/内部调用）：退化成全量，保持旧行为
 		return all
 	}
+	if all == nil {
+		// 这里什么都读不到：下面只剩「本窗口名下的」会返回，目标窗口可能因此
+		// 一个标签都建不出来（见 notifyAfterClose 的说明）。
+		log.Printf("[win] GetSessionsForWindow %q: 守护进程没响应", win)
+	}
 	// all 为 nil 表示没连上守护进程。这时**不能**清归属：一次查询失败就把
 	// 所有会话变成「无主」，别的窗口会立刻认领走，标签页就跑错窗口了。
 	// 非 nil 的空切片才代表「守护进程上确实一个会话都没有」。
@@ -1749,6 +1784,8 @@ func (a *App) GetSessionsForWindow(ctx context.Context) []map[string]any {
 			}
 		}
 	}
+	// 一行日志：出问题（标签该出现却没出现）时，先看这里拿到的是几个。
+	log.Printf("[win] GetSessionsForWindow %q -> %d 个（守护进程上 %d 个）", win, len(out), len(all))
 	return out
 }
 
