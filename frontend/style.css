@@ -356,9 +356,16 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .menu-sub-dropdown {
   display: none; position: absolute; left: 100%; top: 0;
-  background: var(--menu-glass-bg);
-  -webkit-backdrop-filter: var(--menu-glass-blur);
-  backdrop-filter: var(--menu-glass-blur);
+  /* 嵌套菜单**不能**再用 backdrop-filter：
+     - 外层 .menu-dropdown 自己就是一个 backdrop root，
+     - 子元素再挂 backdrop-filter 时采样到的是那个 root，而不是页面内容，
+       于是 30% 半透明底色等于全透 —— 实测 WebView2 里三级菜单看起来像
+       完全没画背景，字直接浮在设置页上（计算样式却是对的，
+       background/backdrop-filter 都正常解析，只有渲染没效果）。
+     这里直接用不透明底色，边框/阴影/圆角保持一致，仍是同一套菜单皮肤。 */
+  background: var(--tabpop-bg-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   border: 1px solid var(--menu-glass-border);
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   min-width: max-content; width: max-content; z-index: 110; padding: 0;
