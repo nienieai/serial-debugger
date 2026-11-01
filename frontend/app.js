@@ -2381,6 +2381,32 @@ function _ghostMove(relX) {
   _tabDragPlace({ btn: g.btn, ph: g.ph }, gx);
 }
 
+function _ghostCancel() {
+  _pendingGhost = null;
+  var g = _ghostDrag;
+  if (!g) return;   // 没接过、或者已经被 cancel 过一次：直接忽略（来回拖会重复发）
+  _ghostDrag = null;
+  g.btn.classList.remove('tab-dragging');
+  g.btn.style.left = '';
+  g.btn.style.top = '';
+  g.btn.style.width = '';
+  g.btn.style.height = '';
+  if (g.add && g.add.btn) g.add.btn.style.transform = '';
+  if (g.ph && g.ph.parentNode) g.ph.parentNode.removeChild(g.ph);
+  document.body.classList.remove('is-tab-dragging');
+  // 归属已经退回源窗口：本地把这条标签摘掉（不关会话 —— 它在守护进程里还活着，
+  // 源窗口下一次同步会把它接回去）
+  for (var i = 0; i < state.tabs.length; i++) {
+    if (state.tabs[i] && String(state.tabs[i].sessionId) === g.sid) {
+      _detachTab(state.tabs[i]);
+      break;
+    }
+  }
+  // 拖动期间压着的同步（见 syncDaemonSessions 开头）现在补上
+  _syncAfterGhost = false;
+  if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+}
+
 function _ghostEnd() {
   var g = _ghostDrag;
   if (!g) {
@@ -2751,6 +2777,12 @@ window.addEventListener('DOMContentLoaded', () => {
       if (data.from && String(data.from) !== String(me)) return;
       var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
       if (tab) _detachTab(tab);
+      // 最后一页被拖走了：**先别关窗口**。鼠标可能还按着，用户随时可能把这一页
+      // 拖回来（浏览器的反悔），窗口没了就接不回来了。这里只「停车」：
+      // 不自动补空闲会话、不自我关闭（见 syncDaemonSessions 里的 _parked）。
+      // 结局交给 Go：落地在别处就关窗（closeWindowIfEmpty / BeginWindowTabDrag
+      // 松手那段），拖回来就恢复（归属退回 → 同步拿到会话 → _parked 清掉）。
+      if (state.tabs.length === 0) state._parked = true;
     });
     // 拖出窗口完成（Go 判定鼠标已松开）：这个会话的归属已经转给新窗口了，
     // 本窗口把标签摘掉即可 —— **不销毁会话**，它在新窗口里继续活着。
@@ -2767,14 +2799,12 @@ window.addEventListener('DOMContentLoaded', () => {
       // 注意 sessionId 可能是数字、事件里是字符串，必须宽松比较
       var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
       if (tab) _detachTab(tab);
-      // 这个窗口的最后一页被拖走了：窗口已经空了，直接关掉。
-      // 不关的话它会按「启动时新建会话」又补一个空闲会话出来，看起来像
-      // 拖出来的窗口自己生了一页。
-      // 判断放在 tab 外面：万一本窗口的标签已经被别的同步摘掉了，也要收摊。
-      if (state.tabs.length === 0) {
-        state._suppressAutoCreate = Date.now() + 3000;
-        window.go.main.App.CloseCurrentWindow().catch(function() {});
-      }
+      // 这个窗口的最后一页被拖走了：不在这里关窗，只停车。
+      // 关窗的时机交给 Go —— 可反悔拖动要求这一页还有机会被拖回来，
+      // 窗口先关掉的话 Show 回来就是一句空操作（实测：退回时窗口根本没出现，
+      // 因为它在并入的那一刻已经把自己关了）。真正空着没人要的窗口，
+      // Go 会在松手时按归属表收掉（closeWindowIfEmpty）。
+      if (state.tabs.length === 0) state._parked = true;
     });
     // 会话归属变了（标签被拖进/拖出别的窗口、关窗口时转交）：重新同步一次。
     // 会话本身没销毁，所以这里不能用 daemon-offline 那条重路径。
@@ -2804,6 +2834,10 @@ window.addEventListener('DOMContentLoaded', () => {
       _ghostMove(d && d.x);
     } else if (name === 'tab-drop-end') {
       _ghostEnd();
+    } else if (name === 'tab-drop-cancel') {
+      // 用户把光标拖出了标签条带：那一页已经退回原来的窗口（见 Go 的
+      // unmergeWindowFromTab），这边把幽灵标签摘掉
+      _ghostCancel();
     }
   });
 
@@ -3130,13 +3164,19 @@ async function syncDaemonSessions(procData) {
   }
   if (!daemonSessions) daemonSessions = [];
 
+  // 停车的窗口（它的最后一页被拖走了、还等着被拖回来）又拿到会话了 = 那一页
+  // 回来了，退出停车状态（见 tearoff-start / tearoff-done 里的 _parked）。
+  if (daemonSessions.length > 0) state._parked = false;
+
   // Auto-create idle process if daemon just came online with no processes.
   // Skip while a tab is being intentionally closed (suppress window to avoid
   // the process-changed event from the destroy triggering immediate re-creation).
+  // 也跳过「停车的窗口」：它空着是拖动过程中的正常状态，补一个空闲会话出来
+  // 就又变成「拖出来的窗口自己生了一页」。
   const suppress = state._suppressAutoCreate && Date.now() < state._suppressAutoCreate;
   // autoCreateMode: add a local tab (no daemon process) when no tabs exist
   var autoMode = state.autoCreateMode || 'single';
-  if (!suppress && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0) {
+  if (!suppress && !state._parked && autoMode !== 'none' && daemonSessions.length === 0 && state.tabs.length === 0) {
     await autoCreateIdleSession(autoMode);  // 按设置补一个单端 / 转发空闲会话（不弹选择页）
     // ⚠️ 刚建出来的进程**不在**这次同步开头取到的那份快照里。此处此前写的是
     // `daemonSessions = []`，本意是「别为它再建一个标签页」，但第 3 步正是用这份

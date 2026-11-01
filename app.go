@@ -736,6 +736,9 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 		// 关窗之后再通知：tearoff-done 让源窗口收尾、activate-session 让目标窗口
 		// 重同步并把这一页切到前台（用户要求「新标签变成打开的页面」）。
 		a.notifyAfterClose(target, sessionID, from)
+		// 源窗口的最后一页已经交出去了：它现在空着（拖出期间被「停车」不让它自己
+		// 关，好让拖回来的反悔还有地方去），松手落在别处就收掉它。
+		a.closeWindowIfEmpty(from)
 		return
 	}
 	// 落在别处：这个窗口就留下。尺寸本来就是整窗的，只把跑出屏幕的部分推回来。
@@ -744,6 +747,23 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 	log.Printf("[tearoff] 会话 %s 就地成窗 %q", sessionID, name)
 	// 通知源窗口：这个会话已经转交给新窗口了，可以把自己的标签摘掉
 	a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
+	// 同上：源窗口要是因此空了，现在收掉。
+	a.closeWindowIfEmpty(from)
+}
+
+// closeWindowIfEmpty 关掉一个已经空了的源窗口（它的最后一页被拖走、也没被拖回来）。
+//
+// 「空」按归属表算：这个窗口名下一张页都没有。这一步以前是前端在 tearoff-done
+// 里直接 CloseCurrentWindow，但可反悔拖动要求窗口先活着等那一页回来（见 app.js
+// 的 _parked），所以只能等松手时由这里按最终归属判定。
+func (a *App) closeWindowIfEmpty(name string) {
+	if name == "" || len(a.sessOfWindow(name)) > 0 {
+		return
+	}
+	if w := a.windowByName(name); w != nil {
+		log.Printf("[window] %q 的最后一页已经拖走，收掉这个空窗口", name)
+		w.Close()
+	}
 }
 
 // BeginWindowTabDrag 由前端在「单标签窗口里按下标签」时调用。
@@ -763,18 +783,36 @@ func (a *App) BeginWindowTabDrag(ctx context.Context, sessionID string) error {
 	if w == nil {
 		return fmt.Errorf("找不到窗口 %q", self)
 	}
+	log.Printf("[tabdrag] 开始盯落点：窗口 %q 拖的是会话 %s", self, sessionID)
 	startX, startY := w.Position()
 	go func() {
+		// 这个循环一直跑到松手，中途在「跟着光标的窗口」和「并进别人标签栏的幽灵
+		// 标签」两态之间来回切 —— 就是浏览器的反悔：并进去以后把光标拖出标签条带
+		// 一定范围，这一页当场退回成窗口；再拖回去停一下，又并进去。松手才落地。
+		merged := "" // 已并入的目标窗口名；"" = 还没并入
 		// 阻尼：光标要在目标窗口的标签栏带里**连续待够** tabMergeDwell 才并过去。
 		// 只「扫过去」不算 —— main 占屏很大，把窗口从它上面拖过去太容易蹭到标签栏，
 		// 一蹭就吞进去的话根本没法把窗口挪到别处。
 		hoverTarget := ""
 		var hoverSince time.Time
 		for leftButtonDown() {
+			x, y := cursorPos()
+			if merged != "" {
+				// 已并入：光标离开目标标签条带**超过余量**才算拖出（见
+				// tabBandLeaveMargin）。贴着边缘抖一下不弹回去，否则手一抖就重来。
+				if !a.nearTabBand(merged, x, y) {
+					a.unmergeWindowFromTab(self, w, sessionID, merged)
+					merged, hoverTarget, hoverSince = "", "", time.Time{}
+				} else {
+					a.sendDropMove(merged)
+				}
+				time.Sleep(16 * time.Millisecond)
+				continue
+			}
+			// 未并入：窗口由系统的拖窗循环带着走，这里只判落点。
 			// 窗口还没挪窝 = 只是按了一下标签：这时候不做落点判断，否则
 			// 「窗口正好压在别人标签栏上时点一下标签」会把页面甩走。
 			if px, py := w.Position(); absInt(px-startX) >= 4 || absInt(py-startY) >= 4 {
-				x, y := cursorPos()
 				target := a.tabBandWindowAt(x, y, self)
 				switch {
 				case target == "":
@@ -783,10 +821,20 @@ func (a *App) BeginWindowTabDrag(ctx context.Context, sessionID string) error {
 					hoverTarget, hoverSince = target, time.Now()
 				case time.Since(hoverSince) >= tabMergeDwell:
 					a.mergeWindowIntoTab(self, w, sessionID, target)
-					return
+					merged, hoverTarget, hoverSince = target, "", time.Time{}
+					continue
 				}
 			}
 			time.Sleep(16 * time.Millisecond)
+		}
+		// 松手：已并入就落地（幽灵标签收尾 + 关掉源窗口）；没并入就什么都不做 ——
+		// 窗口留在松开的地方，和以前「只按着标签拖了一下窗口」完全一样。
+		if merged != "" {
+			a.sendDropMove(merged)
+			a.sendFrame(merged, map[string]any{"e": "tab-drop-end", "d": map[string]any{"sid": sessionID}})
+			w.Close()
+		} else {
+			log.Printf("[tabdrag] 松手：窗口 %q 没有并进别人标签栏", self)
 		}
 	}()
 	return nil
@@ -795,9 +843,32 @@ func (a *App) BeginWindowTabDrag(ctx context.Context, sessionID string) error {
 // tabMergeDwell 是「拖着的窗口停在别人标签栏上多久才并进去」的阻尼。
 const tabMergeDwell = 300 * time.Millisecond
 
-// mergeWindowIntoTab 把单标签窗口里那一页并到另一个窗口的标签栏，并收掉本窗口。
+// tabBandLeaveMargin 是「已并入之后又拖出来」的余量（物理像素）。
 //
-// 顺序有讲究：先转归属（目标窗口同步时才看得到它），再关本窗口，然后才通知目标
+// 光标要离开标签条带这么多才算拖出：贴着边缘抖一下、或者只是往下挪了几像素调
+// 位置，都不该把刚并进去的那一页弹回去。单向没有阻尼 —— 拖出去是用户明确的
+// 反向动作，马上生效手感才对。
+const tabBandLeaveMargin = 48
+
+// nearTabBand 判断屏幕坐标 (x,y) 是否还在某个窗口标签条带的「含余量」范围里。
+//
+// 和 inTabBand 的区别就是四周外扩了 tabBandLeaveMargin，专门给「已并入后拖出」用：
+// 在带内 = 还打算并着，出余量 = 反悔。
+func (a *App) nearTabBand(name string, x, y int) bool {
+	w := a.windowByName(name)
+	if w == nil {
+		return false
+	}
+	px, py := w.Position()
+	pw, _ := w.Size()
+	return x >= px-tabBandLeaveMargin && x < px+pw+tabBandLeaveMargin &&
+		y >= py-tabBandLeaveMargin && y < py+tabBandHeight+tabBandLeaveMargin
+}
+
+// mergeWindowIntoTab 把单标签窗口里那一页并到另一个窗口的标签栏（鼠标还按着，
+// 所以这还不是「落地」，见 BeginWindowTabDrag 的两态循环与 unmergeWindowFromTab）。
+//
+// 顺序有讲究：先转归属（目标窗口同步时才看得到它），再藏本窗口，然后才通知目标
 // 窗口 —— 关窗是异步的，紧跟着发的同步可能正好撞上销毁过程而失败（见
 // notifyAfterClose）。这里不能等 250ms：鼠标还按着，标签得马上接过去继续拖。
 func (a *App) mergeWindowIntoTab(self string, w *application.WebviewWindow, sessionID, target string) {
@@ -815,11 +886,20 @@ func (a *App) mergeWindowIntoTab(self string, w *application.WebviewWindow, sess
 	}})
 	a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": target, "from": self})
 	a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
-	// 鼠标还按着：继续跟光标，把横向位置一帧帧转给目标窗口；松手之后才真正关窗。
-	go func() {
-		a.driveDropSort(sessionID, target)
-		w.Close()
-	}()
+}
+
+// unmergeWindowFromTab 是 mergeWindowIntoTab 的反向：把已经并进别人标签栏的那一页
+// 当场退回成窗口 —— 鼠标还按着，用户把光标拖出了目标窗口的标签条带（见
+// tabBandLeaveMargin），这就是浏览器的「反悔」。
+//
+// 归属先退回来（源窗口下次同步才能看到它），再把源窗口重新显出来：隐藏期间系统的
+// 拖窗循环一直挂在这扇窗口上、也在跟着光标挪，显出来就继续跟手。
+func (a *App) unmergeWindowFromTab(self string, w *application.WebviewWindow, sessionID, target string) {
+	a.sessSet(sessionID, self)
+	log.Printf("[tabdrag] 会话 %s 从 %q 的标签栏退回（源 %q）", sessionID, target, self)
+	w.Show()
+	a.sendFrame(target, map[string]any{"e": "tab-drop-cancel", "d": map[string]any{"sid": sessionID}})
+	a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": self})
 }
 
 // pointerRelX 返回「光标相对某个窗口左边的横向距离」（物理像素）。
@@ -833,27 +913,13 @@ func (a *App) pointerRelX(win string) int {
 	return x - px
 }
 
-// driveDropSort 在「窗口已经并进目标标签栏」之后继续跟鼠标，直到松手。
+// sendDropMove 把当前光标位置（相对目标窗口左边的横向像素）转给目标窗口，
+// 让那边接管拖动的幽灵标签跟着光标滑。
 //
 // 为什么要由 Go 转发：鼠标还按着，但指针已经在目标窗口上了，源窗口收不到
-// pointermove，目标窗口自己也拿不到 —— 只有这里轮询得到光标。目标窗口靠这些帧
-// 把新标签拖着左右滑（见 app.js 的 _ghostDrag），落地靠最后一帧 tab-drop-end。
-func (a *App) driveDropSort(sessionID, target string) {
-	w := a.windowByName(target)
-	if w == nil {
-		return
-	}
-	winX, _ := w.Position()
-	send := func(name string) {
-		x, _ := cursorPos()
-		a.sendFrame(target, map[string]any{"e": name, "d": map[string]any{"x": x - winX}})
-	}
-	for leftButtonDown() {
-		send("tab-drop-move")
-		time.Sleep(16 * time.Millisecond)
-	}
-	send("tab-drop-move")
-	a.sendFrame(target, map[string]any{"e": "tab-drop-end", "d": map[string]any{"sid": sessionID}})
+// pointermove，目标窗口自己也拿不到 —— 只有这里轮询得到光标。
+func (a *App) sendDropMove(target string) {
+	a.sendFrame(target, map[string]any{"e": "tab-drop-move", "d": map[string]any{"x": a.pointerRelX(target)}})
 }
 
 // notifyAfterClose 在源窗口关掉之后过一小会儿，通知目标窗口和其余窗口。
