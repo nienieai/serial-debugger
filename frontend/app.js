@@ -87,7 +87,7 @@ function openProbeWindow() {
   window.go.main.App.OpenProbeWindow().then(function (name) {
     if (window.console) console.log('[probe] 已打开窗口: ' + name);
   }).catch(function (e) {
-    alert('打开测试窗口失败: ' + e);
+    showAlert(t('cli.error', '错误'), '打开测试窗口失败: ' + e);
   });
 }
 
@@ -165,13 +165,13 @@ function initSessionWindow(sid) {
 function openActiveSessionWindow() {
   var tab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
   if (!tab || !tab.sessionId) {
-    alert('当前标签还没有绑定会话（先打开串口）');
+    showAlert(t('confirm.title', '提示'), '当前标签还没有绑定会话（先打开串口）');
     return;
   }
   window.go.main.App.OpenSessionWindow(tab.sessionId).then(function (n) {
     if (window.console) console.log('[session-window] ' + n);
   }).catch(function (e) {
-    alert('打开会话窗口失败: ' + e);
+    showAlert(t('cli.error', '错误'), '打开会话窗口失败: ' + e);
   });
 }
 
@@ -2436,8 +2436,7 @@ window.addEventListener('DOMContentLoaded', () => {
     window.runtime.EventsOn('multistr-changed', (data) => onMultistrChanged(data));
     // 多窗口原型：probe 窗口定向发过来的事件
     window.runtime.EventsOn('probe-ping', (data) => {
-      if (typeof showAlert === 'function') showAlert('收到 probe 事件', String(data), null, true);
-      else alert('probe: ' + data);
+      showAlert('收到 probe 事件', String(data), null, true);
     });
   } catch {}
 
@@ -6941,10 +6940,15 @@ function _syncWelcome() {
   else state._welcomePage.hide();
 }
 
+// 文件 → 退出：走和点窗口 X 完全一样的关闭流程，由 Go 侧 WindowClosing Hook
+// 决定要不要问「是否停止守护进程」。
+//
+// 不要用 window.runtime.Quit()（= Application.Quit）：那是强制退出，会绕过
+// 这道判定，mode=never 的用户也会被顺手停掉守护进程。
 function quitApp() {
-  if (confirm(t('confirm.quit_msg', 'Are you sure you want to quit?'))) {
-    try { window.runtime.Quit(); } catch {}
-  }
+  window.go.main.App.CloseMainWindow().catch(function (e) {
+    if (window.console) console.error('CloseMainWindow failed:', e);
+  });
 }
 
 // ---- quick panel drag (event delegation on #mainContent) ----

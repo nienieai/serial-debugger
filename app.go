@@ -591,6 +591,16 @@ func (a *App) QuitApp() {
 	a.quit()
 }
 
+// CloseMainWindow 由前端「文件 → 退出」调用。
+//
+// 它故意**不**直接 Application.Quit：那会强制关窗，绕过 WindowClosing Hook 里
+// 「要不要先停守护进程」的判定。这里走正常关闭，和用户点窗口 X 完全同一条路径。
+func (a *App) CloseMainWindow() {
+	if a.window != nil {
+		a.window.Close()
+	}
+}
+
 // stopDaemonQuiet 与 StopDaemon 走同一条 IPC 路径，但不做那个 3 秒的 stopping
 // 复位 —— 进程马上要退了，不需要再允许重连。
 func (a *App) stopDaemonQuiet() {

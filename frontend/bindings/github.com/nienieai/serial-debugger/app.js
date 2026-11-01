@@ -69,6 +69,17 @@ export function CloseAllDialogs() {
 }
 
 /**
+ * CloseMainWindow 由前端「文件 → 退出」调用。
+ * 
+ * 它故意**不**直接 Application.Quit：那会强制关窗，绕过 WindowClosing Hook 里
+ * 「要不要先停守护进程」的判定。这里走正常关闭，和用户点窗口 X 完全同一条路径。
+ * @returns {$CancellablePromise<void>}
+ */
+export function CloseMainWindow() {
+    return $Call.ByName("main.App.CloseMainWindow");
+}
+
+/**
  * @param {string} processID
  * @returns {$CancellablePromise<void>}
  */
