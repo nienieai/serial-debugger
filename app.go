@@ -156,6 +156,12 @@ func (a *App) attach(wailsApp *application.App, win *application.WebviewWindow) 
 	a.wailsApp = wailsApp
 	a.window = win
 	a.registerWindow(win.Name(), win)
+	// 主窗口关闭时也要从窗口表里摘掉：多窗口之后 main 可能先于别的窗口关（比如
+	// 把它唯一那个标签拖到别的窗口去）。不摘的话窗口表里会留着一个已销毁的窗口，
+	// appWindowAt 还会把它的矩形当落点，会话就被转给一个不存在的窗口了。
+	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
+		a.unregisterWindow(win.Name())
+	})
 }
 
 // ---- 多窗口原型 ----
@@ -181,6 +187,11 @@ func (a *App) unregisterWindow(name string) {
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
 	delete(a.windows, name)
+	// 主窗口没了就把指针清掉：OpenDialog / CloseMainWindow 会回退到它，
+	// 拿一个已经销毁的窗口去 Position()/Close() 会出问题。
+	if name == "main" {
+		a.window = nil
+	}
 }
 
 func (a *App) windowByName(name string) *application.WebviewWindow {
@@ -613,6 +624,10 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 		a.sessSet(sessionID, target)
 		log.Printf("[tearoff] 会话 %s 拖入窗口 %q（源 %q）", sessionID, target, from)
 		w.Close()
+		// tearoff-done 让**源窗口**把这个标签摘掉；源窗口如果没有别的标签了，
+		// 它自己会关掉（见 app.js 的 tearoff-done 处理）—— 「拖到别的窗口的
+		// 标签栏就变成那边的标签，这个窗口整个收掉」就是这条。
+		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
 		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
 	case target == from && a.inTabBand(from, x, y):
 		// 拖回自己的标签栏：等于放回原位

@@ -2073,9 +2073,8 @@ var _tabDrag = null;   // { btn, idx, started, ph, pid, ... }
 
 function _tabDragDown(e) {
   if (e.button !== 0) return;
-  // 只有一个标签时不做拖动排序：这点位移让给「拖动窗口」。
-  // （两套拖动不能同时生效：pointer 捕获会吃掉窗口拖动依赖的鼠标事件）
-  if (document.querySelectorAll('#tabsScroll .tab-btn').length <= 1) return;
+  // 单标签窗口也允许拖标签：要能把唯一那页拖到别的窗口去（窗口拖动交给
+  // 标签栏空白处，见 style.css 里 .tab-btn 的 --wails-draggable: no-drag）。
   var btn = e.currentTarget;
   if (e.target && e.target.closest && e.target.closest('.close-tab')) return;
   var idx = parseInt(btn.dataset.tabIdx, 10);
@@ -2591,8 +2590,15 @@ window.addEventListener('DOMContentLoaded', () => {
       if (data.from && window.__winName && String(data.from) !== String(window.__winName)) return;
       // 注意 sessionId 可能是数字、事件里是字符串，必须宽松比较
       var tab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
-      if (!tab) return;
-      _detachTab(tab);
+      if (tab) _detachTab(tab);
+      // 这个窗口的最后一页被拖走了：窗口已经空了，直接关掉。
+      // 不关的话它会按「启动时新建会话」又补一个空闲会话出来，看起来像
+      // 拖出来的窗口自己生了一页。
+      // 判断放在 tab 外面：万一本窗口的标签已经被别的同步摘掉了，也要收摊。
+      if (state.tabs.length === 0) {
+        state._suppressAutoCreate = Date.now() + 3000;
+        window.go.main.App.CloseCurrentWindow().catch(function() {});
+      }
     });
     // 会话归属变了（标签被拖进/拖出别的窗口、关窗口时转交）：重新同步一次。
     // 会话本身没销毁，所以这里不能用 daemon-offline 那条重路径。
@@ -5257,7 +5263,12 @@ function renderTabs() {
 
   // 只有一个标签时，整条标签栏兼作窗口拖动区（见 style.css 的 .is-window-drag）。
   // 多标签时不加：那种情况下标签栏要用于拖动排序。
-  scroll.classList.toggle('is-window-drag', scroll.querySelectorAll('.tab-btn').length === 1);
+  // 注意要连 #tabsBar 一起加：空白处点上去命中的是 bar，不是 scroll ——
+  // 只加在 scroll 上时，单标签窗口在标签栏空白处拖不动窗口。
+  var oneTab = scroll.querySelectorAll('.tab-btn').length === 1;
+  scroll.classList.toggle('is-window-drag', oneTab);
+  var _bar = document.getElementById('tabsBar');
+  if (_bar) _bar.classList.toggle('is-window-drag', oneTab);
 }
 
 // ---- port open/close ----
