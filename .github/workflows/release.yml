@@ -3,7 +3,7 @@ name: build-release
 on:
   workflow_dispatch:        # 手动触发：Actions 页面 → Run workflow
   push:
-    tags: [ 'v*' ]          # 推送 v0.7.0 等 tag 时自动发布 Release
+    tags: [ 'v*' ]          # 推送 v0.9.0 等 tag 时自动发布 Release
 
 permissions:
   contents: write
@@ -12,6 +12,10 @@ jobs:
   build:
     name: Build Windows
     runs-on: windows-latest
+    env:
+      # Windows 版 GUI 走纯 Go + WebView2，不需要 cgo（与 build/windows/Taskfile.yml 一致）
+      CGO_ENABLED: '0'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,17 +26,41 @@ jobs:
           go-version: '1.26.x'
           cache: true
 
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      # 版本号只有一个来源：wails.json 的 info.productVersion。
+      # 以前这里写死 wails@v2 让 CI 单独跑一条 v2 的构建链，v3 迁移后必然漂移，
+      # 现在统一用和本地 build.ps1 相同的 go build 命令，CI 与本地产物一致。
+      - name: Read version from wails.json
+        shell: pwsh
+        run: |
+          $ver = (Get-Content wails.json -Raw -Encoding UTF8 | ConvertFrom-Json).info.productVersion
+          if (-not $ver) { throw 'info.productVersion missing in wails.json' }
+          "APP_VERSION=$ver"    | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "APP_VERSION_V4=$ver.0" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "version: $ver"
+
+      - name: Install go-winres
+        run: go install github.com/tc-hib/go-winres@latest
 
       - name: Build daemon / cli / mcp
+        shell: pwsh
         run: |
-          go build -trimpath -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
-          go build -trimpath -ldflags="-s -w" -o build/bin/serial-cli.exe    ./cmd/serial-cli/
-          go build -trimpath -ldflags="-s -w" -o build/bin/serial-mcp.exe    ./cmd/serial-mcp/
+          New-Item -ItemType Directory -Force -Path build/bin | Out-Null
+          $ld = "-s -w -X github.com/nienieai/serial-debugger/version.Version=$env:APP_VERSION"
+          go build -trimpath -ldflags="$ld" -o build/bin/serial-daemon.exe ./daemon/
+          go build -trimpath -ldflags="$ld" -o build/bin/serial-cli.exe    ./cmd/serial-cli/
+          go build -trimpath -ldflags="$ld" -o build/bin/serial-mcp.exe    ./cmd/serial-mcp/
 
-      - name: Build GUI (wails)
-        run: wails build
+      # GUI：等价于 build/windows/Taskfile.yml 的 build:native —— 先出 Windows 资源（图标 /
+      # 清单 / 版本信息），再 go build；-tags production 走嵌入前端（!hotreload 那份实现）。
+      - name: Build GUI (Wails v3)
+        shell: pwsh
+        run: |
+          $winres = Join-Path (go env GOPATH) 'bin\go-winres.exe'
+          & $winres make --in winres/winres.json --arch amd64 --out rsrc `
+            --file-version $env:APP_VERSION_V4 --product-version $env:APP_VERSION_V4
+          $ld = "-s -w -H windowsgui -X github.com/nienieai/serial-debugger/version.Version=$env:APP_VERSION"
+          go build -tags production -trimpath -buildvcs=false -ldflags="$ld" -o build/bin/serial-gui.exe .
+          Remove-Item -Force -ErrorAction SilentlyContinue *.syso
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
