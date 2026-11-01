@@ -748,6 +748,25 @@ export function QuitApp() {
 }
 
 /**
+ * ReadDaemonLog 读守护进程日志的增量，供日志标签页轮询。
+ * 
+ * offset < 0 表示首次打开：只取末尾 maxBytes 字节，并丢掉被切开的半行。
+ * 返回的 next 是下一次该从哪里读，**一定落在行边界上** —— 半行和半个 UTF-8
+ * 字符都留到下一次，前端拿到的永远是完整的行。
+ * 
+ * 只读文件、不碰守护进程：日志本来就是 daemon 自己写的，而「GUI 启动之前发生
+ * 了什么」也只有文件里有（实时事件流做不到这件事）。
+ * @param {number} offset
+ * @param {number} maxBytes
+ * @returns {$CancellablePromise<{ [_ in string]?: any }>}
+ */
+export function ReadDaemonLog(offset, maxBytes) {
+    return $Call.ByName("main.App.ReadDaemonLog", offset, maxBytes).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
  * ReadMultistrEntries reads entries from sendq, returns as JSON string.
  * @param {string} processID
  * @returns {$CancellablePromise<string>}

@@ -2146,6 +2146,113 @@ func (a *App) CreateExampleFiles(kind string) map[string]any {
 	}
 }
 
+// ── 守护进程日志（「守护进程 → 查看守护进程日志」标签页） ──
+
+const (
+	// daemonLogTailBytes 首次打开日志页时只取末尾这么多。文件轮转上限是 2 MB，
+	// 一次全灌给前端既慢又没人看 —— 用户关心的是最近几屏。
+	daemonLogTailBytes = 128 << 10
+	// daemonLogMaxChunk 是单次增量读取上限，防止一次调用把几 MB 塞进 IPC。
+	daemonLogMaxChunk = 1 << 20
+)
+
+// daemonLogPath 返回守护进程日志文件的绝对路径。
+//
+// 推导方式和 `serial-cli logs` 完全一致（cmd/serial-cli/main.go）：发布包里
+// serial-gui 与 serial-daemon 同目录，日志固定写 <exe>/logs/daemon.log
+// （见 daemon/logfile.go）。守护进程装在别处时这里读不到 —— 界面上会显示
+// 「日志文件还没生成」，而不是假装有数据。
+func daemonLogPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(exe), "logs", "daemon.log")
+}
+
+// ReadDaemonLog 读守护进程日志的增量，供日志标签页轮询。
+//
+// offset < 0 表示首次打开：只取末尾 maxBytes 字节，并丢掉被切开的半行。
+// 返回的 next 是下一次该从哪里读，**一定落在行边界上** —— 半行和半个 UTF-8
+// 字符都留到下一次，前端拿到的永远是完整的行。
+//
+// 只读文件、不碰守护进程：日志本来就是 daemon 自己写的，而「GUI 启动之前发生
+// 了什么」也只有文件里有（实时事件流做不到这件事）。
+func (a *App) ReadDaemonLog(offset int64, maxBytes int) (map[string]any, error) {
+	path := daemonLogPath()
+	if path == "" {
+		return nil, fmt.Errorf("取不到程序所在目录")
+	}
+	out := map[string]any{"path": path, "size": int64(0), "next": int64(0), "text": ""}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// 还没写过日志（守护进程没启动过）。不是错误：前端继续轮询，它自己会出来。
+			out["missing"] = true
+			return out, nil
+		}
+		return nil, err
+	}
+	size := info.Size()
+	out["size"] = size
+	if maxBytes <= 0 {
+		maxBytes = daemonLogTailBytes
+	}
+	if maxBytes > daemonLogMaxChunk {
+		maxBytes = daemonLogMaxChunk
+	}
+
+	fromTail := offset < 0
+	if fromTail {
+		offset = size - int64(maxBytes)
+		if offset < 0 {
+			offset = 0
+		}
+	} else if offset > size {
+		// 文件变小 = 守护进程启动时轮转过（daemon.log → daemon.log.1），从头读
+		offset = 0
+		out["rotated"] = true
+	}
+	n := size - offset
+	if n <= 0 {
+		out["next"] = offset
+		return out, nil
+	}
+	if n > int64(maxBytes) {
+		n = int64(maxBytes)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	if nn, rerr := f.ReadAt(buf, offset); nn > 0 {
+		buf = buf[:nn]
+	} else if rerr != nil {
+		return nil, rerr
+	}
+
+	start := offset
+	if fromTail && start > 0 {
+		// 从尾部读的起点大概率落在行中间：丢掉第一段残行
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+			buf = buf[i+1:]
+			start += int64(i) + 1
+		}
+	}
+	if start+int64(len(buf)) < size {
+		// 后面还有数据：只交完整行，剩下的下次再读
+		if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
+			buf = buf[:i+1]
+		}
+	}
+	out["text"] = string(buf)
+	out["next"] = start + int64(len(buf))
+	return out, nil
+}
+
 func (a *App) ShowFolderInExplorer(kind string) map[string]any {
 	// 设置目录与资源目录无关（在 exe 同级），单独处理，不去要 resources 路径。
 	if kind == "settings" {
@@ -2153,6 +2260,15 @@ func (a *App) ShowFolderInExplorer(kind string) map[string]any {
 		if err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		_ = openFolder(dir)
+		return map[string]any{"ok": true}
+	}
+	// 日志目录同样在 exe 同级（见 daemon/logfile.go），不走资源层
+	if kind == "logs" {
+		dir := filepath.Dir(daemonLogPath())
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		}

@@ -1566,6 +1566,7 @@ function applyI18n() {
   _set('menuRefreshPorts','menu.refresh_ports','刷新串口列表');
   _set('menuViewThreads','menu.view_threads','查看线程');
   _set('menuViewClients','menu.view_clients','查看客户端');
+  _set('menuDaemonLog','menu.daemon_log','查看守护进程日志');
   _set('menuDevTools','menu.dev_tools','开发人员工具');
   _set('menuAbout','menu.about','关于');
   _set('btnSend','btn.send','发送');
@@ -3538,6 +3539,8 @@ function handleDaemonOffline() {
     if (t._page && t._page.isWelcome) continue;
     // .stlog 文件页读的是本地磁盘，跟守护进程没关系：别跟着一起销毁。
     if (t.type === 'stlog') continue;
+    // 日志页同理：它读的是磁盘上的 daemon.log，与守护进程实例无关
+    if (t.type === 'daemonlog') continue;
     if (t.sessionId) {
       delete state.historyCache[t.sessionId];
       delete state.statsBase[t.sessionId];
@@ -4270,7 +4273,7 @@ function _relabelIdleTabs() {
   var list = state.tabs || [];
   for (var i = 0; i < list.length; i++) {
     var tb = list[i];
-    if (!tb || tb.portOpen || tb.type === 'settings' || tb.type === 'new') continue;
+    if (!tb || tb.portOpen || tb.type === 'settings' || tb.type === 'new' || tb.type === 'daemonlog') continue;
     if (tb.syncedParams && tb.syncedParams.portName) continue;  // 已声明端口，标题里带着端口名
     tb.label = tb.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
   }
@@ -4919,7 +4922,7 @@ var _tabRenaming = false;
 function _tabRenameStart(btn, idx) {
   if (_tabRenaming) return;
   var tab = state.tabs[idx];
-  if (!tab || tab.type === 'settings' || tab.type === 'new') return;
+  if (!tab || tab.type === 'settings' || tab.type === 'new' || tab.type === 'daemonlog') return;
   // 双击的第一下是「切标签」，switchTab 会重绘整个标签栏，传进来的按钮可能已经
   // 不在文档里了。重新按索引找一枚当前挂在 DOM 上的。
   if (!btn || !document.contains(btn)) {
@@ -5144,13 +5147,14 @@ function _tabMenuOpen(clientX, clientY, idx) {
 function _tabIconKey(tb) {
   if (tb.type === 'settings') return 'settings';
   if (tb.type === 'new') return 'plus';
+  if (tb.type === 'daemonlog') return 'history';
   if (tb.type === 'stlog') return (tb._stlog && tb._stlog.isDir) ? 'folder' : 'file';
   return tb.mode === 'forward' ? 'swap' : 'terminal';
 }
 
-// 状态：'' 表示不给点（设置页、新建页不是会话）
+// 状态：'' 表示不给点（设置页、新建页、日志页都不是会话）
 function _tabStateClass(tb) {
-  if (tb.type === 'settings' || tb.type === 'new') return '';
+  if (tb.type === 'settings' || tb.type === 'new' || tb.type === 'daemonlog') return '';
   if (tb.type === 'stlog') return 'is-ro';
   if (!tb.portOpen) return 'is-idle';
   return tb.mode === 'forward' ? 'is-fwd' : 'is-live';
@@ -5162,7 +5166,7 @@ function _tabStateClass(tb) {
 // 「COM3 @ 115200」「端口转发空闲」这类文案，因为 CLI 和 MCP 也在看同一个名字，
 // 各端各拼一份必然对不上。名字为空时退回端口名/会话号。
 function _tabNameOf(tb) {
-  if (tb.type === 'settings' || tb.type === 'new') return tb.label || '';
+  if (tb.type === 'settings' || tb.type === 'new' || tb.type === 'daemonlog') return tb.label || '';
   if (tb.type === 'stlog') return tb.label || stlogBaseName(tb.path || '');
   // 用户起的名字最优先。自动名（端口名 / 「会话 #N」）只在没有工程目录时用 ——
   // 推送或打开一个工程后，标签上该显示工程文件夹名，而不是录制那一刻的「会话 #3」。
@@ -5196,7 +5200,7 @@ function _applyTabDisplaySettings() {
 // 只有 GUI 自己一个时整块省略 —— 那是「我在看自己的会话」，写个 1 只是噪声。
 function _tabClientsNode(tb) {
   if (state.tabShowClients === false) return null;
-  if (tb.type === 'settings' || tb.type === 'new') return null;
+  if (tb.type === 'settings' || tb.type === 'new' || tb.type === 'daemonlog') return null;
   var v = tb.viewers || {};
   var gui = v.gui || 0, cli = v.cli || 0, mcp = v.mcp || 0;
   var total = gui + cli + mcp;
@@ -5225,7 +5229,7 @@ function _tabClientsNode(tb) {
 //   a 端口 · 参数    b 参数 · 速率    c 保存 · 客户端
 function _tabSubText(tb) {
   if (state.tabTwoLines !== true) return '';
-  if (tb.type === 'settings' || tb.type === 'new') return '';
+  if (tb.type === 'settings' || tb.type === 'new' || tb.type === 'daemonlog') return '';
 
   if (tb.type === 'stlog') {
     var st = tb._stlog || {};
@@ -5383,7 +5387,7 @@ function renderTabs() {
     const isSettings = (t.type === 'settings');
     const isChooser = (t.type === 'new');
     // 会话标签：悬停出自绘浮窗（c-tabpop），不再挂原生 title
-    if (!isSettings && !isChooser) {
+    if (!isSettings && !isChooser && t.type !== 'daemonlog') {
       btn.addEventListener('pointerenter', function (e) {
         if (e.pointerType === 'touch') return;
         _tabPopSchedule(btn, i);
