@@ -2178,6 +2178,33 @@ function _tabDragAutoScrollStep() {
   _tabDragRaf = requestAnimationFrame(_tabDragAutoScrollStep);
 }
 
+// 拖动中的横向落位：夹在标签栏里（右边界给「+」留出位置），并把「+」往右顶。
+//
+// 两种拖动共用：同一窗口里拖排序（_tabDragMove）和「并进别的窗口后接管拖动」
+// （_ghostMove，见 _ghostDrag）。两边的视觉必须一致 —— 以前接管那条没做「+」的
+// 推移，跨窗口并进来的标签会从「+」右边飘过去，看着像跑出了标签栏。
+//
+// add：{ btn, left, w }；没有「+」（极窄窗口等）时传 null，那就只做边界限制。
+function _tabDragApplyX(btn, w, gx, add) {
+  var bar = document.getElementById('tabsBar');
+  if (bar) {
+    var br = bar.getBoundingClientRect();
+    var maxGx = br.right - w - 4;
+    if (add && add.btn) maxGx = Math.min(maxGx, br.right - w - add.w - 14);
+    gx = Math.max(br.left + 4, Math.min(gx, maxGx));
+  }
+  btn.style.left = gx + 'px';
+
+  if (add && add.btn) {
+    // 被拖标签的右缘贴上去就推着「+」走，最多推到窗口边界为止。
+    var want = gx + w + 6 - add.left;
+    var maxPush = Math.max(0, window.innerWidth - 4 - (add.left + add.w));
+    var push = Math.max(0, Math.min(want, maxPush));
+    add.btn.style.transform = push > 0.5 ? 'translateX(' + push + 'px)' : '';
+  }
+  return gx;
+}
+
 // 落点 = 第一个「鼠标还在它左半区」的标签之前；都没有就排到最后
 function _tabDragPlace(st, clientX) {
   var scroll = document.getElementById('tabsScroll');
@@ -2331,7 +2358,17 @@ function _ghostBegin(idx, relX) {
   btn.style.top = r.top + 'px';
   document.body.classList.add('is-tab-dragging');
 
-  _ghostDrag = { sid: String(state.tabs[idx].sessionId), idx: idx, btn: btn, ph: ph, w: r.width };
+  // 「+」的位置也要记下来（和 _tabDragStart 一样）：接管拖动和排序拖动是同一套
+  // 视觉，被拖进来的标签同样要把「+」往右顶。以前这里没记，跨窗口并进来的标签
+  // 会从「+」右边飘过去，看着像跑到标签栏外面了。
+  var add = null;
+  var addBtn = document.getElementById('tabAddBtn');
+  if (addBtn) {
+    var ar = addBtn.getBoundingClientRect();
+    add = { btn: addBtn, left: ar.left, w: ar.width };
+  }
+
+  _ghostDrag = { sid: String(state.tabs[idx].sessionId), idx: idx, btn: btn, ph: ph, w: r.width, add: add };
   if (typeof relX === 'number') _ghostMove(relX);
 }
 
@@ -2340,13 +2377,7 @@ function _ghostMove(relX) {
   if (!g || typeof relX !== 'number') return;
   // Go 发的是「相对窗口左边的物理像素」，页面这边是 CSS 像素
   var dpr = window.devicePixelRatio || 1;
-  var gx = relX / dpr;
-  var bar = document.getElementById('tabsBar');
-  if (bar) {
-    var br = bar.getBoundingClientRect();
-    gx = Math.max(br.left + 4, Math.min(gx, br.right - g.w - 4));
-  }
-  g.btn.style.left = gx + 'px';
+  var gx = _tabDragApplyX(g.btn, g.w, relX / dpr, g.add);
   _tabDragPlace({ btn: g.btn, ph: g.ph }, gx);
 }
 
@@ -2362,6 +2393,7 @@ function _ghostEnd() {
   g.btn.style.top = '';
   g.btn.style.width = '';
   g.btn.style.height = '';
+  if (g.add && g.add.btn) g.add.btn.style.transform = '';
   document.body.classList.remove('is-tab-dragging');
   _finishTabReorder(g.btn, g.idx, g.ph, true);
   // 拖动期间压着的同步（见 syncDaemonSessions 开头）现在补上
@@ -2422,23 +2454,7 @@ function _tabDragMove(e) {
   // 只跟水平方向：压暗的那个标签留在标签栏这一行里左右滑，不跟着鼠标上下跑，
   // 也不在光标下面变成一块浮起来的方块。右边界要给「+」留出位置 —— 推到最右时
   // 是「标签 + 加号」一起顶到窗口边，不能让标签把加号压在身下。
-  var gx = e.clientX - st.offX;
-  var bar = document.getElementById('tabsBar');
-  if (bar) {
-    var br = bar.getBoundingClientRect();
-    var maxGx = br.right - st.w - 4;
-    if (st.addBtn) maxGx = Math.min(maxGx, br.right - st.w - st.addW - 14);
-    gx = Math.max(br.left + 4, Math.min(gx, maxGx));
-  }
-  st.btn.style.left = gx + 'px';
-
-  // 把「+」往右顶：被拖标签的右缘贴上去就推着它走，最多推到窗口边界为止。
-  if (st.addBtn) {
-    var want = gx + st.w + 6 - st.addLeft;
-    var maxPush = Math.max(0, window.innerWidth - 4 - (st.addLeft + st.addW));
-    var push = Math.max(0, Math.min(want, maxPush));
-    st.addBtn.style.transform = push > 0.5 ? 'translateX(' + push + 'px)' : '';
-  }
+  _tabDragApplyX(st.btn, st.w, e.clientX - st.offX, st.addBtn ? { btn: st.addBtn, left: st.addLeft, w: st.addW } : null);
   _tabDragPlace(st, e.clientX);
 }
 
