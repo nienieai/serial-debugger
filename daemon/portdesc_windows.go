@@ -40,14 +40,14 @@ func loadPortDescriptions() map[string]string {
 // 全走一遍要多花一个数量级的时间，而这是每次刷新端口列表都要做的事。
 // 实测本机这些类合计约 40 个实例、耗时在毫秒级。
 var serialCapableClasses = []string{
-	"USB",      // USB 转串口（CH340/CH343/FTDI/CP210x…）
-	"BTHENUM",  // 蓝牙串口（SPP）
-	"ROOT",     // 虚拟串口（com0com 等）
-	"ACPI",     // 主板自带串口
-	"FTDIBUS",  // FTDI 总线
-	"SERENUM",  // 串口枚举器
-	"LPTENUM",  // 并口转串口
-	"MODEM",    // 调制解调器串口
+	"USB",     // USB 转串口（CH340/CH343/FTDI/CP210x…）
+	"BTHENUM", // 蓝牙串口（SPP）
+	"ROOT",    // 虚拟串口（com0com 等）
+	"ACPI",    // 主板自带串口
+	"FTDIBUS", // FTDI 总线
+	"SERENUM", // 串口枚举器
+	"LPTENUM", // 并口转串口
+	"MODEM",   // 调制解调器串口
 }
 
 // loadPortDescriptionsFromRegistry 取「COM 口 → 设备描述」的映射。
