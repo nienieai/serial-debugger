@@ -248,6 +248,7 @@
   "perm.fixed": "已授予目前使用者讀寫權限，現在可以開啟序列埠了（拔插或重新開機後失效）。",
   "perm.fixing": "正在等待授權…",
   "perm.manual": "目前使用者沒有序列埠權限。可執行 serial-cli fix-permissions 暫時授權，或執行 install.sh --fix-permissions 永久解決。",
+  "perm.no_agent": "目前程式不在桌面工作階段裡，叫不出系統授權視窗（常見於從 SSH 或終端機啟動）。請在桌面裡啟動本程式後重試，或執行 serial-cli fix-permissions。",
   "perm.no_device": "沒有偵測到 USB 序列埠裝置。",
   "perm.no_pkexec": "系統裡沒有 pkexec，無法顯示授權視窗。可請管理員執行 install.sh --fix-permissions。",
   "placeholder.no_process": "無串口處理程序",

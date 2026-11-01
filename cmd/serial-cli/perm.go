@@ -111,6 +111,9 @@ func cmdFixPermissions(args []string) {
 	switch res.Reason {
 	case "cancel":
 		printErr("没有获得授权（密码框被取消或被拒绝）。")
+	case "no_agent":
+		printErr("调不出系统授权窗口：当前进程不在桌面会话里（常见于 SSH 或后台启动）。")
+		printErr("请在桌面里启动本程序，或在有终端的 SSH 会话里重跑本命令。")
 	case "no_pkexec":
 		printErr("没有找到 pkexec，弹不出授权窗口。可请管理员手工执行：")
 		printErr("  sudo chmod a+rw %s", strings.Join(st.Denied, " "))

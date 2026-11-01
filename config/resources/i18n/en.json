@@ -248,6 +248,7 @@
   "perm.fixed": "Access granted. You can open the port now (replugging or rebooting revokes it).",
   "perm.fixing": "Waiting for authorization…",
   "perm.manual": "Your user has no access to the serial device. Run serial-cli fix-permissions for temporary access, or install.sh --fix-permissions for a permanent fix.",
+  "perm.no_agent": "This app is not running inside a desktop session, so the system authorization dialog cannot be shown (common when started from SSH or a terminal). Start it from the desktop and try again, or run serial-cli fix-permissions.",
   "perm.no_device": "No USB serial device found.",
   "perm.no_pkexec": "pkexec was not found, so the authorization dialog cannot be shown. Ask an administrator to run install.sh --fix-permissions.",
   "placeholder.no_process": "No serial process",

@@ -1077,6 +1077,7 @@ function _permReasonText(r) {
   var reason = (r && r.reason) || 'failed';
   if (reason === 'cancel') return t('perm.cancel', '没有获得授权。');
   if (reason === 'no_pkexec') return t('perm.no_pkexec', '系统里没有 pkexec，弹不出授权窗口。可请管理员执行 install.sh --fix-permissions。');
+  if (reason === 'no_agent') return t('perm.no_agent', '当前程序不在桌面会话里，调不出系统授权窗口（常见于从 SSH 或终端启动）。请在桌面里启动本程序后重试，或运行 serial-cli fix-permissions。');
   if (reason === 'no_device') return t('perm.no_device', '没有检测到 USB 串口设备。');
   return t('perm.failed', '授权失败：{err}').replace('{err}', (r && r.detail) || '');
 }

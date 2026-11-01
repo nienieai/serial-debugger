@@ -82,14 +82,23 @@ func FixTemp() FixResult {
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
+			// 先认「没有授权代理」这种：pkexec 找不到桌面会话里的 polkit 代理时会
+			// 退而造一个文本代理，连控制终端都没有就报
+			// `Error creating textual authentication agent: ... /dev/tty: No such device
+			// or address`（GUI 从 SSH / 非桌面会话启动时必然踩到）。这不是权限问题，
+			// 换句话说明白比原样弹英文有用。
+			if strings.Contains(strings.ToLower(msg), "authentication agent") {
+				return FixResult{Reason: "no_agent", Detail: msg}
+			}
 			// 126 = 授权没拿到（取消 / 被 polkit 拒绝），127 = 程序找不到。
 			// 两者对用户是同一句话：这次没授予权限。
 			if ee.ExitCode() == 126 {
-				return FixResult{Reason: "cancel", Detail: strings.TrimSpace(stderr.String())}
+				return FixResult{Reason: "cancel", Detail: msg}
 			}
-			return FixResult{Reason: "failed", Detail: strings.TrimSpace(stderr.String())}
+			return FixResult{Reason: "failed", Detail: msg}
 		}
 		return FixResult{Reason: "failed", Detail: err.Error()}
 	}

@@ -248,6 +248,7 @@
   "perm.fixed": "Acceso concedido. Ya puedes abrir el puerto (reconectar o reiniciar lo revoca).",
   "perm.fixing": "Esperando autorización…",
   "perm.manual": "Tu usuario no tiene acceso al puerto serie. Ejecuta serial-cli fix-permissions para concederlo temporalmente, o install.sh --fix-permissions para una solución permanente.",
+  "perm.no_agent": "La aplicación no se ejecuta en una sesión de escritorio, así que no se puede mostrar el diálogo de autorización del sistema (habitual si se lanzó desde SSH o un terminal). Iníciala desde el escritorio o ejecuta serial-cli fix-permissions.",
   "perm.no_device": "No se detectó ningún puerto serie USB.",
   "perm.no_pkexec": "No se encontró pkexec, así que no se puede mostrar el diálogo de autorización. Pide a un administrador que ejecute install.sh --fix-permissions.",
   "placeholder.no_process": "Sin proceso serie",

@@ -248,6 +248,7 @@
   "perm.fixed": "已授予当前用户读写权限，现在可以打开串口了（拔插或重启后失效）。",
   "perm.fixing": "正在等待授权…",
   "perm.manual": "当前用户没有串口权限。可运行 serial-cli fix-permissions 临时授权，或执行 install.sh --fix-permissions 永久解决。",
+  "perm.no_agent": "当前程序不在桌面会话里，调不出系统授权窗口（常见于从 SSH 或终端启动）。请在桌面里启动本程序后重试，或运行 serial-cli fix-permissions。",
   "perm.no_device": "没有检测到 USB 串口设备。",
   "perm.no_pkexec": "系统里没有 pkexec，弹不出授权窗口。可请管理员执行 install.sh --fix-permissions。",
   "placeholder.no_process": "无串口进程",

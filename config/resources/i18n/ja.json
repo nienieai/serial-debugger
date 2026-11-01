@@ -248,6 +248,7 @@
   "perm.fixed": "許可しました。シリアルポートを開けます（抜き差しや再起動で失効します）。",
   "perm.fixing": "認証を待っています…",
   "perm.manual": "現在のユーザーにはシリアルポートの権限がありません。serial-cli fix-permissions で一時的に許可するか、install.sh --fix-permissions で恒久的に解決してください。",
+  "perm.no_agent": "このプログラムはデスクトップセッション外で動作しているため、システムの認証ダイアログを表示できません（SSH や端末から起動した場合によくあります）。デスクトップから起動して再試行するか、serial-cli fix-permissions を実行してください。",
   "perm.no_device": "USB シリアルデバイスが見つかりません。",
   "perm.no_pkexec": "pkexec が見つからないため、認証ダイアログを表示できません。管理者に install.sh --fix-permissions の実行を依頼してください。",
   "placeholder.no_process": "シリアルプロセスなし",

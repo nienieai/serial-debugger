@@ -248,6 +248,7 @@
   "perm.fixed": "Accès accordé. Vous pouvez ouvrir le port (rebrancher ou redémarrer l'annule).",
   "perm.fixing": "En attente d'autorisation…",
   "perm.manual": "Votre utilisateur n'a pas accès au port série. Lancez serial-cli fix-permissions pour un accès temporaire, ou install.sh --fix-permissions pour une solution permanente.",
+  "perm.no_agent": "L'application ne tourne pas dans une session de bureau : la fenêtre d'autorisation système ne peut pas s'afficher (fréquent quand elle est lancée depuis SSH ou un terminal). Lancez-la depuis le bureau, ou exécutez serial-cli fix-permissions.",
   "perm.no_device": "Aucun port série USB détecté.",
   "perm.no_pkexec": "pkexec est introuvable, la fenêtre d'autorisation ne peut pas s'afficher. Demandez à un administrateur d'exécuter install.sh --fix-permissions.",
   "placeholder.no_process": "Aucun processus série",
