@@ -10,17 +10,32 @@ var _ICON_MISSING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" 
 var activeIcons = {};    // 当前生效的图标（内置集合 + 可能叠加的外置包）
 var _builtinIcons = {};  // 内置集合快照，切回「内置默认」时用它还原
 
-// 读取内置图标（key 由后端按文件名生成）。页面一加载就开始，结果同时给
-// initIconThemes() 用——那里要等它完成，否则内置集合还没到手就被外置包覆盖了。
-var _iconsReady = (async function _initIcons() {
-	try {
-		_builtinIcons = (await window.go.main.App.GetBuiltinIcons()) || {};
-	} catch(e) {
-		_builtinIcons = {};
+// 读取内置图标（key 由后端按文件名生成）。结果同时给 initIconThemes() 用——
+// 那里要等它完成，否则内置集合还没到手就被外置包覆盖了。
+//
+// 注意时序：本文件是普通 <script>，而 window.go 由 bindings-global.js（ES module，
+// deferred）提供，所以**本文件执行时 window.go 还不存在**。早期版本在这里直接
+// `await window.go.main.App.GetBuiltinIcons()`，异常被 catch 吞掉，_builtinIcons
+// 变成 {}，结果界面上所有图标都退化成 _ICON_MISSING（方框+叉）。
+// 现在改成等 wails-ready 事件（bindings-global.js 挂完 bindings 后广播）。
+var _iconsReady = new Promise(function (resolve) {
+	function load() {
+		window.go.main.App.GetBuiltinIcons().then(function (icons) {
+			_builtinIcons = icons || {};
+			activeIcons = Object.assign({}, _builtinIcons);
+			resolve(_builtinIcons);
+		}).catch(function () {
+			_builtinIcons = {};
+			activeIcons = {};
+			resolve(_builtinIcons);
+		});
 	}
-	activeIcons = Object.assign({}, _builtinIcons);
-	return _builtinIcons;
-})();
+	if (window.go && window.go.main && window.go.main.App) {
+		load();
+	} else {
+		window.addEventListener('wails-ready', load, { once: true });
+	}
+});
 
 // 把图标包叠到内置集合上；ext 为空表示回到内置默认。
 function applyIconTheme(ext) {

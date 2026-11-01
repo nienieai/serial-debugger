@@ -38,3 +38,29 @@ func TestDecideClose(t *testing.T) {
 		}
 	}
 }
+
+// 「有会话时要不要弹确认框」——三档设置的行为，以及 transfer 退化回销毁那条。
+func TestWindowCloseNeedsConfirm(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured string
+		sessions   int
+		degraded   bool
+		want       bool
+	}{
+		{"每次询问：有会话 → 问", "ask", 2, false, true},
+		{"每次询问：没会话 → 不问", "ask", 0, false, false},
+		{"直接销毁：有会话也不再问", "destroy", 2, false, false},
+		{"直接销毁：没会话 → 不问", "destroy", 0, false, false},
+		{"转到其他窗口：有会话直接转", "transfer", 2, false, false},
+		{"想转交但没有别的窗口（退化成销毁）→ 必须问", "transfer", 1, true, true},
+		{"退化 + 没会话 → 不问", "transfer", 0, true, false},
+		{"缺键/旧配置按每次询问算", "", 1, false, true},
+	}
+	for _, c := range cases {
+		if got := windowCloseNeedsConfirm(c.configured, c.sessions, c.degraded); got != c.want {
+			t.Errorf("%s: windowCloseNeedsConfirm(%q, %d, degraded=%v) = %v, want %v",
+				c.name, c.configured, c.sessions, c.degraded, got, c.want)
+		}
+	}
+}

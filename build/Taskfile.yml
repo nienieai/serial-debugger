@@ -1,0 +1,28 @@
+version: '3'
+
+# 跨平台共用的构建步骤。
+
+tasks:
+  go:mod:tidy:
+    summary: go mod tidy
+    internal: true
+    run: once
+    cmds:
+      - go mod tidy
+
+  generate:bindings:
+    summary: 生成 JS bindings（无构建链，直接落到 frontend/bindings 并随前端提交）
+    # -b     用 bundled runtime（bindings 里 import "/wails/runtime.js"）
+    # -names 用方法名而不是数字 ID：bindings 是提交物、不参与构建，
+    #        ID 会随 Go 方法增减而变，名字不会。
+    run: once
+    cmds:
+      - wails3 generate bindings -b -names
+
+  build:frontend:
+    summary: 前端是纯 HTML/JS，没有打包步骤
+    run: once
+    deps:
+      - task: generate:bindings
+    cmds:
+      - 'echo "no-op: frontend has no build step"'

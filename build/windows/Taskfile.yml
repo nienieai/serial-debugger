@@ -1,0 +1,45 @@
+version: '3'
+
+includes:
+  common: ../Taskfile.yml
+
+tasks:
+  build:
+    summary: 构建 Windows GUI
+    cmds:
+      - task: build:native
+
+  build:native:
+    internal: true
+    deps:
+      - task: common:go:mod:tidy
+      - task: common:build:frontend
+    cmds:
+      # build/bin 不一定存在（干净 checkout），go build -o 不会自己建目录
+      - cmd: powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path '{{.BIN_DIR}}' | Out-Null"
+        platforms: [windows]
+      - task: generate:syso
+      - 'go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+      # syso 是中间产物，构建完清掉，别进版本库（否则会和下一次生成打架）
+      - cmd: powershell -NoProfile -Command "Remove-Item -Force -ErrorAction SilentlyContinue *.syso"
+        platforms: [windows]
+    vars:
+      BUILD_FLAGS: '-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X github.com/nienieai/serial-debugger/version.Version={{.APP_VERSION}}"'
+    env:
+      GOOS: windows
+      CGO_ENABLED: '0'
+
+  generate:syso:
+    summary: 生成 Windows 资源（图标 / 清单 / 版本信息）
+    # 用 go-winres 而不是 wails3 generate syso：v3.0.0 的 generate syso -info
+    # 只写进 fixed 段，StringFileInfo（产品名/公司/描述）全丢。
+    # 版本在这里用命令行注入，避免资源和 ldflags 两处版本号不同步。
+    cmds:
+      - go-winres make --in winres/winres.json --arch amd64 --out rsrc --file-version {{.V4}} --product-version {{.V4}}
+    vars:
+      V4: '{{.APP_VERSION}}.0'
+
+  run:
+    summary: 运行已构建的 GUI
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}.exe"'

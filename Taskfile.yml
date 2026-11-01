@@ -1,0 +1,30 @@
+version: '3'
+
+# Wails v3 的构建入口（v3 用 Taskfile 代替 v2 的 `wails build` 单体命令）。
+#
+# 和 spike 里验证过的结构一致，只保留 Windows：
+#   - 前端没有构建链，build:frontend 是 no-op（只触发 bindings 生成）
+#   - syso 用 go-winres 而不是 `wails3 generate syso`（后者会丢掉 StringFileInfo，
+#     详见 _wails3_spike/SPIKE_RESULTS.md 第 ④ 项）
+#   - 产物仍然落在 build/bin，deploy-dev.ps1 不用改
+
+vars:
+  APP_NAME: "serial-gui"
+  BIN_DIR: "build/bin"
+  # 由 build.ps1 从 wails.json 的 info.productVersion 传进来覆盖
+  APP_VERSION: "0.9.0"
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+
+tasks:
+  build:
+    summary: 构建 GUI（当前平台）
+    cmds:
+      - task: windows:build
+
+  run:
+    summary: 运行已构建的 GUI
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}.exe"'

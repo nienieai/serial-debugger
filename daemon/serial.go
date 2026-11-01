@@ -1412,6 +1412,9 @@ func (p *Process) shouldSaveHistory() bool {
 //
 // 开启时立即建文件，不等第一条数据——用户能马上看到文件名；关闭时把当前文件
 // 关掉，已写入的内容保留，之后的帧不再追加。环形缓冲与界面显示完全不受影响。
+//
+// 关闭这一路还要把「别录了」写回工程（markSessionNotSaving）：封存本身不清
+// save 标记（见 closeStlogLocked），这里是唯一能表达「我不想录」的地方。
 func (p *Process) SetSaveHistory(enabled bool) {
 	p.saveHistory.Store(enabled)
 	p.saveHistorySet.Store(true)
@@ -1419,10 +1422,14 @@ func (p *Process) SetSaveHistory(enabled bool) {
 		p.openHistoryFile()
 		return
 	}
+	p.markSessionNotSaving()
 	p.detachHistoryFile()
 }
 
 // applyDefaultSaveHistory 把全局默认作用到「没有单独设置过」的进程上。
+//
+// 这里走 detachHistoryFile 而不是 SetSaveHistory(false)：全局默认变了不等于
+// 用户对这个工程说过「别录」，所以不能顺手把工程的 save 标记写掉。
 func (p *Process) applyDefaultSaveHistory() {
 	if p.saveHistorySet.Load() {
 		return
@@ -1446,7 +1453,12 @@ func (p *Process) openHistoryFile() {
 	}
 	// 先把上一个会话读回环形缓冲：重启后打开「保存历史」还能接着看上次的录制。
 	// 必须在建新会话之前——新建的空目录会成为「最近的会话」，把真数据挡掉。
-	p.restoreLatestSession()
+	//
+	// 工程会话跳过这一步：它的历史在 OpenSession 打开工程时已经从**这个工程**
+	// 灌进环了，再去 history/ 找「最近一个会话」只会把不相干的另一条会话读进来。
+	if p.sessionDir() == "" {
+		p.restoreLatestSession()
+	}
 	if err := p.ensureStlogSession(); err != nil {
 		logOp("错误", "开启录制失败 (进程 #%s): %v", p.id, err)
 	}
@@ -1884,11 +1896,6 @@ func (pm *ProcessManager) createDeclared(mode, port string, cfg SerialConfig, cf
 		pm.onProcessChanged()
 	}
 	return proc, nil
-}
-
-// ForwardCreate is a backward-compatible wrapper that creates a forward process.
-func (pm *ProcessManager) ForwardCreate(cfgA, cfgB SerialConfig) (*Process, error) {
-	return pm.Create("forward", cfgA.Port, cfgA, &cfgB, true)
 }
 
 // Rename 改一个进程的线程名。传空串表示退回自动名（端口名 / 会话号）。
@@ -2666,17 +2673,6 @@ func (pm *ProcessManager) ListConnected() []map[string]any {
 	return result
 }
 
-func (pm *ProcessManager) FirstConnectedID() string {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	for _, p := range pm.processes {
-		if p.status == "connected" {
-			return p.id
-		}
-	}
-	return ""
-}
-
 // SetDefaultHistorySave 修改新进程的默认落盘开关，并作用到所有未单独设置过的
 // 进程——老行为是全局开关立即生效，这里保持兼容；显式设置过的进程不被覆盖。
 func (pm *ProcessManager) SetDefaultHistorySave(v bool) {
@@ -2825,15 +2821,6 @@ func parseHistoryPackets(packets [][]byte) []HistoryEntry {
 		}
 	}
 	return entries
-}
-
-// GetHistorySharedName returns the shared memory name for a process.
-func (pm *ProcessManager) GetHistorySharedName(id string) string {
-	proc := pm.Get(id)
-	if proc == nil {
-		return ""
-	}
-	return proc.historyName
 }
 
 func (pm *ProcessManager) GetStats(id string) (*ProcessStats, error) {

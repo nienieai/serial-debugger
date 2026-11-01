@@ -1,0 +1,109 @@
+/*
+  对话框窗口的样式。
+
+  配色不写死：主窗口弹窗前会用 _dialogVars() 抓一份 CSS 变量快照塞进 spec，
+  这里只声明兜底值，运行时被内联到 :root 上覆盖。
+
+  类名按项目规范拆职责：
+    o-  布局      c-  组件      t-  皮肤/工具      is-  状态
+*/
+
+:root {
+  --bg: #ffffff;
+  --bg2: #f2f2f2;
+  --fg: #111111;
+  --border: #c8c8c8;
+  --accent: #2563eb;
+
+  --dlg-pad: 16px;
+  --dlg-gap: 12px;
+  --dlg-radius: 6px;
+  --dlg-btn-pad-y: 6px;
+  --dlg-btn-pad-x: 18px;
+  --dlg-font: 13px;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: var(--dlg-font);
+}
+
+.o-dialog-col {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  padding: var(--dlg-pad);
+  gap: var(--dlg-gap);
+  overflow: hidden;
+}
+
+.o-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--dlg-gap);
+  flex: 0 0 auto;
+}
+
+.c-dialog__msg {
+  flex: 1 1 auto;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+}
+
+/* 多行 / 按列对齐的文本（.stlog 摘要之类） */
+.c-dialog__msg.t-mono {
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 12px;
+}
+
+.c-dialog__opt {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--dlg-gap) / 2);
+  flex: 0 0 auto;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.c-dialog__btn {
+  padding: var(--dlg-btn-pad-y) var(--dlg-btn-pad-x);
+  border: 1px solid var(--border);
+  border-radius: var(--dlg-radius);
+  background: var(--bg2);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  min-width: 84px;
+}
+
+.c-dialog__btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.c-dialog__btn:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.c-dialog__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.is-hidden {
+  display: none !important;
+}

@@ -1166,13 +1166,6 @@ func waitDaemonExit(timeout time.Duration) {
 	}
 }
 
-// WaitDaemonReady 阻塞到守护进程端点可连接为止（超时返回 false）。
-//
-// GUI 用它代替「每秒试连一次」：守护进程一就绪就能立刻连上，不必等下一次轮询。
-func WaitDaemonReady(timeout time.Duration) bool {
-	return pipe.WaitReady(timeout)
-}
-
 func startDaemonProcess() (string, error) {
 	exePath := findDaemonExe()
 	if exePath == "" {
@@ -1201,20 +1194,21 @@ func startDaemonProcess() (string, error) {
 }
 
 func findDaemonExe() string {
+	name := daemonExeName()
 	exePath, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(exePath)
-		p := filepath.Join(dir, "serial-daemon.exe")
+		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 	if wd, err := os.Getwd(); err == nil {
-		p := filepath.Join(wd, "serial-daemon.exe")
+		p := filepath.Join(wd, name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
-		p = filepath.Join(wd, "build", "bin", "serial-daemon.exe")
+		p = filepath.Join(wd, "build", "bin", name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}

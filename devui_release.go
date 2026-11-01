@@ -3,10 +3,9 @@
 package main
 
 import (
-	"context"
 	"io/fs"
 
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // 本文件是发布构建（不带 -tags hotreload）的默认实现：行为与引入热重载之前
@@ -20,8 +19,8 @@ func uiAssets() fs.FS { return assets }
 const uiDevMode = false
 
 // uiAssetMiddleware 在发布构建里不装任何中间件（不额外改写响应头）。
-func uiAssetMiddleware() assetserver.Middleware { return nil }
+func uiAssetMiddleware() application.Middleware { return nil }
 
 // uiStartHotReload 在发布构建里是空实现。热重载只在 -tags hotreload 时存在，
 // 这样发布二进制里连监听文件、重载窗口这些字符串都不会出现。
-func uiStartHotReload(ctx context.Context) {}
+func uiStartHotReload(win *application.WebviewWindow) {}

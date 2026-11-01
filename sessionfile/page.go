@@ -143,33 +143,6 @@ func DecodePage(buf []byte, expectOffset uint64) (*Page, error) {
 	return &Page{Header: h, Stats: st, Records: recs}, nil
 }
 
-// EncodePage assembles a full 4096-byte page from its parts. Records must
-// already be encoded contiguously; the caller passes the committed length.
-func EncodePage(pageOffset uint64, committedLen uint16, firstRecOff uint16,
-	st Stats, body []byte) []byte {
-	buf := make([]byte, PageSize)
-	h := PageHeader{
-		Magic:        PageMagic,
-		Ver:          PageVer,
-		PageOffset:   pageOffset,
-		CommittedLen: committedLen,
-		FirstRecOff:  firstRecOff,
-	}
-	h.Marshal(buf[:PageHeaderLen])
-	st.Marshal(buf[PageHeaderLen:RecordsStart])
-	copy(buf[RecordsStart:], body[:committedLen-RecordsStart])
-
-	crc := crc32.ChecksumIEEE(buf[:CRCOffset])
-	binary.LittleEndian.PutUint32(buf[CRCOffset:], crc)
-	return buf
-}
-
-// PageCRC recomputes the checksum of a raw page buffer.
-func PageCRC(buf []byte) uint32 { return crc32.ChecksumIEEE(buf[:CRCOffset]) }
-
-// StoredCRC reads the checksum recorded in the page tail.
-func StoredCRC(buf []byte) uint32 { return binary.LittleEndian.Uint32(buf[CRCOffset:]) }
-
 // SetPageCRC stamps the checksum into the page tail.
 func SetPageCRC(buf []byte) {
 	binary.LittleEndian.PutUint32(buf[CRCOffset:], crc32.ChecksumIEEE(buf[:CRCOffset]))

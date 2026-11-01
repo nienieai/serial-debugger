@@ -23,15 +23,6 @@ type Record struct {
 	OriginStr string
 }
 
-// EncodedLen reports how many bytes this record occupies on disk.
-func (r *Record) EncodedLen() int {
-	n := RecordHeaderLen + len(r.Payload)
-	if r.Origin == OriginInline {
-		n += 1 + len(r.OriginStr)
-	}
-	return n
-}
-
 // EncodeRecord writes the record into dst and returns the bytes written.
 func EncodeRecord(dst []byte, r *Record) int {
 	binary.LittleEndian.PutUint64(dst[0:], r.Ts)

@@ -124,23 +124,6 @@ func CreateSessionIn(parent string, set Settings) (*Session, error) {
 // Dir 返回会话目录。
 func (s *Session) Dir() string { return s.dir }
 
-// SessionID 返回完整 uuid。
-func (s *Session) SessionID() string { return s.manifest.SessionID }
-
-// SettingsDoc 返回当前设置（可改，Close 前调 SaveSettings 落盘）。
-func (s *Session) SettingsDoc() *SettingsDoc { return s.doc }
-
-// SetPkgMaxBytes 调整单包上限（会夹到 [8 MiB, 1 GiB]）。只影响后续的切包判断。
-func (s *Session) SetPkgMaxBytes(n int64) {
-	if n < MinPkgMaxBytes {
-		n = MinPkgMaxBytes
-	}
-	if n > MaxPkgMaxBytes {
-		n = MaxPkgMaxBytes
-	}
-	s.pkgMax = n
-}
-
 // PkgSeq 返回当前包序号（从 1 开始）。
 func (s *Session) PkgSeq() int { return s.seq }
 
@@ -255,13 +238,6 @@ func (s *Session) Flush() error {
 	return s.w.Flush()
 }
 
-// SaveSettings 把内存里的 settings.json 写盘（改过 label/notes/plot 之后调用）。
-func (s *Session) SaveSettings() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return SaveSettingsDoc(s.dir, s.doc)
-}
-
 // SetSaveFlag 只改 settings.json 里的 save 字段。
 //
 // 必须「读磁盘 → 改一个字段 → 写回」，不能直接 SaveSettings()：内存里的 doc 是
@@ -285,9 +261,6 @@ func (s *Session) SetSaveFlag(v bool) error {
 	s.doc = doc
 	return nil
 }
-
-// Created 返回会话创建时间（RFC3339）。名字清空、退回自动目录名时要用它重算。
-func (s *Session) Created() string { return s.manifest.Created }
 
 // RenameDir 把整个会话目录改名。
 //

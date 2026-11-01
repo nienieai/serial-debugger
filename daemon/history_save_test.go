@@ -51,27 +51,7 @@ func countLogFiles(t *testing.T, dir string) int {
 	return n
 }
 
-func fileSize(t *testing.T, dir string) int64 {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
-	var size int64
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".log" {
-			continue
-		}
-		// 用 Stat 取大小：ReadDir 的 FileInfo 走目录缓存，刚写过的文件可能还是 0。
-		info, err := os.Stat(filepath.Join(dir, e.Name()))
-		if err == nil {
-			size += info.Size()
-		}
-	}
-	return size
-}
-
-// 默认不落盘：新进程即使有数据也不应产生 history/*.log。
+// 默认不落盘：新进程即使有数据也不应产生会话目录。
 func TestHistoryDefaultIsOff(t *testing.T) {
 	pm, proc, dir := newSaveTestProc(t)
 
@@ -80,12 +60,15 @@ func TestHistoryDefaultIsOff(t *testing.T) {
 	}
 	proc.recordHistoryAt(1000, "AABB", "rx", "")
 	proc.recordHistoryAt(1001, "CCDD", "tx", "")
-	if n := countLogFiles(t, dir); n != 0 {
-		t.Fatalf("默认关闭时不应建历史文件, got %d 个", n)
+	if n := len(findSessions(t, dir)); n != 0 {
+		t.Fatalf("默认关闭时不应建会话目录, got %d 个", n)
 	}
 }
 
-// 按进程开启后：立即建文件，后续数据追加；关闭后不再追加（已写入的保留）。
+// 按进程开启后：立即建会话，后续数据追加；关闭后不再追加（已写入的保留）。
+//
+// v2 起「落盘」是一个会话目录（manifest + settings + pkg-*.stlog），
+// 不再有 history/*.log —— 所以这里数目录、按封存后的记录数断内容。
 func TestSetSaveHistoryPerProcess(t *testing.T) {
 	pm, proc, dir := newSaveTestProc(t)
 
@@ -95,22 +78,27 @@ func TestSetSaveHistoryPerProcess(t *testing.T) {
 	if on, _ := pm.ProcessHistorySave(proc.id); !on {
 		t.Fatal("开启后状态应为 true")
 	}
-	if n := countLogFiles(t, dir); n != 1 {
-		t.Fatalf("开启时应立即建 1 个历史文件, got %d", n)
+	if n := len(findSessions(t, dir)); n != 1 {
+		t.Fatalf("开启时应立即建 1 个会话目录, got %d", n)
 	}
 
 	proc.recordHistoryAt(1000, "AABB", "rx", "")
-	sizeBefore := fileSize(t, dir)
-	if sizeBefore == 0 {
-		t.Fatalf("开启后数据应写入文件 (size=%d)", sizeBefore)
+	// 封存会 Flush + Sync：不封存的话这一帧可能还留在页缓冲里，量不到。
+	proc.detachHistoryFile()
+	sess := onlySession(t, dir)
+	if got := mustReadStlog(t, sess).Records; got != 1 {
+		t.Fatalf("开启后数据应写进会话, got %d 条", got)
 	}
 
 	if err := pm.SetProcessHistorySave(proc.id, false); err != nil {
 		t.Fatalf("关闭失败: %v", err)
 	}
 	proc.recordHistoryAt(1001, "CCDD", "tx", "")
-	if got := fileSize(t, dir); got != sizeBefore {
-		t.Fatalf("关闭后不应再追加: size %d -> %d", sizeBefore, got)
+	if n := len(findSessions(t, dir)); n != 1 {
+		t.Fatalf("关闭后不该再建会话目录, got %d", n)
+	}
+	if got := mustReadStlog(t, sess).Records; got != 1 {
+		t.Fatalf("关闭后不应再追加: 记录数 %d", got)
 	}
 	// 关掉文件不影响环形缓冲：内存里的历史仍在。
 	if entries := historyOf(t, pm.GetHistoryPage(proc.id, 0, 0, 0)); len(entries) != 2 {
@@ -126,8 +114,8 @@ func TestDefaultSaveHistoryAppliesOnlyToUnset(t *testing.T) {
 	if on, _ := pm.ProcessHistorySave(proc.id); !on {
 		t.Fatal("默认改为开后，未单独设置的进程应跟着开")
 	}
-	if n := countLogFiles(t, dir); n != 1 {
-		t.Fatalf("跟着开时应建文件, got %d", n)
+	if n := len(findSessions(t, dir)); n != 1 {
+		t.Fatalf("跟着开时应建会话目录, got %d", n)
 	}
 
 	if err := pm.SetProcessHistorySave(proc.id, false); err != nil {

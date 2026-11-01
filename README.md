@@ -7,17 +7,17 @@
 **GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
 [![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
-[![Version](https://img.shields.io/badge/version-0.8.3-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![Wails](https://img.shields.io/badge/Wails-v2.12-DF0000)](https://wails.io)
+[![Wails](https://img.shields.io/badge/Wails-v3.0-DF0000)](https://wails.io)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6)
 ![IPC](https://img.shields.io/badge/IPC_protocol-1-lightgrey)
 
-[![CLI](https://img.shields.io/badge/CLI-34_commands-blueviolet)](CLI-CHEATSHEET.md)
-[![MCP](https://img.shields.io/badge/MCP-28_tools-blueviolet)](ARCHITECTURE.md)
+[![CLI](https://img.shields.io/badge/CLI-49_commands-blueviolet)](CLI-CHEATSHEET.md)
+[![MCP](https://img.shields.io/badge/MCP-29_tools-blueviolet)](ARCHITECTURE.md)
 [![i18n](https://img.shields.io/badge/i18n-9_languages-brightgreen)](config/i18n)
 
 </div>
@@ -67,13 +67,38 @@ serial-cli shutdown             # 关闭守护进程
 
 `serial-mcp.exe` 作为 MCP 服务端通过 stdio 提供 JSON-RPC 2.0 接口，可接入支持 MCP 协议的客户端。
 
+### Linux（分体版，解压即用）
+
+Linux 包里四个可执行没有 `.exe` 后缀，行为与 Windows 一致；GUI 走 WebKitGTK 后端。
+
+```bash
+# 运行库：GTK4 + WebKitGTK 6.0（Ubuntu 24.04 及以上自带；缺失时 GUI 会提示要装什么）
+sudo apt install -y libgtk-4-1 libwebkitgtk-6.0-4 libsoup-3.0-0
+
+./serial-cli start                 # 启动守护进程（GUI 也会自己拉起）
+./serial-cli ports                 # 列串口：应能看到 /dev/ttyUSB0 这类设备
+./serial-cli create /dev/ttyUSB0 115200
+./serial-cli send "AT\r\n"
+./serial-gui                       # 桌面里启动 GUI
+```
+
+**可能踩到的坑：串口权限。** Linux 上 `/dev/ttyUSB*`、`/dev/ttyACM*` 默认是 `root:dialout` + `0660`，普通用户不在 `dialout` 组里就读写不了，表现是打开串口报 `打开失败: Permission denied`。分体版**不往系统里写任何东西**，只做临时授权：
+
+| 场景 | 做法 |
+| --- | --- |
+| GUI | 连上守护进程后若检测到读不了的串口，标签栏下方出现横幅「串口权限不足：/dev/ttyUSB0」→ 点「临时授权」→ 输一次系统密码 |
+| CLI | `serial-cli fix-permissions`（`--yes` 跳过确认，`--json` 给脚本用） |
+| 不想每次授权 | `sudo usermod -aG dialout $USER` 后重新登录；或跑一次 `build/linux/install.sh --fix-permissions` 写条 uaccess 规则（不需要加组、不用注销） |
+
+> 临时授权只给**当前用户**加 ACL，**拔插设备或重启后失效**，横幅会再出现一次 —— 这是刻意的：免安装的版本不替用户改系统。另外这条授权要求 GUI 在桌面会话里运行，从 SSH / 后台启动的进程弹不出系统密码框（会提示换一种启动方式）。
+
 ## 🧩 组成 / Components
 
 | 可执行文件 | 说明 |
 | --- | --- |
 | `serial-daemon.exe` | 守护进程，单实例（互斥体），ProcessManager 管理 idle/connected 双状态 + single/forward 双模式 |
-| `serial-gui.exe` | Wails v2 桌面客户端，多标签页，3 管道持久连接，纯事件驱动 |
-| `serial-cli.exe` | 命令行工具，交互 REPL + 一次性命令，35 条命令（含 help、rename） |
+| `serial-gui.exe` | Wails v3 桌面客户端，多标签页，3 管道持久连接，纯事件驱动 |
+| `serial-cli.exe` | 命令行工具，交互 REPL + 一次性命令，49 条命令（含 help 与 `stlog-*` 离线工具） |
 | `serial-mcp.exe` | MCP 协议工具，JSON-RPC 2.0 over stdio，29 个工具 |
 
 ## ⚡ 架构 / Architecture
@@ -169,11 +194,19 @@ graph LR
 ### 从源码构建
 
 ```bash
-# 在仓库根目录执行
+# 在仓库根目录执行（Windows）
 go build -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli.exe    ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp.exe    ./cmd/serial-mcp/
-wails build -devtools  # GUI，产物在 build/bin/
+.\build.ps1              # GUI（Wails v3；-Release 产出自包含 exe）
+```
+
+```bash
+# Linux（需要 GTK4 + WebKitGTK 6.0 开发包；GUI 走 cgo，不能从 Windows 交叉编译）
+go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
+go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
+go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
+go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 ```
 
 > 💡 **仅需命令行工具时**（无需 GUI），可直接用 `go install` 安装：
@@ -184,11 +217,11 @@ wails build -devtools  # GUI，产物在 build/bin/
 > go install github.com/nienieai/serial-debugger/daemon@latest
 > ```
 >
-> GUI（`serial-gui`）需 Wails 环境（`wails build`），完整构建矩阵见 [BUILD.md](BUILD.md)。
+> GUI（`serial-gui`）需 Wails v3 环境与平台 WebView 开发包（Windows：WebView2 SDK；Linux：GTK4 + WebKitGTK 6.0），完整构建矩阵见 [BUILD.md](BUILD.md)。
 
 版本号统一维护在 `version/version.go`，改一处全部可执行文件同步。仓库已配置 [GitHub Actions 自动构建](.github/workflows/release.yml)：推送 `v*` 标签或手动触发即可产出二进制并发布 Release。
 
-## 🖥️ CLI 命令 / CLI（34 条，含 help）
+## 🖥️ CLI 命令 / CLI（49 条，含 help 与 `stlog-*`）
 
 | 类别 | 命令 |
 | --- | --- |
@@ -200,9 +233,10 @@ wails build -devtools  # GUI，产物在 build/bin/
 | 多字符串 | `multistr save/load/reload/status` |
 | 历史 | `history-files` `history-search` `history-enable` `history-status` `history-attach` `history-new` `history-detach` |
 | 诊断 | `sessions` `monitor` `threads` `goroutines` |
+| 系统（Linux） | `fix-permissions [--yes] [--json]` —— 对当前读不了的 USB 串口做一次临时授权（pkexec），不写系统文件 |
 | 其他 | `help` |
 
-## 🤖 MCP 工具 / MCP（28 个）
+## 🤖 MCP 工具 / MCP（29 个）
 
 `serial_start_daemon` `serial_list_ports` `serial_refresh_ports` `serial_create` `serial_open` `serial_connect` `serial_disconnect` `serial_switch` `serial_forward_create` `serial_declare` `serial_set_mode` `serial_close` `serial_send` `serial_sessions` `serial_history` `serial_status` `serial_monitor` `serial_shutdown` `serial_stats` `serial_port_watch` `serial_autosend_start` `serial_autosend_stop` `serial_autosend_status` `serial_sendqueue` `serial_multistr_save` `serial_multistr_load` `serial_multistr_status` `serial_probe_ports`
 
@@ -226,7 +260,7 @@ wails build -devtools  # GUI，产物在 build/bin/
 | [需求文档](REQUIREMENTS.md) | 需求列表与实现状态 |
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
-| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.8.3 各版本的变更、根因与验收方法 |
+| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.9.0 各版本的变更、根因与验收方法 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
@@ -234,10 +268,11 @@ wails build -devtools  # GUI，产物在 build/bin/
 
 ## 📜 版本历史 / Changelog
 
-当前版本 **v0.8.3**。最近三版：
+当前版本 **v0.9.0**。最近三版：
 
 | 版本 | 要点 |
 |------|------|
+| **0.9.0** | 多窗口对等模型成型：再启动一次 GUI 就在当前进程里新开窗口（单实例）、标签可拖进另一个窗口且**可反悔**（拖出去当场退回）、拖出成窗后拖回标签栏也有实时预览；关窗确认加「记住选择」，destroy 模式不再追问且真的销毁会话；Linux 分体版串口权限改为**只做临时授权**（GUI 横幅 + `serial-cli fix-permissions`，不写系统文件）；关于页修正渲染引擎与平台文案 |
 | **0.8.3** | 会话文件升级成**工程目录**（`manifest.json` + `settings.json` + `index.bin` + 分包的 `pkg-*.stlog`）：录制只写 `.stlog`、拖入工程或文件即可浏览、工程可按键交给守护进程恢复成会话页（单端口 / 转发）；标签悬停浮窗与文件页浮窗定稿（去掉尖角）；历史/实时渲染再降一档内存与 CPU；许可证改为 **Apache 2.0** |
 | **0.8.2** | 资源统一到 `resources/` 并分「内置 / 外置」两层；主题支持图片（全页背景、四条栏、缩略图）；设置页外观卡与新建会话页重画；标签栏与多字符串面板拖动换成 pointer 实现（实时补位、FLIP 动画、边缘自动滚动、推挤「+」） |
 | **0.8.1** | GUI 一轮集中修复：新建页先选模式、前端热重载、端口下拉同步与占用高亮、历史视图空白、自绘滚动条、状态栏统计残留、标签栏滚动提示、主题按钮图标 |

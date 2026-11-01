@@ -289,13 +289,25 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-item.is-open .menu-label { background: var(--bg3); }
 .menu-dropdown {
   display: none; position: absolute; top: calc(100% + 4px); left: 0;
-  /* 毛玻璃：菜单浮在页面之上，模糊的是它后面的数据行，纹理看得见 */
-  background: var(--menu-glass-bg);
-  -webkit-backdrop-filter: var(--menu-glass-blur);
-  backdrop-filter: var(--menu-glass-blur);
+  /* 毛玻璃：菜单浮在页面之上，模糊的是它后面的数据行，纹理看得见。
+     模糊**不能**直接挂在这个容器上，否则它成为 backdrop root，里面的
+     .menu-sub-dropdown 再挂 backdrop-filter 就采样不到页面 —— WebView2 里
+     三级菜单会变成全透明（Chromium 反而正常）。所以把「底色 + 模糊」下沉到
+     ::before：伪元素没有子元素，不会把子菜单套进 backdrop root。 */
   border: 1px solid var(--menu-glass-border);
   min-width: max-content; width: max-content; z-index: 100; padding: 0;
   border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.menu-dropdown::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
 }
 .menu-item:hover .menu-dropdown { display: none; }
 .menu-item.is-open .menu-dropdown { display: block; }
@@ -356,6 +368,8 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .menu-sub-dropdown {
   display: none; position: absolute; left: 100%; top: 0;
+  /* 这里能安全地再用毛玻璃：外层 .menu-dropdown 的模糊已经下沉到 ::before，
+     它不再是 backdrop root（见 .menu-dropdown 的注释）。 */
   background: var(--menu-glass-bg);
   -webkit-backdrop-filter: var(--menu-glass-blur);
   backdrop-filter: var(--menu-glass-blur);
@@ -369,7 +383,8 @@ button:disabled:active { transform: none; box-shadow: none; }
    菜单就成了重影，所以退回不透明底色。 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .header { background: var(--bg2); }
-  .menu-dropdown, .menu-sub-dropdown {
+  /* 下拉的底色已经下沉到 ::before，回退也要跟着改到伪元素上 */
+  .menu-dropdown::before, .menu-sub-dropdown {
     background: var(--tabpop-bg-solid);
     border-color: var(--border);
   }
@@ -428,6 +443,24 @@ button:disabled:active { transform: none; box-shadow: none; }
   align-self: stretch; flex: 1 1 auto; min-width: 0;
 }
 .tabs-scroll::-webkit-scrollbar { display: none; /* Chrome/Safari */ }
+/* 只有一个标签时，整条标签栏（**连标签本身**）都当作窗口拖动区：
+   单标签窗口里那一页就是窗口，拖标签 = 拖窗口，没有「把它拖出去」的含义；
+   拖到别的窗口的标签栏上松手，Go 侧会把这一页转过去并关掉这个窗口
+   （见 app.go 的 BeginWindowTabDrag）。多标签窗口不加这个类，标签走 JS 的
+   排序 / 纵向拖出逻辑。
+
+   ⚠️ --wails-draggable 是**继承**的，而 v3 只看鼠标下方那个元素的**计算值**：
+   给 scroll/bar 设 drag，标签按钮就继承到 drag —— 单标签时这正是要的效果。
+   多标签时这里没有 drag，标签按钮拿到默认值，不会拖窗口。
+   空白处命中的是 #tabsBar（不是 scroll），所以两个元素都要挂。 */
+.tabs-scroll.is-window-drag,
+.tabs-bar.is-window-drag {
+  --wails-draggable: drag;
+}
+/* 关闭按钮不是拖动把手：单标签时会从标签继承到 drag，按着它移动会把窗口拖走 */
+.tab-btn .close-tab {
+  --wails-draggable: no-drag;
+}
 /* 标签栏左右「还能滚」提示：复用发送区的 .send-scroll-arrow（绝对定位、不吃
    布局、pointer-events:none），只换宽度与渐变底色 —— 标签栏底色是 --bg2。 */
 .tabs-scroll-arrow { width: 26px; font-size: 18px; }
@@ -457,7 +490,9 @@ button:disabled:active { transform: none; box-shadow: none; }
   z-index: 2; margin-bottom: -1px; padding-bottom: 8px; height: 33px;
   box-shadow: 0 -1px 3px rgba(0,0,0,0.06);
 }
-.tab-btn:active { transform: scale(0.96); }
+/* 按下不缩放：标签栏是密集排列，缩放会让整排视觉抖动（用户反馈）。
+   这里同时盖掉 154 行全局 button:active 的 scale —— 类选择器优先于元素选择器。 */
+.tab-btn:active { transform: none; }
 .tab-btn.is-active:active { background-color: var(--input-bg); }
 
 /* ---- 7b. 各条栏的主题背景图 + 遮罩 ----
@@ -1886,6 +1921,42 @@ body.is-qp-dragging .qp-add-row { position: relative; z-index: 10050; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .c-dropmask { background: var(--bg); }
 }
+/* ---- 8d. 串口权限横幅（只有 Linux 会出现）----
+   插在标签栏与内容区之间参与 flex 布局：出现时把内容压下去，不覆盖任何控件。
+   刻意不用模态弹窗 —— 打开失败时用户还得能点菜单换端口、看日志，弹窗会挡住。
+   分体版只能临时授权，拔插或重启后横幅会再来一次，所以它必须安静地待在那里。 */
+.o-perm-banner { display: none; flex-shrink: 0; }
+.c-perm-banner {
+  align-items: center; gap: 8px;
+  padding: 5px 8px 5px 10px;
+  font-size: 12px; color: var(--fg);
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.c-perm-banner.is-show { display: flex; }
+.c-perm-banner__icon { color: var(--yellow); flex-shrink: 0; }
+/* 文案单行截断：设备多的时候（ttyUSB0..9 + ttyACM0）不能把按钮挤出去 */
+.c-perm-banner__text {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.c-perm-banner__btn {
+  flex-shrink: 0; padding: 2px 10px; font-size: 12px; line-height: 18px;
+  color: #fff; background: var(--accent);
+  border: 0; border-radius: 4px; cursor: pointer;
+  font-family: inherit;
+}
+.c-perm-banner__btn:hover { filter: brightness(1.08); }
+.c-perm-banner__btn:disabled { opacity: .55; cursor: default; filter: none; }
+.c-perm-banner__close {
+  flex-shrink: 0; width: 20px; height: 20px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1; font-family: inherit;
+  color: var(--placeholder); background: transparent;
+  border: 0; border-radius: 4px; cursor: pointer;
+}
+.c-perm-banner__close:hover { background: var(--bg3); color: var(--fg); }
+
 .statusbar-left { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .statusbar-right { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 #statusbar-stats { display: inline-flex; gap: 14px; margin-left: 10px; }
@@ -2592,3 +2663,46 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .t-stlog-btn.is-on { color: var(--accent); border-color: var(--accent); }
 .t-stlog-btn:active { transform: scale(0.96); }
 .t-stlog-btn:disabled { opacity: .5; cursor: default; }
+
+/* ---- 23. Components: 守护进程日志标签页 ---- */
+/* 顶栏与按钮直接复用 .stlog 那套布局/皮肤：它们本来就是通用的「左信息右按钮」
+   结构，另起一套只会让两处慢慢漂移。这里只给日志正文加自己的类。 */
+.o-daemonlog-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; }
+.o-daemonlog-bar__info { flex: 1 1 auto; min-width: 0; }
+.o-daemonlog-bar__actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.o-daemonlog-rows { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* 日志正文：等宽、可换行（守护进程的报文行很长），选中要能整段拖走 */
+.c-daemonlog {
+  padding: 8px 16px 8px 12px;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 13px; line-height: 1.55;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  color: var(--fg);
+  user-select: text;
+}
+.c-daemonlog__row { white-space: pre-wrap; word-break: break-word; }
+.c-daemonlog__ts { color: var(--placeholder); margin-inline-end: 6px; }
+.c-daemonlog__cat { margin-inline-end: 6px; color: var(--placeholder); }
+.c-daemonlog__cat.is-error { color: var(--red); }
+.c-daemonlog__cat.is-warn { color: var(--yellow); }
+.c-daemonlog__msg { color: var(--fg); }
+
+.t-daemonlog-bar { padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.t-daemonlog-name {
+  font-size: 13px; font-weight: 600; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t-daemonlog-meta {
+  font-size: 11.5px; color: var(--placeholder);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.t-daemonlog-btn {
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 12px; font-size: 12px; cursor: pointer;
+}
+.t-daemonlog-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+.t-daemonlog-btn.is-on { color: var(--accent); border-color: var(--accent); }
+.t-daemonlog-btn:active { transform: scale(0.96); }
+.t-daemonlog-btn:disabled { opacity: .5; cursor: default; }

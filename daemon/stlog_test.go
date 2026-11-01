@@ -341,3 +341,117 @@ func TestHistoryRestoreFromSession(t *testing.T) {
 		t.Fatalf("第二条 = %+v，期望 tx/ccdd/gui-1a2b3c4d", e1)
 	}
 }
+
+// settings.json 的 save 记的是「这个工程要不要录」这个**用户意图**，不是
+// 「现在正在录」这个运行时状态。
+//
+// 封存（关标签 / 关 GUI / 守护进程退出都走这条）曾经会把它清成 false，于是
+// 「正常关过一次的工程永远不再自动录」—— 就是用户报的「推送后没启动保存」。
+func TestProjectSaveIntentSurvivesClose(t *testing.T) {
+	_, proc, dir := newSaveTestProc(t)
+	proc.SetSaveHistory(true)
+	proc.recordHistoryAt(1000, "AABB", "rx", "")
+	proc.detachHistoryFile()
+
+	sess := onlySession(t, dir)
+	doc, err := sessionfile.LoadSettingsDoc(sess)
+	if err != nil {
+		t.Fatalf("读 settings.json 失败: %v", err)
+	}
+	if !doc.Save {
+		t.Fatal("封存后 save 被清成了 false：这个工程以后推送回来不会续录")
+	}
+}
+
+// 反过来：用户手动关掉保存是**唯一**会把「别录了」写回工程的路径。
+func TestExplicitStopSavingClearsFlag(t *testing.T) {
+	_, proc, dir := newSaveTestProc(t)
+	proc.SetSaveHistory(true)
+	proc.recordHistoryAt(1000, "AABB", "rx", "")
+	proc.SetSaveHistory(false) // 用户在标签里关掉保存
+
+	sess := onlySession(t, dir)
+	doc, err := sessionfile.LoadSettingsDoc(sess)
+	if err != nil {
+		t.Fatalf("读 settings.json 失败: %v", err)
+	}
+	if doc.Save {
+		t.Fatal("显式关掉保存后 save 仍为 true：推送回来会偷偷开录")
+	}
+}
+
+// 端到端：推送工程（session.open 见到 save=true → resumeRecording）应该续写
+// **同一个目录**，而不是另起一个会话；旧数据仍在，新数据接在后面。
+func TestPushResumesIntoSameSessionDir(t *testing.T) {
+	pm, proc, dir := newSaveTestProc(t)
+	proc.SetSaveHistory(true)
+	proc.recordHistoryAt(1000, "AABB", "rx", "")
+	proc.detachHistoryFile()
+
+	sess := onlySession(t, dir)
+
+	// 模拟推送：session.open 建一个**新进程**，按工程里记的名字/设置接管。
+	proc2, err := pm.Create("single", "", SerialConfig{}, nil, false)
+	if err != nil || proc2 == nil {
+		t.Fatalf("建进程失败: %v", err)
+	}
+	proc2.resumeRecording(sess)
+	if proc2.stlog == nil {
+		t.Fatal("续录没起来：进程里没有录制句柄")
+	}
+	proc2.recordHistoryAt(2000, "CCDD", "rx", "")
+	proc2.detachHistoryFile()
+
+	if n := len(findSessions(t, dir)); n != 1 {
+		t.Fatalf("会话数 = %d，期望 1（续录不该另建目录）", n)
+	}
+	info := mustReadStlog(t, sess)
+	if len(info.Frames) != 2 {
+		t.Fatalf("帧数 = %d，期望 2（旧的 1 条 + 续录的 1 条）", len(info.Frames))
+	}
+	if !bytes.Equal(info.Frames[1].Payload, []byte{0xCC, 0xDD}) {
+		t.Errorf("续录帧 payload = %X，期望 CCDD", info.Frames[1].Payload)
+	}
+}
+
+// 「既然打开了工程了，就不要在另起文件录制了」：工程会话上开保存，要续写这个
+// 工程，而不是在 history/ 下再堆一个目录（那样历史会散成两处）。
+func TestTurnSaveOnProjectWritesIntoSameDir(t *testing.T) {
+	pm, proc, dir := newSaveTestProc(t)
+	proc.SetSaveHistory(true)
+	proc.recordHistoryAt(1000, "AABB", "rx", "")
+	proc.detachHistoryFile()
+	sess := onlySession(t, dir)
+
+	// 模拟 session.open：建一个挂着工程目录的文件会话进程（save=false，不自动开录）
+	proc2, err := pm.createIdle("single", sess, "")
+	if err != nil || proc2 == nil {
+		t.Fatalf("建文件会话失败: %v", err)
+	}
+	if got := proc2.sessionDir(); got != sess {
+		t.Fatalf("sessionDir = %q，期望 %q", got, sess)
+	}
+
+	proc2.SetSaveHistory(true) // 用户在标签里打开保存
+	if n := len(findSessions(t, dir)); n != 1 {
+		t.Fatalf("会话数 = %d，期望 1（打开了工程就不该另建目录）", n)
+	}
+	proc2.recordHistoryAt(2000, "CCDD", "rx", "")
+	proc2.detachHistoryFile()
+
+	info := mustReadStlog(t, sess)
+	if len(info.Frames) != 2 {
+		t.Fatalf("帧数 = %d，期望 2（续写进同一个工程）", len(info.Frames))
+	}
+	if !bytes.Equal(info.Frames[1].Payload, []byte{0xCC, 0xDD}) {
+		t.Errorf("新帧 payload = %X，期望 CCDD", info.Frames[1].Payload)
+	}
+	// 意图要落盘：这次是手动开的保存，下次推送必须还能续录。
+	doc, err := sessionfile.LoadSettingsDoc(sess)
+	if err != nil {
+		t.Fatalf("读 settings.json 失败: %v", err)
+	}
+	if !doc.Save {
+		t.Fatal("续录后没把 save 写回工程：下次推送又不会续录")
+	}
+}

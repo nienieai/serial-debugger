@@ -1,11 +1,11 @@
 # serial-cli 命令速查表
 
-`serial-cli.exe` 支持两种模式：
+`serial-cli`（Windows 为 `serial-cli.exe`）支持两种模式：
 
 - **命令行模式**：`serial-cli <cmd>`，一次性执行后退出（CallOnce 临时管道）
 - **交互模式**：不带参数启动 REPL，3 管道持久连接，事件实时推送，支持引号参数（`send "hello world"`）
 
-## 命令一览（34 条，含 help）
+## 命令一览（49 条，含 help 与 `stlog-*`）
 
 | 类别 | 命令 |
 |------|------|
@@ -16,6 +16,7 @@
 | 自动发送 | `autosend start/stop/status/interval` `sendqueue` |
 | 多字符串 | `multistr save/load/reload/status` |
 | 历史 | `history-files` `history-search` `history-enable` `history-status` `history-attach` `history-new` `history-detach` |
+| 系统（Linux） | `fix-permissions [--yes] [--json]` |
 | 诊断 | `sessions` `monitor` `threads` `goroutines` |
 | 其他 | `help` |
 
@@ -97,6 +98,20 @@ serial-cli monitor [timeout]     # 实时监听事件（3 管道）
 serial-cli threads               # 线程/会话详情
 serial-cli goroutines            # Goroutine 调用栈
 ```
+
+### Linux 串口权限
+
+`/dev/ttyUSB*`、`/dev/ttyACM*` 默认是 `root:dialout 0660`，普通用户打开会失败（`打开失败: Permission denied`）。分体版**不写系统文件**，只临时授权：
+
+```bash
+serial-cli fix-permissions          # 列出读不了的串口，确认后弹一次密码框
+serial-cli fix-permissions --yes    # 不问，直接授权（脚本里用）
+serial-cli fix-permissions --json   # 输出 {supported,devices,denied,ok,reason,detail}
+```
+
+- 授权方式是给**当前用户**加 ACL（优先 `setfacl`，没有就退回 `chmod 0666`），**拔插或重启后失效**，需要再执行一次。
+- 必须在**有控制终端**的会话里跑；从后台 / 无终端启动会返回 `reason: "no_agent"`。
+- 想永久解决：`sudo usermod -aG dialout $USER` 后重新登录，或 `build/linux/install.sh --fix-permissions` 写 uaccess 规则（不用加组、不用注销）。
 
 ## 交互模式示例
 

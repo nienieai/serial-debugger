@@ -87,46 +87,6 @@ func CreateSharedRing(name string, ringDataSize uint32) (*RingBuffer, error) {
 	return rb, nil
 }
 
-// OpenSharedRing opens an existing named shared-memory ring buffer for reading.
-func OpenSharedRing(name string) (*RingBuffer, error) {
-	wname, _ := syscall.UTF16PtrFromString(name)
-
-	h, _, err := procOpenFileMapping.Call(
-		uintptr(fileMapRead),
-		0,
-		uintptr(unsafe.Pointer(wname)),
-	)
-	if h == 0 {
-		return nil, fmt.Errorf("OpenFileMapping failed: shared memory '%s' not found", name)
-	}
-
-	addr, _, err := procMapViewOfFile.Call(
-		h,
-		uintptr(fileMapRead),
-		0, 0,
-		0, // map entire section
-	)
-	if addr == 0 {
-		syscall.CloseHandle(syscall.Handle(h))
-		return nil, fmt.Errorf("MapViewOfFile failed: %v", err)
-	}
-
-	base := unsafe.Pointer(addr)
-	// 先只按头部长度建立视图并校验，校验通过后才按头里声明的大小重建视图。
-	// 直接用未经校验的 bufSize 构造切片会得到一个长度荒谬的切片。
-	header := unsafe.Slice((*byte)(base), uintptr(headerTotal))
-	if verr := validateHeaderBytes(header); verr != nil {
-		procUnmapViewOfFile.Call(addr)
-		syscall.CloseHandle(syscall.Handle(h))
-		return nil, fmt.Errorf("共享内存 %q 头部无效: %w", name, verr)
-	}
-	bs := atomic.LoadUint32((*uint32)(unsafe.Add(base, headerSizeOff)))
-	totalSize := uintptr(headerTotal) + uintptr(bs)
-
-	data := unsafe.Slice((*byte)(base), totalSize)
-	return wrapMemory(data, true, base, h), nil
-}
-
 // OpenSharedRingForWrite opens an existing named shared-memory ring buffer
 // for both reading and writing. Used by clients that need to push data
 // into a send queue that the daemon will consume.

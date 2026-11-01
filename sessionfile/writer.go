@@ -313,12 +313,6 @@ func (w *Writer) AllocatedBytes() int64 {
 	return w.tailOff
 }
 
-// CommittedLen reports how full the current page is.
-func (w *Writer) CommittedLen() int { return w.committedLen }
-
-// PageTouched reports whether the current page has been written before.
-func (w *Writer) PageTouched() bool { return w.pageTouched }
-
 // SkippedTail reports the offset of a tail page that could not be read or
 // recovered when the file was opened, so the writer resumed on an earlier page.
 // Zero means nothing was abandoned. When non-zero, the bytes of that page are

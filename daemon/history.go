@@ -123,30 +123,6 @@ func historyDir() string {
 	return filepath.Join(filepath.Dir(exe), "history")
 }
 
-// newHistoryFile creates a new timestamped history file for append.
-func newHistoryFile(dir, procID string) (*os.File, string, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, "", err
-	}
-	name := time.Now().Format("200601021504") + "_" + procID + ".log"
-	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, "", err
-	}
-	return f, path, nil
-}
-
-// attachHistoryFile opens an existing history file for append.
-func attachHistoryFile(dir, filename string) (*os.File, string, error) {
-	path := filepath.Join(dir, filepath.Base(filename))
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, "", err
-	}
-	return f, path, nil
-}
-
 // loadHistoryIntoRing reads all entries from a history file and writes them
 // into the ring buffer so the frontend can display historical data.
 func loadHistoryIntoRing(rb *ringbuf.RingBuffer, filePath string) (int, error) {
@@ -204,20 +180,6 @@ func readHistoryRaw(r *bufio.Reader) ([]byte, error) {
 		}
 	}
 	return pkt, nil
-}
-
-func appendHistoryPacket(f *os.File, pkt []byte) error {
-	if f == nil {
-		return nil
-	}
-	_, err := f.Write(pkt)
-	return err
-}
-
-func closeHistoryFile(f *os.File) {
-	if f != nil {
-		f.Close()
-	}
 }
 
 // ── file listing ──

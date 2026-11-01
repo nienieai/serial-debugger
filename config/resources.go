@@ -92,18 +92,6 @@ func findResource(parts ...string) string {
 // resourcePath 是老接口，语义同 findResource。
 func resourcePath(parts ...string) string { return findResource(parts...) }
 
-// ResourceDir 返回优先级最高的磁盘资源来源；没有则空串。
-func ResourceDir() string {
-	dirs := resourceDirs()
-	if len(dirs) == 0 {
-		return ""
-	}
-	return dirs[0]
-}
-
-// ResourcesDir 暴露给 app 层用。
-func ResourcesDir() string { return ResourceDir() }
-
 // UserResourcesDir 返回外置资源目录 <exe>\resources（不保证已存在）。
 // 「创建示例文件 / 在资源管理器里打开」这类**写操作**都落在这里，不碰内置层。
 func UserResourcesDir() string {
@@ -115,9 +103,6 @@ func UserResourcesDir() string {
 	}
 	return ""
 }
-
-// I18nDir 磁盘上的语言包目录（优先级最高的那一层）；没有则空串。
-func I18nDir() string { return findResource("i18n") }
 
 // I18nFile 按优先级找某个语言包文件：<资源层>/i18n/<lang>.json。
 func I18nFile(lang string) (string, bool) {

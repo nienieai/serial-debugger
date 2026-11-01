@@ -11,7 +11,7 @@ import (
 )
 
 // 语言包：<资源层>/i18n/<lang>.json，随二进制嵌入；磁盘上的同名文件覆盖嵌入
-//（内置 resources-system 优先于外置 resources，见 resources.go）。
+// （内置 resources-system 优先于外置 resources，见 resources.go）。
 //
 //go:embed resources/i18n/*.json
 var i18nFS embed.FS

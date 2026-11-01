@@ -248,14 +248,6 @@ func (rb *RingBuffer) read(maxLen uint32) ([]byte, bool) {
 
 // ── Peek (public, locked) ──
 
-// PeekPacketLength returns the length of the next packet's data
-// without consuming it. Returns 0 if no complete packet.
-func (rb *RingBuffer) PeekPacketLength() uint32 {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	return rb.peekPacketLength()
-}
-
 // peekPacketLength is the internal, unlocked version of PeekPacketLength.
 func (rb *RingBuffer) peekPacketLength() uint32 {
 	if atomic.LoadUint32(rb.countPtr()) < lenPrefixSize {
@@ -284,10 +276,6 @@ func (rb *RingBuffer) UsedSpace() uint32 {
 
 func (rb *RingBuffer) IsEmpty() bool {
 	return atomic.LoadUint32(rb.countPtr()) == 0
-}
-
-func (rb *RingBuffer) IsFull() bool {
-	return atomic.LoadUint32(rb.countPtr()) == rb.bufferSize
 }
 
 func (rb *RingBuffer) Capacity() uint32 {
@@ -506,33 +494,4 @@ func (rb *RingBuffer) SnapshotPage(limit int, beforeMs int64, sameTsSkip int) Pa
 		res.Packets = append(res.Packets, pkt)
 	}
 	return res
-}
-
-// OldestTimestampMs returns the timestamp (Unix milliseconds) of the oldest
-// packet in the buffer, or 0 if empty. Does not consume any data.
-func (rb *RingBuffer) OldestTimestampMs() int64 {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
-	if atomic.LoadUint32(rb.countPtr()) < lenPrefixSize {
-		return 0
-	}
-
-	tail := atomic.LoadUint32(rb.tailPtr())
-	buf := rb.data[rb.dataStart : rb.dataStart+rb.bufferSize]
-
-	// Skip length prefix (2 bytes)
-	pktLen := uint32(buf[tail]) | uint32(buf[(tail+1)%rb.bufferSize])<<8
-	if pktLen < 8 || atomic.LoadUint32(rb.countPtr()) < lenPrefixSize+pktLen {
-		return 0
-	}
-	tail = (tail + 2) % rb.bufferSize
-
-	// Read first 8 bytes of packet (timestamp LE int64)
-	var tsBytes [8]byte
-	for i := 0; i < 8; i++ {
-		tsBytes[i] = buf[tail]
-		tail = (tail + 1) % rb.bufferSize
-	}
-	return int64(binary.LittleEndian.Uint64(tsBytes[:]))
 }

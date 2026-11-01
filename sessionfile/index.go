@@ -34,19 +34,6 @@ const (
 	indexEntLen        = 64
 )
 
-// Lookup 按包序号取摘要。
-func (idx *Index) Lookup(seq int) (IndexEntry, bool) {
-	if idx == nil {
-		return IndexEntry{}, false
-	}
-	for _, e := range idx.Entries {
-		if e.Seq == seq {
-			return e, true
-		}
-	}
-	return IndexEntry{}, false
-}
-
 // SaveIndex 原子写入 index.bin。
 func SaveIndex(dir string, idx *Index) error {
 	buf := make([]byte, indexHdrLen+len(idx.Entries)*indexEntLen)

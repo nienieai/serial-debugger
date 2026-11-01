@@ -5,13 +5,13 @@
 | 工具 | 最低版本 | 用途 | 备注 |
 | --- | --- | --- | --- |
 | Go | 1.26+ | 后端编译 | 检查：`go version` |
-| Wails CLI | v2.x | GUI 构建 | `go install github.com/wailsapp/wails/v2/cmd/wails@latest` |
+| Wails CLI | v3.0 | GUI 构建 | `go install github.com/wailsapp/wails/v3/cmd/wails3@latest` |
 | WebView2 运行时 | Evergreen | GUI 运行 | 仅 Windows；目标机需安装 |
-| GTK3 + WebKit2GTK | 4.1 | GUI 构建/运行 | 仅 Linux：`apt install libgtk-3-dev libwebkit2gtk-4.1-dev` |
+| GTK4 + WebKitGTK 6.0 | 6.0 | GUI 构建/运行 | 仅 Linux：构建装 `libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev`，运行装 `libgtk-4-1 libwebkitgtk-6.0-4 libsoup-3.0-0` |
 
 守护进程 / CLI / MCP 三个可执行文件在 Windows 与 Linux 上均可构建，不需要 Wails、WebView2 或 GTK，仅需 Go 工具链。
 
-> 首次构建前先运行 `wails doctor` 自检，它会列出缺失依赖及修复指引。
+> 首次构建 GUI 前可运行 `wails3 doctor` 自检（`wails doctor` 是 v2 的旧命令）。
 
 ## 快速构建
 
@@ -25,19 +25,25 @@ go build -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli.exe ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp.exe ./cmd/serial-mcp/
 
-# GUI（必须用 wails build，加 -devtools 启用 DevTools）
-wails build -devtools
+# GUI：统一走 build.ps1（内部 wails3 build，版本号从 wails.json 读）
+.\build.ps1            # dev 构建：前端从磁盘读，保存即刷新
+.\build.ps1 -Release   # release 构建：前端嵌进 exe，可单文件分发
 ```
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-Linux 下去掉 `.exe` 后缀，GUI 另需 GTK3 + WebKit2GTK 开发包：
+Linux 下去掉 `.exe` 后缀；GUI 必须是 **cgo 构建**（不能从 Windows 交叉编译，要在 Linux 上编）：
 
 ```bash
 go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
+go build -tags production -trimpath -buildvcs=false \
+  -ldflags "-s -w -X github.com/nienieai/serial-debugger/version.Version=0.9.0" \
+  -o build/bin/serial-gui .
 ```
+
+> Linux 上**不要**用 `wails3 build` 也没关系 —— 它最终也是这条 `go build -tags production`。装了 `wails3` 时直接 `wails3 build` 更方便（会顺带生成 bindings）。
 
 平台差异的实现约定见 [ARCHITECTURE.md](ARCHITECTURE.md) §13。
 
@@ -48,7 +54,7 @@ go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
 ### 仅修改前端 (JS/CSS/HTML)
 
 ```bash
-wails build -devtools
+.\build.ps1
 ```
 
 前端文件（`frontend/*`）由 Wails embed 嵌入 `serial-gui.exe`，Go 代码无变化时无需重编 daemon/CLI/MCP。
@@ -81,13 +87,13 @@ go build -ldflags="-s -w" -o build/bin/serial-mcp.exe ./cmd/serial-mcp/
 go build -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli.exe ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp.exe ./cmd/serial-mcp/
-wails build -devtools
+.\build.ps1
 ```
 
 ### 仅修改 GUI Go 后端 (app.go / settings.go / main.go / platform_*.go)
 
 ```bash
-wails build -devtools
+.\build.ps1
 ```
 
 ### 依赖关系速查
@@ -117,13 +123,15 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 | 产物 | 说明 | 是否随 Release 分发 |
 | --- | --- | --- |
 | `build/bin/serial-daemon.exe` | 守护进程，单实例 | 是 |
-| `build/bin/serial-gui.exe` | Wails GUI，多标签页 | 是（目标机需 WebView2 运行时） |
-| `build/bin/serial-cli.exe` | CLI 工具 | 是 |
-| `build/bin/serial-mcp.exe` | MCP 协议工具 | 是 |
+| `build/bin/serial-gui.exe` | Wails v3 GUI，多标签页 | 是（目标机需 WebView2 运行时） |
+| `build/bin/serial-cli.exe` | CLI 工具（49 条命令） | 是 |
+| `build/bin/serial-mcp.exe` | MCP 协议工具（29 个工具） | 是 |
 | `build/bin/i18n/` | 外部 i18n 翻译文件（exe 同目录） | 可选 |
 | `build/bin/themes/` | 外部主题（颜色 + 图标） | 可选 |
 
-> 4 个可执行文件必须放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`。
+Linux 产物同名去掉 `.exe`；运行 GUI 需要 `libgtk-4-1 libwebkitgtk-6.0-4 libsoup-3.0-0`（装包脚本在 `build/linux/`，`make-package.sh` 出单文件 `.run`，`install.sh` 装到 `~/.local`，可选 `--fix-permissions` 写 uaccess 规则）。
+
+> 4 个可执行文件必须放在同一目录下，GUI 通过 `os.Executable()` 自动查找同目录的 `serial-daemon`。
 
 ### 部署到开发测试目录
 
@@ -132,7 +140,7 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 .\deploy-dev.ps1 -Build     # 先重编译再部署（改了 Go 代码）
 ```
 
-目标目录默认 `<仓库>\..\串口调试工具\0.8.4-dev`，可用 `-Target` 指定。
+目标目录默认 `<仓库>\..\串口调试工具\0.9.0-dev`，可用 `-Target` 指定。
 
 之所以要脚本而不是只拷 exe，是因为**只换 exe 会有两处永远读到旧内容**：
 
@@ -150,98 +158,30 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 ## 源代码目录
 
 ```text
-串口调试工具-0.6.5/
-├── main.go                    # GUI 入口 (Wails)
-├── app.go                     # GUI Go 后端 (Wails 绑定、daemon 通信、TabDecoder 管理)
-├── settings.go                # GUI 设置持久化 (INI)
-├── gen_icons.go               # 图标生成 (go:build ignore)
-├── platform_windows.go        # GUI Windows 平台代码
-├── platform_other.go          # GUI 其他平台桩
-├── wails.json                 # Wails 配置
+serial-tool/
+├── main.go / app.go / app_perm.go      # GUI 入口、绑定后端、串口权限体检
+├── settings.go / dialog.go / instance.go  # gui.ini、对话框窗口、单实例
+├── platform_windows.go / platform_other.go # GUI 平台桩（openFolder 等）
+├── devui_release.go / devui_hotreload.go  # 前端资源：嵌入 vs 从磁盘读（build tag）
 │
-├── decode/                    # 字节解码包
-│   ├── decode.go              #   Segment 类型、UTF-8/GBK/ASCII 容忍解码器
-│   └── decode_test.go         #   26 个单元测试
-│
-├── daemon/                    # 守护进程 serial-daemon.exe
-│   ├── main.go                #   入口
-│   ├── serial.go              #   进程管理、串口 I/O、自动发送引擎
-│   ├── multistr.go            #   多字符串条目序列化/持久化
-│   ├── ipc.go                 #   命名管道 IPC 服务端
-│   ├── probe.go               #   设备端口探测引擎
-│   ├── history.go             #   历史记录持久化
-│   ├── platform_windows.go    #   Windows 平台
-│   ├── platform_other.go      #   其他平台桩
-│   ├── portdesc_windows.go    #   端口描述 (Windows)
-│   ├── portdesc_other.go      #   端口描述 (其他平台)
-│   └── winres/                #   Windows 资源文件
-│
-├── cmd/
-│   ├── serial-cli/            # CLI 工具 serial-cli.exe
-│   │   ├── main.go            #   入口、34 条命令（含 help）
-│   │   └── winres/
-│   └── serial-mcp/            # MCP 工具 serial-mcp.exe
-│       ├── main.go            #   入口 (stdio JSON-RPC)
-│       ├── tools.go           #   28 个 MCP 工具定义和处理器
-│       └── winres/
-│
-├── client/                    # IPC 客户端库 (DaemonClient)
-│   ├── client.go              #   3 管道客户端、共享内存操作、便捷方法
-│   ├── process_windows.go     #   进程检测 (Windows)
-│   └── process_other.go       #   进程检测 (其他平台)
-│
-├── pipe/                      # Windows 命名管道封装
-│   ├── pipe.go                #   通用接口
-│   ├── pipe_windows.go        #   CreateNamedPipe / CreateFile
-│   └── pipe_other.go          #   其他平台桩
-│
-├── protocol/                  # IPC 协议 (JSON-RPC 换行分帧)
-│   └── protocol.go
-│
-├── ringbuf/                   # 共享内存环形缓冲区
-│   ├── ringbuf.go             #   跨平台逻辑
-│   └── ringbuf_windows.go     #   CreateFileMappingW / MapViewOfFile
-│
-├── config/                    # 配置 (embed 嵌入二进制)
-│   ├── i18n.go                #   内置 i18n 翻译加载
-│   ├── i18n/                  #   9 种语言翻译 JSON
-│   ├── icons.go               #   内置图标加载 (embed icons/system/*.svg)
-│   ├── icons/system/          #   内置图标主题（28 个 24×24 SVG + icons.json）
-│   ├── theme.go               #   主题系统 (颜色+图标)
-│   ├── themes/system.json     #   内置颜色主题
-│   └── probe.toml             #   设备探测规则配置
-│
-├── version/                   # 版本号 (改一处全部同步)
-│   └── version.go             #   const Version = "0.6.5"
-│
-├── frontend/                  # GUI 前端 (Wails 嵌入)
-│   ├── index.html             #   HTML 骨架（仅菜单栏/标签栏/容器/状态栏，其余 JS 构建）
-│   ├── style.css              #   样式 (o-/c-/t-/is- 命名体系，.tab-page-inner 布局约束)
-│   ├── app.js                 #   主逻辑 — 状态管理/事件驱动/标签页管理/弹窗构建/发送/主题
-│   ├── decoder.js             #   编解码 (Hex、renderSegments 分段渲染)
-│   ├── history.js             #   历史渲染缓存 (pageEl 访问活动标签页元素，ts-text/ts-stat 分色)
-│   ├── i18n.js                #   多语言系统 (t()、外部 i18n、_i18nFallback)
-│   ├── icons.js               #   SVG 图标库 (icon()、_populateIcons，Go embed 加载)
-│   ├── statusbar.js           #   状态栏组件 (StatusDaemon/Clients 靠左、Encoding/Stats 靠右)
-│   ├── tabpage.js             #   TabPage + 欢迎页 — 每标签页独立 DOM 子树 + createWelcomePage()
-│   ├── settingspage.js        #   设置页组件 (buildSettingsPage + createSettingsOverlay + _buildColorRow + _renderColorPreview)
-│   ├── color-picker.js        #   调色板 Web Component (Shadow DOM, RGBA 滑块, EyeDropper)
-│   ├── color-picker.html      #   调色板 Shadow DOM 模板
-│   └── wailsjs/               #   Wails 自动生成的 JS 绑定
-│
-├── assets/                    # 图标资源 (ICO 生成)
-├── build/                     # Wails 构建资源 + 产物
-│   ├── appicon.png            #   Wails 应用图标 (PNG)
-│   ├── windows/               #   Wails Windows 构建资源 (manifest / info.json / icon.ico)
-│   └── bin/                   #   可执行文件
-│       ├── i18n/              #   外部 i18n 翻译文件 (exe 同目录)
-│       └── themes/            #   外部主题 (颜色+图标)
-├── go.mod / go.sum            # Go 模块定义
-├── README.md                  # 项目说明
-├── REQUIREMENTS.md            # 需求文档
-├── BUILD.md                   # 本文档
-├── LAYOUT-RULES.md            # 布局约束文档
-└── ARCHITECTURE.md             # 架构设计文档
+├── daemon/          # serial-daemon：进程管理、串口 I/O、IPC 服务端、历史 / .stlog 录制
+├── cmd/serial-cli/  # serial-cli：49 条命令 + 交互 REPL
+├── cmd/serial-mcp/  # serial-mcp：stdio JSON-RPC，29 个工具
+├── client/          # DaemonClient（3 管道 + 共享内存）
+├── contract/        # IPC 方法名常量（单一事实来源）
+├── protocol/        # JSON-RPC 换行分帧
+├── pipe/            # Windows 命名管道 / Linux Unix 域套接字（成对文件）
+├── ringbuf/         # 共享内存环形缓冲区（Windows / Linux 成对文件）
+├── sessionfile/     # .stlog v1.4 单文件与 v2 工程目录的读写
+├── sysperm/         # Linux 串口权限：access(2) 探测 + pkexec 临时授权（其它平台桩）
+├── decode/          # UTF-8 / GBK / ASCII 容错解码，产 []Segment
+├── config/          # 内置资源：i18n（9 语言）、icons、themes、probe.toml
+├── version/         # 版本号（改一处全部同步）
+├── frontend/        # 纯 HTML/JS/CSS（无构建链）＋ bindings/（wails3 生成，随仓库提交）
+├── build/           # 构建资源与产物：windows/、linux/（.run 打包与安装脚本）、bin/、pkg/
+├── docs/format/     # .stlog 格式规范与版本演进
+├── winres/          # Windows 资源（go-winres 生成 .syso）
+└── *.md             # README / BUILD / ARCHITECTURE / LAYOUT-RULES / TODO / CHANGELOG …
 ```
 
 ## 开发调试
@@ -250,14 +190,14 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 go run ./daemon/                      # 守护进程
 go run ./cmd/serial-cli/ status       # CLI
 go run ./cmd/serial-mcp/              # MCP
-wails dev                             # GUI 热重载
+.\build.ps1                           # GUI 热重载（dev 构建，前端从磁盘读）
 ```
 
 没有真实串口时，可用虚拟串口对联调（Windows 下 com0com 等工具），或用两块 USB 转串口板互连。
 
 ## 图标
 
-内置图标位于 `config/resources/icons/system/`（20 个 24×24 SVG + icons.json），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，内含 icons.json + 平铺 SVG）。
+内置图标位于 `config/resources/icons/system/`（32 个 24×24 SVG + icons.json），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，内含 icons.json + 平铺 SVG）。
 
 Windows 可执行文件图标（ICO）：`daemon/`、`cmd/serial-cli/`、`cmd/serial-mcp/` 三个目录各有 `winres/`，统一用 go-winres 生成：
 
@@ -272,7 +212,8 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 
 ## 注意事项
 
-- GUI 必须 `wails build`，`go build .` 不支持 WebView2 集成
+- GUI 统一走 `.\build.ps1`（内部 `wails3 build`）；直接 `go build .` 必须带 `-tags production`，否则前端资源不内嵌（hotreload 构建反而从 `<exe>/frontend/` 读盘）
+- Linux 分体版**不写系统文件**：串口权限只做临时授权（GUI 横幅 / `serial-cli fix-permissions`，pkexec 给当前设备加 ACL），拔插或重启后失效；要永久解决走 `sudo usermod -aG dialout $USER` 或 `build/linux/install.sh --fix-permissions`（写 `/etc/udev/rules.d/60-serial-tool.rules` 的 uaccess 规则）。授权必须由**桌面会话里**的进程发起，SSH / 后台启动的 GUI 弹不出系统密码框（会返回 `no_agent`）
 - 守护进程注册管道 `\\.\pipe\serial-tool-daemon`，字节模式 + 同步 I/O
 - 3 管道架构：持久客户端额外创建 `\\.\pipe\st-{clientId}-resp`（响应）和 `\\.\pipe\st-{clientId}-sub`（事件推送）
 - 管道超时：`WaitNamedPipeW` 5s，IPC Call 10s，串口打开 8s，写入 3s
@@ -284,7 +225,7 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 - 状态栏由 `frontend/statusbar.js` 组件化：StatusDaemon / StatusClients / StatusEncoding / StatusStats，通过 `_statusBar` API 更新
 - 设置页通过菜单「设置 → 软件设置」打开（独立标签页），左侧导航（编码与显示/外观/存储与行为/语言/关于），右侧气泡卡片布局
 - 主题/语言气泡底部"创建示例"按键通过 Go 后端 `CreateExampleFiles` 创建示例文件夹和文件
-- 设置页全部文字已 i18n 化（当前 121 个 `settings.*` 翻译键，9 语言全覆盖）
+- 设置页全部文字已 i18n 化（168 个 `settings.*` 键；9 个语言包各 593 个键，键集必须一致）
 - 所有可执行文件放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`
 - 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（发布包布局）→ `exe/../../config/`（开发布局：exe 在 `build/bin`，配置在仓库根）→ 工作目录 `probe.toml` / `config/probe.toml`，候选去重。全部未命中时回退**内置规则**（`config/probe.toml` 经 `//go:embed` 嵌入二进制），因此发布包即使不含 `config/` 目录，`probe` 也可直接使用
 - GUI 设置文件 `settings/gui.ini`（INI 格式），与 `serial-gui.exe` 同级的 `settings/` 目录；同目录还有 `cli.ini`（CLI 只读：`[general] language/color`）与 `daemon.ini`（守护进程只读：`[log] language/color`），一个文件只有一个写者。MCP 不落盘
@@ -309,4 +250,4 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 }
 ```
 
-28 个工具：`serial_start_daemon`, `serial_list_ports`, `serial_refresh_ports`, `serial_create`, `serial_open`, `serial_connect`, `serial_disconnect`, `serial_switch`, `serial_forward_create`, `serial_declare`, `serial_set_mode`, `serial_close`, `serial_send`, `serial_sessions`, `serial_history`, `serial_status`, `serial_monitor`, `serial_shutdown`, `serial_stats`, `serial_port_watch`, `serial_autosend_start`, `serial_autosend_stop`, `serial_autosend_status`, `serial_sendqueue`, `serial_multistr_save`, `serial_multistr_load`, `serial_multistr_status`, `serial_probe_ports`
+29 个工具：`serial_start_daemon`, `serial_list_ports`, `serial_refresh_ports`, `serial_create`, `serial_open`, `serial_connect`, `serial_disconnect`, `serial_switch`, `serial_forward_create`, `serial_declare`, `serial_set_mode`, `serial_close`, `serial_rename`, `serial_send`, `serial_sessions`, `serial_history`, `serial_status`, `serial_monitor`, `serial_shutdown`, `serial_stats`, `serial_port_watch`, `serial_autosend_start`, `serial_autosend_stop`, `serial_autosend_status`, `serial_sendqueue`, `serial_multistr_save`, `serial_multistr_load`, `serial_multistr_status`, `serial_probe_ports`
