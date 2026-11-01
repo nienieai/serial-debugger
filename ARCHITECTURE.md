@@ -1538,6 +1538,8 @@ Go 没有预处理器，**条件编译的粒度是文件，不是代码块**—�
 - `xxx_windows.go` → `//go:build windows`（后缀已生效，标签用于统一风格）
 - `xxx_other.go` → `//go:build !windows`（后缀**不生效**，标签是唯一约束）
 
+`sysperm/` 不属于上表：它只有 **Linux + 兜底** 两份（`sysperm_linux.go` / `sysperm_other.go`，后者 `//go:build !linux`），因为「串口设备提权」只有 Linux 需要；Windows 的 COM 口与 macOS 的 `/dev/cu.*` 都归当前用户，兜底一律 `Supported=false`，界面据此不提横幅。要加别的平台时按 13.4 的「拆三份」处理。
+
 ### 13.4 新增平台时
 
 以新增 Linux 支持为例，要动的就是上表 7 对文件。两种做法：

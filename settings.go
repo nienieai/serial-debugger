@@ -52,6 +52,10 @@ type AppSettings struct {
 	ShutdownDaemonWarn bool `json:"shutdownDaemonWarn" ini:"shutdown_daemon_warn"`
 	// TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
 	TabCloseWarn bool `json:"tabCloseWarn" ini:"tab_close_warn"`
+	// SerialPermissionHint 控制「串口权限不足」横幅要不要自动弹。只在 Linux 有意义：
+	// 分体版对设备节点只能临时授权，拔插或重启后又要重新授权，横幅就是那条提醒。
+	// 关掉后不再自动出现，设置页里的手动入口保留（错误弹窗里也会说明怎么手动修）。
+	SerialPermissionHint bool `json:"serialPermissionHint" ini:"serial_permission_hint"`
 	// WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
 	//   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
 	//   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
@@ -132,6 +136,8 @@ func defaultSettings() *AppSettings {
 		ShutdownDaemonWarn: true,
 		WindowCloseAction:  "ask",
 		StlogShowYear:      true,
+		// 权限横幅默认开：Linux 上装完就能用，别让用户卡在「打开失败」里没人解释。
+		SerialPermissionHint: true,
 		// 标签栏：默认单行（保持 0.8.4 现状），客户端数字按 0.8.3 原样分来源彩色
 		TabTwoLines:    false,
 		TabSubLine:     "a",

@@ -63,6 +63,9 @@ func main() {
 		printHelp()
 	case "check":
 		cmdCheck()
+	case "fix-permissions":
+		// 不依赖守护进程，必须在 runCommand 之前分流（否则先尝试连 IPC 再失败）。
+		cmdFixPermissions(args[1:])
 	case "stlog-read", "stlog-verify", "stlog-dump", "stlog-export":
 		// .stlog 是离线文件格式的工具，不依赖守护进程，必须在
 		// runCommand 之前分流，否则会先尝试连 IPC 而失败。
@@ -1856,6 +1859,10 @@ func printHelp() {
                                      导出成一行一帧的纯文本（CRLF，记事本能开）
                                      默认写 stdout，也可用 -o 直接落盘
                                      四条均为离线操作，不需要守护进程
+
+系统 (Linux):
+  fix-permissions [--yes] [--json]   对当前读不到写不了的 USB 串口做一次临时授权
+                                     （pkexec 弹窗；不写系统文件，拔插/重启后需重做）
 
 诊断:
   stats   [processId]                查看进程 I/O 统计（速率/字节/错误）

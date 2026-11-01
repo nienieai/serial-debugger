@@ -119,6 +119,16 @@
     <button class="tab-btn tab-new" id="tabAddBtn" onclick="openNewSessionTab()" data-i18n-title="tooltip.new_tab" title="新建会话">+</button>
   </div>
 
+  <!-- 串口权限横幅（只有 Linux 会出现）：非模态，出现时把内容压下去，不盖任何控件。
+       分体版对设备节点只能临时授权（pkexec 一次、加 ACL），拔插或重启后失效 ——
+       这条横幅就是那次提醒。显示与否、文案都归 app.js 管，这里只放骨架。 -->
+  <div class="o-perm-banner c-perm-banner" id="permBanner" aria-hidden="true">
+    <span class="c-perm-banner__icon" aria-hidden="true">⚠</span>
+    <span class="c-perm-banner__text" id="permBannerText"></span>
+    <button class="c-perm-banner__btn" id="permBannerFix" onclick="fixSerialPermission()">临时授权</button>
+    <button class="c-perm-banner__close" id="permBannerClose" onclick="hidePermBanner()" title="关闭" aria-label="关闭">×</button>
+  </div>
+
   <div class="main-content" id="mainContent">
     <!-- 全页背景层：标签页下沿到状态栏上沿这一整块，主题里配了 --app-bg-image 就铺图，
          没配就是 --bg 纯色。放在所有页面之下，页面本身不再各画各的背景。 -->

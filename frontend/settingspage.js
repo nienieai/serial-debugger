@@ -627,6 +627,15 @@ function buildSettingsPage() {
 	var warnInput = warnToggle.querySelector('input');
 	if (warnInput) warnInput.setAttribute('data-toggle', 'shutdownWarn');
 	bStorage.appendChild(_row(t('settings.shutdown_daemon_warn','关闭 GUI 前确认'), warnToggle));
+	// 「串口权限提示」只在 Linux 生效：分体版只能临时授权，拔插/重启后失效，
+	// 横幅就是那条提醒。关掉后不再自动弹，打开串口失败时仍会写明修法。
+	// 做成开关而不是「永不提示」，是因为这个误报与否全看发行版的设备权限，
+	// 有人确实不需要它。
+	bStorage.appendChild(_row(t('settings.serial_perm_hint','串口权限提示'),
+		_buildToggle(function() {
+			state.serialPermissionHint = !(state.serialPermissionHint !== false);
+			saveSettings();
+		}, state.serialPermissionHint !== false)));
 	// （「关闭标签页前确认」已经挪到「标签页」面板的「关闭窗口」气泡里）
 	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）。守护进程
 	// 没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由

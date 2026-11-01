@@ -237,6 +237,9 @@ const state = {
   shutdownDaemonWarn: true,
   // 关闭标签页前确认：只在那个标签的串口开着时才拦。
   tabCloseWarn: false,
+  // 「串口权限不足」横幅（只有 Linux 会真正显示）：默认开。关掉后不再自动弹，
+  // 打开串口失败时仍会在错误文案里写明怎么手动修。
+  serialPermissionHint: true,
   // 「关窗口时，这个窗口里的会话怎么处理」：ask 每次问 / destroy 直接销毁 /
   // transfer 转到别的窗口。判定在 Go 侧（allowWindowClose），这里只管存取。
   windowCloseAction: 'ask',
@@ -437,6 +440,7 @@ function _collectSettings() {
       shutdownDaemonMode: state.shutdownDaemonMode || 'last',
       shutdownDaemonWarn: state.shutdownDaemonWarn !== false,
       tabCloseWarn: state.tabCloseWarn === true,
+      serialPermissionHint: state.serialPermissionHint !== false,
       windowCloseAction: state.windowCloseAction || 'ask',
       autoSaveHistory: state.autoSaveHistory === true,
       tabTwoLines: state.tabTwoLines === true,
@@ -522,6 +526,7 @@ async function loadSettings() {
       }
       if (typeof s.shutdownDaemonWarn === 'boolean') state.shutdownDaemonWarn = s.shutdownDaemonWarn;
       if (typeof s.tabCloseWarn === 'boolean') state.tabCloseWarn = s.tabCloseWarn;
+      if (typeof s.serialPermissionHint === 'boolean') state.serialPermissionHint = s.serialPermissionHint;
       if (s.windowCloseAction === 'destroy' || s.windowCloseAction === 'transfer' || s.windowCloseAction === 'ask') {
         state.windowCloseAction = s.windowCloseAction;
       }
@@ -999,6 +1004,123 @@ function showChoice(title, message, options, dontAskLabel) {
   }).catch(function () {
     // 页内降级弹窗没有勾选框：少一个「记住」总比功能整个挂掉强
     _choiceInPage(title, message, options);
+  });
+}
+
+// ---- 串口权限横幅（只有 Linux 会出现）----
+//
+// 分体版（解压即用）对设备节点只做**临时授权**：pkexec 一次、给当前用户加 ACL，
+// 不写任何系统文件。拔插或重启后节点重建、ACL 随之消失，所以横幅会再出现一次 ——
+// 这不是噪音，是唯一能让人知道「为什么昨天好好的今天又打不开了」的地方。
+//
+// 为什么用横幅而不是弹窗：打开失败时用户往往还要换端口、看日志、翻设置，模态框
+// 会把入口全挡住。判定与执行都在 Go 侧（sysperm.Probe / FixTemp），这里只管显示。
+var _permDeniedDevices = [];
+var _permFixing = false;
+
+function _permBannerEl() { return document.getElementById('permBanner'); }
+
+// 文案与按钮状态都由这里重画：换语言时 applyI18n 会再调一次，不必另存 DOM 引用。
+function _permBannerRender() {
+  var el = _permBannerEl();
+  if (!el) return;
+  var text = document.getElementById('permBannerText');
+  if (text) {
+    text.textContent = t('perm.banner', '串口权限不足：{dev}。当前用户读不到它，可以临时授权一次（拔插或重启后需要重新授权）。')
+      .replace('{dev}', _permDeniedDevices.join(', '));
+  }
+  var btn = document.getElementById('permBannerFix');
+  if (btn) {
+    btn.textContent = _permFixing ? t('perm.fixing', '正在等待授权…') : t('perm.fix', '临时授权');
+    btn.disabled = !!_permFixing;
+  }
+  var close = document.getElementById('permBannerClose');
+  if (close) {
+    close.title = t('perm.close', '关闭');
+    close.setAttribute('aria-label', close.title);
+  }
+}
+
+function showPermBanner(devices) {
+  _permDeniedDevices = devices || [];
+  _permBannerRender();
+  var el = _permBannerEl();
+  if (!el) return;
+  el.classList.add('is-show');
+  el.setAttribute('aria-hidden', 'false');
+}
+
+function hidePermBanner() {
+  var el = _permBannerEl();
+  if (!el) return;
+  el.classList.remove('is-show');
+  el.setAttribute('aria-hidden', 'true');
+}
+
+// 探一次权限。返回 true 表示「横幅已经接管这次提示」（调用方就别再弹窗了）。
+// 探测失败一律静默：它不是主流程，不能因为查权限把开串口的路堵死。
+async function probeSerialPermission() {
+  if (state.serialPermissionHint === false) return false;
+  try {
+    var st = await window.go.main.App.GetSerialPermission();
+    if (!st || !st.supported) return false;
+    var denied = st.denied || [];
+    if (denied.length === 0) { hidePermBanner(); return false; }
+    if (!_permFixing) showPermBanner(denied);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function _permReasonText(r) {
+  var reason = (r && r.reason) || 'failed';
+  if (reason === 'cancel') return t('perm.cancel', '没有获得授权。');
+  if (reason === 'no_pkexec') return t('perm.no_pkexec', '系统里没有 pkexec，弹不出授权窗口。可请管理员执行 install.sh --fix-permissions。');
+  if (reason === 'no_device') return t('perm.no_device', '没有检测到 USB 串口设备。');
+  return t('perm.failed', '授权失败：{err}').replace('{err}', (r && r.detail) || '');
+}
+
+// 横幅上的「临时授权」。等待期间禁用按钮：一次 pkexec 只该弹一个密码框。
+async function fixSerialPermission() {
+  if (_permFixing) return;
+  _permFixing = true;
+  _permBannerRender();
+  try {
+    var r = await window.go.main.App.FixSerialPermission();
+    if (r && r.ok) {
+      hidePermBanner();
+      showAlert(t('confirm.title', '通知'), t('perm.fixed', '已授予当前用户读写权限，现在可以打开串口了（拔插或重启后失效）。'));
+      if (typeof refreshPortsForce === 'function') refreshPortsForce();
+    } else {
+      showAlert(t('cli.error', '错误'), _permReasonText(r));
+    }
+  } catch (e) {
+    showAlert(t('cli.error', '错误'), t('perm.failed', '授权失败：{err}').replace('{err}', String(e)));
+  } finally {
+    _permFixing = false;
+    _permBannerRender();
+  }
+}
+
+// 开串口 / 端口转发的失败统一走这里。`permission denied` 是 Linux 上最常见的一种：
+// 交给横幅处理（可点授权、界面照常能操作）；其它错误原样弹窗。
+// 用户把提示关掉时仍然要给一条能照着做的路，所以补一句手动修法。
+function _onOpenError(e) {
+  var msg = t('serial.open_fail', '打开失败: ') + e;
+  var s = String(e || '');
+  if (!/permission denied|EACCES|PermissionDenied/i.test(s)) {
+    showAlert(t('cli.error', '错误'), msg);
+    return;
+  }
+  var manual = t('perm.manual', '当前用户没有串口权限。可运行 serial-cli fix-permissions 临时授权，或执行 install.sh --fix-permissions 永久解决。');
+  if (state.serialPermissionHint === false) {
+    showAlert(t('cli.error', '错误'), msg + '\n' + manual);
+    return;
+  }
+  probeSerialPermission().then(function (shown) {
+    // 探不到被拒的节点（比如设备在探测与报错之间被拔掉）就退回弹窗，别什么都不显示
+    if (!shown) showAlert(t('cli.error', '错误'), msg + '\n' + manual);
   });
 }
 
@@ -1571,6 +1693,8 @@ function applyI18n() {
     var key = el.getAttribute('data-i18n-title');
     el.title = t(key, el.title);
   });
+  // 权限横幅的文案带设备名（{dev} 由 JS 填），不是纯 i18n 键，得单独重画一次
+  _permBannerRender();
   // Restore toggle button active states after textContent reset — always call to refresh i18n text
   _setQpCycleBtn(!!state._qpCycleActive);
   var tab = getActiveTab();
@@ -3018,6 +3142,9 @@ async function tryConnect() {
       updateModeUI();
       refreshPortsForce().then(() => _syncPortSelectsFromTab());
       applyI18n();
+      // 连上守护进程后顺手体检一次串口权限：Linux 上没权限时越早说越好，
+      // 别等用户点了「打开串口」才弹一个看不懂的 Permission denied。
+      probeSerialPermission();
     }
   } catch (e) {
     _tlog('tryConnect 异常', Math.round(performance.now() - tConn), String(e));
@@ -3784,6 +3911,7 @@ async function startDaemon() {
     updateOpenBtn();
     await syncDaemonSessions();
     _tlog('syncDaemonSessions 完成', Math.round(performance.now() - tStart));
+    probeSerialPermission();
   } catch (e) {
     _tlog('startDaemon 失败', Math.round(performance.now() - tStart), String(e));
     console.error('startDaemon failed:', e);
@@ -5679,7 +5807,7 @@ async function openPort() {
     appendSystemMsg(`串口已打开: ${cfg.port} @ ${cfg.baud}`);
     saveSettings();
   } catch (e) {
-    showAlert(t('cli.error','错误'), t('serial.open_fail','打开失败: ') + e);
+    _onOpenError(e);
   }
 }
 
@@ -5731,7 +5859,7 @@ async function openForwardPorts() {
     appendSystemMsg('端口转发已启动: ' + cfgA.port + ' ↔ ' + cfgB.port);
     saveSettings();
   } catch (e) {
-    showAlert(t('cli.error','错误'), t('serial.open_fail','打开失败: ') + e);
+    _onOpenError(e);
   }
 }
 

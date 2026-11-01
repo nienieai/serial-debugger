@@ -197,6 +197,16 @@ export class AppSettings {
              */
             this["tabCloseWarn"] = false;
         }
+        if (!("serialPermissionHint" in $$source)) {
+            /**
+             * SerialPermissionHint 控制「串口权限不足」横幅要不要自动弹。只在 Linux 有意义：
+             * 分体版对设备节点只能临时授权，拔插或重启后又要重新授权，横幅就是那条提醒。
+             * 关掉后不再自动出现，设置页里的手动入口保留（错误弹窗里也会说明怎么手动修）。
+             * @member
+             * @type {boolean}
+             */
+            this["serialPermissionHint"] = false;
+        }
         if (!("windowCloseAction" in $$source)) {
             /**
              * WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
@@ -323,18 +333,18 @@ export class AppSettings {
      * @returns {AppSettings}
      */
     static createFrom($$source = {}) {
-        const $$createField35_0 = $$createType0;
-        const $$createField36_0 = $$createType1;
-        const $$createField37_0 = $$createType2;
+        const $$createField36_0 = $$createType0;
+        const $$createField37_0 = $$createType1;
+        const $$createField38_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("serial" in $$parsedSource) {
-            $$parsedSource["serial"] = $$createField35_0($$parsedSource["serial"]);
+            $$parsedSource["serial"] = $$createField36_0($$parsedSource["serial"]);
         }
         if ("autoSend" in $$parsedSource) {
-            $$parsedSource["autoSend"] = $$createField36_0($$parsedSource["autoSend"]);
+            $$parsedSource["autoSend"] = $$createField37_0($$parsedSource["autoSend"]);
         }
         if ("append" in $$parsedSource) {
-            $$parsedSource["append"] = $$createField37_0($$parsedSource["append"]);
+            $$parsedSource["append"] = $$createField38_0($$parsedSource["append"]);
         }
         return new AppSettings(/** @type {Partial<AppSettings>} */($$parsedSource));
     }

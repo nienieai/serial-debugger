@@ -12,6 +12,9 @@ import * as config$0 from "./config/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as decode$0 from "./decode/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as sysperm$0 from "./sysperm/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -247,6 +250,20 @@ export function FirstSessionID() {
 }
 
 /**
+ * FixSerialPermission 对当前读不到的串口节点做一次临时授权（pkexec 弹一次密码框）。
+ * 
+ * 刻意只做临时授权：分体版是解压即用的，替用户往 /etc/udev/rules.d 里写规则属于
+ * 改系统，得用户自己决定（build/linux/install.sh --fix-permissions）。所以拔插或
+ * 重启后节点重建、权限失效，横幅会再出现一次。
+ * @returns {$CancellablePromise<sysperm$0.FixResult>}
+ */
+export function FixSerialPermission() {
+    return $Call.ByName("main.App.FixSerialPermission").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
+    }));
+}
+
+/**
  * ForwardConnect connects an idle forward-mode process to two serial ports.
  * @param {string} processID
  * @param {$models.SerialConfig} cfgA
@@ -295,7 +312,7 @@ export function GetAutoSendStatus(processID) {
  */
 export function GetBuiltinIcons() {
     return $Call.ByName("main.App.GetBuiltinIcons").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -304,7 +321,7 @@ export function GetBuiltinIcons() {
  */
 export function GetClients() {
     return $Call.ByName("main.App.GetClients").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -315,7 +332,7 @@ export function GetClients() {
  */
 export function GetDialog(id) {
     return $Call.ByName("main.App.GetDialog", id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -382,7 +399,7 @@ export function GetHistoryStatusFor(processID) {
  */
 export function GetI18n(lang) {
     return $Call.ByName("main.App.GetI18n", lang).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -391,7 +408,7 @@ export function GetI18n(lang) {
  */
 export function GetPorts() {
     return $Call.ByName("main.App.GetPorts").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -402,6 +419,19 @@ export function GetPorts() {
  */
 export function GetProtocolVersion() {
     return $Call.ByName("main.App.GetProtocolVersion");
+}
+
+/**
+ * GetSerialPermission 体检本机 USB 串口节点的访问权限（Linux 才有意义）。
+ * 
+ * 非 Linux 返回 supported=false：界面据此不再提横幅，也不必解释「为什么没有」。
+ * 检测只读文件系统事实（access(2)），不落任何状态文件 —— 授权成功后自然就不报了。
+ * @returns {$CancellablePromise<sysperm$0.Status>}
+ */
+export function GetSerialPermission() {
+    return $Call.ByName("main.App.GetSerialPermission").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType8($result);
+    }));
 }
 
 /**
@@ -441,7 +471,7 @@ export function GetSessionStats(processID) {
  */
 export function GetSessions() {
     return $Call.ByName("main.App.GetSessions").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -458,7 +488,7 @@ export function GetSessions() {
  */
 export function GetSessionsForWindow() {
     return $Call.ByName("main.App.GetSessionsForWindow").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -494,7 +524,7 @@ export function GetVersion() {
  */
 export function GetWatchedSessions() {
     return $Call.ByName("main.App.GetWatchedSessions").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType9($result);
     }));
 }
 
@@ -503,7 +533,7 @@ export function GetWatchedSessions() {
  */
 export function ListExternalColorThemes() {
     return $Call.ByName("main.App.ListExternalColorThemes").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType11($result);
     }));
 }
 
@@ -514,7 +544,7 @@ export function ListExternalColorThemes() {
  */
 export function ListExternalI18n() {
     return $Call.ByName("main.App.ListExternalI18n").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType11($result);
+        return $$createType13($result);
     }));
 }
 
@@ -523,7 +553,7 @@ export function ListExternalI18n() {
  */
 export function ListExternalIconThemes() {
     return $Call.ByName("main.App.ListExternalIconThemes").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType11($result);
     }));
 }
 
@@ -533,7 +563,7 @@ export function ListExternalIconThemes() {
  */
 export function ListHistoryFiles() {
     return $Call.ByName("main.App.ListHistoryFiles").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -542,7 +572,7 @@ export function ListHistoryFiles() {
  */
 export function ListThemes() {
     return $Call.ByName("main.App.ListThemes").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType15($result);
     }));
 }
 
@@ -553,7 +583,7 @@ export function ListThemes() {
  */
 export function LoadAppSettings() {
     return $Call.ByName("main.App.LoadAppSettings").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType17($result);
     }));
 }
 
@@ -565,7 +595,7 @@ export function LoadAppSettings() {
  */
 export function LoadExternalI18n(lang) {
     return $Call.ByName("main.App.LoadExternalI18n", lang).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -739,7 +769,7 @@ export function PickStlogFile() {
  */
 export function ProbeDroppedPaths(paths) {
     return $Call.ByName("main.App.ProbeDroppedPaths", paths).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType19($result);
     }));
 }
 
@@ -806,7 +836,7 @@ export function ReadStlogFrames(path, offset, limit) {
  */
 export function RefreshPorts() {
     return $Call.ByName("main.App.RefreshPorts").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -1160,7 +1190,7 @@ export function WhoAmI() {
  */
 export function WindowList() {
     return $Call.ByName("main.App.WindowList").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType9($result);
     }));
 }
 
@@ -1170,7 +1200,7 @@ export function WindowList() {
  */
 export function WindowNames() {
     return $Call.ByName("main.App.WindowNames").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType9($result);
     }));
 }
 
@@ -1201,17 +1231,19 @@ const $$createType0 = decode$0.Segment.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = $Create.Array($$createType1);
 const $$createType3 = $Create.Map($Create.Any, $Create.Any);
-const $$createType4 = $Create.Map($Create.Any, $Create.Any);
-const $$createType5 = $Create.Array($$createType3);
-const $$createType6 = $models.DialogSpec.createFrom;
-const $$createType7 = $Create.Array($Create.Any);
-const $$createType8 = config$0.ExternalThemeInfo.createFrom;
-const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = $models.ExternalI18nInfo.createFrom;
+const $$createType4 = sysperm$0.FixResult.createFrom;
+const $$createType5 = $Create.Map($Create.Any, $Create.Any);
+const $$createType6 = $Create.Array($$createType3);
+const $$createType7 = $models.DialogSpec.createFrom;
+const $$createType8 = sysperm$0.Status.createFrom;
+const $$createType9 = $Create.Array($Create.Any);
+const $$createType10 = config$0.ExternalThemeInfo.createFrom;
 const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = config$0.ThemeInfo.createFrom;
+const $$createType12 = $models.ExternalI18nInfo.createFrom;
 const $$createType13 = $Create.Array($$createType12);
-const $$createType14 = $models.AppSettings.createFrom;
-const $$createType15 = $Create.Nullable($$createType14);
-const $$createType16 = $models.DropProbe.createFrom;
-const $$createType17 = $Create.Array($$createType16);
+const $$createType14 = config$0.ThemeInfo.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = $models.AppSettings.createFrom;
+const $$createType17 = $Create.Nullable($$createType16);
+const $$createType18 = $models.DropProbe.createFrom;
+const $$createType19 = $Create.Array($$createType18);
