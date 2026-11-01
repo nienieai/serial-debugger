@@ -272,6 +272,14 @@ export function ForwardCreate(portA, baudA, portB, baudB) {
 }
 
 /**
+ * GetAppDir 返回 GUI 的 exe 所在目录（关于页「程序目录」显示用）。
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetAppDir() {
+    return $Call.ByName("main.App.GetAppDir");
+}
+
+/**
  * GetAutoSendStatus returns auto-send status.
  * @param {string} processID
  * @returns {$CancellablePromise<{ [_ in string]?: any }>}

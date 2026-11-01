@@ -687,7 +687,10 @@ function buildSettingsPage() {
 	heroHead.appendChild(heroName);
 	var heroVer = document.createElement('span');
 	heroVer.className = 'settings-about-hero-ver';
-	heroVer.textContent = 'v' + (window._appVersion || '0.8.2');
+	// 版本号由 app.js 启动时从后端取（GetVersion）。拿不到就不显示徽标 ——
+	// 以前这里兜底写死 '0.8.2'，早就不是当前版本了，属于「过期文案」。
+	if (window._appVersion) heroVer.textContent = 'v' + window._appVersion;
+	else heroVer.classList.add('is-hidden');
 	heroHead.appendChild(heroVer);
 	hero.appendChild(heroHead);
 	var heroDesc = document.createElement('p');
@@ -707,10 +710,11 @@ function buildSettingsPage() {
 	var kv = document.createElement('div');
 	kv.className = 'settings-about-kv';
 	var protoValEl = null;
+	var dirValEl = null;
 	[['settings.about_kv_proto', '协议号', ''],
 	 ['settings.about_kv_dir', '程序目录', ''],
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
-	 ['settings.about_kv_back', '后端', 'Go / Wails v2'],
+	 ['settings.about_kv_back', '后端', 'Go / Wails v3'],
 	 ['settings.about_kv_render', '渲染', 'WebView2'],
 	 ['settings.about_kv_conf', '配置文件', 'settings/gui.ini']].forEach(function(row) {
 		var k = document.createElement('span');
@@ -721,6 +725,7 @@ function buildSettingsPage() {
 		v.className = 'settings-about-v';
 		v.textContent = row[2];
 		if (row[0] === 'settings.about_kv_proto') protoValEl = v;
+		if (row[0] === 'settings.about_kv_dir') dirValEl = v;
 		kv.appendChild(k);
 		kv.appendChild(v);
 	});
@@ -731,6 +736,12 @@ function buildSettingsPage() {
 			if (pv && protoValEl) protoValEl.textContent = 'IPC ' + pv;
 		}).catch(function() {});
 	} catch (e) { /* 非 Wails 环境（设计稿 / 测试桩）忽略 */ }
+	// 程序目录同样从后端取：以前这一行传的是空串，界面上永远是空的。
+	try {
+		window.go.main.App.GetAppDir().then(function(dir) {
+			if (dir && dirValEl) dirValEl.textContent = dir;
+		}).catch(function() {});
+	} catch (e) { /* 同上 */ }
 	colA.appendChild(kv);
 	// 设置已经拆成 settings/ 目录（gui.ini / cli.ini / daemon.ini），
 	// 这里给一个直达入口，省得用户自己去程序目录里翻。

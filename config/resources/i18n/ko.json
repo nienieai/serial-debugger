@@ -96,6 +96,7 @@
   "confirm.ok_clear": "비우기",
   "confirm.ok_restore": "복원",
   "confirm.ok_shutdown": "중지",
+  "confirm.remember_choice": "선택 기억하기",
   "confirm.quit_always": "종료하면 데몬이 중지되고 다른 GUI / CLI / MCP 클라이언트를 포함한 모든 시리얼 연결이 끊깁니다. 종료할까요?",
   "confirm.quit_last": "마지막 클라이언트입니다. 종료하면 데몬이 중지되고 모든 시리얼 연결이 끊깁니다. 종료할까요?",
   "confirm.quit_msg": "정말 종료하시겠습니까?",

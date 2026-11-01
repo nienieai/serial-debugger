@@ -96,6 +96,7 @@
   "confirm.ok_clear": "Effacer",
   "confirm.ok_restore": "Restaurer",
   "confirm.ok_shutdown": "Arrêter",
+  "confirm.remember_choice": "Mémoriser mon choix",
   "confirm.quit_always": "Quitter arrêtera le démon et déconnectera tous les ports série, y compris les autres clients GUI / CLI / MCP. Quitter ?",
   "confirm.quit_last": "C'est le dernier client. Quitter arrêtera le démon et déconnectera tous les ports série. Quitter ?",
   "confirm.quit_msg": "Êtes-vous sûr de vouloir quitter ?",

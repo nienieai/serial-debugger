@@ -1227,22 +1227,37 @@ func (a *App) allowWindowClose(name string) bool {
 
 	// 「关窗口时会话怎么处理」的默认动作（设置 → 标签页）。
 	// transfer 只有在确实还有别的窗口时才成立，否则退化成 destroy。
-	closeMode := cfg.WindowCloseAction
-	if closeMode != "destroy" && closeMode != "transfer" {
-		closeMode = "ask"
+	configured := cfg.WindowCloseAction
+	if configured != "destroy" && configured != "transfer" {
+		configured = "ask"
 	}
+	closeMode := configured
 	canTransfer := a.pickTransferTarget(name) != ""
+	degraded := false
 	if closeMode == "transfer" && !canTransfer {
 		closeMode = "destroy"
+		degraded = true
 	}
 
-	// destroy / transfer 是用户在设置里明确选过的：destroy 还要再确认一次
-	// （会断串口），transfer 不破坏任何东西，直接办。
-	needConfirm := action == closeConfirm || (len(sids) > 0 && closeMode != "transfer")
+	// destroy / transfer 是用户在设置里明确选过的，不再追问（设置页那条文案本来
+	// 就叫「直接销毁（会断串口）」）；只有 ask、以及「想转交却没地方转」这种
+	// 退化情形才弹会话确认框。对话框里勾了「记住选择」写的就是这个设置。
+	needConfirm := action == closeConfirm || windowCloseNeedsConfirm(configured, len(sids), degraded)
 
 	if !needConfirm {
-		if len(sids) > 0 && closeMode == "transfer" {
-			a.transferWindowSessions(name)
+		if len(sids) > 0 {
+			switch closeMode {
+			case "transfer":
+				a.transferWindowSessions(name)
+			case "destroy":
+				// 用户在设置里明确选了「直接销毁」，或者在确认框里勾了「记住选择」
+				// 选过销毁：这里就是最终决定，真把会话销毁掉。
+				// 以前这条分支只处理 transfer，destroy 全靠确认框走
+				// ConfirmWindowClose；现在 destroy 不再弹框，漏掉这一步的话会话
+				// 会变成守护进程上的孤儿 —— 标签没了、串口却一直开着（实测踩到）。
+				n := a.destroyWindowSessions(name)
+				log.Printf("[close] 窗口 %q 按设置直接销毁 %d 个会话", name, n)
+			}
 		}
 		if stopDaemon {
 			a.stopDaemonQuiet()
@@ -1471,6 +1486,25 @@ func decideClose(mode string, warn, connected bool, clientCount int) closeAction
 		return closeStopDaemon
 	}
 	return closeConfirm
+}
+
+// windowCloseNeedsConfirm 决定「有会话时关这个窗口要不要弹确认框」。
+//
+// 和设置页的三档文案对齐（设置 → 标签页 → 窗口里的会话）：
+//   - ask      每次都问
+//   - destroy  用户明确选了「直接销毁（会断串口）」，不再追问
+//   - transfer 不破坏任何东西，直接转交
+//
+// degraded = 设置是 transfer、但这会儿没有别的窗口可转（退化成销毁）。这种情形
+// 必须问：用户期望的是「转走」，不是「悄悄把串口断掉」。
+func windowCloseNeedsConfirm(configured string, sessions int, degraded bool) bool {
+	if sessions <= 0 {
+		return false
+	}
+	if degraded {
+		return true
+	}
+	return configured != "destroy" && configured != "transfer"
 }
 
 // QuitApp 退出整个程序（所有窗口一起关），保留给「彻底退出」这类入口。
@@ -2449,6 +2483,15 @@ func (a *App) GetBuiltinIcons() map[string]string {
 
 func (a *App) GetVersion() string {
 	return version.Version
+}
+
+// GetAppDir 返回 GUI 的 exe 所在目录（关于页「程序目录」显示用）。
+func (a *App) GetAppDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
 }
 
 // GetProtocolVersion 返回本客户端使用的 IPC 协议版本（MAJOR.MINOR.PATCH）。

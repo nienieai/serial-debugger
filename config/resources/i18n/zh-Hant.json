@@ -96,6 +96,7 @@
   "confirm.ok_clear": "清空",
   "confirm.ok_restore": "恢復預設",
   "confirm.ok_shutdown": "確認停止",
+  "confirm.remember_choice": "記住選擇",
   "confirm.quit_always": "結束將停止守護進程，所有串口連線都會中斷（包括其它 GUI / CLI / MCP 用戶端）。確定結束嗎？",
   "confirm.quit_last": "這是最後一個用戶端。結束將停止守護進程，所有串口連線都會中斷。確定結束嗎？",
   "confirm.quit_msg": "確定要退出嗎？",

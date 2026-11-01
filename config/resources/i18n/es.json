@@ -96,6 +96,7 @@
   "confirm.ok_clear": "Limpiar",
   "confirm.ok_restore": "Restaurar",
   "confirm.ok_shutdown": "Detener",
+  "confirm.remember_choice": "Recordar mi elección",
   "confirm.quit_always": "Salir detendrá el demonio y desconectará todos los puertos serie, incluidos otros clientes GUI / CLI / MCP. ¿Salir?",
   "confirm.quit_last": "Es el último cliente. Salir detendrá el demonio y desconectará todos los puertos serie. ¿Salir?",
   "confirm.quit_msg": "¿Está seguro de que desea salir?",

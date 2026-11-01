@@ -96,6 +96,7 @@
   "confirm.ok_clear": "消去",
   "confirm.ok_restore": "復元",
   "confirm.ok_shutdown": "停止",
+  "confirm.remember_choice": "選択を記憶する",
   "confirm.quit_always": "終了するとデーモンが停止し、他の GUI / CLI / MCP クライアントを含むすべてのシリアル接続が切断されます。終了しますか？",
   "confirm.quit_last": "これが最後のクライアントです。終了するとデーモンが停止し、すべてのシリアル接続が切断されます。終了しますか？",
   "confirm.quit_msg": "アプリケーションを終了しますか？",

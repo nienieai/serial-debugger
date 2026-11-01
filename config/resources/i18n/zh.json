@@ -96,6 +96,7 @@
   "confirm.ok_clear": "清空",
   "confirm.ok_restore": "恢复默认",
   "confirm.ok_shutdown": "确认停止",
+  "confirm.remember_choice": "记住选择",
   "confirm.quit_always": "退出将停止守护进程，所有串口连接都会断开（包括其它 GUI / CLI / MCP 客户端）。确定退出吗？",
   "confirm.quit_last": "这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？",
   "confirm.quit_msg": "确定要退出吗？",

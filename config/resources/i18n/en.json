@@ -96,6 +96,7 @@
   "confirm.ok_clear": "Clear",
   "confirm.ok_restore": "Restore",
   "confirm.ok_shutdown": "Shutdown",
+  "confirm.remember_choice": "Remember my choice",
   "confirm.quit_always": "Exiting will stop the daemon and disconnect all serial ports, including other GUI / CLI / MCP clients. Exit anyway?",
   "confirm.quit_last": "This is the last client. Exiting will stop the daemon and disconnect all serial ports. Exit anyway?",
   "confirm.quit_msg": "Are you sure you want to quit?",

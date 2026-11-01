@@ -977,7 +977,9 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel
   });
 }
 
-function showChoice(title, message, options) {
+// dontAskLabel：可选。传了就在对话框里多一个勾选框（Go 侧 DialogSpec.dontAsk，
+// 见 dialog.js:68）；勾没勾作为第一个参数交给被选中的 onPick。
+function showChoice(title, message, options, dontAskLabel) {
   var opts = options || [];
   var buttons = opts.map(function (o, i) {
     return { key: 'c' + i, label: o.label, kind: i === 0 ? 'primary' : 'default' };
@@ -986,13 +988,16 @@ function showChoice(title, message, options) {
     kind: 'choice',
     title: String(title || ''),
     message: String(message === null || message === undefined ? '' : message),
-    buttons: buttons
+    buttons: buttons,
+    dontAsk: !!dontAskLabel,
+    dontAskLabel: dontAskLabel || ''
   }).then(function (r) {
     var m = /^c(\d+)$/.exec(r.action || '');
     if (!m) return;
     var opt = opts[parseInt(m[1], 10)];
-    if (opt && opt.onPick) opt.onPick();
+    if (opt && opt.onPick) opt.onPick(!!r.dontAsk);
   }).catch(function () {
+    // 页内降级弹窗没有勾选框：少一个「记住」总比功能整个挂掉强
     _choiceInPage(title, message, options);
   });
 }
@@ -1005,9 +1010,13 @@ function showChoice(title, message, options) {
 // 此刻窗口**还没关掉**（event.Cancel 拦住了）。
 //
 // d.closeAction（设置 → 标签页 →「关闭窗口时会话」）：
-//   destroy → 只给「销毁」一个选择（仍然确认一次，会断串口）
+//   destroy → 不再追问，直接销毁（会断串口；设置页那条文案就是「直接销毁」）
 //   ask     → 三选一：销毁并关闭 / 转到其他窗口 / 取消
-//   transfer 不会走到这里（Go 直接转交，除非没有别的窗口，那时也会改成 destroy）
+//   transfer 不会走到这里（Go 直接转交；没有别的窗口可转时退化成 destroy，
+//            那种情形 Go 会再问一次，走下面单按钮的确认框）
+//
+// 三选一里带「记住选择」：勾上就把这次的选择写回设置（windowCloseAction），
+// 下次按同一档办（destroy 直接销毁、transfer 直接转交，都不再问）。
 function _onWindowCloseConfirm(d) {
   var n = (d && d.sessions) || 0;
   var stopDaemon = !!(d && d.stopDaemon);
@@ -1042,6 +1051,12 @@ function _onWindowCloseConfirm(d) {
     state.shutdownDaemonWarn = false;
     saveSettingsNow();
   } : null;
+  // 「记住选择」：把这次选的会话处理方式写回设置（设置 → 标签页 → 窗口里的会话）。
+  // 同样必须在关窗之前落盘 —— 关窗之后进程可能就没了。
+  function rememberChoice(action) {
+    state.windowCloseAction = action;
+    saveSettingsNow();
+  }
 
   if (n > 0 && canTransfer && closeAction === 'ask') {
     // 两个选项都是「真的关窗」，所以用三选一：销毁 / 转交 / 取消
@@ -1049,10 +1064,17 @@ function _onWindowCloseConfirm(d) {
       t('confirm.win_close_title', '关闭窗口'),
       msg,
       [
-        { label: t('confirm.win_close_transfer_btn', '转到其他窗口'), onPick: function() { doClose('transfer'); } },
-        { label: t('confirm.win_close_destroy_btn', '销毁并关闭'), onPick: function() { doClose('destroy'); } },
+        {
+          label: t('confirm.win_close_transfer_btn', '转到其他窗口'),
+          onPick: function(remember) { if (remember) rememberChoice('transfer'); doClose('transfer'); }
+        },
+        {
+          label: t('confirm.win_close_destroy_btn', '销毁并关闭'),
+          onPick: function(remember) { if (remember) rememberChoice('destroy'); doClose('destroy'); }
+        },
         { label: t('confirm.cancel', '取消'), onPick: cancel }
-      ]
+      ],
+      t('confirm.remember_choice', '记住选择')
     );
     return;
   }
@@ -2706,7 +2728,12 @@ window.addEventListener('DOMContentLoaded', () => {
   bindTabsScroll();
   initTabPopup();
   // Fetch version once
-  window.go.main.App.GetVersion().then(function(v) { window._appVersion = v || '0.6.1'; document.title = '串口调试工具 v' + window._appVersion; }).catch(function() { window._appVersion = '0.6.1'; });
+  // 版本号拿不到就留空，别再兜底写死一个（以前是 '0.6.1'，早就过期了）：
+  // 空串时标题不带版本、关于页隐藏版本徽标，比显示一个假版本号诚实。
+  window.go.main.App.GetVersion().then(function(v) {
+    window._appVersion = v || '';
+    if (v) document.title = '串口调试工具 v' + v;
+  }).catch(function() { window._appVersion = ''; });
   // 本窗口的名字（main / win-1 / win-3……）。Go 侧已按调用方窗口分流，前端只有
   // 少数「全局广播」的地方需要自己过滤（目前是原生拖放）。
   window.go.main.App.WhoAmI().then(function(n) { window.__winName = n; }).catch(function() {});
