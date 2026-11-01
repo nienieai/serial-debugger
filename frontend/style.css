@@ -289,13 +289,25 @@ button:disabled:active { transform: none; box-shadow: none; }
 .menu-item.is-open .menu-label { background: var(--bg3); }
 .menu-dropdown {
   display: none; position: absolute; top: calc(100% + 4px); left: 0;
-  /* 毛玻璃：菜单浮在页面之上，模糊的是它后面的数据行，纹理看得见 */
-  background: var(--menu-glass-bg);
-  -webkit-backdrop-filter: var(--menu-glass-blur);
-  backdrop-filter: var(--menu-glass-blur);
+  /* 毛玻璃：菜单浮在页面之上，模糊的是它后面的数据行，纹理看得见。
+     模糊**不能**直接挂在这个容器上，否则它成为 backdrop root，里面的
+     .menu-sub-dropdown 再挂 backdrop-filter 就采样不到页面 —— WebView2 里
+     三级菜单会变成全透明（Chromium 反而正常）。所以把「底色 + 模糊」下沉到
+     ::before：伪元素没有子元素，不会把子菜单套进 backdrop root。 */
   border: 1px solid var(--menu-glass-border);
   min-width: max-content; width: max-content; z-index: 100; padding: 0;
   border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.menu-dropdown::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
 }
 .menu-item:hover .menu-dropdown { display: none; }
 .menu-item.is-open .menu-dropdown { display: block; }
@@ -356,16 +368,11 @@ button:disabled:active { transform: none; box-shadow: none; }
 }
 .menu-sub-dropdown {
   display: none; position: absolute; left: 100%; top: 0;
-  /* 嵌套菜单**不能**再用 backdrop-filter：
-     - 外层 .menu-dropdown 自己就是一个 backdrop root，
-     - 子元素再挂 backdrop-filter 时采样到的是那个 root，而不是页面内容，
-       于是 30% 半透明底色等于全透 —— 实测 WebView2 里三级菜单看起来像
-       完全没画背景，字直接浮在设置页上（计算样式却是对的，
-       background/backdrop-filter 都正常解析，只有渲染没效果）。
-     这里直接用不透明底色，边框/阴影/圆角保持一致，仍是同一套菜单皮肤。 */
-  background: var(--tabpop-bg-solid);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  /* 这里能安全地再用毛玻璃：外层 .menu-dropdown 的模糊已经下沉到 ::before，
+     它不再是 backdrop root（见 .menu-dropdown 的注释）。 */
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
   border: 1px solid var(--menu-glass-border);
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   min-width: max-content; width: max-content; z-index: 110; padding: 0;
@@ -376,7 +383,8 @@ button:disabled:active { transform: none; box-shadow: none; }
    菜单就成了重影，所以退回不透明底色。 */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .header { background: var(--bg2); }
-  .menu-dropdown, .menu-sub-dropdown {
+  /* 下拉的底色已经下沉到 ::before，回退也要跟着改到伪元素上 */
+  .menu-dropdown::before, .menu-sub-dropdown {
     background: var(--tabpop-bg-solid);
     border-color: var(--border);
   }
