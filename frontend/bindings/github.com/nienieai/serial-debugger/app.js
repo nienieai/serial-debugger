@@ -46,8 +46,7 @@ export function BatchDecodeForTab(hexStrings, encoding) {
  * 等于拖窗口本身 —— 移动交给系统原生拖窗（见 style.css 的 .is-window-drag）。
  * 原生拖动期间前端拿不到事件（系统模态循环），所以落点只能由这里轮询。
  * 
- * **不等松手**：光标一进到别的窗口的标签栏带，这一页当场就并过去、本窗口
- * 跟着收掉。松手才判的话，用户得把窗口端端正正停在人家标签栏上再松，手感很别扭。
+ * 落点与反悔全交给 driveTabDrop（和「标签拖出成窗」同一套）。
  * @param {string} sessionID
  * @returns {$CancellablePromise<void>}
  */
@@ -575,7 +574,7 @@ export function Log(msg) {
 }
 
 /**
- * 把会话挪到另一个窗口（供右键菜单等入口复用；拖拽走 finishTabDrag）。
+ * 把会话挪到另一个窗口（供右键菜单等入口复用；拖拽走 driveTabDrop）。
  * @param {string} sessionID
  * @param {string} target
  * @returns {$CancellablePromise<void>}
@@ -1060,10 +1059,8 @@ export function StartTabDecoder(processID) {
  * 窗口尺寸和正常窗口一致，不是小预览窗：拖出来的东西**当场就是一个窗口**，
  * 光标停在它的标签上（见 tearOffGrabX/Y），松手就留在原地，不用再长大一次。
  * 
- * 松手时按光标位置决定归宿（见 finishTabDrag）：
- *   - 落在**别的窗口的标签栏**一带 → 会话转交给那个窗口，新窗口关掉
- *   - 落回源窗口自己的标签栏   → 当取消：归属退回，标签留在原位
- *   - 落在别处                → 新窗口留下
+ * 松手/中途换主意都交给 driveTabDrop（和「单标签窗口拖标签」同一套）：拖到别人
+ * 标签条上停一下就当场预览着插进去，拖出来又退回成窗口，松手才落地。
  * @param {string} sessionID
  * @returns {$CancellablePromise<string>}
  */
