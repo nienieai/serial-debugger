@@ -599,7 +599,12 @@ func (a *App) StartTearOffDrag(ctx context.Context, sessionID string, offX, offY
 	return name, nil
 }
 
-// finishTabDrag 处理「松手」：并入别的窗口 / 退回源窗口 / 就地成窗。
+// finishTabDrag 处理「松手」：并入别的窗口 / 放回标签栏 / 就地成窗。
+//
+// 「松手还在源窗口里」**不能**一律当成取消：拖出阈值只有 42px，松手位置几乎
+// 必然还在源窗口的内容区里 —— 那样就永远建不出新窗口（实测：每次都判成
+// 「拖回源窗口，取消」，用户看到的是一闪而过的跟随窗）。
+// 只有落回**标签栏那一带**才算放回去，落内容区照旧建新窗口。
 func (a *App) finishTabDrag(name, sessionID, from string, w *application.WebviewWindow, x, y int) {
 	target := a.appWindowAt(x, y, name)
 	switch {
@@ -609,10 +614,10 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 		log.Printf("[tearoff] 会话 %s 拖入窗口 %q（源 %q）", sessionID, target, from)
 		w.Close()
 		a.emit("sessions-changed", map[string]any{"reason": "move", "sid": sessionID, "to": target})
-	case target == from && from != "":
-		// 拖回自己：等于取消，什么都不变
+	case target == from && a.inTabBand(from, x, y):
+		// 拖回自己的标签栏：等于放回原位
 		a.sessSet(sessionID, from)
-		log.Printf("[tearoff] 会话 %s 拖回源窗口 %q，取消", sessionID, from)
+		log.Printf("[tearoff] 会话 %s 放回源窗口 %q 的标签栏，取消", sessionID, from)
 		w.Close()
 		a.emit("sessions-changed", map[string]any{"reason": "cancel", "sid": sessionID})
 	default:
@@ -648,6 +653,24 @@ func (a *App) finishTabDrag(name, sessionID, from string, w *application.Webview
 		// 通知源窗口：这个会话已经转交给新窗口了，可以把自己的标签摘掉
 		a.emit("tearoff-done", map[string]any{"sid": sessionID, "win": name, "from": from})
 	}
+}
+
+// tabBandHeight 是「窗口顶部属于标签栏的那一带」的高度（标题栏 + 菜单栏 + 标签栏）。
+//
+// 拖拽落点落在这条带子里 = 放回标签栏（取消）；落在下面（内容区）就是拖出来。
+// 96 px 是按现有布局量的：标题栏 ~40 + 菜单栏 ~22 + 标签栏 ~34。
+// 这里没法做精确的 DOM 命中（松手时源页面拿不到坐标），所以用布局常量近似。
+const tabBandHeight = 96
+
+// inTabBand 判断屏幕坐标 (x,y) 是否落在某个窗口顶部的标签栏一带。
+func (a *App) inTabBand(name string, x, y int) bool {
+	w := a.windowByName(name)
+	if w == nil {
+		return false
+	}
+	px, py := w.Position()
+	pw, _ := w.Size()
+	return x >= px && x < px+pw && y >= py && y < py+tabBandHeight
 }
 
 // appWindowAt 返回「屏幕坐标 (x,y) 落在哪个应用窗口里」，没有则返回空。
