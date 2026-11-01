@@ -55,6 +55,13 @@ type DaemonInfo struct {
 	PID             uint32 `json:"pid"`
 	StartTime       string `json:"startTime"`
 	UptimeSec       int64  `json:"uptimeSec"`
+	// LogPath 是守护进程自己那份 daemon.log 的绝对路径。
+	//
+	// 加它是因为「GUI 与守护进程同目录」只是个约定，用户态安装、systemd
+	// 服务、手工从别处启动都能打破它；GUI 的「查看守护进程日志」原来靠猜，
+	// 猜错就只能显示「日志文件还没生成」。老守护进程不回这个字段，客户端
+	// 仍退回本地推导，所以是向后兼容的增量（协议号不动）。
+	LogPath string `json:"logPath,omitempty"`
 }
 
 // Compatible 报告对端守护进程是否与本客户端兼容：MAJOR.MINOR 相同即可。

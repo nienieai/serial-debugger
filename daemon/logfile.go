@@ -32,17 +32,28 @@ var (
 	logFile *os.File
 )
 
-// logFilePath 返回（并创建）日志文件路径。目录创建失败时返回错误。
-func logFilePath() (string, error) {
+// logFilePathPlain 只算日志文件路径，不建目录 —— 给 daemon.info 上报用。
+//
+// 和 logFilePath 分开是因为「报告自己写在哪」不该顺手 mkdir：客户端可能只是
+// 想知道路径，日志还一条都没写过。
+func logFilePathPlain() string {
 	exe, err := os.Executable()
 	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(exe), logDirName, logFileName)
+}
+
+// logFilePath 返回（并创建）日志文件路径。目录创建失败时返回错误。
+func logFilePath() (string, error) {
+	path := logFilePathPlain()
+	if path == "" {
+		return "", fmt.Errorf("取不到程序所在目录")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return "", err
 	}
-	dir := filepath.Join(filepath.Dir(exe), logDirName)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, logFileName), nil
+	return path, nil
 }
 
 // initLogFile 打开日志文件。必须在任何 logOp 之前调用。

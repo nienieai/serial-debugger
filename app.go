@@ -2156,18 +2156,58 @@ const (
 	daemonLogMaxChunk = 1 << 20
 )
 
-// daemonLogPath 返回守护进程日志文件的绝对路径。
+// daemonLogPathLocal 是「守护进程与 GUI 同目录」这个约定下的推导。
 //
-// 推导方式和 `serial-cli logs` 完全一致（cmd/serial-cli/main.go）：发布包里
-// serial-gui 与 serial-daemon 同目录，日志固定写 <exe>/logs/daemon.log
-// （见 daemon/logfile.go）。守护进程装在别处时这里读不到 —— 界面上会显示
-// 「日志文件还没生成」，而不是假装有数据。
-func daemonLogPath() string {
+// 用户态安装、systemd 服务、手工从别处启动都能打破这个约定，所以它只是**兜底**：
+// 真正的路径来自 daemon.info 的 logPath（见 daemonLogPath）。
+func daemonLogPathLocal() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(exe), "logs", "daemon.log")
+}
+
+// daemonLogPathCache 缓存解析出来的日志路径；空串表示还没解析过。
+var (
+	daemonLogPathMu    sync.Mutex
+	daemonLogPathCache string
+)
+
+// daemonLogPath 返回守护进程日志文件路径，**优先用守护进程自己报的**。
+//
+// 守护进程装在别处时本地推导会指到一个不存在的文件，界面只能显示「日志文件
+// 还没生成」—— 而它明明在写。daemon.info 从 0.9.0 起带回 logPath，问到了就用；
+// 问不到（0.8.x 老守护进程、或它压根没在跑）退回 daemonLogPathLocal。
+//
+// force 只在「这一轮是从头读」（offset < 0，即刚打开标签或上次没读到）时给 true，
+// 免得每 800 ms 的增量轮询都多打一次 daemon.info。
+func (a *App) daemonLogPath(force bool) string {
+	daemonLogPathMu.Lock()
+	cached := daemonLogPathCache
+	daemonLogPathMu.Unlock()
+	if cached != "" && !force {
+		return cached
+	}
+
+	best := daemonLogPathLocal()
+	fromDaemon := false
+	if res, err := a.call(contract.DaemonInfo, nil); err == nil {
+		if s, _ := res["logPath"].(string); s != "" {
+			best, fromDaemon = s, true
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	daemonLogPathMu.Lock()
+	changed := daemonLogPathCache != best
+	daemonLogPathCache = best
+	daemonLogPathMu.Unlock()
+	if changed {
+		log.Printf("[daemon] 日志文件: %s（来源：%s）", best, map[bool]string{true: "守护进程自报", false: "本地推导"}[fromDaemon])
+	}
+	return best
 }
 
 // ReadDaemonLog 读守护进程日志的增量，供日志标签页轮询。
@@ -2179,7 +2219,9 @@ func daemonLogPath() string {
 // 只读文件、不碰守护进程：日志本来就是 daemon 自己写的，而「GUI 启动之前发生
 // 了什么」也只有文件里有（实时事件流做不到这件事）。
 func (a *App) ReadDaemonLog(offset int64, maxBytes int) (map[string]any, error) {
-	path := daemonLogPath()
+	// offset < 0 = 这一轮从头读（刚打开标签，或上次没读到文件）：顺手重新问一次
+	// 守护进程日志路径，别的轮询走缓存，不多打 daemon.info。
+	path := a.daemonLogPath(offset < 0)
 	if path == "" {
 		return nil, fmt.Errorf("取不到程序所在目录")
 	}
@@ -2187,6 +2229,10 @@ func (a *App) ReadDaemonLog(offset int64, maxBytes int) (map[string]any, error) 
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// 记一下：下一轮（offset 仍 < 0）会重新问守护进程，换了实例也能跟上
+			daemonLogPathMu.Lock()
+			daemonLogPathCache = ""
+			daemonLogPathMu.Unlock()
 			// 还没写过日志（守护进程没启动过）。不是错误：前端继续轮询，它自己会出来。
 			out["missing"] = true
 			return out, nil
@@ -2268,7 +2314,7 @@ func (a *App) ShowFolderInExplorer(kind string) map[string]any {
 	}
 	// 日志目录同样在 exe 同级（见 daemon/logfile.go），不走资源层
 	if kind == "logs" {
-		dir := filepath.Dir(daemonLogPath())
+		dir := filepath.Dir(a.daemonLogPath(true))
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		}

@@ -98,7 +98,9 @@ function _dlPoll(first) {
     _dlSetStatus(_dlT('daemonlog.unavailable', '这个版本没有读日志的接口（老 exe？）'));
     return;
   }
-  var offset = first ? -1 : _dl.offset;
+  // offset 仍是 null 说明上一轮根本没读到（日志文件还没出现）：继续按「从头读」
+  // 处理，这样守护进程一启动、文件一出现就能立刻接上，而不是从 0 重新扫一遍。
+  var offset = (first || _dl.offset === null) ? -1 : _dl.offset;
   App.ReadDaemonLog(offset, 0).then(function (res) {
     if (!_dl || !res) return;
     if (res.path) _dl.pathEl.textContent = res.path;

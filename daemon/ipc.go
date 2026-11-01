@@ -798,6 +798,8 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			PID:             uint32(os.Getpid()),
 			StartTime:       s.startTime.Format(time.RFC3339),
 			UptimeSec:       int64(time.Since(s.startTime).Seconds()),
+			// 自己写在哪就报哪：GUI 的「查看守护进程日志」靠它找文件
+			LogPath: logFilePathPlain(),
 		}}
 
 	case contract.PortsRefresh:

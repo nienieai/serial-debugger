@@ -159,7 +159,7 @@
 | 工程会话上开保存续写这个工程 | `openStlogFile` 见到 `sessionDir()` 非空就改走 `resumeRecording`，不再在 `history/` 下另建目录（只有工程目录读不出来才退回新建）；`resumeRecording` 接上录制后把 `save=true` 写回工程，否则「手动开保存 → 录完关掉 → 下次推送」又不续录；`openHistoryFile` 不再给工程会话跑 `restoreLatestSession`（会把无关的「最近一个会话」读进环）。`53db096` |
 | 推送工程把新会话认领给发起窗口 | `OpenStlogSession` 漏了 `sessClaim`，而 `GetSessionsForWindow` 只在「本窗口名下一条都没有」时才认领无主会话 —— 窗口里但凡开着串口或挂着空闲标签，推送回来的工程就一直是「无主」，本窗口永远建不出标签，5 秒后弹「守护进程没有把这个工程挂上来（进程可能创建失败）」。实机验证：`GetSessionsForWindow "main" -> 2 个（守护进程上 2 个）`。`2cc4c70` |
 | 清掉零引用死代码 + 修 `history_save_test.go` 的陈旧断言 | `deadcode -test ./...` 报出的 35 个不可达函数（v1 `.log` 写入器残骸、`EncodePage`/`PageCRC`/`StoredCRC` 这第二份页实现、内置图标包 API 等）；`openStlogFile`/`resumeRecording` 的收尾提成 `attachStlogLocked`。`history_save_test.go` 三条用例还在数 `history/*.log`（v2 起只写 `.stlog` 目录），断言恒为 0 —— 两条一直红、一条假绿，改成按会话目录 + 封存后的记录数断言。`369181d` |
-| 「守护进程 → 查看守护进程日志」标签页 | 菜单开一个 `type: 'daemonlog'` 的单例标签页（`frontend/daemonlog.js`），按偏移量增量读 `<exe>/logs/daemon.log`（新绑定 `ReadDaemonLog`）：首次取末尾 128 KB 并丢掉半行，之后每 800 ms 续读，切走停轮询、切回补读。走文件而不是事件流，是为了能看见 GUI 启动**之前**的行 —— 排查「守护进程起不来」时那些行才关键。等宽着色（`[错误]` 红 / `[警告]` 黄）、跟随/清空/复制/打开目录、DOM 最多留 5000 行。9 个语言包各加 11 键 |
+| 「守护进程 → 查看守护进程日志」标签页 | 菜单开一个 `type: 'daemonlog'` 的单例标签页（`frontend/daemonlog.js`），按偏移量增量读 `<exe>/logs/daemon.log`（新绑定 `ReadDaemonLog`）：首次取末尾 128 KB 并丢掉半行，之后每 800 ms 续读，切走停轮询、切回补读。走文件而不是事件流，是为了能看见 GUI 启动**之前**的行 —— 排查「守护进程起不来」时那些行才关键。等宽着色（`[错误]` 红 / `[警告]` 黄）、跟随/清空/复制/打开目录、DOM 最多留 5000 行。9 个语言包各加 11 键。**日志路径由守护进程自己报**：`daemon.info` 增加 `logPath`（`protocol.DaemonInfo`，`omitempty`，老守护进程不回时客户端退回「与 GUI 同目录」的推导），GUI 只在「从头读」时问一次并缓存 —— 否则用户态安装 / systemd 服务 / 手工从别处起的守护进程，GUI 就永远显示「日志文件还没生成」 |
 
 ## v0.8.3 已完成
 
