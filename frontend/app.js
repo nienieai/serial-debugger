@@ -2016,6 +2016,9 @@ var _tabDrag = null;   // { btn, idx, started, ph, pid, ... }
 
 function _tabDragDown(e) {
   if (e.button !== 0) return;
+  // 只有一个标签时不做拖动排序：这点位移让给「拖动窗口」。
+  // （两套拖动不能同时生效：pointer 捕获会吃掉窗口拖动依赖的鼠标事件）
+  if (document.querySelectorAll('#tabsScroll .tab-btn').length <= 1) return;
   var btn = e.currentTarget;
   if (e.target && e.target.closest && e.target.closest('.close-tab')) return;
   var idx = parseInt(btn.dataset.tabIdx, 10);
@@ -5097,6 +5100,10 @@ function renderTabs() {
   _ensureTabsHist();
   _updateTabDensity(true);
   if (typeof _updateTabArrows === 'function') _updateTabArrows();
+
+  // 只有一个标签时，整条标签栏兼作窗口拖动区（见 style.css 的 .is-window-drag）。
+  // 多标签时不加：那种情况下标签栏要用于拖动排序。
+  scroll.classList.toggle('is-window-drag', scroll.querySelectorAll('.tab-btn').length === 1);
 }
 
 // ---- port open/close ----

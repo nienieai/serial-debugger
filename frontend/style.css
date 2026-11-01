@@ -443,6 +443,14 @@ button:disabled:active { transform: none; box-shadow: none; }
   align-self: stretch; flex: 1 1 auto; min-width: 0;
 }
 .tabs-scroll::-webkit-scrollbar { display: none; /* Chrome/Safari */ }
+/* 只有一个标签时，标签栏整体当作窗口拖动区（v3 运行时认这个自定义属性，
+   见 runtime 的 drag.ts：只有真的发生拖动才抑制 click/右键，
+   单纯点一下仍然按正常点击处理）。
+   --wails-draggable 会继承，所以标签本身和「+」按钮都在拖动区内。
+   标签拖动排序在单标签时由 JS 主动让路（_tabDragDown 直接返回），两套拖动不打架。 */
+.tabs-scroll.is-window-drag {
+  --wails-draggable: drag;
+}
 /* 标签栏左右「还能滚」提示：复用发送区的 .send-scroll-arrow（绝对定位、不吃
    布局、pointer-events:none），只换宽度与渐变底色 —— 标签栏底色是 --bg2。 */
 .tabs-scroll-arrow { width: 26px; font-size: 18px; }
