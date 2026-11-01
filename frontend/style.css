@@ -480,7 +480,9 @@ button:disabled:active { transform: none; box-shadow: none; }
   z-index: 2; margin-bottom: -1px; padding-bottom: 8px; height: 33px;
   box-shadow: 0 -1px 3px rgba(0,0,0,0.06);
 }
-.tab-btn:active { transform: scale(0.96); }
+/* 按下不缩放：标签栏是密集排列，缩放会让整排视觉抖动（用户反馈）。
+   这里同时盖掉 154 行全局 button:active 的 scale —— 类选择器优先于元素选择器。 */
+.tab-btn:active { transform: none; }
 .tab-btn.is-active:active { background-color: var(--input-bg); }
 
 /* ---- 7b. 各条栏的主题背景图 + 遮罩 ----
