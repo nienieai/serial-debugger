@@ -2230,6 +2230,22 @@ function _flipShift(el, dx, dy) {
 // 为什么不用 v3 的原生拖窗（startDrag）：它不是公开 API。这里用 pointermove
 // 算屏幕坐标 + SetWindowPosition 模拟，限流到约 8ms 一次。
 
+// 把「已经在左右拖排序」的视觉收干净，但**不改顺序**：用于转成 tear-off。
+function _tabDragCancelVisual(st) {
+  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+  st.ph = null;
+  st.btn.classList.remove('tab-dragging');
+  st.btn.style.left = '';
+  st.btn.style.top = '';
+  st.btn.style.width = '';
+  st.btn.style.height = '';
+  if (st.addBtn) st.addBtn.style.transform = '';
+  document.body.classList.remove('is-tab-dragging');
+  _tabDragStopAutoScroll();
+  // 标成「没真正开始排序」：_tabDragFinish 那边看到 tearing 就不走排序收尾了
+  st.started = false;
+}
+
 function _tabCanTearOff(st) {
   var tab = state.tabs[st.idx];
   return !!(tab && tab.sessionId && state.daemonOnline);
@@ -2259,6 +2275,99 @@ function _tabTearOffStart(st, e) {
 // 真正的松手时机，前端此时可能已经收不到事件了）。
 function _tabTearOffFinish(st) {
   st.finished = true;
+}
+
+// ---- 「并进别的窗口后继续拖」的接管 ----
+//
+// 单标签窗口拖到别人的标签栏上，Go 会立刻把这一页转过去并关掉那个窗口。
+// 鼠标还按着，但指针已经不在会派发 pointermove 的地方了（源窗口没了，目标窗口
+// 自己也拿不到）—— 光标位置由 Go 每 16ms 用 tab-drop-move 帧发过来，这里照着
+// 现有排序拖动的视觉把标签拖着左右滑，松手（tab-drop-end）落座。
+//
+// 为什么不留着跟随窗：窗口是独立 HWND，盖在别人标签栏上就没法「插进那排标签」，
+// 用户要的是并进去之后还能继续左右挑位置。
+var _ghostDrag = null;      // { sid, idx, btn, ph, w }
+var _pendingGhost = null;   // { sid, x }：标签还没同步出来，等着
+var _syncAfterGhost = false;
+
+// Go 的 tab-drop-begin：这一页已经转给本窗口了，建出标签并接管拖动
+function _beginDropSort(sid, relX) {
+  if (!sid) return;
+  _pendingGhost = { sid: String(sid), x: relX };
+  // 会话刚落过来，本地还没有它的标签：先重同步。标签建出来以后
+  // _tryBeginGhost 会在同步末尾把它接过去。
+  syncDaemonSessions();
+  _tryBeginGhost();
+}
+
+function _tryBeginGhost() {
+  if (!_pendingGhost || _ghostDrag) return;
+  var want = _pendingGhost.sid;
+  var idx = -1;
+  for (var i = 0; i < state.tabs.length; i++) {
+    if (state.tabs[i] && String(state.tabs[i].sessionId) === want) { idx = i; break; }
+  }
+  if (idx < 0) return;   // 标签还没建出来，等下一次同步末尾再试
+  var x = _pendingGhost.x;
+  _pendingGhost = null;
+  switchTab(idx);        // 新标签变成打开的页面
+  _ghostBegin(idx, x);
+}
+
+function _ghostBegin(idx, relX) {
+  var btn = document.querySelector('.tab-btn[data-tab-idx="' + idx + '"]');
+  if (!btn) return;
+  var r = btn.getBoundingClientRect();
+  var ph = document.createElement('div');
+  ph.className = 'tab-placeholder';
+  ph.style.width = r.width + 'px';
+  btn.parentNode.insertBefore(ph, btn);
+
+  btn.classList.add('tab-dragging');
+  btn.style.width = r.width + 'px';
+  btn.style.height = r.height + 'px';
+  btn.style.left = r.left + 'px';
+  btn.style.top = r.top + 'px';
+  document.body.classList.add('is-tab-dragging');
+
+  _ghostDrag = { sid: String(state.tabs[idx].sessionId), idx: idx, btn: btn, ph: ph, w: r.width };
+  if (typeof relX === 'number') _ghostMove(relX);
+}
+
+function _ghostMove(relX) {
+  var g = _ghostDrag;
+  if (!g || typeof relX !== 'number') return;
+  // Go 发的是「相对窗口左边的物理像素」，页面这边是 CSS 像素
+  var dpr = window.devicePixelRatio || 1;
+  var gx = relX / dpr;
+  var bar = document.getElementById('tabsBar');
+  if (bar) {
+    var br = bar.getBoundingClientRect();
+    gx = Math.max(br.left + 4, Math.min(gx, br.right - g.w - 4));
+  }
+  g.btn.style.left = gx + 'px';
+  _tabDragPlace({ btn: g.btn, ph: g.ph }, gx);
+}
+
+function _ghostEnd() {
+  var g = _ghostDrag;
+  if (!g) {
+    _pendingGhost = null;
+    return;
+  }
+  _ghostDrag = null;
+  g.btn.classList.remove('tab-dragging');
+  g.btn.style.left = '';
+  g.btn.style.top = '';
+  g.btn.style.width = '';
+  g.btn.style.height = '';
+  document.body.classList.remove('is-tab-dragging');
+  _finishTabReorder(g.btn, g.idx, g.ph, true);
+  // 拖动期间压着的同步（见 syncDaemonSessions 开头）现在补上
+  if (_syncAfterGhost) {
+    _syncAfterGhost = false;
+    syncDaemonSessions();
+  }
 }
 
 // 只从本窗口摘掉标签：不调 CloseSession，会话在守护进程里继续活着
@@ -2294,6 +2403,16 @@ function _tabDragMove(e) {
       _tabTearOffStart(st, e);
       return;
     } else {
+      return;
+    }
+  } else if (_tabCanTearOff(st)) {
+    // 已经在左右拖排序了，还能继续往下拖出成窗口。以前进了排序分支就再也不判
+    // tear-off，用户「先左右挪两下、再往下拖」就永远拖不出窗口，只能先松手重来。
+    var tdx = Math.abs(e.clientX - st.startX);
+    var tdy = Math.abs(e.clientY - st.startY);
+    if (tdy >= TEAR_OFF_DY && tdy > tdx) {
+      _tabDragCancelVisual(st);
+      _tabTearOffStart(st, e);
       return;
     }
   }
@@ -2348,20 +2467,28 @@ function _tabDragFinish(commit) {
   st.btn.style.height = '';
   if (st.addBtn) st.addBtn.style.transform = '';
 
-  var scroll = document.getElementById('tabsScroll');
-  var kids = scroll ? Array.prototype.filter.call(scroll.children, function(el) { return el !== st.btn; }) : [];
-  var target = st.ph ? kids.indexOf(st.ph) : -1;
-  if (st.ph && st.ph.parentNode) st.ph.parentNode.removeChild(st.ph);
+  _finishTabReorder(st.btn, st.idx, st.ph, commit);
+}
 
-  if (commit && target >= 0 && target !== st.idx) {
-    var moved = state.tabs.splice(st.idx, 1)[0];
+// 按占位块的位置把 state.tabs 重排一次，然后重画。
+//
+// 排序拖动（_tabDragFinish）和「并进别的窗口后接管拖动」（_ghostEnd）共用：
+// 两边的视觉状态是同一套，落座逻辑没理由写两份。
+function _finishTabReorder(btn, idx, ph, commit) {
+  var scroll = document.getElementById('tabsScroll');
+  var kids = scroll ? Array.prototype.filter.call(scroll.children, function (el) { return el !== btn; }) : [];
+  var target = ph ? kids.indexOf(ph) : -1;
+  if (ph && ph.parentNode) ph.parentNode.removeChild(ph);
+
+  if (commit && target >= 0 && target !== idx) {
+    var moved = state.tabs.splice(idx, 1)[0];
     state.tabs.splice(target, 0, moved);
-    if (state.activeTab === st.idx) state.activeTab = target;
-    else if (st.idx < state.activeTab && target >= state.activeTab) state.activeTab--;
-    else if (st.idx > state.activeTab && target <= state.activeTab) state.activeTab++;
+    if (state.activeTab === idx) state.activeTab = target;
+    else if (idx < state.activeTab && target >= state.activeTab) state.activeTab--;
+    else if (idx > state.activeTab && target <= state.activeTab) state.activeTab++;
     // 拖动结束后浏览器还会补一个 click，别让它把标签又切回去
     window._tabClickSuppress = true;
-    setTimeout(function() { window._tabClickSuppress = false; }, 0);
+    setTimeout(function () { window._tabClickSuppress = false; }, 0);
   }
   renderTabs();
 }
@@ -2653,6 +2780,13 @@ window.addEventListener('DOMContentLoaded', () => {
       // 送得出去（实测：标签转过来却没出现）。同步完 _tryActivatePending 会切过去。
       _activateSessionSoon(d && d.sid);
       if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+    } else if (name === 'tab-drop-begin') {
+      // 单标签窗口并进来了，鼠标还没松：接过来继续左右拖（见 _ghostDrag）
+      _beginDropSort(d && d.sid, d && d.x);
+    } else if (name === 'tab-drop-move') {
+      _ghostMove(d && d.x);
+    } else if (name === 'tab-drop-end') {
+      _ghostEnd();
     }
   });
 
@@ -2947,6 +3081,9 @@ function _applyDaemonSessionToTab(tab, ds) {
 }
 
 async function syncDaemonSessions(procData) {
+  // 有标签正被「接管拖动」（并进来的那一页，鼠标还没松）：这时候重画标签栏会把
+  // 正在拖的 DOM 抽掉，拖动就断了。压到松手之后再补一次（见 _ghostEnd）。
+  if (_ghostDrag) { _syncAfterGhost = true; return; }
   if (syncPending) { syncAgain = true; return; }
   syncPending = true;
   try {
@@ -3229,6 +3366,8 @@ async function syncDaemonSessions(procData) {
   // 别的窗口拖过来的那一页（见 _activateSessionSoon）：标签这次同步才建出来的话，
   // 到这里就能切过去了。
   _tryActivatePending();
+  // 同上，但这次是「鼠标还按着」的那种：接过来继续左右拖（见 _ghostDrag）。
+  _tryBeginGhost();
   } finally {
     syncPending = false;
     if (syncAgain) {
