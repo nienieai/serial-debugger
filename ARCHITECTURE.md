@@ -221,8 +221,8 @@ sequenceDiagram
 | `ping` | — | `{"pong":"ok"}`（静默） |
 | `subscribe` | `events: ["rx","tx",...]`（空数组推送全部已订阅状态） | `{"subscribed": N}`（订阅后立即推送对应状态） |
 | `status` | — | `{"status":"ok","version","protocolVersion"}` |
-| `ports` | — | `{"ports":[{port,description,inUse,inUseBy}]}` — `inUseBy` 为 `daemon`（本工具会话占用）/ `other`（别的程序占用，仅 Windows 判得出）；缓存，不重新探测 |
-| `ports.refresh` | — | 同上，但会重查端口、**重做一次占用试开**，结果变化时广播 `ports-changed` |
+| `ports` | — | `{"ports":[{port,description,inUse,inUseBy}]}` — `inUseBy` 为 `daemon`（本工具会话占用）/ `other`（别的程序占用，仅 Windows 判得出）。占用由 2 秒硬件探针持续重试开刷新，所以缓存结果最旧也就一个探针周期 |
+| `ports.refresh` | — | 同上，但会重查端口并立即重做占用试开，结果变化时广播 `ports-changed` |
 | `ports.probe` | `ports? baudRates? rules? configPath?` | `{"results":[{port,baud,rule,description}]}` |
 | `process.create` | `mode? port? baud? ... portB? baudB? ... connect? name?` | `{"processId","name","connected","success"}` — `connect: false` 声明配置不打开端口；`name` 是线程名（留空用自动名） |
 | `process.destroy` | `processId` | `{"success"}` |

@@ -329,12 +329,18 @@ func (s *IpcServer) startHwProbe() {
 					continue
 				}
 				last := s.hwProbeLastPorts
-				if portsChangedStr(last, ports) {
+				setChanged := portsChangedStr(last, ports)
+				if setChanged {
 					s.hwProbeLastPorts = ports
-					// 硬件探针只跟「端口集合变没变」，不做占用试开
-					// （试开会短暂独占打开设备，见 refreshPortBusy）。
-					s.reloadCache(false)
 				}
+				// 端口集合变了当然要重算；**没变也要重算**，因为「被别的程序占用」
+				// 与端口集合无关：别人随时可能打开/关掉某个口，只在启动时探一次的话
+				// 界面会一直显示旧状态，用户点开下拉看不到红标（实际反馈）。
+				//
+				// 每 2s 试开的代价可以忽略：已判为被占用的一次 CreateFile 失败即返回；
+				// 空闲口开→立刻关，不碰 DCB（不拉 DTR）；本工具自己占的端口直接跳过。
+				// reloadCache 内部只在结果变化时才广播 ports-changed。
+				s.reloadCache(true)
 			case <-s.hwProbeStop:
 				return
 			}

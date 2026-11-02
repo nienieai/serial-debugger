@@ -1548,11 +1548,17 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .o-divider--quick::before { content: ""; position: absolute; top: 0; left: -3px; bottom: 0; width: 10px; }
 .o-divider--quick:hover, .o-divider--quick.is-active { background: var(--accent); }
 
-/* 收起态（面板 display:none）：分隔条往内挪 10px，把窗口右边缘让给原生缩放。
-   它原本 margin-right:-3px + ::before 左扩 3px，热区正好压在客户区最右边；
-   拖窗口边框改大小时，mousedown 会被 initQuickPanelDrag 抢走并 preventDefault，
-   于是窗口不缩放、反而把面板拉出来（TODO #96）。 */
-.o-divider--quick.is-collapsed { margin-right: 10px; }
+/* 收起态（面板 display:none）：
+   **线的位置不动**（仍贴着右边缘，不内缩——内缩会在右边留一条竖缝，很难看），
+   只把「可拖拽的命中带」挪进内侧：
+   - 元素本身 pointer-events:none → 最右侧不再吞掉 mousedown，窗口边框缩放照常；
+   - ::before 改成距边缘 6px 起、宽 16px 的命中带（并单独 auto）→ 6~22px 都能抓，
+     比原来的 10px 更好拖。
+   面板展开时两条规则都不生效（线两侧本来就该能拖）。（TODO #96） */
+.o-divider--quick.is-collapsed { pointer-events: none; }
+.o-divider--quick.is-collapsed::before {
+  left: auto; right: 6px; width: 16px; pointer-events: auto;
+}
 
 .quick-panel {
   background: color-mix(in srgb, var(--input-bg) 88%, transparent); min-width: 0; overflow: hidden;

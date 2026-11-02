@@ -1109,10 +1109,19 @@ async function fixSerialPermission() {
 // 用户把提示关掉时仍然要给一条能照着做的路，所以补一句手动修法。
 function _onOpenError(e) {
   // 守护进程把「端口被别的程序占用」这类可预期失败编码成 sys.* 键，这里直接翻成
-  // 当前语言，别把 Access is denied 原样甩给用户（TODO #98）。
+  // 当前语言，别把 Access is denied 原样甩给用户。
+  //
+  // 注意不能只看开头：Wails 把 Go 的 error 包成 `RuntimeError: <原文>`，实测弹窗
+  // 里出现的就是「打开失败RuntimeError: sys.port_busy_other」，所以用正则抓键。
   var raw = String(e || '');
-  if (raw.indexOf('sys.') === 0) {
-    showAlert(t('cli.error', '错误'), formatSysMsg(raw));
+  var sysKey = (raw.match(/sys\.[A-Za-z0-9_.]+/) || [null])[0];
+  if (sysKey) {
+    showAlert(t('cli.error', '错误'), formatSysMsg(sysKey));
+    // 顺手刷新一次端口列表：此刻正是「被别的程序占了」的现场，让下拉立刻标红，
+    // 而不是等用户下次手动刷新才看到。
+    if (sysKey === 'sys.port_busy_other' && typeof refreshPortsForce === 'function') {
+      refreshPortsForce().catch(function() {});
+    }
     return;
   }
   var msg = t('serial.open_fail', '打开失败: ') + e;
