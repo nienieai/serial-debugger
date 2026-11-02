@@ -111,6 +111,9 @@ type AppendDefaults struct {
 var iniSectionOrder = []string{"display", "serial", "autosend", "append"}
 
 func defaultSettings() *AppSettings {
+	// Language 默认「跟随系统」：新装用户直接拿到自己系统语言的界面，
+	// 系统语言不在九种内置语言里就回落英语（解析在 i18n.js 的 resolveAutoLang）。
+	// 已有 gui.ini 里的 language 值不受影响。
 	return &AppSettings{
 		DisplayMode:        "text",
 		SendRatio:          0.3,
@@ -130,7 +133,7 @@ func defaultSettings() *AppSettings {
 		Theme:              "auto",
 		ColorThemeID:       "theme-default",
 		IconThemeID:        "",
-		Language:           "zh",
+		Language:           "auto",
 		AutoCreateMode:     "single",
 		ShutdownDaemonMode: "last",
 		ShutdownDaemonWarn: true,

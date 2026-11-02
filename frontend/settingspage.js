@@ -1008,23 +1008,6 @@ function _buildEncodingSelect() {
 	return _buildSelect(['utf-8','gb2312','ascii'], ['UTF-8','GB2312','ASCII'], state.encoding, function(v) { setEncoding(v); });
 }
 
-function _buildLangSelect() {
-	var langs = [
-		['auto', t('settings.lang_auto', '跟随系统')],
-		['zh', '简体中文'], ['zh-Hant', '繁體中文'], ['en', 'English'],
-		['fr', 'Français'], ['es', 'Español'], ['ru', 'Русский'],
-		['ar', 'العربية'], ['ja', '日本語'], ['ko', '한국어']
-	];
-	if (window._externalLangs) {
-		window._externalLangs.forEach(function(el) {
-			// 后端返回的字段是 lang（旧代码读 el.code，外置语言根本进不了这个下拉）
-			var code = el.lang || el.code;
-			if (code && !langs.some(function(l) { return l[0] === code; })) langs.push([code, el.name || code]);
-		});
-	}
-	return _buildSelect(langs.map(function(p){return p[0];}), langs.map(function(p){return p[1];}), state.language, function(v) { setLanguage(v); });
-}
-
 // ---- theme color cache ----
 var _themeColorCache = {};
 
@@ -1364,7 +1347,7 @@ async function refreshSettingsLangList() {
 	try {
 		window._externalLangs = await window.go.main.App.ListExternalI18n() || [];
 	} catch(e) { window._externalLangs = []; }
-	var lang = state.language || 'zh';
+	var lang = state.language || 'auto';
 	var builtinLangs = ['zh','zh-Hant','en','fr','es','ru','ar','ja','ko'];
 	var all = [];
 	// 「跟随系统」排在最前面：它不是语言包，选中后由 resolveAutoLang() 按系统语言

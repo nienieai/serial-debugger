@@ -2762,3 +2762,26 @@ input.settings-select::-webkit-outer-spin-button { -webkit-appearance: none; mar
 .t-daemonlog-btn.is-on { color: var(--accent); border-color: var(--accent); }
 .t-daemonlog-btn:active { transform: scale(0.96); }
 .t-daemonlog-btn:disabled { opacity: .5; cursor: default; }
+
+/* ---- 21. 输入控件的毛玻璃 ---- */
+/* 设置页 / 两个弹窗 / 工具栏 / 多字符串面板里的输入壳统一改成半透明 + 背景模糊，
+   与菜单下拉同一套观感。放在文件末尾是有意的：.cs-trigger / .settings-select /
+   .settings-search 各自都写过 background，必须排在它们之后才能覆盖。
+   范围刻意排除：
+   - checkbox / radio / range —— 开关的视觉由 .settings-toggle-slider 负责；
+   - 发送框 textarea —— 上面叠了镜像层，半透明会干扰着色与选区。 */
+.settings-page-inner input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.settings-page-inner select,
+.settings-search,
+.c-form-row input:not([type="checkbox"]):not([type="radio"]),
+.c-form-row select,
+.tabset-row input:not([type="checkbox"]):not([type="radio"]),
+.tabset-row select,
+.send-controls input[type="number"],
+.qp-row input[type="text"],
+.qp-row input[type="number"],
+.cs-trigger {
+  background: color-mix(in srgb, var(--input-bg) 72%, transparent);
+  backdrop-filter: blur(10px) saturate(1.25);
+  -webkit-backdrop-filter: blur(10px) saturate(1.25);
+}

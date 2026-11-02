@@ -181,7 +181,7 @@ function resolveAutoLang() {
 
 // 当前真正生效的语言码（'auto' 解析成具体语言；其它值原样）。
 function effectiveLang() {
-  var l = (typeof state !== 'undefined' && state && state.language) ? state.language : 'zh';
+  var l = (typeof state !== 'undefined' && state && state.language) ? state.language : 'auto';
   return l === 'auto' ? resolveAutoLang() : l;
 }
 
@@ -214,7 +214,7 @@ async function initExternalLangs() {
 }
 
 function updateLangMenu() {
-  const lang = state.language || 'zh';
+  const lang = state.language || 'auto';
   const eff = (lang === 'auto') ? resolveAutoLang() : lang;
   // 「跟随系统」本身要不要打勾
   const autoEl = document.getElementById('menuLangAuto');

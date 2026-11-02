@@ -195,7 +195,7 @@ const state = {
   colorThemes: [],
   iconThemeId: '',
   iconThemes: [],
-  language: 'zh',
+  language: 'auto',
   scrollLocked: false,
   // 历史渲染窗口行数：null = 按视口推导（推荐）；数字 = 设置里手动指定
   historyWindowRows: null,
@@ -1255,7 +1255,7 @@ function _themeName(raw) {
   if (!raw) return '';
   if (typeof raw === 'string') return raw;
   if (typeof raw === 'object') {
-    var lang = state.language || 'zh';
+    var lang = state.language || 'auto';
     // 1. Exact match for current language
     if (raw[lang]) return raw[lang];
     // 2. Short form match (e.g. "zh-Hant" → "zh")
@@ -1991,6 +1991,33 @@ function _csRefresh(wrap) {
   }
 }
 
+// 计算 portal 下拉的位置与高度（打开时和 resize 时共用）。
+//
+// 关键：窗口底部附近的下拉**要向上弹**。以前只算「trigger 底 → 状态栏顶」的
+// 剩余高度并用 max(80, …) 兜底，于是靠近窗口底时那 80px 会顶穿状态栏、被窗口
+// 边缘截断（设置页「高级」里那几项实测就是这样，最后一项只露出半截）。
+function _csPosition(dropdown, trigger) {
+  if (!dropdown || !trigger) return;
+  var rect = trigger.getBoundingClientRect();
+  var sb = document.querySelector('.statusbar');
+  var limitBottom = Math.min(window.innerHeight, sb ? sb.getBoundingClientRect().top : window.innerHeight) - 6;
+  var spaceBelow = limitBottom - (rect.bottom + 2);
+  var spaceAbove = rect.top - 8;
+  // 下方连两行都放不下、且上方更宽裕 → 向上弹
+  var dropUp = spaceBelow < 88 && spaceAbove > spaceBelow;
+  dropdown.style.left = rect.left + 'px';
+  dropdown.style.minWidth = rect.width + 'px';
+  dropdown.style.maxWidth = Math.min(rect.width * 2, window.innerWidth - rect.left - 12) + 'px';
+  dropdown.style.maxHeight = Math.max(80, Math.floor(dropUp ? spaceAbove : spaceBelow)) + 'px';
+  if (dropUp) {
+    dropdown.style.top = 'auto';
+    dropdown.style.bottom = (window.innerHeight - rect.top + 2) + 'px';
+  } else {
+    dropdown.style.bottom = 'auto';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+  }
+}
+
 function _csOpenDropdown(wrap) {
   if (_csOpen && _csOpen !== wrap) _csClose(_csOpen);
   _csRefresh(wrap);
@@ -2001,17 +2028,8 @@ function _csOpenDropdown(wrap) {
   dd.classList.add('is-portalled');
   dd.style.display = 'block';
   var trig = wrap.querySelector('.cs-trigger');
-  var rect = trig ? trig.getBoundingClientRect() : { left: 0, bottom: 0, width: 0 };
   dd.style.position = 'fixed';
-  dd.style.left = rect.left + 'px';
-  dd.style.top = (rect.bottom + 2) + 'px';
-  dd.style.minWidth = rect.width + 'px';
-  dd.style.maxWidth = Math.min(rect.width * 2, window.innerWidth - rect.left - 12) + 'px';
-  // max-height: from trigger bottom to statusbar top (minus margin)
-  var sb = document.querySelector('.statusbar');
-  var sbTop = sb ? sb.getBoundingClientRect().top : window.innerHeight;
-  var avail = sbTop - rect.bottom - 6;
-  dd.style.maxHeight = Math.max(80, Math.floor(avail)) + 'px';
+  _csPosition(dd, trig);
   dd.style.zIndex = '200';
   wrap.classList.add('is-open');
   _csOpen = wrap;
@@ -2021,10 +2039,7 @@ function _csOpenDropdown(wrap) {
   // Close on window resize
   _csResizeObserver = new ResizeObserver(function() {
     if (!_csOpen) return;
-    var r2 = trig.getBoundingClientRect();
-    dd.style.left = r2.left + 'px';
-    dd.style.top = (r2.bottom + 2) + 'px';
-    dd.style.minWidth = r2.width + 'px';
+    _csPosition(dd, trig);
   });
   _csResizeObserver.observe(document.body);
   var selOpt = wrap.querySelector('.cs-option.is-selected');
