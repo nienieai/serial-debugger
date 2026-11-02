@@ -29,6 +29,18 @@ type portInfo struct {
 	//   "other"            —— 被别的程序占着（Windows 上独占试开被拒）
 	InUse   bool   `json:"inUse"`
 	InUseBy string `json:"inUseBy,omitempty"`
+	// 下面三个只在 InUseBy == "daemon" 时出现，告诉调用方「是本工具的哪个会话」。
+	// 别的程序占着时系统不提供进程信息（要枚举全系统句柄，见 REQUIREMENTS #59）。
+	OwnerProcessId string `json:"ownerProcessId,omitempty"`
+	OwnerName      string `json:"ownerName,omitempty"`
+	OwnerMode      string `json:"ownerMode,omitempty"`
+}
+
+// portOwner 是「端口 → 本工具占用它的那个进程」的摘要。
+type portOwner struct {
+	ID   string
+	Name string
+	Mode string
 }
 
 // ---- client session (3-pipe) ----
@@ -189,16 +201,16 @@ func (s *IpcServer) getPortDescs() map[string]string {
 }
 
 // buildPortList 组出端口列表。probeBusy=true 时顺带重做一遍「被别的程序占用」的
-// 试开判断（只有显式刷新 / 启动才传 true）。
+// 试开判断。
 func (s *IpcServer) buildPortList(probeBusy bool) []portInfo {
 	ports, err := serial.GetPortsList()
 	if err != nil {
 		return nil
 	}
 	descs := s.getPortDescs()
-	owned := s.ownedPorts()
+	owners := s.portOwners()
 	if probeBusy {
-		s.refreshPortBusy(ports, owned)
+		s.refreshPortBusy(ports, owners)
 	}
 	busy := s.getPortBusy()
 	result := make([]portInfo, 0, len(ports))
@@ -208,10 +220,10 @@ func (s *IpcServer) buildPortList(probeBusy bool) []portInfo {
 			desc = p
 		}
 		item := portInfo{Port: p, Description: desc}
-		switch {
-		case owned[p]:
+		if o, ours := owners[p]; ours {
 			item.InUse, item.InUseBy = true, "daemon"
-		case busy[p] == portBusyOther:
+			item.OwnerProcessId, item.OwnerName, item.OwnerMode = o.ID, o.Name, o.Mode
+		} else if busy[p] == portBusyOther {
 			item.InUse, item.InUseBy = true, "other"
 		}
 		result = append(result, item)
@@ -219,29 +231,37 @@ func (s *IpcServer) buildPortList(probeBusy bool) []portInfo {
 	return result
 }
 
-// ownedPorts 返回本工具自己占用的端口（任意客户端的会话都算）。
-func (s *IpcServer) ownedPorts() map[string]bool {
-	owned := make(map[string]bool)
+// portOwners 返回「本工具自己占用的端口 → 占用它的进程」。任意客户端的会话都算。
+//
+// 在 pm.mu 读锁内取，Process.Name() 只锁自己的 nameMu，不会和 pm.mu 互相等。
+func (s *IpcServer) portOwners() map[string]portOwner {
+	owners := make(map[string]portOwner)
 	if s.pm == nil {
-		return owned
+		return owners
 	}
 	s.pm.mu.RLock()
-	for port := range s.pm.portMap {
-		owned[port] = true
+	defer s.pm.mu.RUnlock()
+	for port, id := range s.pm.portMap {
+		o := portOwner{ID: id}
+		if p := s.pm.processes[id]; p != nil {
+			o.Name = p.Name()
+			o.Mode = p.mode
+		}
+		owners[port] = o
 	}
-	s.pm.mu.RUnlock()
-	return owned
+	return owners
 }
 
 // refreshPortBusy 对「不是本工具占用」的端口做一次独占试开，缓存结果。
 //
-// 只在启动与显式刷新时调用：试开虽然不碰 DCB（不会拉 DTR），但确实会短暂独占
-// 打开设备，不该跟着 2 秒的硬件探针反复做。设备已经打不开（拔掉/驱动异常）时
-// probe 返回 unknown，界面保持原样，不误标红。
-func (s *IpcServer) refreshPortBusy(ports []string, owned map[string]bool) {
+// 2 秒硬件探针每拍都会调它：占用状态与端口集合无关，别人随时可能打开/关掉某个口，
+// 只在启动时探一次的话界面会一直停在旧状态。代价可忽略——被占用的口 CreateFile
+// 立刻失败返回，空闲口开→立刻关且不碰 DCB（不拉 DTR），本工具自己占的直接跳过。
+// 设备已经打不开（拔掉/驱动异常）时 probe 返回 unknown，界面保持原样，不误标红。
+func (s *IpcServer) refreshPortBusy(ports []string, owners map[string]portOwner) {
 	next := make(map[string]portBusyState, len(ports))
 	for _, p := range ports {
-		if owned[p] {
+		if _, ours := owners[p]; ours {
 			continue
 		}
 		next[p] = probePortBusy(p)

@@ -227,7 +227,7 @@ go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 | 类别 | 命令 |
 | --- | --- |
 | 守护进程 | `start` `check` `status` `shutdown` |
-| 端口 | `ports` `refresh` `probe [ports...] [--config] [--budget]` |
+| 端口 | `ports [--table]` `refresh [--table]` `probe [ports...] [--config] [--budget]` |
 | 进程 | `create` `rename` `declare` `open` `connect` `disconnect` `close` `switch` `setmode` `forward` `session-open` |
 | 数据 | `send [--hex]` `sendone [--raw]` `stats` `history` |
 | 自动发送 | `autosend start/stop/status/interval` `sendqueue` |

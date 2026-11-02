@@ -253,6 +253,7 @@
   "perm.no_pkexec": "لم يتم العثور على pkexec، لذا لا يمكن عرض نافذة التفويض. اطلب من المسؤول تنفيذ install.sh --fix-permissions.",
   "placeholder.no_process": "لا توجد عمليات المنفذ التسلسلي",
   "port.busy_other": " (قيد الاستخدام من تطبيق آخر)",
+  "port.busy_session": " (قيد الاستخدام بواسطة {name})",
   "quick_panel.add": "+ إضافة",
   "quick_panel.clear_all": "مسح الكل",
   "quick_panel.clear_all_msg": "هل أنت متأكد من مسح جميع الإعدادات المسبقة؟ لا يمكن التراجع عن هذا الإجراء.",

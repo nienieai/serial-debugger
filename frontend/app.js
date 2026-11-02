@@ -4022,11 +4022,24 @@ function updatePortList(ports) {
   } else {
     ports.forEach(p => {
       const desc = (p.description && p.description !== p.port) ? ' — ' + p.description : '';
-      // 被**别的程序**占着（守护进程试开判出来的）：选项标红并写明原因。
-      // 本工具自己的会话占用仍走 .port-occupied（黄），由 _markOccupied 按标签维护。
+      // 占用分两类，颜色也不同：
+      //   other    —— 被**别的程序**占着（守护进程独占试开判出来的）→ 红底 + 说明
+      //   daemon   —— 被**本工具的某个会话**占着（可能是别的窗口 / CLI / MCP 建的）
+      //              → 黄底 + 「会话名」后缀。注意这里刻意用 .port-busy-session 而不是
+      //              .port-occupied：后者由 _markOccupied 按「本窗口的标签」动态维护，
+      //              构建时写死会被它下一次计算覆盖掉。
       const busyOther = !!(p.inUse && p.inUseBy === 'other');
-      const cls = busyOther ? ' class="port-busy-other"' : '';
-      const tail = busyOther ? t('port.busy_other', '（被其他程序占用）') : '';
+      const busySession = !!(p.inUse && p.inUseBy === 'daemon');
+      let cls = '';
+      let tail = '';
+      if (busyOther) {
+        cls = ' class="port-busy-other"';
+        tail = t('port.busy_other', '（被其他程序占用）');
+      } else if (busySession) {
+        cls = ' class="port-busy-session"';
+        const owner = p.ownerName || ('#' + (p.ownerProcessId || '?'));
+        tail = t('port.busy_session', '（{name} 占用）').replace('{name}', owner);
+      }
       html += `<option${cls} value="${escHtml(p.port)}">${escHtml(p.port + desc + tail)}</option>`;
     });
   }

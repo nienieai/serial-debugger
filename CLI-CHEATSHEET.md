@@ -35,11 +35,21 @@ serial-cli shutdown         # 优雅关闭（先断开全部串口）
 ### 端口与设备
 
 ```bash
-serial-cli ports            # 可用串口列表（缓存）
-serial-cli refresh          # 刷新串口列表
+serial-cli ports            # 可用串口列表（缓存，JSON；含 inUse/inUseBy/owner*）
+serial-cli refresh          # 刷新串口列表（顺带重做一次占用判断）
+serial-cli ports --table    # 人读表：谁占着这个口一眼看到
 serial-cli probe            # 设备端口探测（TOML 规则识别设备类型）
 serial-cli probe COM3 COM4  # 只探测指定端口
 serial-cli probe --config my-rules.toml   # 自定义规则文件
+```
+
+`ports --table` 的输出（`-` 表示空闲；`other app` 是被别的程序占用，仅 Windows 判得出）：
+
+```text
+PORT | DESCRIPTION | OCCUPIED
+COM8 | 蓝牙链接上的标准串行 | other app（被其他程序占用）
+COM12 | USB-SERIAL CH340 | 会话 3 (single, #3)
+COM15 | 蓝牙链接上的标准串行 | -
 ```
 
 ### 进程与串口

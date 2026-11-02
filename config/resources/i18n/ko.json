@@ -253,6 +253,7 @@
   "perm.no_pkexec": "pkexec이 없어 권한 창을 띄울 수 없습니다. 관리자에게 install.sh --fix-permissions 실행을 요청하세요.",
   "placeholder.no_process": "시리얼 프로세스 없음",
   "port.busy_other": " (다른 프로그램 사용 중)",
+  "port.busy_session": " ({name} 사용 중)",
   "quick_panel.add": "+ 추가",
   "quick_panel.clear_all": "모두 비우기",
   "quick_panel.clear_all_msg": "모든 프리셋을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",

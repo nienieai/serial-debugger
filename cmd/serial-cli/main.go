@@ -749,7 +749,11 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			errExit(err, interactive)
 			return
 		}
-		printJSON(result)
+		if wantsTable(args) {
+			printPortsTable(result)
+		} else {
+			printJSON(result)
+		}
 
 	case "refresh":
 		result, err := dc.Call(contract.PortsRefresh, nil)
@@ -757,7 +761,11 @@ func runCommandWithClient(dc *client.DaemonClient, args []string, interactive bo
 			errExit(err, interactive)
 			return
 		}
-		printJSON(result)
+		if wantsTable(args) {
+			printPortsTable(result)
+		} else {
+			printJSON(result)
+		}
 
 	case "threads":
 		result, err := dc.Call(contract.Threads, nil)
@@ -1628,6 +1636,58 @@ func printJSON(v any) {
 	fmt.Println(string(b))
 }
 
+// wantsTable 判断命令行里有没有 --table。参数按整串比较，不认得的值不管
+// （ports / refresh 本身没有别的带值参数）。
+func wantsTable(args []string) bool {
+	for _, a := range args {
+		if a == "--table" {
+			return true
+		}
+	}
+	return false
+}
+
+// printPortsTable 把 ports 结果打成一行人读表（默认仍输出 JSON，脚本不受影响）：
+//
+//	PORT | DESCRIPTION | OCCUPIED
+//	COM8 | 蓝牙链接上的标准串行 | other app
+//	COM12 | USB-SERIAL CH340 | 会话 3 (single, #3)
+//
+// 不按列补空格对齐：描述是 CJK，按字符数补会在终端里错位；用 ` | ` 分隔最稳。
+func printPortsTable(result map[string]any) {
+	ports, _ := result["ports"].([]any)
+	if len(ports) == 0 {
+		fmt.Println("PORT | DESCRIPTION | OCCUPIED")
+		fmt.Println("(没有串口)")
+		return
+	}
+	fmt.Println("PORT | DESCRIPTION | OCCUPIED")
+	for _, item := range ports {
+		m, _ := item.(map[string]any)
+		if m == nil {
+			continue
+		}
+		port, _ := m["port"].(string)
+		desc, _ := m["description"].(string)
+		occupied := "-"
+		if inUse, _ := m["inUse"].(bool); inUse {
+			by, _ := m["inUseBy"].(string)
+			if by == "other" {
+				occupied = "other app（被其他程序占用）"
+			} else {
+				name, _ := m["ownerName"].(string)
+				mode, _ := m["ownerMode"].(string)
+				id, _ := m["ownerProcessId"].(string)
+				if name == "" {
+					name = "#" + id
+				}
+				occupied = fmt.Sprintf("%s (%s, #%s)", name, mode, id)
+			}
+		}
+		fmt.Printf("%s | %s | %s\n", port, desc, occupied)
+	}
+}
+
 // translateHistory walks a session.history result and translates sys.* entries in-place.
 func translateHistory(result map[string]any) {
 	entries, _ := result["history"].([]any)
@@ -1822,8 +1882,8 @@ func printHelp() {
   shutdown                           关闭守护进程
 
 端口:
-  ports                              可用串口列表（缓存，不刷新）
-  refresh                            刷新串口列表
+  ports   [--table]                  可用串口列表（缓存，不刷新）；--table 出人读表
+  refresh [--table]                  刷新串口列表（含重做占用判断）；--table 同上
   probe  [ports...] [--config <path>] [--budget <ms>]  设备端口探测（发送探针帧识别设备类型）
 
 进程:

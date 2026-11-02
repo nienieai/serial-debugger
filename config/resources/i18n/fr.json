@@ -253,6 +253,7 @@
   "perm.no_pkexec": "pkexec est introuvable, la fenêtre d'autorisation ne peut pas s'afficher. Demandez à un administrateur d'exécuter install.sh --fix-permissions.",
   "placeholder.no_process": "Aucun processus série",
   "port.busy_other": " (utilisé par une autre app)",
+  "port.busy_session": " (utilisé par {name})",
   "quick_panel.add": "+ Ajouter",
   "quick_panel.clear_all": "Tout effacer",
   "quick_panel.clear_all_msg": "Êtes-vous sûr de vouloir effacer tous les préréglages ? Cette action est irréversible.",

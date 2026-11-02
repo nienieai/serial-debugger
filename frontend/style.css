@@ -853,6 +853,13 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 /* 被**别的程序**占着（守护进程试开判出来的）：红色，与本工具会话占用的黄色区分 */
 .port-busy-other { background: var(--red); color: #fff; }
 
+/* 被**本工具的某个会话**占着（别的窗口 / CLI / MCP 建的）：黄色，文案后缀带会话名。
+   和 .port-occupied 同色但分开写：后者由 _markOccupied 按本窗口标签动态切换，
+   构建时写进去会被它覆盖。 */
+.port-busy-session { background: var(--yellow); color: #fff; }
+@media (prefers-color-scheme: dark) { .port-busy-session { color: #000; } }
+:root[data-theme="dark"] .port-busy-session { color: #000; }
+
 /* ---- 10. Components: Buttons ---- */
 
 /* Toggle button — auto-width via ghost ::before */
@@ -1075,6 +1082,8 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .cs-option.port-occupied { background: var(--yellow); color: #fff; }
 [data-theme="dark"] .cs-option.port-occupied { color: #000; }
 .cs-option.port-busy-other { background: var(--red); color: #fff; }
+.cs-option.port-busy-session { background: var(--yellow); color: #fff; }
+[data-theme="dark"] .cs-option.port-busy-session { color: #000; }
 
 /* cs-trigger height variants */
 .config-bar  .cs-trigger,

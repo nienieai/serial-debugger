@@ -253,6 +253,7 @@
   "perm.no_pkexec": "系统里没有 pkexec，弹不出授权窗口。可请管理员执行 install.sh --fix-permissions。",
   "placeholder.no_process": "无串口进程",
   "port.busy_other": "（被其他程序占用）",
+  "port.busy_session": "（{name} 占用）",
   "quick_panel.add": "+ 添加",
   "quick_panel.clear_all": "清空全部",
   "quick_panel.clear_all_msg": "确定要清空所有预设条目吗？此操作不可恢复。",

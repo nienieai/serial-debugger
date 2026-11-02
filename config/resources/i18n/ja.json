@@ -253,6 +253,7 @@
   "perm.no_pkexec": "pkexec が見つからないため、認証ダイアログを表示できません。管理者に install.sh --fix-permissions の実行を依頼してください。",
   "placeholder.no_process": "シリアルプロセスなし",
   "port.busy_other": "（他のアプリが使用中）",
+  "port.busy_session": "（{name} が使用中）",
   "quick_panel.add": "+ 追加",
   "quick_panel.clear_all": "すべてクリア",
   "quick_panel.clear_all_msg": "すべてのプリセットをクリアしますか？この操作は元に戻せません。",

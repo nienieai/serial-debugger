@@ -253,6 +253,7 @@
   "perm.no_pkexec": "No se encontró pkexec, así que no se puede mostrar el diálogo de autorización. Pide a un administrador que ejecute install.sh --fix-permissions.",
   "placeholder.no_process": "Sin proceso serie",
   "port.busy_other": " (en uso por otra app)",
+  "port.busy_session": " (en uso por {name})",
   "quick_panel.add": "+ Añadir",
   "quick_panel.clear_all": "Limpiar todo",
   "quick_panel.clear_all_msg": "¿Está seguro de que desea limpiar todos los preajustes? Esta acción no se puede deshacer.",
