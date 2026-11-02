@@ -1367,6 +1367,14 @@ async function refreshSettingsLangList() {
 	var lang = state.language || 'zh';
 	var builtinLangs = ['zh','zh-Hant','en','fr','es','ru','ar','ja','ko'];
 	var all = [];
+	// 「跟随系统」排在最前面：它不是语言包，选中后由 resolveAutoLang() 按系统语言
+	// 解析（没有对应语言包时回落英语）。副标题显示当前解析结果，省得用户猜。
+	all.push({
+		code: 'auto',
+		name: t('settings.lang_auto', '跟随系统'),
+		builtin: true,
+		sub: (lang === 'auto') ? ('auto → ' + resolveAutoLang()) : 'auto'
+	});
 	for (var i = 0; i < builtinLangs.length; i++) {
 		var lc = builtinLangs[i];
 		var name = lc;
@@ -1406,7 +1414,7 @@ async function refreshSettingsLangList() {
 		row.appendChild(langName);
 		var langCode = document.createElement('span');
 		langCode.className = 'settings-lang-code';
-		langCode.textContent = item.code;
+		langCode.textContent = item.sub || item.code;
 		row.appendChild(langCode);
 		(function(code, el) {
 			el.addEventListener('click', function() {
