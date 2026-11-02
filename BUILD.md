@@ -39,7 +39,7 @@ go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
 go build -tags production -trimpath -buildvcs=false \
-  -ldflags "-s -w -X github.com/nienieai/serial-debugger/version.Version=0.9.0" \
+  -ldflags "-s -w -X github.com/nienieai/serial-debugger/version.Version=0.9.1" \
   -o build/bin/serial-gui .
 ```
 
@@ -140,7 +140,7 @@ Linux 产物同名去掉 `.exe`；运行 GUI 需要 `libgtk-4-1 libwebkitgtk-6.0
 .\deploy-dev.ps1 -Build     # 先重编译再部署（改了 Go 代码）
 ```
 
-目标目录默认 `<仓库>\..\串口调试工具\0.9.0-dev`，可用 `-Target` 指定。
+目标目录默认 `<仓库>\..\串口调试工具\0.9.1-dev`，可用 `-Target` 指定。
 
 之所以要脚本而不是只拷 exe，是因为**只换 exe 会有两处永远读到旧内容**：
 

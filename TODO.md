@@ -1,6 +1,6 @@
 # 待办与已知问题
 
-> 本文档维护：**待实现**（按优先级排序的表）、**已知问题**（表）、**进行中版本**（目前是 v0.9.0）与近期版本（v0.6.3 ～ v0.8.3）的已完成记录；
+> 本文档维护：**待实现**（按优先级排序的表）、**已知问题**（表）、**进行中版本**（目前是 v0.9.1）与近期版本（v0.6.3 ～ v0.9.0）的已完成记录；
 > 更早版本完成情况见 [CHANGELOG.md](CHANGELOG.md)。
 > 会话文件（`.stlog`）的格式规范在 [docs/format/stlog-format.md](docs/format/stlog-format.md)（**已进版本控制**：改格式字段必须同 PR 改规范，版本演进见 [docs/format/CHANGES.md](docs/format/CHANGES.md)）。
 
@@ -157,7 +157,13 @@
 | 94 | 先开 GUI、后开守护进程，有概率连不上 | 部分修复 | **0.8.4 遗留**。根因在 v3 迁移时定位到并改掉了：前端曾有一条「离线时每秒试连」的轮询，它和用户点「启动守护进程」抢同一把锁，把点击静默吞掉（结论留在 `frontend/app.js:2883-2884` 的注释里）。现在删掉了轮询，改成 Go 侧 `watchDaemonReady` 经 `pipe.WaitReady` 每 1s 重发 `daemon-ready`（`app.go:1020` 的 `daemonReadyRepeat`），丢一次也能自愈。**剩下的只是复验**：GUI 在跑 → 控制台起 `serial-daemon` → 1.5s 内应出现 `[daemon] 事件 daemon-ready` 与 `CheckDaemonStatus ok=true`。顺带：前端注释仍写「每 3s 重发」（`app.js:2877`、`:2958`），实际是 1s，改注释时一并改 |
 | 95 | 守护进程换实例后 GUI 不会自己重连，界面停在「在线」 | 待处理 | **2026-11-01 实测**（验证「日志路径由守护进程自报」时撞到）：`serial-cli shutdown` 停掉旧实例、1 秒后从另一个目录起新实例，之后 GUI 再没打过一条 `GetSessionsForWindow`，标签页停在旧状态；重启 GUI 才连上。**怀疑**：`daemon-ready` 的处理是 `if (!state.daemonOnline) tryConnect()`（`frontend/app.js:2708`），若干净关闭那一刻客户端没把 `daemonOnline` 置回 false（`daemon-shutdown` 没送到或没处理），新实例就绪后 `tryConnect` 直接返回。**待查**：① 守护进程退出前是否真广播了 shutdown 事件；② 心跳（2s×3 + 一次重连确认）为何没把这种情况判成掉线；③ 稳妥的修法大概是「`daemon-ready` 到达时比对 `daemon.info` 的 PID，换了实例就无条件重连一次」 |
 
-## v0.9.0 进行中
+## v0.9.1 进行中
+
+| 需求 / 问题 | 说明 |
+|---|---|
+| （暂无） | 0.9.1 开发线刚开，这一轮的条目还没进来 |
+
+## v0.9.0 已完成
 
 | 需求 / 问题 | 说明 |
 |---|---|
