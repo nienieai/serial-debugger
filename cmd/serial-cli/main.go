@@ -1651,18 +1651,40 @@ func translateHistory(result map[string]any) {
 	}
 }
 
+// errText 把守护进程回的 sys.* 键翻成当前语言，其它错误原样返回。
+//
+// 例：端口被别的程序占着时守护进程返回 "sys.port_busy_other"，直接打出来是
+// 一串键名，对命令行用户没有意义（daemon/serial.go 的 mapPortOpenErr）。
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if t := config.FormatSysMsg(cliLang, msg); t != msg {
+		return t
+	}
+	return msg
+}
+
 func errExit(err error, interactive bool) {
 	if !interactive {
 		exitOnErr(err)
 	}
-	printErr("错误: %v", err)
+	printErr("错误: %s", errText(err))
 }
 
 func exitOnErr(err error) {
-	if err != nil {
-		printErr(`{"error": "%s"}`, err.Error())
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	if t := config.FormatSysMsg(cliLang, msg); t != msg {
+		// 说明放 error，原始键放 code：脚本仍能按 code 判断，人也能看懂。
+		printErr(`{"error": %q, "code": %q}`, t, msg)
 		os.Exit(1)
 	}
+	printErr(`{"error": %q}`, msg)
+	os.Exit(1)
 }
 
 // probeOutcomeJSON 是一次探测结果对外的 JSON 形状。

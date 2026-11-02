@@ -850,6 +850,9 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 @media (prefers-color-scheme: dark) { .port-occupied { color: #000; } }
 :root[data-theme="dark"] .port-occupied { color: #000; }
 
+/* 被**别的程序**占着（守护进程试开判出来的）：红色，与本工具会话占用的黄色区分 */
+.port-busy-other { background: var(--red); color: #fff; }
+
 /* ---- 10. Components: Buttons ---- */
 
 /* Toggle button — auto-width via ghost ::before */
@@ -1071,6 +1074,7 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .cs-option.is-selected { background: var(--accent); color: #fff; }
 .cs-option.port-occupied { background: var(--yellow); color: #fff; }
 [data-theme="dark"] .cs-option.port-occupied { color: #000; }
+.cs-option.port-busy-other { background: var(--red); color: #fff; }
 
 /* cs-trigger height variants */
 .config-bar  .cs-trigger,
@@ -1543,6 +1547,12 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 }
 .o-divider--quick::before { content: ""; position: absolute; top: 0; left: -3px; bottom: 0; width: 10px; }
 .o-divider--quick:hover, .o-divider--quick.is-active { background: var(--accent); }
+
+/* 收起态（面板 display:none）：分隔条往内挪 10px，把窗口右边缘让给原生缩放。
+   它原本 margin-right:-3px + ::before 左扩 3px，热区正好压在客户区最右边；
+   拖窗口边框改大小时，mousedown 会被 initQuickPanelDrag 抢走并 preventDefault，
+   于是窗口不缩放、反而把面板拉出来（TODO #96）。 */
+.o-divider--quick.is-collapsed { margin-right: 10px; }
 
 .quick-panel {
   background: color-mix(in srgb, var(--input-bg) 88%, transparent); min-width: 0; overflow: hidden;

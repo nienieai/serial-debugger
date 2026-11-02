@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1305,6 +1306,19 @@ func (p *Process) statsLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 
 // ---- serial port helper ----
 
+// mapPortOpenErr 把「端口被别的程序占着」翻成 sys.* 键，交给客户端按各自语言翻译。
+//
+// go.bug.st/serial 已把 Windows 的 ERROR_ACCESS_DENIED 与 Linux 的 EBUSY 归到
+// PortBusy（serial_windows.go:373 / serial_unix.go:219），这里只认这个码；
+// 权限不足（PermissionDenied）保持原样返回，仍走 GUI 的串口权限横幅那条路。
+func mapPortOpenErr(err error) error {
+	var pe *serial.PortError
+	if errors.As(err, &pe) && pe.Code() == serial.PortBusy {
+		return errors.New("sys.port_busy_other")
+	}
+	return err
+}
+
 func openSerialPort(config *SerialConfig) (serial.Port, error) {
 	if config.Baud <= 0 {
 		config.Baud = 115200
@@ -1344,7 +1358,7 @@ func openSerialPort(config *SerialConfig) (serial.Port, error) {
 	select {
 	case r := <-openCh:
 		if r.err != nil {
-			return nil, r.err
+			return nil, mapPortOpenErr(r.err)
 		}
 		// 清除硬件接收缓冲区中的残留数据
 		r.p.ResetInputBuffer()

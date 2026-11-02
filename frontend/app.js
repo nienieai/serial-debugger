@@ -1108,8 +1108,15 @@ async function fixSerialPermission() {
 // 交给横幅处理（可点授权、界面照常能操作）；其它错误原样弹窗。
 // 用户把提示关掉时仍然要给一条能照着做的路，所以补一句手动修法。
 function _onOpenError(e) {
+  // 守护进程把「端口被别的程序占用」这类可预期失败编码成 sys.* 键，这里直接翻成
+  // 当前语言，别把 Access is denied 原样甩给用户（TODO #98）。
+  var raw = String(e || '');
+  if (raw.indexOf('sys.') === 0) {
+    showAlert(t('cli.error', '错误'), formatSysMsg(raw));
+    return;
+  }
   var msg = t('serial.open_fail', '打开失败: ') + e;
-  var s = String(e || '');
+  var s = raw;
   if (!/permission denied|EACCES|PermissionDenied/i.test(s)) {
     showAlert(t('cli.error', '错误'), msg);
     return;
@@ -2576,6 +2583,32 @@ function _ghostEnd() {
   }
 }
 
+// 活动页变了之后的统一收尾：显示新页、按页型同步状态栏里「属于会话」的那几块
+// （统计 / Tab / 编码 / 行尾）、刷按钮与空态。
+//
+// 关标签 / 拖出成窗 / 打开设置页 都必须走这里。以前只有关闭标签做了这套，
+// 拖出走 _detachTab 时漏了 —— 于是源窗口停在设置页时，右下角还挂着上一条会话的
+// 统计与 Tab/UTF-8/LF 三项（TODO #97）。
+function _afterActivePageChanged(opts) {
+  opts = opts || {};
+  var at = getActiveTab();
+  if (at && at._page) at._page.show();
+  else if (state._welcomePage) state._welcomePage.show();
+  state.currentMode = (at && at.mode) ? at.mode : 'single';
+  updateModeUI();
+  updateEmptyState();
+  renderTabs();
+  updateOpenBtn();
+  updateSyncIndicator();
+  _updateStatsVisible();
+  updateDaemonUI();
+  _syncTabDisplayChrome();
+  if (opts.reloadHistory !== false && at && isSessionTab(at)) {
+    loadTabHistory();
+    refreshStatsDOM();
+  }
+}
+
 // 只从本窗口摘掉标签：不调 CloseSession，会话在守护进程里继续活着
 function _detachTab(tab) {
   var idx = state.tabs.indexOf(tab);
@@ -2587,10 +2620,10 @@ function _detachTab(tab) {
   }
   state.tabs.splice(idx, 1);
   _clampActiveTab();
-  var nt = getActiveTab();
-  if (nt && nt._page) nt._page.show();
-  else if (state._welcomePage) state._welcomePage.show();
   renderTabs();
+  // 剩下的是另一条会话就重新载入它；只剩设置页/欢迎页时要把状态栏里属于会话的
+  // 那几块收掉（TODO #97）。
+  _afterActivePageChanged({ reloadHistory: !!getActiveTab() && isSessionTab(getActiveTab()) });
 }
 
 function _tabDragMove(e) {
@@ -3631,11 +3664,12 @@ function _markOccupied(sel, owner) {
         }
       }
     }
-    const want = occupied ? 'port-occupied' : '';
+    // 用 classList 只切自己那一个类：同一个 option 上还可能有守护进程报的
+    // .port-busy-other（红，被别的程序占用），整体赋 className 会把它抹掉。
     // 只在真的变了时写：这个 select 上挂着 MutationObserver（attributes: true），
     // 无条件写 className 每次都会把整份下拉重建一遍（TODO #79 ①）。
-    if (opt.className !== want) {
-      opt.className = want;
+    if (opt.classList.contains('port-occupied') !== occupied) {
+      opt.classList.toggle('port-occupied', occupied);
       changed = true;
     }
   }
@@ -3979,7 +4013,12 @@ function updatePortList(ports) {
   } else {
     ports.forEach(p => {
       const desc = (p.description && p.description !== p.port) ? ' — ' + p.description : '';
-      html += `<option value="${escHtml(p.port)}">${escHtml(p.port + desc)}</option>`;
+      // 被**别的程序**占着（守护进程试开判出来的）：选项标红并写明原因。
+      // 本工具自己的会话占用仍走 .port-occupied（黄），由 _markOccupied 按标签维护。
+      const busyOther = !!(p.inUse && p.inUseBy === 'other');
+      const cls = busyOther ? ' class="port-busy-other"' : '';
+      const tail = busyOther ? t('port.busy_other', '（被其他程序占用）') : '';
+      html += `<option${cls} value="${escHtml(p.port)}">${escHtml(p.port + desc + tail)}</option>`;
     });
   }
   if (html !== state.lastPorts) {
@@ -4459,22 +4498,9 @@ function _closeTabNow(tab) {
   state.tabs.splice(idx, 1);
   _clampActiveTab();
   const newTab = getActiveTab();
-  // Show the new active tab page (or welcome page if no tabs remain)
-  if (newTab && newTab._page) {
-    newTab._page.show();
-  } else if (state._welcomePage) {
-    state._welcomePage.show();
-  }
-  state.currentMode = (newTab && newTab.mode) ? newTab.mode : 'single';
-  updateModeUI();
-  updateEmptyState();
-  renderTabs();
-  updateOpenBtn();
-  updateSyncIndicator();
-  _updateStatsVisible();
-  updateDaemonUI();
-  if (newTab) loadTabHistory();
-  else clearDisplay();
+  // 收尾统一交给 _afterActivePageChanged（与拖出成窗、切页走同一条路）。
+  _afterActivePageChanged({ reloadHistory: !!newTab });
+  if (!newTab) clearDisplay();
 }
 
 function closeCurrentTab() { closeTab(state.activeTab); }
@@ -6204,18 +6230,10 @@ function openSettingsPage() {
 
   state.activeTab = state.tabs.length - 1;
   state.currentMode = 'single';
-  // Show settings page
-  page.style.display = '';
-  setTimeout(function() {
-    renderSettingsThemeGrid();
-    renderSettingsIconGrid();
-  }, 50);
-  renderTabs();
-  updateOpenBtn();
-  updateEmptyState();
-  updateSyncIndicator();
-  _updateStatsVisible();
-  updateDaemonUI();
+  // 与关标签 / 拖出成窗共用同一套收尾：设置页不是会话页，状态栏里属于会话的
+  // 统计与 Tab/编码/行尾三项都要收掉（TODO #97）。主题/图标网格的重绘在
+  // settingsTab._page.show() 里已经排了一次，这里不再重复。
+  _afterActivePageChanged({ reloadHistory: false });
   _refreshSettingsI18n();
 }
 function showAbout() {
@@ -7625,6 +7643,9 @@ function applyQuickPanelRatio() {
 	} else {
 		quickPanel.style.display = '';
 	}
+	// 收起态：分隔条往内挪 10px（CSS .is-collapsed），把窗口右边缘让给原生缩放。
+	// 否则它的热区压在窗口边框上，拖边框会被面板手柄抢走（TODO #96）。
+	qDivider.classList.toggle('is-collapsed', r <= 0.01);
 	updateQuickPanelCheck();
 }
 
