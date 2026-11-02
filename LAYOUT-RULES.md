@@ -58,10 +58,19 @@
 | `.cs-wrap select` | `position: absolute; inset: 0; opacity: 0; pointer-events: none` | 原生 select 仅作语义容器 |
 | `.cs-trigger` | `width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 26px 0 8px` | 截断过长文字；默认撑满 `.cs-wrap` |
 | `.cs-text` | `overflow: hidden; text-overflow: ellipsis; min-width: 0` | 选中项文字截断 |
-| `.cs-arrow` | `position: absolute; right: 5px; top: 50%; transform: translateY(-50%)` | 箭头不占布局 |
-| `.cs-dropdown` | 打开时 `is-portalled`：portal 到 `body`，JS 内联 `position: fixed` + `left/top/minWidth/maxWidth/maxHeight` | 不受父容器 `overflow: hidden` 裁剪 |
+| `.cs-arrow` | `position: absolute; right: 5px; top: 50%; transform: translateY(-50%)` | 箭头不占布局。<br>**必须用 `data-icon="chevron_down"` 声明式注入**，不能直接 `innerHTML = icon(...)`：图标集合是异步拉的，早于 `wails-ready` 创建的下拉会拿到 `_ICON_MISSING`（方框+叉），之后再没人补 —— 弹窗与设置页那一列「⊠」就是这么来的 |
+| `.cs-dropdown` | 打开时 `is-portalled`：portal 到 `body`，JS 内联 `position: fixed` + `left/top/minWidth/maxWidth/maxHeight`；底色 **`var(--menu-glass-bg)` + `backdrop-filter: blur(14px) saturate(1.4)`**（与菜单下拉同款毛玻璃） | 不受父容器 `overflow: hidden` 裁剪；下拉内没有二级浮层，所以模糊可以直接挂在容器上（菜单因为有三级子菜单才下沉到 `::before`） |
 
 **规则：原生 `<select>` 的 width 对可见布局无效，必须约束 `.cs-trigger` 或 `.cs-wrap`。**
+
+**所有 `<select>` 都要自绘**：`initAllCustomSelects()`（`app.js`）在启动时扫全文档，并挂一个 `MutationObserver` 兜住后建的下拉（软件设置页 `_buildSelect()`、标签页设置弹窗、串口详细设置、以后新增的面板）。`initCustomSelect()` 用 `closest('.cs-wrap')` 幂等，重复扫安全。
+
+**包一层之后要补布局**：原来写在 `<select>` 上的 `flex: 1 1 auto` 对 `.cs-wrap` 不生效，所以下面四类行里的 wrap 要单独给宽度（`style.css` 的 `.cs-wrap` 段）：
+
+```css
+.settings-row > .cs-wrap, .settings-num > .cs-wrap,
+.c-form-row > .cs-wrap, .tabset-row > .cs-wrap { flex: 1 1 auto; min-width: 0; }
+```
 
 portal 细节（`app.js` `_csOpenDropdown()`）：
 

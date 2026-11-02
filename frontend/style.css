@@ -121,6 +121,13 @@ body {
 }
 #app { display: flex; flex-direction: column; height: 100vh; position: relative; }
 
+/* 页面区自成层叠上下文。
+   .header 是 z-index:6，页内的 .o-overlay（守护进程未启用的遮罩）是 z-index:50；
+   #mainContent 没有定位/层叠上下文时，遮罩会跑到根上下文里跟 header 比大小 →
+   遮罩盖住菜单下拉，用户点不到「守护进程 → 启停」，正好被那句提示卡死。
+   把 #mainContent 定成 z-index:1，遮罩就只在自己这层里，菜单永远是它上面。 */
+#mainContent { position: relative; z-index: 1; }
+
 /* ---- 3. State Modifiers ---- */
 .is-hidden     { display: none !important; }
 .is-open       { /* semantic marker, component handles own open styles */ }
@@ -338,6 +345,13 @@ button:disabled:active { transform: none; box-shadow: none; }
 .chk.on::before {
   content: ""; display: block; width: 16px; height: 16px;
   background: var(--accent); border-radius: 3px;
+}
+
+/* 「跟随系统」时，把解析到的那一项标成空心框（实心框留给「跟随系统」本项）：
+   用户既知道当前是自动，也知道自动落到了哪种语言。 */
+.menu-dropdown button.is-auto-target .chk::before {
+  content: ""; display: block; width: 16px; height: 16px;
+  background: transparent; border: 2px solid var(--accent); border-radius: 3px;
 }
 .chk.on::after {
   content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -1052,6 +1066,17 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 /* ---- 11. Components: Custom Select (.cs-*) ---- */
 .cs-wrap { position: relative; display: inline-flex; user-select: none; }
 .cs-wrap select { position: absolute; inset: 0; opacity: 0; pointer-events: none; appearance: auto; -webkit-appearance: auto; }
+
+/* 自绘下拉接管原 <select> 的布局：包了一层之后，原来写在 select 上的
+   flex:1 1 auto / 宽度要补到 .cs-wrap 上，否则设置页与两个弹窗里会缩成一小块。 */
+.settings-row > .cs-wrap,
+.settings-num > .cs-wrap,
+.c-form-row > .cs-wrap,
+.tabset-row > .cs-wrap { flex: 1 1 auto; min-width: 0; width: auto; }
+.settings-row > .cs-wrap .cs-trigger,
+.tabset-row > .cs-wrap .cs-trigger { width: 100%; min-height: 30px; font-size: 14px; }
+.c-form-row > .cs-wrap { flex: 1 1 0; }
+.c-form-row > .cs-wrap .cs-trigger { width: 100%; }
 .cs-trigger {
   display: flex; align-items: center; background: var(--input-bg); color: var(--fg);
   border: 1px solid var(--border); border-radius: 6px; padding: 0 26px 0 8px;
@@ -1064,8 +1089,14 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .cs-wrap.is-open .cs-arrow { transform: translateY(-50%) rotate(180deg); }
 .cs-dropdown {
   position: absolute; top: calc(100% + 2px); left: 0; min-width: 100%; overflow-y: auto; z-index: 1;
-  background: var(--input-bg); border: 1px solid var(--border);
-  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.35); display: none;
+  /* 与菜单下拉同款毛玻璃：半透明底 + 背景模糊。这里可以直接挂在容器上——
+     与 .menu-dropdown 不同，下拉里没有嵌套的二级浮层，不存在「backdrop root
+     把子菜单的采样断掉」的问题。 */
+  background: var(--menu-glass-bg, rgba(40, 40, 40, 0.72));
+  border: 1px solid var(--menu-glass-border, var(--border));
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.32); display: none;
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
 }
 .cs-dropdown.is-portalled {
   margin: 0; padding: 0; box-sizing: border-box;

@@ -10,8 +10,10 @@ function langMenuId(lang) {
 
 async function setLanguage(lang) {
   state.language = lang;
+  // 'auto' 先解析成具体语言再加载；state 里保留 'auto'，下次启动仍然跟随系统
+  var load = (lang === 'auto') ? resolveAutoLang() : lang;
   // Load i18n first so _dir / _font are available
-  await loadI18n(lang);
+  await loadI18n(load);
   document.documentElement.dir = i18nDir();
   applyFont();
   // Update language menu checkmarks
@@ -149,6 +151,40 @@ function refreshSysMsgI18n() {
 let stateExternalLangs = [];
 const builtinLangs = ['zh','zh-Hant','en','fr','es','ru','ar','ja','ko'];
 
+// ---- 「跟随系统」语言 ----
+//
+// state.language === 'auto' 时，真正加载哪个语言包由 resolveAutoLang() 决定：
+//   1. 繁体中文的常见区域写法（zh-TW / zh-HK / zh-MO / zh-Hant）→ zh-Hant
+//   2. 精确命中九种内置语言之一
+//   3. 只命中主标签（en-US → en、ja-JP → ja）
+//   4. 都对不上 → **英语**（按需求：没有对应语言包的系统语言一律回退 en）
+// 说明：这里读的是 WebView 的 navigator.language，也就是系统/浏览器的界面语言，
+// 不额外加 Go 侧绑定。
+function resolveAutoLang() {
+  var list = (navigator.languages && navigator.languages.length)
+    ? navigator.languages : [navigator.language || ''];
+  for (var i = 0; i < list.length; i++) {
+    var raw = String(list[i] || '').toLowerCase();
+    if (!raw) continue;
+    if (/^zh-(tw|hk|mo|hant)/.test(raw)) return 'zh-Hant';
+    for (var j = 0; j < builtinLangs.length; j++) {
+      if (raw === builtinLangs[j].toLowerCase()) return builtinLangs[j];
+    }
+    var main = raw.split('-')[0];
+    if (main === 'zh') return 'zh';
+    for (var k = 0; k < builtinLangs.length; k++) {
+      if (main === builtinLangs[k].toLowerCase()) return builtinLangs[k];
+    }
+  }
+  return 'en';
+}
+
+// 当前真正生效的语言码（'auto' 解析成具体语言；其它值原样）。
+function effectiveLang() {
+  var l = (typeof state !== 'undefined' && state && state.language) ? state.language : 'zh';
+  return l === 'auto' ? resolveAutoLang() : l;
+}
+
 async function initExternalLangs() {
   try {
     stateExternalLangs = await window.go.main.App.ListExternalI18n() || [];
@@ -179,11 +215,17 @@ async function initExternalLangs() {
 
 function updateLangMenu() {
   const lang = state.language || 'zh';
-  // Built-in languages
+  const eff = (lang === 'auto') ? resolveAutoLang() : lang;
+  // 「跟随系统」本身要不要打勾
+  const autoEl = document.getElementById('menuLangAuto');
+  if (autoEl) autoEl.querySelector('.chk').classList.toggle('on', lang === 'auto');
+  // Built-in languages：跟随系统时也把实际生效的那一项标出来（实心 + 系统项打勾），
+  // 这样用户既知道在跟随系统，也知道跟随到了哪种语言。
   ['zh','zh-Hant','en','fr','es','ru','ar','ja','ko'].forEach(function(l) {
     const el = document.getElementById(langMenuId(l));
     if (el) {
-      el.querySelector('.chk').classList.toggle('on', l === lang);
+      el.querySelector('.chk').classList.toggle('on', l === eff && lang !== 'auto');
+      el.classList.toggle('is-auto-target', lang === 'auto' && l === eff);
     }
   });
   // External languages

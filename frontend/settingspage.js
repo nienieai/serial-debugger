@@ -1010,13 +1010,16 @@ function _buildEncodingSelect() {
 
 function _buildLangSelect() {
 	var langs = [
+		['auto', t('settings.lang_auto', '跟随系统')],
 		['zh', '简体中文'], ['zh-Hant', '繁體中文'], ['en', 'English'],
 		['fr', 'Français'], ['es', 'Español'], ['ru', 'Русский'],
 		['ar', 'العربية'], ['ja', '日本語'], ['ko', '한국어']
 	];
 	if (window._externalLangs) {
 		window._externalLangs.forEach(function(el) {
-			if (!langs.some(function(l) { return l[0] === el.code; })) langs.push([el.code, el.name]);
+			// 后端返回的字段是 lang（旧代码读 el.code，外置语言根本进不了这个下拉）
+			var code = el.lang || el.code;
+			if (code && !langs.some(function(l) { return l[0] === code; })) langs.push([code, el.name || code]);
 		});
 	}
 	return _buildSelect(langs.map(function(p){return p[0];}), langs.map(function(p){return p[1];}), state.language, function(v) { setLanguage(v); });

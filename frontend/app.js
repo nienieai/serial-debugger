@@ -83,14 +83,6 @@ function initProbeWindow() {
   }
 }
 
-function openProbeWindow() {
-  window.go.main.App.OpenProbeWindow().then(function (name) {
-    if (window.console) console.log('[probe] 已打开窗口: ' + name);
-  }).catch(function (e) {
-    showAlert(t('cli.error', '错误'), '打开测试窗口失败: ' + e);
-  });
-}
-
 // ---- 会话窗口原型 ----
 //
 // 独立窗口用 ?w=session&sid=X 打开（Go 侧见 OpenSessionWindow）。
@@ -158,20 +150,6 @@ function initSessionWindow(sid) {
     window.go.main.App.DebugEmitSession(sid, '注入的测试帧 ' + new Date().toLocaleTimeString())
       .then(function (r) { append('* ' + r); })
       .catch(function (e) { append('注入失败: ' + e); });
-  });
-}
-
-// 主窗口入口：把当前标签绑定的会话开成独立窗口。
-function openActiveSessionWindow() {
-  var tab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
-  if (!tab || !tab.sessionId) {
-    showAlert(t('confirm.title', '提示'), '当前标签还没有绑定会话（先打开串口）');
-    return;
-  }
-  window.go.main.App.OpenSessionWindow(tab.sessionId).then(function (n) {
-    if (window.console) console.log('[session-window] ' + n);
-  }).catch(function (e) {
-    showAlert(t('cli.error', '错误'), '打开会话窗口失败: ' + e);
   });
 }
 
@@ -569,7 +547,8 @@ async function loadSettings() {
     // Always initialize UI regardless of whether settings exist
     await initColorThemes();
     await initIconThemes();
-    await loadI18n(state.language);
+    // 保存的语言可能是 'auto'：加载前先解析成具体语言（见 i18n.js 的 effectiveLang）
+    await loadI18n(effectiveLang());
     document.documentElement.dir = i18nDir();
     applyFont();
     updateLangMenu();
@@ -584,7 +563,7 @@ async function loadSettings() {
     initIconThemes().catch(() => {});
     _applyDisplayStyle();
     if (_statusBar) _statusBar.updateEol();
-    await loadI18n(state.language).catch(() => {});
+    await loadI18n(effectiveLang()).catch(() => {});
     document.documentElement.dir = i18nDir();
     applyFont();
     updateLangMenu();
@@ -1731,6 +1710,7 @@ function applyI18n() {
   _set('menuViewClients','menu.view_clients','查看客户端');
   _set('menuDaemonLog','menu.daemon_log','查看守护进程日志');
   _set('menuDevTools','menu.dev_tools','开发人员工具');
+  _set('menuLangAuto','menu.lang_auto','跟随系统');
   _set('menuAbout','menu.about','关于');
   _set('btnSend','btn.send','发送');
   var sb = document.getElementById('btnSend');
@@ -2091,7 +2071,12 @@ function initCustomSelect(sel) {
   trig.appendChild(textSpan);
   var arrow = document.createElement('span');
   arrow.className = 'cs-arrow';
-  arrow.innerHTML = icon('chevron_down', 14, 14);
+  // 声明式注入：图标集合是异步拉的，直接 icon() 会拿到 _ICON_MISSING（方框+叉），
+  // 而且写进 innerHTML 后再也没人补 —— 设置弹窗/标签页设置里那一列「⊠」就是这么来的。
+  arrow.setAttribute('data-icon', 'chevron_down');
+  arrow.setAttribute('data-icon-w', '14');
+  arrow.setAttribute('data-icon-h', '14');
+  if (typeof _fillIcon === 'function') _fillIcon(arrow);
   trig.appendChild(arrow);
   wrap.appendChild(trig);
   var dd = document.createElement('div');
@@ -2172,7 +2157,26 @@ function initCustomSelect(sel) {
 }
 
 function initAllCustomSelects() {
-  document.querySelectorAll('select').forEach(function(s) { initCustomSelect(s); });
+  var wrapAll = function(root) {
+    var scope = (root && root.querySelectorAll) ? root : document;
+    scope.querySelectorAll('select').forEach(function(s) { initCustomSelect(s); });
+  };
+  wrapAll(document);
+  // 后建的下拉（软件设置页、标签页设置弹窗、串口详细设置，以及以后新增的面板）
+  // 也要自绘：用一个 MutationObserver 兜底，比在每个构建函数里各叫一次可靠。
+  // initCustomSelect 自身幂等（closest('.cs-wrap') 直接返回），重复扫安全。
+  var mo = new MutationObserver(function(muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var n = added[j];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.tagName === 'SELECT') initCustomSelect(n);
+        else wrapAll(n);
+      }
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
 }
 
 document.addEventListener('click', function(e) {
@@ -2892,6 +2896,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   initStatusBar();
+  initAllCustomSelects();
   bindTabsScroll();
   initTabPopup();
   // Fetch version once
@@ -3338,7 +3343,7 @@ async function syncDaemonSessions(procData) {
   // 守护进程事件可能比语言包先到：这时建出来的标签页/快捷面板会拿到空文案
   // （t() 缺键给空串），而且之后没有任何补译路径。先把语言包装好再建 UI。
   if (!_i18nLoaded) {
-    try { await loadI18n(state.language || 'zh'); } catch (e) {}
+    try { await loadI18n(effectiveLang()); } catch (e) {}
   }
   if (!state.daemonOnline) return;
 
@@ -6051,7 +6056,7 @@ function _bindSettingsPortSync() {
 function _refreshSettingsI18n() {
   if (typeof loadI18n !== 'function') return;
   var before = (typeof _i18nSig === 'string') ? _i18nSig : '';
-  loadI18n(state.language || 'zh').then(function() {
+  loadI18n(effectiveLang()).then(function() {
     if (typeof _i18nSig !== 'string' || _i18nSig === before) return;
     applyI18n();
     if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
