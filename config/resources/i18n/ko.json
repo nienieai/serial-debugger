@@ -255,6 +255,8 @@
   "placeholder.no_process": "시리얼 프로세스 없음",
   "port.busy_other": " (다른 프로그램 사용 중)",
   "port.busy_session": " ({name} 사용 중)",
+  "port.other_tab": "다른 탭",
+  "port.own_forward": "이 탭의 다른 포트",
   "quick_panel.add": "+ 추가",
   "quick_panel.clear_all": "모두 비우기",
   "quick_panel.clear_all_msg": "모든 프리셋을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",

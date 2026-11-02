@@ -3667,38 +3667,71 @@ function syncAutoSendState(daemonSessions) {
 // 标注「已被其它标签页占用」的端口选项。
 // sel 是本页的 <select> 元素（不能用 id 查：多标签时每个页面各有一份同 id），
 // owner 是这个下拉所属的标签页 —— 前向模式下「自己另一个端口」不能算被别人占用。
+// 逐标签标注端口下拉里的占用状态（底色 + 文案后缀都在这儿加）。
+//
+// sel 是本页的 <select>（不能用 id 查：多标签时每页各有一份同 id），
+// owner 是这个下拉所属的标签页。三种情况的判定顺序很关键：
+//   1. 被**别的程序**占着（守护进程试开判出来的 inUseBy=other）→ 红底，任何视角都成立；
+//   2. 自己这个标签正在用的口 → **不标**（用户实测：自己的口显示「已占用」最误导）；
+//   3. 别的标签 / 别的窗口 / CLI / MCP 的会话占着 → 黄底 + 会话名后缀。
+// 另外转发模式里「本标签自己的另一个端口」仍标黄：防止把 A/B 选成同一个口。
 function _markOccupied(sel, owner) {
   if (!sel) return;
   const tab = owner || getActiveTab();
-  // Extract individual ports for this page's forward tab
   const myPorts = tab && tab.mode === 'forward' && tab.portOpen ? _forwardPorts(tab) : null;
   const selId = sel.id;
+  const meta = state.portListData || {};
   let changed = false;
   for (let i = 0; i < sel.options.length; i++) {
     const opt = sel.options[i];
     const portName = opt.value;
-    let occupied = false;
+    const base = opt.getAttribute('data-base') || opt.textContent || '';
+    let cls = '';
+    let suffix = '';
     if (portName) {
-      for (let j = 0; j < state.tabs.length; j++) {
-        const t = state.tabs[j];
-        if (t === tab) continue;
-        if (!t.portOpen || !t.syncedParams) continue;
-        if (_tabHasPort(t, portName)) { occupied = true; break; }
-      }
-      // In forward mode, mark own other port as occupied to prevent self-duplicate
-      if (!occupied && myPorts) {
-        if ((selId === 'portSelectA' && portName === myPorts[1]) ||
-            (selId === 'portSelectB' && portName === myPorts[0])) {
-          occupied = true;
+      const info = meta[portName] || {};
+      // 「自己这个标签在用」要同时看 portOpen：断开的标签可能还留着 syncedParams，
+      // 只按它判断会把这个口一直当成自家占用而不标（反过来就是自己的口标成占用）。
+      const mine = !!(tab && tab.portOpen && _tabHasPort(tab, portName));
+      let sibling = null;
+      if (!mine) {
+        for (let j = 0; j < state.tabs.length; j++) {
+          const t2 = state.tabs[j];
+          if (t2 === tab) continue;
+          if (!t2.portOpen || !t2.syncedParams) continue;
+          if (_tabHasPort(t2, portName)) { sibling = t2; break; }
         }
       }
+      const selfForwardOther = !mine && !sibling && !!myPorts &&
+        ((selId === 'portSelectA' && portName === myPorts[1]) ||
+         (selId === 'portSelectB' && portName === myPorts[0]));
+      if (info.inUseBy === 'other') {
+        cls = 'port-busy-other';
+        suffix = t('port.busy_other', '（被其他程序占用）');
+      } else if (sibling) {
+        cls = 'port-occupied';
+        const nm = sibling.label || t('port.other_tab', '其他标签');
+        suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', nm);
+      } else if (selfForwardOther) {
+        cls = 'port-occupied';
+        suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', t('port.own_forward', '本标签另一端口'));
+      } else if (!mine && info.inUseBy === 'daemon') {
+        cls = 'port-occupied';
+        const on = info.ownerName || ('#' + (info.ownerProcessId || '?'));
+        suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', on);
+      }
     }
-    // 用 classList 只切自己那一个类：同一个 option 上还可能有守护进程报的
-    // .port-busy-other（红，被别的程序占用），整体赋 className 会把它抹掉。
-    // 只在真的变了时写：这个 select 上挂着 MutationObserver（attributes: true），
-    // 无条件写 className 每次都会把整份下拉重建一遍（TODO #79 ①）。
-    if (opt.classList.contains('port-occupied') !== occupied) {
-      opt.classList.toggle('port-occupied', occupied);
+    const text = base + suffix;
+    if (opt.textContent !== text) {
+      opt.textContent = text;
+      changed = true;
+    }
+    const has = (opt.classList.contains('port-occupied') ? 'o' : '') +
+                (opt.classList.contains('port-busy-other') ? 'x' : '');
+    const want = cls === 'port-occupied' ? 'o' : (cls === 'port-busy-other' ? 'x' : '');
+    if (has !== want) {
+      opt.classList.remove('port-occupied', 'port-busy-other');
+      if (cls) opt.classList.add(cls);
       changed = true;
     }
   }
@@ -4029,11 +4062,15 @@ function updatePortList(ports) {
   // 顺手缓存「COM → 设备描述」：标签浮窗（c-tabpop）要显示串口名，
   // 而这里刷出来的描述原本只用于拼下拉框文案，用完就丢。
   state.portDescs = {};
+  // 端口元数据（含占用归属）缓存：逐标签的占用标记在 _markOccupied 里做，
+  // 因为它要区分「自己这个标签在用」和「别的会话在用」。
+  state.portListData = {};
   if (ports) {
     for (let i = 0; i < ports.length; i++) {
       const p = ports[i];
       if (!p || !p.port) continue;
       state.portDescs[p.port] = (p.description && p.description !== p.port) ? p.description : '';
+      state.portListData[p.port] = p;
     }
   }
   let html = '';
@@ -4042,25 +4079,11 @@ function updatePortList(ports) {
   } else {
     ports.forEach(p => {
       const desc = (p.description && p.description !== p.port) ? ' — ' + p.description : '';
-      // 占用分两类，颜色也不同：
-      //   other    —— 被**别的程序**占着（守护进程独占试开判出来的）→ 红底 + 说明
-      //   daemon   —— 被**本工具的某个会话**占着（可能是别的窗口 / CLI / MCP 建的）
-      //              → 黄底 + 「会话名」后缀。注意这里刻意用 .port-busy-session 而不是
-      //              .port-occupied：后者由 _markOccupied 按「本窗口的标签」动态维护，
-      //              构建时写死会被它下一次计算覆盖掉。
-      const busyOther = !!(p.inUse && p.inUseBy === 'other');
-      const busySession = !!(p.inUse && p.inUseBy === 'daemon');
-      let cls = '';
-      let tail = '';
-      if (busyOther) {
-        cls = ' class="port-busy-other"';
-        tail = t('port.busy_other', '（被其他程序占用）');
-      } else if (busySession) {
-        cls = ' class="port-busy-session"';
-        const owner = p.ownerName || ('#' + (p.ownerProcessId || '?'));
-        tail = t('port.busy_session', '（{name} 占用）').replace('{name}', owner);
-      }
-      html += `<option${cls} value="${escHtml(p.port)}">${escHtml(p.port + desc + tail)}</option>`;
+      // 这里只放**中性的**端口名 + 描述：占用标记（黄/红）与后缀统一由
+      // _markOccupied 按「每个标签自己的视角」加 —— 自己正在用的那个口不能显示
+      // 成「被占用」（用户实测就是这个），而别的窗口 / CLI / MCP 的会话占用要显示。
+      const base = p.port + desc;
+      html += `<option value="${escHtml(p.port)}" data-base="${escHtml(base)}">${escHtml(base)}</option>`;
     });
   }
   if (html !== state.lastPorts) {

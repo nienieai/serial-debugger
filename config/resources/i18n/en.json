@@ -255,6 +255,8 @@
   "placeholder.no_process": "No serial process",
   "port.busy_other": " (in use by another app)",
   "port.busy_session": " (in use by {name})",
+  "port.other_tab": "another tab",
+  "port.own_forward": "this tab's other port",
   "quick_panel.add": "+ Add",
   "quick_panel.clear_all": "Clear All",
   "quick_panel.clear_all_msg": "Are you sure you want to clear all presets? This cannot be undone.",

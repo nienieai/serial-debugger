@@ -255,6 +255,8 @@
   "placeholder.no_process": "Sin proceso serie",
   "port.busy_other": " (en uso por otra app)",
   "port.busy_session": " (en uso por {name})",
+  "port.other_tab": "otra pestaña",
+  "port.own_forward": "otro puerto de esta pestaña",
   "quick_panel.add": "+ Añadir",
   "quick_panel.clear_all": "Limpiar todo",
   "quick_panel.clear_all_msg": "¿Está seguro de que desea limpiar todos los preajustes? Esta acción no se puede deshacer.",

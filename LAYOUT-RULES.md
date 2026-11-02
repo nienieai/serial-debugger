@@ -78,6 +78,9 @@ portal 细节（`app.js` `_csOpenDropdown()` + `_csPosition()`）：
 - **靠近窗口底部要向上弹**：下方可用高度 = `min(窗口底, 状态栏顶) - trigger.bottom - 6`。若下方连两行（≈88px）都放不下且上方更宽裕，就改成 `bottom = 窗口底 - trigger.top + 2`，`max-height` 取上方空间。早期版本只算下方并把下限硬塞成 80px，设置页「高级」里最后那项会被窗口底截掉半行（实测截图）。
 - 滚动（捕获阶段监听 `document` scroll）与窗口 resize（`ResizeObserver`）时自动关闭 / 跟随重定位；两处共用同一个 `_csPosition()`。
 - 输入类控件（设置页 input/select、弹窗、`.settings-search`、`.send-controls` 的数字框、多字符串面板、`.cs-trigger`）统一毛玻璃：`color-mix(in srgb, var(--input-bg) 72%, transparent)` + `backdrop-filter: blur(10px)`，规则放在 `style.css` 末尾以便覆盖各控件自己的 `background`；**排除** checkbox/radio/range 与发送框 textarea（后者上面叠着镜像层）。
+- **端口占用标记用固定状态色**（`.port-occupied` 琥珀 `#f2b200` + 深色字、`.port-busy-other` 红 `#d92d20` + 白字），不跟 `--yellow` / `--red` 主题变量走：亮色主题的 `--yellow` 是深琥珀、暗色是亮黄，配白字或黑字总有一头糊（实测亮黄底白字看不清）。状态色本来就该跨主题一致。
+- 选项悬停用**叠加遮罩**（`box-shadow: inset 0 0 0 999px rgba(127,127,127,.22)`）而不是改 `background`：黄/红底色也要能被高亮，换色会把「被占用」信息盖掉。
+- 占用标记的**视角**是逐标签的（`_markOccupied(sel, tab)`）：自己这个标签正在用的口不标；同窗口别的标签、别的窗口、CLI/MCP 的会话标琥珀 +「会话名 占用」；被别的程序占用标红。判定顺序见 `app.js` 该函数的注释。
 - 关闭时移回原 `.cs-wrap` 并清空内联样式。
 
 ## 3. 配置栏 (config-bar)

@@ -860,19 +860,14 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .forward-row:first-of-type .fwd-label { color: var(--dc-ts1, var(--fwd-p1)); }
 .forward-row:last-of-type .fwd-label  { color: var(--dc-ts2, var(--fwd-p2)); }
 
-.port-occupied { background: var(--yellow); color: #fff; }
-@media (prefers-color-scheme: dark) { .port-occupied { color: #000; } }
-:root[data-theme="dark"] .port-occupied { color: #000; }
+/* 端口占用标记用**固定状态色**，不跟主题变量走：
+   主题里的 --yellow 亮色下是深琥珀、暗色下是亮黄，配白字或黑字总有一头糊
+   （实测亮黄底 + 白字看不清）。固定成琥珀底 + 深色字、红底 + 白字，两套主题
+   下都清楚；这两类颜色表达的是「状态」，本来就不该随皮肤变。 */
+.port-occupied { background: #f2b200; color: #1a1a1a; }
 
 /* 被**别的程序**占着（守护进程试开判出来的）：红色，与本工具会话占用的黄色区分 */
-.port-busy-other { background: var(--red); color: #fff; }
-
-/* 被**本工具的某个会话**占着（别的窗口 / CLI / MCP 建的）：黄色，文案后缀带会话名。
-   和 .port-occupied 同色但分开写：后者由 _markOccupied 按本窗口标签动态切换，
-   构建时写进去会被它覆盖。 */
-.port-busy-session { background: var(--yellow); color: #fff; }
-@media (prefers-color-scheme: dark) { .port-busy-session { color: #000; } }
-:root[data-theme="dark"] .port-busy-session { color: #000; }
+.port-busy-other { background: #d92d20; color: #fff; }
 
 /* ---- 10. Components: Buttons ---- */
 
@@ -1108,13 +1103,13 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   display: flex; align-items: center; padding: 7px 12px; cursor: pointer;
   white-space: nowrap; color: var(--fg); font-size: 13px; line-height: 1.3;
 }
-.cs-option:hover { background: var(--hover); }
+/* 悬停用**叠加的半透明遮罩**，不直接改 background：黄/红这类状态底色也要能高亮，
+   直接换色会把「被占用」的信息盖掉。inset box-shadow 画在背景之上、文字之下，
+   所以既保留底色又不影响可读性。 */
+.cs-option:hover { box-shadow: inset 0 0 0 999px rgba(127, 127, 127, 0.22); }
 .cs-option.is-selected { background: var(--accent); color: #fff; }
-.cs-option.port-occupied { background: var(--yellow); color: #fff; }
-[data-theme="dark"] .cs-option.port-occupied { color: #000; }
-.cs-option.port-busy-other { background: var(--red); color: #fff; }
-.cs-option.port-busy-session { background: var(--yellow); color: #fff; }
-[data-theme="dark"] .cs-option.port-busy-session { color: #000; }
+.cs-option.port-occupied { background: #f2b200; color: #1a1a1a; }
+.cs-option.port-busy-other { background: #d92d20; color: #fff; }
 
 /* cs-trigger height variants */
 .config-bar  .cs-trigger,

@@ -255,6 +255,8 @@
   "placeholder.no_process": "無串口處理程序",
   "port.busy_other": "（被其他程式占用）",
   "port.busy_session": "（{name} 佔用）",
+  "port.other_tab": "其他標籤",
+  "port.own_forward": "本標籤另一埠",
   "quick_panel.add": "+ 新增",
   "quick_panel.clear_all": "清空全部",
   "quick_panel.clear_all_msg": "確定要清空所有預設項目嗎？此操作無法復原。",

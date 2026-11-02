@@ -255,6 +255,8 @@
   "placeholder.no_process": "Нет процессов COM",
   "port.busy_other": " (занят другой программой)",
   "port.busy_session": " (занят {name})",
+  "port.other_tab": "другая вкладка",
+  "port.own_forward": "другой порт этой вкладки",
   "quick_panel.add": "+ Добавить",
   "quick_panel.clear_all": "Очистить всё",
   "quick_panel.clear_all_msg": "Вы уверены, что хотите очистить все пресеты? Это действие необратимо.",
