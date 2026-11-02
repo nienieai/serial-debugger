@@ -306,6 +306,18 @@ func (a *App) sessPrune(alive map[string]bool) {
 	}
 }
 
+// sessClearAll 清空全部窗口的会话归属。
+//
+// 只在**确认守护进程已经没了**时调用（用户点停止、收到 daemon-shutdown 广播、
+// 心跳判定离线且重连失败）：会话是守护进程里的对象，它一走会话就全没了，归属表
+// 再留着只会误导 —— 实测：手动停掉守护进程（界面已显示「守护进程未启用」）后
+// 关窗口，仍会弹「会停止这个窗口里的会话（共 3 个）」，可实际一个都不剩。
+func (a *App) sessClearAll() {
+	a.sessMu.Lock()
+	a.sessOwner = make(map[string]string)
+	a.sessMu.Unlock()
+}
+
 // winNameFromCtx 取出「正在调用这个方法的窗口名」。
 //
 // 靠的是 v3 的约定：Service 方法第一个参数是 context.Context 时，框架会把
@@ -1553,6 +1565,8 @@ func (a *App) stopDaemonQuiet() {
 	ec := a.eventConn
 	a.eventConn = nil
 	a.daemonMu.Unlock()
+	// 守护进程要停了：它上面的会话随之消失，归属表一并清掉（关窗口时不再按旧会话数弹框）
+	a.sessClearAll()
 	if ec == nil {
 		return
 	}
@@ -1598,6 +1612,9 @@ func (a *App) onDaemonDisconnected(ec *client.DaemonClient) {
 		return
 	}
 
+	// 重连也失败 = 守护进程真没了，会话跟着没了：先清归属再报离线，
+	// 免得界面上还留着「这个窗口有 3 个会话」的假象（关窗口时会据此弹确认框）。
+	a.sessClearAll()
 	a.emit("daemon-offline", map[string]any{"reason": "heartbeat"})
 }
 
@@ -1721,6 +1738,9 @@ func (a *App) StopDaemon() error {
 		a.eventConn = nil
 	}
 	a.daemonMu.Unlock()
+	// 用户主动停了守护进程：会话跟着消失，归属表一并清掉
+	// （否则界面已显示「守护进程未启用」，关窗口还会弹「会停止 3 个会话」）
+	a.sessClearAll()
 
 	if ec != nil {
 		client.CallOnce(contract.Shutdown, nil, "gui")
@@ -3390,6 +3410,11 @@ func (a *App) pollDaemonEvents(ec *client.DaemonClient) {
 		case msg, ok := <-events:
 			if !ok {
 				return
+			}
+			// 守护进程正常关闭：它上面的会话已经全部销毁，归属表立刻清掉。
+			// 只等心跳那条路（最长 ~6s）的话，这期间关窗口会按旧会话数弹确认框。
+			if msg.Event == "daemon-shutdown" {
+				a.sessClearAll()
 			}
 			// Route directional data events to per-tab decode workers.
 			switch msg.Event {

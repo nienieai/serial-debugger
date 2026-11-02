@@ -39,7 +39,22 @@ func TestDecideClose(t *testing.T) {
 	}
 }
 
-// 「有会话时要不要弹确认框」——三档设置的行为，以及 transfer 退化回销毁那条。
+// 守护进程停了之后「会话」也全没了，归属表必须一起清空——
+// 否则关窗口时还会按旧会话数弹「会停止这个窗口里的会话（共 3 个）」，
+// 而界面其实已经显示「守护进程未启用」（2026-11-02 实测）。
+func TestSessClearAll(t *testing.T) {
+	a := &App{sessOwner: map[string]string{"1": "main", "2": "win-1", "3": "main"}}
+	if got := len(a.sessOfWindow("main")); got != 2 {
+		t.Fatalf("准备阶段：main 应有 2 个会话，实际 %d", got)
+	}
+	a.sessClearAll()
+	if n := len(a.sessOfWindow("main")) + len(a.sessOfWindow("win-1")); n != 0 {
+		t.Fatalf("sessClearAll 后归属应清空，实际还剩 %d", n)
+	}
+	if windowCloseNeedsConfirm("ask", len(a.sessOfWindow("main")), false) {
+		t.Error("清空后按会话数判定不应再弹确认框")
+	}
+}
 func TestWindowCloseNeedsConfirm(t *testing.T) {
 	cases := []struct {
 		name       string
