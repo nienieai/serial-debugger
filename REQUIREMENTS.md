@@ -159,8 +159,8 @@
 | 51 | 转发 P1/P2 按钮端口颜色 | ✓ | 文本模式下 P1 蓝色 / P2 橙色文字+边框，Hex 模式实心背景 |
 | 52 | 多字符串面板 | ✓ | 历史框和发送框右侧可拖出面板，工具菜单勾选开关，展开/收起双向拖动同步 |
 | 53 | 工具菜单 | ✓ | 菜单栏"设置"后新增，内含多字符串开关（对号指示展开状态） |
-| 54 | 开发人员工具 | ✓ | 菜单"帮助 → 开发人员工具"入口 + Ctrl+Shift+F12 快捷键，构建需 `-devtools` 标志 |
-| 55 | 外部 i18n 翻译 | ✓ | exe 同目录 `i18n/{lang}.json` 覆盖内置或新增语言，`_dir` 声明 RTL，打开菜单防抖刷新 |
+| 54 | 开发人员工具 | ✓ | 菜单「帮助 → 开发人员工具」入口 + Ctrl+Shift+F12 快捷键；v3 没有 `-devtools` 标志，production 构建不开检查器，`hotreload` 构建会自动打开（`main.go` 的 `uiDevMode`） |
+| 55 | 外部 i18n 翻译 | ✓ | `<exe>/resources/i18n/{lang}.json` 覆盖内置或新增语言，`_dir` 声明 RTL，打开菜单防抖刷新 |
 | 56 | 多字符串快捷发送 | ✓ | 多字符串面板支持添加/编辑/删除预设条目，点击条目直接发送；队列发送/循环发送由 daemon 统一驱动 |
 | 57 | 历史记录持久化 | ✓ | 双写模式（环形缓冲区 + `history/*.log`），惰性创建文件（首次实际数据到达时），关闭进程保留 |
 | 58 | 历史记录搜索 | ✓ | IPC `history.search` + CLI `history-search`，二进制帧顺序扫描匹配，分页返回 |
@@ -170,7 +170,7 @@
 | 62 | 工具栏水平滚动 | ✓ | v0.5.9：隐藏滚动条，鼠标拖拽滑动，两侧悬浮渐变箭头指示方向，`ResizeObserver` 动态显隐 |
 | 63 | 按钮文字精简 | ✓ | v0.5.9：箭头 + 字/H 短标签，悬浮提示切换说明，`data-wide` ghost 自适应宽度防跳动 |
 | 64 | SVG 图标系统 | ✓ | v0.5.9：键化 ICONS 库，640×640 画布，`data-icon` 声明式注入 |
-| 65 | 内置主题系统 | ✓ | v0.5.9：Go embed `config/themes/`（system.json，dark/light 双模式），CSS 变量覆盖 + Wails 绑定 |
+| 65 | 内置主题系统 | ✓ | v0.5.9：Go embed `config/themes/`（system.json，dark/light 双模式），CSS 变量覆盖 + Wails 绑定；0.8.2 起一个主题一个文件夹：`config/resources/themes/<id>/theme.json` |
 | 66 | 语言字体绑定 | ✓ | v0.5.9：i18n `_font` 字段指定语言首选字体，`document.fonts.check()` 检测无字体回退默认 |
 | 67 | 发送字节自适应单位 | ✓ | v0.5.9：B/kB(2位小数)/MB(1位小数) 自适应，右对齐，最小宽度 80px |
 | 68 | 左侧区域最小宽度 | ✓ | v0.5.9：`.left-area` min-width 300px 防止历史框+发送框被 quick panel 挤压 |
@@ -196,8 +196,8 @@
 | 88 | 标签栏水平滚动 | ✓ | v0.6.0：`.tabs-scroll` 鼠标滚轮，`+` 固定右侧 |
 | 89 | 关于移入设置页 | ✓ | v0.6.0：关于从弹窗改为设置页独立面板 |
 | 90 | 尾部追加默认无 | ✓ | v0.6.0：appendSuffix 默认值从 crlf 改为 '' |
-| 91 | 内置图标文件化 | ✓ | v0.6.0：`config/icons/system/` 20 个 SVG + icons.json（0.6.1 增 menu，0.6.2 增 reset/send） |
-| 92 | 图标主题文件夹化 | ✓ | v0.6.0：`themes/icons/<名>/icons.json` + 平铺 SVG |
+| 91 | 内置图标文件化 | ✓ | v0.6.0：`config/icons/system/` 20 个 SVG + icons.json（0.6.1 增 menu，0.6.2 增 reset/send；0.8.2 迁到 `config/resources/icons/system/`，现 32 个） |
+| 92 | 图标主题文件夹化 | ✓ | v0.6.0：`themes/icons/<名>/icons.json` + 平铺 SVG（0.8.2 起为 `resources/icons/<包名>/`） |
 | 93 | 版本号统一 | ✓ | v0.6.0：`version/version.go` 一处修改全部同步 |
 | 94 | 打开文件夹按键 | ✓ | v0.6.0：创建示例后增加打开系统资源管理器按键 |
 | 95 | 设置导航项间距 | ✓ | v0.6.0：`margin-bottom: 2px; border-radius: 6px` |
@@ -232,6 +232,13 @@
 | 124 | 队列条目 delay 语义明确 | ✓ | v0.7.5.7：省略=1000 ms、0=不额外延时、上限 60000、负数报错；CLI/MCP 边界区分「省略 vs 显式 0」（此前写 0 等于等 1 秒） |
 | 125 | 标签页会话不被陈旧事件载荷清掉 | ✓ | v0.7.5.8：要移除某个在线会话时才先 `GetSessions()` 核实；`connectedAt` 宽限期真正生效（此前是死代码） |
 | 126 | 自动建会话不清掉自己的会话 | ✓ | v0.7.5.9：自动建之后重新取权威列表（此前 `daemonSessions = []` 会让第 3 步把刚建的会话判为已消失）；`addTab` 补写 `connectedAt` |
+| 127 | 多窗口对等模型 | ✓ | 0.9.0：再启动一次 GUI 在当前进程里新开窗口（`application.SingleInstance`，唯一 ID 按 exe 路径分组）；每个窗口有独立会话集合，关掉最后一个窗口才退出进程 |
+| 128 | 标签拖拽：拖出成窗与并入 | ✓ | 0.9.0：标签拖离标签栏起单会话窗口；压到别的标签栏停 300 ms 即并入、离开 48 px 当场退回（可反悔）；两条拖动共用 `driveTabDrop` 两态循环 |
+| 129 | 关窗口时的会话归属 | ✓ | 0.9.0：三选一（每次询问 / 直接销毁 / 转到其他窗口）+「记住选择」写回 `window_close_action`；`destroy` 不再追问且真的销毁会话（此前会留孤儿进程） |
+| 130 | Linux 串口权限临时授权 | ✓ | 0.9.0：分体版不写系统文件，GUI 横幅 + `serial-cli fix-permissions`（pkexec 给当前用户加设备 ACL），拔插/重启后失效；SSH 启动的进程返回 `no_agent` |
+| 131 | 关于页渲染引擎与平台文案 | ✓ | 0.9.0：`GetRenderEngine()` 按平台返回 WebView2 / WebKitGTK / WKWebView，项目目录显示真实路径；平台文案改为「Windows 与 Linux」 |
+
+> 0.8.0 ～ 0.8.3 的需求条目（资源内置/外置分层、主题图片、工程目录与录制、标签栏拖拽重排等）尚未补入本表，细节见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 网络调试
 
@@ -252,7 +259,7 @@
 | 1 | 独立可执行文件 | ✓ | `serial-cli.exe` |
 | 2 | 命令行模式 | ✓ | CallOnce 临时管道 |
 | 3 | 交互模式 | ✓ | 3 管道持久连接，REPL，支持引号参数 |
-| 4 | 34 条命令 | ✓ | 含 declare / probe / setmode / forward 等；`history-*` 命令族 7 条；help 按功能分组重排 |
+| 4 | 49 条命令 | ✓ | 含 declare / probe / setmode / forward / rename / session-open / sendone / logs / `stlog-*` 等；`history-*` 命令族 7 条；help 按功能分组重排 |
 | 5 | start 命令 | ✓ | 统一启动入口，已运行则返回"已在运行中" |
 | 6 | check 命令 | ✓ | 三层检测（进程+管道+IPC），tasklist 失效时回退 IPC |
 | 7 | send --hex | ✓ | 十六进制发送，数据走共享内存 |
@@ -266,7 +273,7 @@
 | # | 需求 | 状态 | 说明 |
 |---|------|------|------|
 | 1 | 独立可执行文件 | ✓ | `serial-mcp.exe`，JSON-RPC 2.0 over stdio |
-| 2 | 28 个工具 | ✓ | 覆盖全部串口功能，含 serial_declare / serial_probe_ports / serial_set_mode / serial_multistr_* |
+| 2 | 29 个工具 | ✓ | 覆盖全部串口功能，含 serial_declare / serial_rename / serial_probe_ports / serial_set_mode / serial_multistr_* |
 | 3 | serial_start_daemon | ✓ | 统一启动入口，已运行返回 already_running |
 | 4 | serial_list_ports / serial_refresh_ports | ✓ | 端口列表缓存读取与强制硬件重扫 |
 | 5 | serial_create / serial_open | ✓ | 创建空闲或连接进程（去重），支持 mode/portB 参数；open 为 create+connect 快捷方式 |
@@ -305,11 +312,11 @@
 
 Python 版与 Go 版各有优劣，以下为功能对比：
 
-| 功能 | Python 版 | Go 版 (v0.6.5) |
+| 功能 | Python 版 | Go 版（现状） |
 |------|-----------|-----------------|
 | 端口自动发现 | ✅ `HELP\r\n` 探针 | ✅ TOML 规则探测 |
-| MCP 协议 | ❌ | ✅ 28 工具 |
-| GUI 桌面应用 | ❌ | ✅ Wails v2 |
+| MCP 协议 | ❌ | ✅ 29 工具 |
+| GUI 桌面应用 | ❌ | ✅ Wails v3 |
 | 自动发送引擎 | ❌ | ✅ 单条/队列模式 |
 | 统计系统 (I/O 吞吐/速率) | ❌ | ✅ stats-count + stats-rate |
 | 串口切换 | ❌ | ✅ 全客户端支持 |

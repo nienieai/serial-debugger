@@ -10,14 +10,15 @@
 | 类别 | 命令 |
 |------|------|
 | 守护进程 | `start` `check` `status` `shutdown` |
-| 端口 | `ports` `refresh` `probe [ports...] [--config <path>]` |
-| 进程 | `create` `declare` `open` `connect` `disconnect` `close` `switch` `setmode` `forward` |
-| 数据 | `send [--hex]` `stats` `history` |
+| 端口 | `ports` `refresh` `probe [ports...] [--config <path>] [--budget <ms>]` |
+| 进程 | `create` `rename` `declare` `open` `connect` `disconnect` `close` `switch` `setmode` `forward` `session-open` |
+| 数据 | `send [--hex]` `sendone [--raw]` `stats` `history` |
 | 自动发送 | `autosend start/stop/status/interval` `sendqueue` |
 | 多字符串 | `multistr save/load/reload/status` |
 | 历史 | `history-files` `history-search` `history-enable` `history-status` `history-attach` `history-new` `history-detach` |
+| 会话文件 | `stlog-read` `stlog-verify` `stlog-dump` `stlog-export`（离线，不需要守护进程） |
+| 诊断 | `sessions` `monitor` `threads` `goroutines` `logs [n]` |
 | 系统（Linux） | `fix-permissions [--yes] [--json]` |
-| 诊断 | `sessions` `monitor` `threads` `goroutines` |
 | 其他 | `help` |
 
 ## 常用示例
@@ -91,12 +92,24 @@ serial-cli history-new 1                 # 新建历史文件
 serial-cli history-detach 1              # 分离历史文件
 ```
 
+### 会话文件（离线）
+
+```bash
+serial-cli stlog-read session.stlog          # 摘要 + 前 20 帧
+serial-cli stlog-verify session.stlog        # 校验结构（0=干净，1=有问题）
+serial-cli stlog-dump session.stlog          # 逐页页头信息
+serial-cli stlog-export session.stlog -o out.txt   # 导出成一行一帧的纯文本
+```
+
+> 这四条不需要守护进程，直接读文件。格式规范见 [docs/format/stlog-format.md](docs/format/stlog-format.md)。
+
 ### 诊断
 
 ```bash
 serial-cli monitor [timeout]     # 实时监听事件（3 管道）
 serial-cli threads               # 线程/会话详情
 serial-cli goroutines            # Goroutine 调用栈
+serial-cli logs [n]              # 打印守护进程日志末尾 n 行（默认 50，不要求守护进程在运行）
 ```
 
 ### Linux 串口权限

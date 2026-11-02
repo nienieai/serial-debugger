@@ -126,8 +126,8 @@ client ────── pipe, protocol, ringbuf        （传递依赖）
 | `build/bin/serial-gui.exe` | Wails v3 GUI，多标签页 | 是（目标机需 WebView2 运行时） |
 | `build/bin/serial-cli.exe` | CLI 工具（49 条命令） | 是 |
 | `build/bin/serial-mcp.exe` | MCP 协议工具（29 个工具） | 是 |
-| `build/bin/i18n/` | 外部 i18n 翻译文件（exe 同目录） | 可选 |
-| `build/bin/themes/` | 外部主题（颜色 + 图标） | 可选 |
+| `<exe>/resources/i18n/` | 外置语言包（`{lang}.json`，覆盖内置翻译或新增语言） | 可选 |
+| `<exe>/resources/themes/` `<exe>/resources/icons/` | 外置主题（`themes/<id>/theme.json` 与 `icons/<包名>/`） | 可选 |
 
 Linux 产物同名去掉 `.exe`；运行 GUI 需要 `libgtk-4-1 libwebkitgtk-6.0-4 libsoup-3.0-0`（装包脚本在 `build/linux/`，`make-package.sh` 出单文件 `.run`，`install.sh` 装到 `~/.local`，可选 `--fix-permissions` 写 uaccess 规则）。
 
@@ -229,8 +229,7 @@ cd cmd/serial-mcp && go-winres make && cd ../..
 - 所有可执行文件放在同一目录下，GUI 通过 `os.Executable()` 自动查找 `serial-daemon.exe`
 - 设备探测配置文件 `probe.toml` 搜索路径（`daemon/probe.go`）：显式指定 → exe 同目录 → `exe/../config/`（发布包布局）→ `exe/../../config/`（开发布局：exe 在 `build/bin`，配置在仓库根）→ 工作目录 `probe.toml` / `config/probe.toml`，候选去重。全部未命中时回退**内置规则**（`config/probe.toml` 经 `//go:embed` 嵌入二进制），因此发布包即使不含 `config/` 目录，`probe` 也可直接使用
 - GUI 设置文件 `settings/gui.ini`（INI 格式），与 `serial-gui.exe` 同级的 `settings/` 目录；同目录还有 `cli.ini`（CLI 只读：`[general] language/color`）与 `daemon.ini`（守护进程只读：`[log] language/color`），一个文件只有一个写者。MCP 不落盘
-- 外部 i18n 目录 `build/bin/i18n/` 与 `serial-gui.exe` 同目录，文件名格式 `{lang}.json`，详见 README
-- 外部主题目录 `build/bin/themes/colors/`（颜色主题 .json）和 `build/bin/resources/icons/<包名>/`（图标主题文件夹，含 icons.json + .svg）
+- 外部资源目录是 `<exe>/resources/`，与 `serial-gui.exe` 同目录：`i18n/<lang>.json`（语言包）、`themes/<id>/`（一个主题一个文件夹，含 `theme.json` 与自带素材）、`icons/<包名>/`（`icons.json` + 平铺 `.svg`）。查找顺序：内置 `resources-system/`（仅动态开发版有）→ 外置 `resources/` → 编译进 exe 的那份（`config/resources.go`）。旧布局 `<exe>/i18n/`、`<exe>/themes/` 已不再读取
 - 图标主题文件夹中 `.svg` 文件名 = 内置图标键名，覆盖对应内置图标
 - i18n 文件 `_font` 字段指定首选字体（如 `"SimSun", "宋体", serif`），系统无此字体时回退默认
 - 内置语言字体：zh=微软雅黑, zh-Hant=微軟正黑體, ja=Yu Gothic UI, ko=Malgun Gothic, ar=Noto Naskh Arabic, 其余=Segoe UI

@@ -22,6 +22,7 @@
 | `.c-color-preview` | [13. 预览气泡](#13-预览气泡-c-color-preview) |
 | `.statusbar` | [14. 状态栏](#14-状态栏-statusbar) |
 | `.config-bar::before` `.send-controls::before` 等 | [15. 模糊渐变条](#15-模糊渐变条) |
+| `.o-perm-banner` `.c-perm-banner` `.c-perm-banner__btn` | [16. 串口权限横幅](#16-串口权限横幅-o-perm-banner) |
 
 ---
 
@@ -262,3 +263,21 @@ v0.6.2 重构：每行 [设置项] [加粗] [背景颜色:深/浅] [字体颜色
 - 模糊通过 `::before` 伪元素承载，`z-index: -1`（位于条内容之下、页面内容之上）。
 - `mask-image`：3/4 区域完全模糊，1/4 区域渐变消失。
 - 转发按键栏的**显隐**由 JS 按模式切换按钮 `is-hidden` 标记控制（见 [6](#6-显示区-display-area)）；`.c-fwd-display .c-fwd-float-btns::before` 仅承载模糊渐变。
+
+## 16. 串口权限横幅 (.o-perm-banner)
+
+只有 Linux 会出现的非模态提示条（`sysperm.Supported` 为真且探到读不了的 `/dev/ttyUSB*` / `/dev/ttyACM*` 才显示；Windows 的 COM 口与 macOS 的 `/dev/cu.*` 永不出现）。
+
+| 元素 | 规则 |
+| --- | --- |
+| `#permBanner.o-perm-banner` | 插在标签栏与 `.main-content` 之间，`flex-shrink: 0`；默认 `display: none`，加 `.is-show` 才 `display: flex` |
+| `.c-perm-banner` | `background: var(--bg2)` + 下边框 1px `var(--border)`，`font-size: 12px`，`user-select: none` |
+| `.c-perm-banner__icon` | 固定宽度图标，`color: var(--yellow)`（警告语气，与错误红区分） |
+| `.c-perm-banner__text` | `flex: 1 1 auto; min-width: 0` + 单行省略（`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`） |
+| `.c-perm-banner__btn` | 右侧「临时授权」按钮，`var(--accent)` 实底白字；请求进行中置 `disabled` |
+| `.c-perm-banner__close` | 20×20 关闭按钮，hover 才显 `var(--bg3)` 底 |
+
+- **参与布局、不覆盖控件**：出现时把 `.main-content` 压矮，不遮挡任何已有元素——所以它不是浮层，也没有 `position: absolute`。
+- **刻意不用模态弹窗**：打开串口失败时用户还要能换端口、看日志、翻设置，弹窗会挡住这些操作。
+- 分体版只做临时授权，拔插或重启后横幅会**再次出现**，因此文案必须能长期停留而不打扰（单行、无动画、无自动消失）。
+- 显隐只由 `showPermBanner()` / `hidePermBanner()` 控制（`onclick` 直接调全局函数），不参与会话页那套 `renderSegments` 渲染；点「×」只是本次隐藏，**不落盘**——下次探测到读不了的设备仍会出现。
