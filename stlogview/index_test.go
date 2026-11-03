@@ -23,11 +23,17 @@ type tf struct {
 // 正好覆盖 scanner 的续片拼接路径。
 func writeTestFile(t *testing.T, frames []tf) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "unit.stlog")
-	w, err := sessionfile.CreateWriter(p, sessionfile.Settings{
+	return writeTestFileSet(t, frames, sessionfile.Settings{
 		Label: "unit", Port: "COM4", Baud: 115200,
 		Display: map[string]string{"encoding": "utf-8"},
 	})
+}
+
+// writeTestFileSet 用给定设置造文件（转发录制、老文件之类的夹具用）。
+func writeTestFileSet(t *testing.T, frames []tf, set sessionfile.Settings) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "unit.stlog")
+	w, err := sessionfile.CreateWriter(p, set)
 	if err != nil {
 		t.Fatalf("CreateWriter: %v", err)
 	}
@@ -120,6 +126,13 @@ func TestScanMatchesReader(t *testing.T) {
 	if ix.rxBytes != int64(info.RxTotal) || ix.txBytes != int64(info.TxTotal) {
 		t.Fatalf("rx/tx %d/%d，标准答案 %d/%d", ix.rxBytes, ix.txBytes, info.RxTotal, info.TxTotal)
 	}
+	// 时间范围与转发字节数（文件浮窗要用的那几项）
+	if ix.firstTs != 1000 || ix.lastTs != 1070 {
+		t.Fatalf("时间范围 %d..%d", ix.firstTs, ix.lastTs)
+	}
+	if ix.p1Bytes != 4 || ix.p2Bytes != 5 {
+		t.Fatalf("转发字节 P1=%d P2=%d", ix.p1Bytes, ix.p2Bytes)
+	}
 	t.Logf("帧 %d · 记录 %d · 页 %d · rx/tx %d/%d", ix.n, ix.records, ix.pages, ix.rxBytes, ix.txBytes)
 }
 
@@ -137,18 +150,25 @@ func TestScanRejectsNonStlog(t *testing.T) {
 // TestHexBytesPerLine 钉住十六进制折行：一行不得超过给定字符数，而且要尽量用满 ——
 // 再加一个字节就会超（以前按 8 对齐，宽窗口下白扔一百多像素）。
 func TestHexBytesPerLine(t *testing.T) {
+	styles := []struct {
+		name string
+		st   Style
+		per  int
+		slen int
+	}{
+		{"空格", DefaultStyle(0), 3, 1},
+		{"0x 前缀", func() Style { s := DefaultStyle(0); s.HexPrefix = true; return s }(), 5, 1},
+		{"逗号", func() Style { s := DefaultStyle(0); s.HexSep = 1; return s }(), 3, 1},
+		{"无分隔", func() Style { s := DefaultStyle(0); s.HexSep = 2; return s }(), 2, 0},
+	}
 	for _, chars := range []int{16, 20, 39, 40, 60, 80, 100, 120, 200} {
-		for _, prefix := range []bool{false, true} {
-			bpl := hexBytesPerLine(chars, prefix)
-			per := 3
-			if prefix {
-				per = 5
+		for _, c := range styles {
+			bpl := hexBytesPerLine(chars, c.st)
+			if line := bpl*c.per - c.slen; line > chars {
+				t.Fatalf("%s chars=%d → bpl=%d 一行 %d 字符，超了", c.name, chars, bpl, line)
 			}
-			if line := bpl*per - 1; line > chars {
-				t.Fatalf("chars=%d prefix=%v → bpl=%d 一行 %d 字符，超了", chars, prefix, bpl, line)
-			}
-			if line := (bpl+1)*per - 1; line <= chars {
-				t.Fatalf("chars=%d prefix=%v → bpl=%d 还能再塞一个字节（一行只有 %d 字符）", chars, prefix, bpl, bpl*per-1)
+			if line := (bpl+1)*c.per - c.slen; line <= chars {
+				t.Fatalf("%s chars=%d → bpl=%d 还能再塞一个字节（一行只有 %d 字符）", c.name, chars, bpl, bpl*c.per-c.slen)
 			}
 		}
 	}

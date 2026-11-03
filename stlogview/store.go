@@ -56,8 +56,8 @@ type Store struct {
 	perLine      int
 	tsLineH2     int
 	dataLineH2   int
-	hexPrefix    bool
 	showYear     bool
+	style        Style
 	prefix       []int64 // 半像素
 	totalH2      int64
 
@@ -82,8 +82,8 @@ func NewStore() *Store {
 		charsPerLine: 120,
 		tsLineH2:     42, // 15px × 1.4 = 21px
 		dataLineH2:   45, // 15px × 1.5 = 22.5px
-		hexPrefix:    false,
 		showYear:     true,
+		style:        DefaultStyle(0),
 	}
 }
 
@@ -123,13 +123,21 @@ type MetaResult struct {
 	Origins   []string `json:"origins"`
 
 	Port    string `json:"port"`
+	PortB   string `json:"portB"`
 	Baud    int    `json:"baud"`
 	Created string `json:"created"`
 	UUID    string `json:"uuid"`
 	Label   string `json:"label"`
 	Enc     string `json:"enc"`
 
+	// Mode 是录制模式（single / forward）；View 是当前布局（hex / text）。
+	// 两个「模式」是两件事，别混。
 	Mode         string `json:"mode"`
+	FirstTs      int64  `json:"firstTs"`
+	LastTs       int64  `json:"lastTs"`
+	P1Bytes      int64  `json:"p1Bytes"`
+	P2Bytes      int64  `json:"p2Bytes"`
+	View         string `json:"view"`
 	CharsPerLine int    `json:"charsPerLine"`
 	PerLine      int    `json:"perLine"`
 	TsLineH2     int    `json:"tsLineH2"`
@@ -261,6 +269,8 @@ func (s *Store) Open(path string) StatusResult {
 		default:
 		}
 		s.ix = ix
+		// 默认显示样式取文件头里的编码；其余取主工程默认值（前端 Configure 会覆盖）。
+		s.style = DefaultStyle(ix.encoding())
 		s.scanMs = time.Since(t0).Milliseconds()
 		s.scanDone = ix.size
 		s.phase = "ready"
@@ -323,12 +333,12 @@ func (s *Store) Meta() MetaResult {
 		Path:         s.path,
 		Phase:        s.phase,
 		ScanMs:       s.scanMs,
-		Mode:         s.mode,
+		View:         s.mode,
 		CharsPerLine: s.charsPerLine,
 		PerLine:      s.perLine,
 		TsLineH2:     s.tsLineH2,
 		DataLineH2:   s.dataLineH2,
-		HexPrefix:    s.hexPrefix,
+		HexPrefix:    s.style.HexPrefix,
 		ShowYear:     s.showYear,
 	}
 	if i := strings.LastIndexAny(s.path, `\/`); i >= 0 {
@@ -353,15 +363,24 @@ func (s *Store) Meta() MetaResult {
 	out.Recovered = ix.recovered
 	out.Origins = ix.orgNames
 	out.Enc = "utf-8"
+	out.FirstTs = ix.firstTs
+	out.LastTs = ix.lastTs
+	out.P1Bytes = ix.p1Bytes
+	out.P2Bytes = ix.p2Bytes
+	out.Mode = "single"
 	if ix.stopErr != nil {
 		out.StopErr = ix.stopErr.Error()
 	}
 	if st := ix.settings; st != nil {
 		out.Port = st.Port
+		out.PortB = st.PortB
 		out.Baud = st.Baud
 		out.Created = st.Created
 		out.UUID = st.UUID
 		out.Label = st.Label
+		if st.Mode == sessionfile.ModeForward {
+			out.Mode = sessionfile.ModeForward
+		}
 		if e := st.Display["encoding"]; e != "" {
 			out.Enc = e
 		}
@@ -369,8 +388,9 @@ func (s *Store) Meta() MetaResult {
 	return out
 }
 
-// Configure 重算布局：改了宽度、行高、模式或 0x 前缀，都要重来一遍前缀和。
-func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, anchorIdx int, hexPrefix bool) ConfigureResult {
+// Configure 重算布局：改了宽度、行高、模式或显示样式（控制字符 / 转义字节 /
+// Hex 分隔与前缀），都要重来一遍格子缓存与前缀和。
+func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, anchorIdx int, style Style) ConfigureResult {
 	if mode != "hex" {
 		mode = "text"
 	}
@@ -383,8 +403,8 @@ func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, a
 
 	changed := mode != s.mode || charsPerLine != s.charsPerLine ||
 		tsLineH2 != s.tsLineH2 || dataLineH2 != s.dataLineH2 ||
-		hexPrefix != s.hexPrefix || s.prefix == nil
-	s.mode, s.charsPerLine, s.tsLineH2, s.dataLineH2, s.hexPrefix = mode, charsPerLine, tsLineH2, dataLineH2, hexPrefix
+		style != s.style || s.prefix == nil
+	s.mode, s.charsPerLine, s.tsLineH2, s.dataLineH2, s.style = mode, charsPerLine, tsLineH2, dataLineH2, style
 	if changed {
 		s.buildLayoutLocked()
 	}
@@ -394,7 +414,7 @@ func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, a
 		PerLine:      s.perLine,
 		TsLineH2:     s.tsLineH2,
 		DataLineH2:   s.dataLineH2,
-		HexPrefix:    s.hexPrefix,
+		HexPrefix:    s.style.HexPrefix,
 		ContentH:     float64(s.totalH2) / 2,
 		MaxOffset:    s.maxOffsetLocked(),
 	}
@@ -413,18 +433,13 @@ func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, a
 	return out
 }
 
-// SetOpt 切年份 / 0x 前缀这类只影响显示的开关。
+// SetOpt 切年份这类只影响显示的开关（会改宽度的开关走 Configure 的 Style）。
 func (s *Store) SetOpt(name string, on bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch name {
 	case "year":
 		s.showYear = on
-	case "prefix":
-		if s.hexPrefix != on {
-			s.hexPrefix = on
-			s.buildLayoutLocked()
-		}
 	}
 	return true
 }
@@ -444,19 +459,19 @@ func (s *Store) SetTheme(dark bool) bool {
 // perLineLocked 是一行放几个单位：文本=格，Hex=字节（尽量用满宽度）。
 func (s *Store) perLineLocked() int {
 	if s.mode == "hex" {
-		return hexBytesPerLine(s.charsPerLine, s.hexPrefix)
+		return hexBytesPerLine(s.charsPerLine, s.style)
 	}
 	return s.charsPerLine
 }
 
 // hexBytesPerLine 按满宽折行：再塞一个字节就会超，不留 8 字节对齐的余量
 // （对齐会白扔最多 7 个字节 ≈ 155 px，宽窗口下很明显）。
-func hexBytesPerLine(chars int, prefix bool) int {
-	per := 3 // "AA " 三格
-	if prefix {
-		per = 5 // "0xAA " 五格
-	}
-	bpl := (chars + 1) / per
+//
+// 一行的字符数 = bpl*per - 分隔符长度（最后一个字节后面没有分隔符）。
+func hexBytesPerLine(chars int, st Style) int {
+	per := st.hexPerByte()
+	slen := st.hexSepLen()
+	bpl := (chars + slen) / per
 	if bpl < 1 {
 		bpl = 1
 	}
@@ -488,9 +503,31 @@ func (s *Store) linesOfLocked(i int) int {
 	return n
 }
 
+// ensureSegLocked 保证格子缓存与当前样式一致。样式变了就整表重算：
+// 格子数只依赖字节流与样式，重扫一遍 arena 比重建索引便宜得多。
+func (s *Store) ensureSegLocked() {
+	ix := s.ix
+	if ix == nil || ix.n == 0 || ix.segKey == s.style {
+		return
+	}
+	st := s.style
+	buf := ix.seg[:0]
+	segIdx := ix.segIdx[:0]
+	for i := 0; i < ix.n; i++ {
+		p := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
+		segIdx = append(segIdx, int32(len(buf)))
+		buf = cellsOf(p, st, buf)
+	}
+	segIdx = append(segIdx, int32(len(buf)))
+	ix.seg = buf
+	ix.segIdx = segIdx
+	ix.segKey = st
+}
+
 // buildLayoutLocked 重算行高前缀和。改宽度走的就是这里：只有除法加法，
 // 不重新 decode、不建字符串。
 func (s *Store) buildLayoutLocked() {
+	s.ensureSegLocked()
 	ix := s.ix
 	if ix == nil || ix.n == 0 {
 		s.prefix = []int64{0}
@@ -534,7 +571,7 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 	out := WindowResult{
 		Mode:          s.mode,
 		PerLine:       s.perLine,
-		HexPrefix:     s.hexPrefix,
+		HexPrefix:     s.style.HexPrefix,
 		ContentHeight: float64(s.totalH2) / 2,
 		ViewportH:     viewportH,
 		OverscanPx:    overscanPx,
@@ -615,9 +652,9 @@ func (s *Store) makeRowLocked(i int) Row {
 	}
 	r.Cells = append(r.Cells, ix.seg[ix.segIdx[i]:ix.segIdx[i+1]]...)
 	if s.mode == "hex" {
-		r.Hex = formatHexLines(p, s.perLine, s.hexPrefix)
+		r.Hex = formatHexLines(p, s.perLine, s.style)
 	} else {
-		r.Segs = decode.Decode(hex.EncodeToString(p), encName(ix.encoding()))
+		r.Segs = decode.Decode(hex.EncodeToString(p), encName(s.style.Enc))
 	}
 	return r
 }
@@ -648,20 +685,31 @@ func dirName(d uint8) string {
 }
 
 // formatHexLines 把一段字节排成 bpl 字节一行的十六进制，行间用 \n 分隔。
-// 与主工程的 formatHexString 同一套规则（大写/空格分隔/可选 0x 前缀），
+// 与主工程的 formatHexString 同一套规则（大小写 / 分隔符 / 可选 0x 前缀），
 // 区别只在先把行折好 —— 主工程是 break-all 乱折，这里按整字节折。
-func formatHexLines(p []byte, bpl int, prefix bool) string {
+func formatHexLines(p []byte, bpl int, st Style) string {
 	if len(p) == 0 {
 		return ""
 	}
 	if bpl < 1 {
 		bpl = 1
 	}
-	const digits = "0123456789ABCDEF"
-	per := 2
-	if prefix {
-		per = 4
+	const up = "0123456789ABCDEF"
+	const low = "0123456789abcdef"
+	digits := up
+	if !st.HexUpper {
+		digits = low
 	}
+	var sep string
+	switch st.HexSep {
+	case 1:
+		sep = ","
+	case 2:
+		sep = ""
+	default:
+		sep = " "
+	}
+	per := st.hexPerByte()
 	var sb strings.Builder
 	sb.Grow(len(p) * (per + 1))
 	for i := 0; i < len(p); i += bpl {
@@ -674,9 +722,9 @@ func formatHexLines(p []byte, bpl int, prefix bool) string {
 		}
 		for j := i; j < end; j++ {
 			if j > i {
-				sb.WriteByte(' ')
+				sb.WriteString(sep)
 			}
-			if prefix {
+			if st.HexPrefix {
 				sb.WriteString("0x")
 			}
 			sb.WriteByte(digits[p[j]>>4])
@@ -757,12 +805,12 @@ func (s *Store) FrameDebug(idx int) string {
 	}
 	p := ix.arena[ix.aoff[idx] : ix.aoff[idx]+int32(ix.ln[idx])]
 	segs := ix.seg[ix.segIdx[idx]:ix.segIdx[idx+1]]
-	fresh := cellsOf(p, ix.encoding(), nil)
-	out := formatHexLines(p, len(p), false)
+	fresh := cellsOf(p, s.style, nil)
+	out := formatHexLines(p, len(p), s.style)
 	if len(out) > 64 {
 		out = out[:64] + "…"
 	}
-	return fmt.Sprintf("存%v 现%v len=%d enc=%d · %s", segs, fresh, len(p), ix.encoding(), out)
+	return fmt.Sprintf("存%v 现%v len=%d enc=%d · %s", segs, fresh, len(p), s.style.Enc, out)
 }
 
 func clampInt(v, lo, hi int) int {

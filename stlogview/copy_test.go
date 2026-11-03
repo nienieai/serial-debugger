@@ -24,7 +24,7 @@ func buildIndexForTest(payloads [][]byte, dirs []uint8) *index {
 		ix.dir = append(ix.dir, d)
 		ix.org = append(ix.org, 0)
 		ix.segIdx = append(ix.segIdx, int32(len(ix.seg)))
-		ix.seg = append(ix.seg, cellsOf(p, 0, nil)...)
+		ix.seg = append(ix.seg, cellsOf(p, DefaultStyle(0), nil)...)
 		arena = append(arena, p...)
 	}
 	ix.segIdx = append(ix.segIdx, int32(len(ix.seg)))
@@ -95,7 +95,7 @@ func TestFormatBytes(t *testing.T) {
 		if f == "hex0x" {
 			f, prefix = copyHex, true
 		}
-		if got := formatBytes(p, 0, f, prefix); got != c.want {
+		if got := formatBytes(p, DefaultStyle(0), f, prefix); got != c.want {
 			t.Errorf("%s → %q，期望 %q", c.format, got, c.want)
 		}
 	}

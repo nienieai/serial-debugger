@@ -1,0 +1,103 @@
+/* ---- 虚窗日志视图（logview）----
+   一行一个绝对定位的 .lv-row，整层 translate3d 平移；行里的 .ts-line / .data-line
+   用的是会话页同一套类，所以配色主题、字体、可见控制字符都跟着走。
+   这里只管几何：视口、行容器、选区盒子、滚动条两道 + 滑块。 */
+
+.lv-host {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  /* .t-stlog-rows 原来给分页内容留的 padding 对虚窗没用：几何全由引擎算，
+     留着会让行起点和选区坐标差 12px、轨道也不贴边。 */
+  padding: 0;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+}
+.lv-view {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  cursor: text;
+}
+.lv-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+.lv-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  padding-left: 12px;
+  padding-right: 8px;
+}
+.lv-row .ts-line { line-height: 1.4; }
+.lv-row .data-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+/* 量字体宽度与行高的探针：不进布局，量完立刻删 */
+.lv-probe {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  visibility: hidden;
+  white-space: pre;
+}
+.lv-msg {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  color: var(--placeholder);
+  font-style: italic;
+  pointer-events: none;
+}
+
+/* 选区：一行可能有多个视觉行，各画一块，跟着 layer 一起平移 */
+.lv-sel-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.lv-selbox {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  pointer-events: none;
+}
+
+/* 滚动条：左边 1px 分界线 + 两道 5px 泳道，满高、贴右、直角 */
+.lv-rail {
+  position: relative;
+  flex: 0 0 11px;
+  width: 11px;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  cursor: pointer;
+}
+.lv-lanes { position: relative; width: 10px; height: 100%; }
+.lv-lane-bar { position: absolute; left: 0; width: 5px; }
+.lv-disk {
+  position: absolute;
+  left: 5px;
+  width: 5px;
+  background: color-mix(in srgb, var(--fg) 22%, transparent);
+}
+.lv-disk.is-bad { background: color-mix(in srgb, var(--red) 22%, transparent); }
+.lv-disk-line {
+  position: absolute;
+  left: 5px;
+  width: 5px;
+  height: 1px;
+  background: var(--red);
+}
+.lv-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  min-height: 15px;
+  background: var(--scrollbar-thumb);
+  will-change: transform;
+  cursor: pointer;
+}
+.lv-thumb:hover { background: var(--accent); }

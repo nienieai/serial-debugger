@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nienieai/serial-debugger/sessionfile"
 )
 
 // TestOpenWindow 打开文件后按像素取窗口：行数、行高、base、几何都要自洽。
@@ -13,11 +15,11 @@ func TestOpenWindow(t *testing.T) {
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
 
-	cfg := s.Configure(120, 42, 45, "hex", 0, false)
+	cfg := s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
 	if cfg.RowCount != len(defaultFrames()) {
 		t.Fatalf("行数 %d", cfg.RowCount)
 	}
-	if cfg.PerLine != hexBytesPerLine(120, false) {
+	if cfg.PerLine != hexBytesPerLine(120, DefaultStyle(0)) {
 		t.Fatalf("perLine %d", cfg.PerLine)
 	}
 
@@ -74,8 +76,8 @@ func TestConfigureTextRebuild(t *testing.T) {
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
 
-	hexCfg := s.Configure(60, 42, 45, "hex", 0, false)
-	textCfg := s.Configure(60, 42, 45, "text", 3, false)
+	hexCfg := s.Configure(60, 42, 45, "hex", 0, DefaultStyle(0))
+	textCfg := s.Configure(60, 42, 45, "text", 3, DefaultStyle(0))
 	if textCfg.Mode != "text" {
 		t.Fatalf("mode %q", textCfg.Mode)
 	}
@@ -112,15 +114,22 @@ func TestSetOptPrefix(t *testing.T) {
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
 
-	s.Configure(120, 42, 45, "hex", 0, false)
-	before := s.Configure(120, 42, 45, "hex", 0, false)
-	s.SetOpt("prefix", true)
-	after := s.Configure(120, 42, 45, "hex", 0, true)
+	before := s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
+	st := DefaultStyle(0)
+	st.HexPrefix = true
+	after := s.Configure(120, 42, 45, "hex", 0, st)
 	if after.PerLine >= before.PerLine {
 		t.Fatalf("加 0x 前缀后 perLine 反而没变小：%d → %d", before.PerLine, after.PerLine)
 	}
 	if after.ContentH < before.ContentH {
 		t.Fatalf("perLine 变小，内容高度应更大：%v → %v", before.ContentH, after.ContentH)
+	}
+	// 分隔符也会改宽度：逗号与空格同宽，无分隔更窄（一行能塞更多字节）
+	st2 := DefaultStyle(0)
+	st2.HexSep = 2
+	none := s.Configure(120, 42, 45, "hex", 0, st2)
+	if none.PerLine <= before.PerLine {
+		t.Fatalf("无分隔应该一行放更多字节：%d → %d", before.PerLine, none.PerLine)
 	}
 }
 
@@ -129,7 +138,7 @@ func TestRulerOrigins(t *testing.T) {
 	s := NewStore()
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
-	s.Configure(120, 42, 45, "hex", 0, false)
+	s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
 
 	r := s.Ruler(64)
 	if r.Total != len(defaultFrames()) {
@@ -175,6 +184,45 @@ func TestClose(t *testing.T) {
 	}
 	if r := s.Ruler(64); len(r.Buckets) != 0 {
 		t.Fatalf("Close 之后还有桶: %d", len(r.Buckets))
+	}
+}
+
+// TestMetaFields 是文件浮窗要用的那几项：模式、端口、时间范围、双向字节。
+func TestMetaFields(t *testing.T) {
+	s := NewStore()
+	s.Open(writeTestFile(t, defaultFrames()))
+	waitReady(t, s)
+	m := s.Meta()
+	if m.Mode != "single" || m.Port != "COM4" || m.Baud != 115200 {
+		t.Fatalf("模式/端口/波特率：%q %q %d", m.Mode, m.Port, m.Baud)
+	}
+	if m.FirstTs != 1000 || m.LastTs != 1070 {
+		t.Fatalf("时间范围 %d..%d", m.FirstTs, m.LastTs)
+	}
+	if m.P1Bytes != 4 || m.P2Bytes != 5 || m.Frames != 8 {
+		t.Fatalf("P1=%d P2=%d 帧=%d", m.P1Bytes, m.P2Bytes, m.Frames)
+	}
+	if m.View != "hex" {
+		t.Fatalf("布局模式 %q", m.View)
+	}
+
+	// 转发录制：模式与 B 口来自文件头
+	fwd := []tf{
+		{ts: 10, dir: sessionfile.DirP1, payload: []byte("ab")},
+		{ts: 20, dir: sessionfile.DirP2, payload: []byte("cde")},
+	}
+	p := writeTestFileSet(t, fwd, sessionfile.Settings{
+		Mode: sessionfile.ModeForward, Port: "COM1", PortB: "COM2",
+	})
+	s2 := NewStore()
+	s2.Open(p)
+	waitReady(t, s2)
+	m2 := s2.Meta()
+	if m2.Mode != "forward" || m2.Port != "COM1" || m2.PortB != "COM2" {
+		t.Fatalf("转发头：%q %q %q", m2.Mode, m2.Port, m2.PortB)
+	}
+	if m2.P1Bytes != 2 || m2.P2Bytes != 3 {
+		t.Fatalf("转发字节 P1=%d P2=%d", m2.P1Bytes, m2.P2Bytes)
 	}
 }
 

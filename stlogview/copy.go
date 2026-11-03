@@ -69,10 +69,7 @@ func (s *Store) posToByteLocked(idx, vline, cell int) int {
 		cell = 0
 	}
 	if s.mode == "hex" {
-		per := 3 // "AA " 三格一个字节
-		if s.hexPrefix {
-			per = 5
-		}
+		per := s.style.hexPerByte() // "AA " 三格、带 0x 五格、无分隔两格……
 		off := vline*s.perLine + cell/per
 		if off > len(p) {
 			off = len(p)
@@ -95,7 +92,7 @@ func (s *Store) posToByteLocked(idx, vline, cell int) int {
 			if want > int(c) {
 				want = int(c)
 			}
-			return byteAtPos(p, ix.encoding(), L, want)
+			return byteAtPos(p, s.style, L, want)
 		}
 		v -= wrap
 	}
@@ -104,13 +101,13 @@ func (s *Store) posToByteLocked(idx, vline, cell int) int {
 
 // byteAtPos 走到「第 wantLine 个逻辑行的第 wantCells 格」，返回那个字节的偏移。
 // 逐单元走（宽字 2 格、Tab 跳到 8 的倍数、/XX 3 格），与 cellsOf 用的是同一个 unitAt。
-func byteAtPos(p []byte, enc uint8, wantLine, wantCells int) int {
+func byteAtPos(p []byte, st Style, wantLine, wantCells int) int {
 	line, col, i := 0, 0, 0
 	for i < len(p) {
 		if line > wantLine || (line == wantLine && col >= wantCells) {
 			return i
 		}
-		c, size, brk := unitAt(p[i:], enc, col)
+		c, size, brk := unitAt(p[i:], st, col)
 		if line == wantLine && col+c > wantCells {
 			return i // 落在单元中间 → 左贴，绝不把一半的 /XX 或 ←↵ 带出去
 		}
@@ -189,7 +186,7 @@ func (s *Store) CopySelection(req CopyReq) CopyResult {
 		if req.WithTS || req.WithDir || req.WithLen {
 			b.WriteString(copyPrefix(ix.ts[i], dirName(ix.dir[i]), len(p), &req, showYear))
 		}
-		b.WriteString(formatBytes(part, ix.encoding(), format, req.HexPrefix))
+		b.WriteString(formatBytes(part, s.style, format, req.HexPrefix))
 		b.WriteByte('\n')
 		frames++
 		nbytes += len(part)
@@ -243,17 +240,19 @@ func copyPrefix(ts int64, dir string, size int, req *CopyReq, showYear bool) str
 }
 
 // formatBytes 按格式输出一段字节。三种口径都在这里，复制到哪儿都一样。
-func formatBytes(p []byte, enc uint8, format string, hexPrefix bool) string {
+// hexPrefix 由请求决定（复制时可能和显示不一样），其余跟着文档的样式走。
+func formatBytes(p []byte, st Style, format string, hexPrefix bool) string {
 	if len(p) == 0 {
 		return ""
 	}
 	switch format {
 	case copyHex:
-		return formatHexLines(p, len(p), hexPrefix)
+		st.HexPrefix = hexPrefix
+		return formatHexLines(p, len(p), st)
 	case copyRaw:
-		return decodeForCopy(p, enc, true)
+		return decodeForCopy(p, st.Enc, true)
 	default:
-		return decodeForCopy(p, enc, false)
+		return decodeForCopy(p, st.Enc, false)
 	}
 }
 

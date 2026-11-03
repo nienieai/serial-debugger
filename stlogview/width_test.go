@@ -36,7 +36,7 @@ func TestLineBreakRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := cellsOf(p, 0, nil)
+		got := cellsOf(p, DefaultStyle(0), nil)
 		ok := len(got) == len(c.want)
 		if ok {
 			for i := range got {
@@ -87,7 +87,7 @@ func TestCellsMatchDecode(t *testing.T) {
 	}
 	for _, enc := range []uint8{0, 1} {
 		for _, c := range cases {
-			got := cellsOf(c, enc, nil)
+			got := cellsOf(c, DefaultStyle(enc), nil)
 			want := oracleCells(c, enc)
 			if fmt.Sprint(got) != fmt.Sprint(want) {
 				t.Fatalf("enc=%d payload=%x\n  计算 %v\n  标准 %v", enc, c, got, want)
@@ -151,7 +151,7 @@ func TestLinesMatchCells(t *testing.T) {
 	for i := 0; i < ix.n; i++ {
 		pay := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
 		want := 0
-		for _, c := range cellsOf(pay, ix.encoding(), nil) {
+		for _, c := range cellsOf(pay, ix.scanStyle(), nil) {
 			want += linesFor(c, s.perLine)
 		}
 		got := s.linesOfLocked(i)

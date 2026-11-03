@@ -2955,6 +2955,19 @@ window.addEventListener('DOMContentLoaded', () => {
   updateEmptyState();
   renderTabs();
 
+  // 启动参数里的 .stlog / 工程目录（双击文件、命令行带路径）：等设置加载完再开，
+  // 否则新页拿到的是默认显示设置而不是用户配的。用「拉」不用「推」 —— Go 侧推
+  // 事件永远赶不上页面就绪，早了就丢。
+  (function takeStartupPath() {
+    var App = window.go && window.go.main && window.go.main.App;
+    if (!App || typeof App.TakeOpenPath !== 'function') return;
+    Promise.resolve().then(function () {
+      return App.TakeOpenPath();
+    }).then(function (p) {
+      if (p) openPathFromOS(p);
+    }).catch(function () {});
+  })();
+
   try {
     window.runtime.EventsOn('ports-changed', () => refreshPorts());
     window.runtime.EventsOn('ports-list', (data) => updatePortList(data.ports));
@@ -4756,15 +4769,15 @@ function _tabPopT(key, fb) {
 
 // 文件标签的浮窗。文件标签没有会话概念（没 sessionId、没端口），套会话卡片只会
 // 得到一片 —，所以单独画：文件名 / 路径 / 大小 / 收发 / 时间范围 / 来源。
-// 数据来自 tab._stlog.info（stlogLoad 每次读回来都会存一份）。
+// 数据来自 tab._stlog.info（引擎打开完成时把 Meta 存一份）。
 function _tabPopRenderFile() {
   var el = _tabPopEl;
   var tab = _tabPop.tab;
   var st = tab._stlog || {};
   var info = st.info || {};
   var path = tab.path || '';
-  var fwd = info.forward === true;
-  var set = info.settings || {};
+  var fwd = info.mode === 'forward';
+  var set = { port: info.port, baud: info.baud };
   var portA = set.port || '';
   var portB = info.portB || '';
 
@@ -4798,14 +4811,14 @@ function _tabPopRenderFile() {
     '</div>';
   }
   var lanesHTML = fwd
-    ? lane('A→B', 'var(--fwd-p1)', info.bytesAB) + lane('B→A', 'var(--fwd-p2)', info.bytesBA)
-    : lane('⇃ RX', 'var(--green)', info.rxTotal) + lane('↾ TX', 'var(--accent)', info.txTotal);
+    ? lane('A→B', 'var(--fwd-p1)', info.p1Bytes) + lane('B→A', 'var(--fwd-p2)', info.p2Bytes)
+    : lane('⇃ RX', 'var(--green)', info.rxBytes) + lane('↾ TX', 'var(--accent)', info.txBytes);
 
   // 比例条：单口是收发比（绿/蓝），转发是分流比（P1/P2 两色）
   var cRx = fwd ? 'var(--fwd-p1)' : 'var(--green)';
   var cTx = fwd ? 'var(--fwd-p2)' : 'var(--accent)';
-  var partA = fwd ? (info.bytesAB || 0) : (info.rxTotal || 0);
-  var partB = fwd ? (info.bytesBA || 0) : (info.txTotal || 0);
+  var partA = fwd ? (info.p1Bytes || 0) : (info.rxBytes || 0);
+  var partB = fwd ? (info.p2Bytes || 0) : (info.txBytes || 0);
   var sum = partA + partB;
   var hasRatio = sum > 0;
   var rp = hasRatio ? Math.round(partA / sum * 100) : 0;
@@ -4819,9 +4832,9 @@ function _tabPopRenderFile() {
     '<span class="c-tabpop__rval" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
   '</div>';
 
-  // 页脚三项：帧（已载入/总数）、时长、来源数。绝对时间范围退到 title。
-  var loaded = (st.frames && st.frames.length) ? st.frames.length : 0;
-  var totalFrames = (typeof info.total === 'number') ? info.total : 0;
+  // 页脚三项：帧、时长、来源数。绝对时间范围退到 title。
+  var totalFrames = (typeof info.frames === 'number') ? info.frames : 0;
+  var loaded = totalFrames;
   var srcCount = (info.origins && info.origins.length) ? info.origins.length : 0;
   var range = stlogRangeText(info.firstTs, info.lastTs) || '';
 
@@ -4860,7 +4873,7 @@ function _tabPopSpanText(firstTs, lastTs) {
 function _tabPopFileSig() {
   var st = (_tabPop && _tabPop.tab && _tabPop.tab._stlog) || {};
   var info = st.info || {};
-  return ['file', info.path || '', info.total || 0, (st.frames ? st.frames.length : 0)].join('|');
+  return ['file', info.path || '', info.frames || 0].join('|');
 }
 
 function _tabPopRender() {
@@ -7842,9 +7855,50 @@ function applySendRatio() {
 // 行渲染直接调 history.js 的 makeDataRow：Rx/Tx 配色、Hex/文本开关、等宽字体、
 // 屏外不绘制全部继承，不另起一套渲染器。
 
-// 首屏/每批 500 帧。一帧最大 4016 B，转十六进制就是 8 KB 字符串，一次给太多
-// 会把过桥的 JSON 和 DOM 一起撑爆；其余靠底部的「加载更多」。
-var STLOG_PAGE_SIZE = 500;
+// .stlog 文件页的数据在 Go 侧（服务 main.LogView → 包 stlogview）：文档只留一份
+// arena 与定长帧表，前端按像素取窗口、只挂可见的几十行，行高由 Go 算。
+// 这里只剩顶栏（文件名/元信息/年份/Hex-文本/导出/推送）与句柄。
+
+// stlogBarText 把 Meta 拼成顶栏那一行。
+//
+// Meta 是「文件这一次打开」的静态快照，和会话页的 stats 不是一回事：没有速率、
+// 没有客户端，只有文件自己写下来的东西（模式/端口/时间范围/来源/完整性）。
+function stlogBarText(m) {
+  if (!m) return '';
+  var parts = [];
+  var range = stlogRangeText(m.firstTs, m.lastTs);
+  if (range) parts.push(range);
+  parts.push(m.size + ' B');
+  parts.push(m.pages + ' 页');
+  parts.push(m.records + ' 记录');
+  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
+  if (m.mode === 'forward') {
+    parts.push('A→B ' + (m.p1Bytes || 0) + ' / B→A ' + (m.p2Bytes || 0) + ' B');
+    parts.push('转发 ' + (m.port ? m.port + ' ↔ ' : '') + (m.portB || ''));
+  } else {
+    parts.push('rx/tx ' + (m.rxBytes || 0) + '/' + (m.txBytes || 0) + ' B');
+  }
+  if (m.label) parts.push('设置 ' + m.label);
+  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
+  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
+  if (m.origins && m.origins.length) {
+    var kinds = [];
+    m.origins.forEach(function (o) {
+      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
+      if (kinds.indexOf(label) < 0) kinds.push(label);
+    });
+    parts.push('来源 ' + kinds.join(' · '));
+  } else {
+    parts.push('无来源');
+  }
+  if (m.recovered && m.recovered.length) parts.push('影子恢复 ' + m.recovered.length + ' 页');
+  if (m.truncated) parts.push('末帧未结束');
+  if (m.broken) parts.push('续片链被切断');
+  if (m.noHead) parts.push('缺头');
+  if (m.stoppedAt) parts.push('停在 0x' + Number(m.stoppedAt).toString(16).toUpperCase());
+  if (m.stopErr) parts.push(m.stopErr);
+  return parts.join(' · ');
+}
 
 function stlogBaseName(p) {
   // 去掉尾部分隔符：拖放给的目录路径可能带 '\'，否则取到的是空串
@@ -7889,134 +7943,41 @@ function stlogRangeText(first, last) {
     (stlogDateText(a) === stlogDateText(b) ? stlogTimeText(b) : stlogFullTs(last));
 }
 
-function stlogSysRow(tab, text) {
-  var line = document.createElement('div');
-  line.className = 'sys-msg';
-  line.textContent = '── ' + text + ' ──';
-  var st = tab._stlog;
-  st.content.insertBefore(line, st.more);
-  return line;
-}
-
-// 顶栏一行元信息：时间范围 / 大小 / 页 / 记录 / rx-tx / 设置 / 异常标记。
-function stlogBarText(info) {
-  var parts = [];
-  var range = stlogRangeText(info.firstTs, info.lastTs);
-  if (range) parts.push(range);
-  parts.push(info.size + ' B');
-  parts.push(info.pages + ' 页');
-  parts.push(info.records + ' 记录');
-  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
-  if (info.forward) {
-    parts.push('A→B ' + (info.bytesAB || 0) + ' / B→A ' + (info.bytesBA || 0) + ' B');
-    var setA = (info.settings && info.settings.port) ? info.settings.port : '';
-    parts.push('转发 ' + (setA ? setA + ' ↔ ' : '') + (info.portB || ''));
-  } else {
-    parts.push('rx/tx ' + info.rxTotal + '/' + info.txTotal + ' B');
-  }
-  if (info.settings && info.settings.label) parts.push('设置 ' + info.settings.label);
-  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
-  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
-  if (info.origins && info.origins.length) {
-    var kinds = [];
-    info.origins.forEach(function (o) {
-      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
-      if (kinds.indexOf(label) < 0) kinds.push(label);
-    });
-    parts.push('来源 ' + kinds.join(' · '));
-  } else {
-    parts.push('无来源');
-  }
-  if (info.recovered && info.recovered.length) parts.push('影子恢复 ' + info.recovered.length + ' 页');
-  if (info.truncated) parts.push('末帧未结束');
-  if (info.brokenChain) parts.push('续片链被切断');
-  if (info.stoppedAt) parts.push('停在 0x' + Number(info.stoppedAt).toString(16).toUpperCase());
-  if (info.stopErr) parts.push(info.stopErr);
-  return parts.join(' · ');
-}
-
+// stlogUpdateChrome 刷新顶栏：元信息那行、完整来源串（title）、帧数。
 function stlogUpdateChrome(tab) {
   var st = tab._stlog;
   var info = st.info || {};
   st.meta.textContent = stlogBarText(info);
-  // 完整来源串放进 title：顶栏只显示种类，鼠标停上去能看到具体是哪个客户端
   st.meta.title = (info.origins && info.origins.length)
     ? info.origins.join(', ')
     : '这个文件里没有来源信息（Rx 恒无来源；样本文件通常是合成的）';
-  var loaded = st.frames.length;
-  var total = (typeof info.total === 'number') ? info.total : loaded;
-  st.count.textContent = '帧 ' + loaded + ' / ' + total;
-  if (st.exhausted) {
-    st.more.style.display = 'none';
-  } else {
-    st.more.style.display = '';
-    st.moreBtn.textContent = '加载更多（还有 ' + Math.max(0, total - loaded) + ' 帧）';
-  }
+  var total = st.view ? st.view.total() : 0;
+  st.count.textContent = '帧 ' + total;
 }
 
-// stlogLoad 加载下一批帧。
-//
-// 文件页只有一个数据源——本地文件，分页从第一帧往后翻（_stlogLoadLocal）。
-// 工程目录不走这里：它被恢复成真正的会话页，历史由会话那套接口提供。
-function stlogLoad(tab) {
-  _stlogLoadLocal(tab);
-}
-
-// _stlogLoadLocal 直接读本地文件，从第一帧往后翻。
-function _stlogLoadLocal(tab) {
+// stlogFlash 在顶栏帧数那个位置闪一行提示（复制结果之类），1.6 s 后恢复。
+function stlogFlash(tab, msg) {
   var st = tab._stlog;
-  if (st.loading || (st.loaded && st.offset >= st.total)) return;
-  st.loading = true;
-  st.moreBtn.disabled = true;
-  window.go.main.App.ReadStlogFrames(tab.path, st.offset, STLOG_PAGE_SIZE).then(function (info) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    st.loaded = true;
-    st.info = info || {};
-    st.total = info.total || 0;
-    var frames = (info.frames || []).map(function (f) {
-      return { ts: f.ts, tsMs: f.ts, dir: f.dir, hex: f.hex, origin: f.origin };
-    });
-    st.offset = (info.offset || 0) + frames.length;
-    st.frames = st.frames.concat(frames);
-    st.rendered = true;
-    st.exhausted = st.offset >= st.total;
-    stlogRerender(tab);
+  if (st._flashTimer) clearTimeout(st._flashTimer);
+  st.count.textContent = msg;
+  st._flashTimer = setTimeout(function () {
+    st._flashTimer = null;
     stlogUpdateChrome(tab);
-    if (!st.firstLoadDone) {
-      st.firstLoadDone = true;
-      st.content.scrollTop = 0; // 离线正序：从第一帧开始看
-    }
-    if (st.total === 0) stlogSysRow(tab, '文件里没有帧');
-  }).catch(function (err) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    if (window.console) console.error('[stlog] ' + tab.path, err);
-    stlogSysRow(tab, '读取失败: ' + String(err));
-  });
+  }, 1600);
 }
 
 // stlogToggleMode 切换文件页的 Hex / 文本 视图。
 //
 // 文件页不复用全局 state.displayMode：会话页默认文本（用户在那儿发的是 ASCII），
 // 而 .stlog 里是原始字节，一打开就该按 Hex 看。两边各存一份，谁也别改对方的设置。
+// 切模式要重算布局（折行数变了），所以走 Go 的 Configure，锚点取当前第一行。
 function stlogToggleMode(tab) {
   var st = tab._stlog;
-  st.mode = (st.mode === 'hex') ? 'text' : 'hex';
-  stlogRerender(tab);
-}
-
-// stlogRerender 用缓存的帧按当前 mode 重画（不重新读文件、不动 offset）。
-function stlogRerender(tab) {
-  var st = tab._stlog;
-  st.content.innerHTML = '';
-  st.frames.forEach(function (f) {
-    makeDataRow(st.content, stlogDirName(f.dir),
-                stlogTsText(f.ts, state.stlogShowYear !== false), f.hex,
-                null, { displayMode: st.mode }, f.origin || '');
-  });
-  st.content.appendChild(st.more);
-  st.modeBtn.textContent = (st.mode === 'hex') ? 'Hex' : '文本';
+  if (!st.view) return;
+  var next = (st.mode === 'hex') ? 'text' : 'hex';
+  st.mode = next;
+  if (st.modeBtn) st.modeBtn.textContent = (next === 'hex') ? 'Hex' : '文本';
+  st.view.setMode(next).then(function () { stlogUpdateChrome(tab); });
 }
 
 function stlogExport(path, btn) {
@@ -8075,7 +8036,8 @@ function openStlogTab(path, kind) {
   yearBtn.addEventListener('click', function () {
     state.stlogShowYear = !(state.stlogShowYear !== false);
     yearBtn.classList.toggle('is-on', state.stlogShowYear);
-    stlogRerender(tab);
+    if (tab._stlog.view) tab._stlog.view.setShowYear(state.stlogShowYear);
+    stlogUpdateChrome(tab);
     if (typeof saveSettings === 'function') saveSettings();
   });
   var countEl = document.createElement('span');
@@ -8107,18 +8069,10 @@ function openStlogTab(path, kind) {
   bar.appendChild(actions);
   page.appendChild(bar);
 
+  // 内容区就是引擎的视口（.lv-host）：没有分页、没有「加载更多」。
   var content = document.createElement('div');
   content.className = 'o-stlog-rows t-stlog-rows';
   page.appendChild(content);
-
-  var more = document.createElement('div');
-  more.className = 'o-stlog-more';
-  var moreBtn = document.createElement('button');
-  moreBtn.className = 't-stlog-btn';
-  moreBtn.textContent = '加载更多';
-  more.addEventListener('click', function () { stlogLoad(tab); });
-  more.appendChild(moreBtn);
-  content.appendChild(more);
 
   var oldPage = getActivePage();
   if (oldPage) oldPage.hide();
@@ -8135,20 +8089,22 @@ function openStlogTab(path, kind) {
     mode: 'single',
     source: 'gui',
     _stlog: {
-      offset: 0, total: 0, loaded: false, loading: false, rendered: false,
       // isDir：工程目录（可以推给守护进程）；单个 .stlog 一律只读
       isDir: kind === 'session',
-      mode: 'hex', frames: [], modeBtn: modeBtn, pushBtn: pushBtn,
-      content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
+      mode: 'hex', info: null, view: null,
+      modeBtn: modeBtn, pushBtn: pushBtn, meta: metaEl, count: countEl
     },
     _page: {
       root: page,
       show: function () {
         page.style.display = '';
-        if (!tab._stlog.loaded && !tab._stlog.loading) stlogLoad(tab);
+        if (tab._stlog.view) tab._stlog.view.refresh();
       },
       hide: function () { page.style.display = 'none'; },
-      destroy: function () { page.remove(); }
+      destroy: function () {
+        if (tab._stlog.view) tab._stlog.view.destroy();
+        page.remove();
+      }
     }
   };
   state.tabs.push(tab);
@@ -8165,7 +8121,20 @@ function openStlogTab(path, kind) {
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
   stlogSyncPushBtn(tab);
-  stlogLoad(tab);
+
+  // 引擎在 tab 建好之后再挂：它的回调要用到 tab 本身。
+  var view = createLogView(content, {
+    disp: function () { return tab.disp; },
+    tsText: function (ms) { return stlogTsText(ms, state.stlogShowYear !== false); },
+    onMeta: function (m) { tab._stlog.info = m; stlogUpdateChrome(tab); },
+    onStatus: function () { stlogUpdateChrome(tab); },
+    onFlash: function (msg) { stlogFlash(tab, msg); }
+  });
+  tab._stlog.view = view;
+  view.open(path).catch(function (err) {
+    if (window.console) console.error('[stlog] ' + path, err);
+    stlogFlash(tab, '打开失败');
+  });
   return tab;
 }
 
@@ -8313,6 +8282,25 @@ function pickProjectDir() {
 // pickStlogFile 选一个 .stlog，开成只读文件页。
 function pickStlogFile() {
   _pickPath(window.go.main.App.PickStlogFile(), 'file', openStlogTab);
+}
+
+// openPathFromOS 打开一个「外部给的路径」：启动参数里的 .stlog / 工程目录。
+//
+// 与拖放、选文件共用同一套预检：路径可能是 .stlog，也可能是工程目录，
+// 还可能是早就被删掉的文件（那样就当没给，静默跳过）。
+function openPathFromOS(path) {
+  if (!path) return;
+  var App = window.go && window.go.main && window.go.main.App;
+  function go(kind) {
+    if (kind === 'session') openProjectTab(path);
+    else openStlogTab(path);
+  }
+  if (!App || typeof App.ProbeDroppedPaths !== 'function') { go('file'); return; }
+  App.ProbeDroppedPaths([path]).then(function (probes) {
+    var pr = probes && probes[0];
+    if (!pr) return;
+    if (pr.kind === 'file' || pr.kind === 'session') go(pr.kind);
+  }).catch(function () {});
 }
 
 // ---- 拖入注册 ----

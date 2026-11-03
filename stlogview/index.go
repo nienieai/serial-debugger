@@ -45,12 +45,19 @@ type index struct {
 	orgNames []string // org 字段是下标，0 = 无来源
 
 	// 折行：第 i 帧的逻辑行格子数 = seg[segIdx[i]:segIdx[i+1]]（segIdx 有 n+1 项）
+	//
+	// 格子数依赖显示样式（控制字符、转义字节、Hex 分隔符都会改宽度），所以带一个
+	// segKey：Configure 传入的样式与它不同就整表重算（见 Store.ensureSegLocked）。
 	segIdx []int32
 	seg    []uint32
+	segKey Style
 
 	arena []byte
 
+	// 统计：文件浮窗要显示时间范围与双向字节数（转发录制 A→B / B→A）。
+	firstTs, lastTs  int64
 	rxBytes, txBytes int64
+	p1Bytes, p2Bytes int64
 }
 
 // scanner 是扫描期的可变状态（不放进 index，免得索引里躺着一堆临时字段）。
@@ -160,11 +167,16 @@ func scanStlog(path string, progress func(frames int, done int64)) (*index, erro
 	if len(ix.segIdx) < ix.n+1 {
 		ix.segIdx = append(ix.segIdx, int32(len(ix.seg)))
 	}
+	ix.segKey = ix.scanStyle()
 	if progress != nil {
 		progress(ix.n, st.Size())
 	}
 	return ix, nil
 }
+
+// scanStyle 是扫描时预填格子用的样式：只按文件头的编码，其余取主工程默认。
+// Configure 传来不同的样式时由 Store.ensureSegLocked 重算。
+func (ix *index) scanStyle() Style { return DefaultStyle(ix.encoding()) }
 
 // addRecords 把一页里的记录接进当前帧。
 func (sc *scanner) addRecords(recs []sessionfile.Record) {
@@ -201,14 +213,24 @@ func (sc *scanner) close() {
 	ix.dir = append(ix.dir, sc.openD)
 	ix.org = append(ix.org, sc.openO)
 	ix.segIdx = append(ix.segIdx, int32(len(ix.seg)))
-	sc.cells = cellsOf(payload, ix.encoding(), sc.cells[:0])
+	sc.cells = cellsOf(payload, ix.scanStyle(), sc.cells[:0])
 	ix.seg = append(ix.seg, sc.cells...)
+	if ix.n == 0 || int64(sc.openTs) < ix.firstTs {
+		ix.firstTs = int64(sc.openTs)
+	}
+	if int64(sc.openTs) > ix.lastTs {
+		ix.lastTs = int64(sc.openTs)
+	}
 	ix.n++
 	switch sc.openD {
 	case sessionfile.DirRx:
 		ix.rxBytes += int64(l)
 	case sessionfile.DirTx:
 		ix.txBytes += int64(l)
+	case sessionfile.DirP1:
+		ix.p1Bytes += int64(l)
+	case sessionfile.DirP2:
+		ix.p2Bytes += int64(l)
 	}
 }
 

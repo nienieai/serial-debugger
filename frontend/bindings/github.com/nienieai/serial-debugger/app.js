@@ -1162,6 +1162,15 @@ export function SwitchPort(sessionId, port, cfg) {
 }
 
 /**
+ * TakeOpenPath 取走启动路径（一次）。前端在 wails-ready 之后调一次：
+ * 有值就开成只读页，没有就什么都不做。
+ * @returns {$CancellablePromise<string>}
+ */
+export function TakeOpenPath() {
+    return $Call.ByName("main.App.TakeOpenPath");
+}
+
+/**
  * TriggerSend triggers a single send from sendq.
  * @param {string} processID
  * @returns {$CancellablePromise<void>}

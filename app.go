@@ -100,6 +100,15 @@ type App struct {
 	// Tab decode workers — one goroutine per tab.
 	tabDecoders   map[string]*tabDecodeUnit // processId → worker
 	tabDecodersMu sync.Mutex
+
+	// 虚窗文档服务：每个 .stlog 标签页一个文档，按 id 分（见 logview.go）。
+	logview *LogView
+
+	// 启动参数里带的 .stlog / 工程目录（双击文件、命令行带上路径）。
+	// 前端加载完自己来取一次，取走就清空 —— 用「拉」而不是「推」：推的时机
+	// 永远赶不上页面就绪，早了就丢事件。
+	openMu   sync.Mutex
+	openPath string
 }
 
 // tabDecodeUnit runs a dedicated decode goroutine for one tab.
@@ -158,7 +167,28 @@ func (td *tabDecodeUnit) setEncoding(enc string) {
 }
 
 func NewApp() *App {
-	return &App{}
+	a := &App{}
+	a.logview = newLogView(a)
+	return a
+}
+
+// ---- 启动参数里的文件 ----
+
+// setStartupPath 记下「启动时要打开的那个路径」（由 main.go 解析命令行后调用）。
+func (a *App) setStartupPath(p string) {
+	a.openMu.Lock()
+	a.openPath = p
+	a.openMu.Unlock()
+}
+
+// TakeOpenPath 取走启动路径（一次）。前端在 wails-ready 之后调一次：
+// 有值就开成只读页，没有就什么都不做。
+func (a *App) TakeOpenPath() string {
+	a.openMu.Lock()
+	p := a.openPath
+	a.openPath = ""
+	a.openMu.Unlock()
+	return p
 }
 
 // attach 把 v3 的 application / window 交给 service。
