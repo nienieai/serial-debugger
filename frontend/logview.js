@@ -127,7 +127,8 @@ function createLogView(host, opts) {
     dead: false,
     // 实时模式（串口监视器 / 转发监视器）
     live: false, atBottom: true, unread: 0, lastSeen: 0, pollTimer: null,
-    reserveTop: opts.reserveTop || 0
+    reserveTop: opts.reserveTop || 0,
+    reserveBottom: opts.reserveBottom || 0
   };
 
   host.classList.add('lv-host');
@@ -146,13 +147,16 @@ function createLogView(host, opts) {
 
   var rail = document.createElement('div');
   rail.className = 'lv-rail';
-  rail.title = '上一道：来源/发送方 · 下一道：落盘完整性';
+  rail.title = '① 读取 ② 校验 ③ 落盘';
+  var track = document.createElement('div');
+  track.className = 'lv-track';
   var lanes = document.createElement('div');
   lanes.className = 'lv-lanes';
   var thumb = document.createElement('div');
   thumb.className = 'lv-thumb';
-  rail.appendChild(lanes);
-  rail.appendChild(thumb);
+  track.appendChild(lanes);
+  track.appendChild(thumb);
+  rail.appendChild(track);
 
   host.appendChild(view);
   host.appendChild(rail);
@@ -213,8 +217,11 @@ function createLogView(host, opts) {
   }
 
   function layout() {
-    st.vh = Math.max(1, host.clientHeight - st.reserveTop);
+    st.vh = Math.max(1, host.clientHeight - st.reserveTop - st.reserveBottom);
     st.trackH = Math.max(1, st.vh);
+    // 滚动条避让：轨道从 reserveTop 开始、到 reserveBottom 结束（分界线仍满高）
+    track.style.top = st.reserveTop + 'px';
+    track.style.height = st.trackH + 'px';
     measure();
     var avail = Math.max(1, host.clientWidth - LV_PAD_X - LV_PAD_R - LV_RAIL_W);
     return fitChars(avail);
@@ -727,7 +734,7 @@ function createLogView(host, opts) {
   // 点轨道：跳到以点击处为中心的一屏
   function railDown(e) {
     if (e.target === thumb) return;
-    var box = rail.getBoundingClientRect();
+    var box = track.getBoundingClientRect();
     var ratio = lvClamp((e.clientY - box.top) / Math.max(1, box.height), 0, 1);
     setOffset(ratio * st.contentH - st.vh / 2);
     e.preventDefault();

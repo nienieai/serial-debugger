@@ -95,6 +95,13 @@
   cursor: pointer;
 }
 .lv-lanes { position: relative; width: 15px; height: 100%; }
+/* 轨道本体：上/下按 reserveTop / reserveBottom 让位（顶部悬浮工具条、底部按钮），
+   左边那条 1px 分界线仍然满高 —— 和 VS Code 一样，分隔线到底，滑块让开。 */
+.lv-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
 .lv-lane {
   position: absolute;
   top: 0;
