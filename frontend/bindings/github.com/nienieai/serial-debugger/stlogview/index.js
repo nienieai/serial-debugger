@@ -7,6 +7,8 @@ export {
     ConfigureResult,
     CopyReq,
     CopyResult,
+    FrameIn,
+    LiveInfo,
     MetaResult,
     Row,
     RulerResult,

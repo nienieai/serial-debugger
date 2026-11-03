@@ -3497,6 +3497,7 @@ async function syncDaemonSessions(procData) {
       newTab._page = new TabPage(state.tabs.length, newTab);
       var mainContent = document.getElementById('mainContent');
       if (mainContent) { mainContent.appendChild(newTab._page.root); initTabPage(newTab._page.root); }
+      _mountLive(newTab);
       state.tabs.push(newTab);
       // Start per-tab Go decode worker
       if (ds.id && state.daemonOnline) {
@@ -4331,6 +4332,7 @@ function _convertChooserToSession(tab, sid, mode) {
   var mc = document.getElementById('mainContent');
   if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
   tab._page.show();
+  _mountLive(tab);
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
@@ -4362,6 +4364,7 @@ async function autoCreateIdleSession(mode) {
   tab._page = new TabPage(state.tabs.length, tab);
   var mc = document.getElementById('mainContent');
   if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  _mountLive(tab);
   state.tabs.push(tab);
 
   if (state.daemonOnline) {
@@ -8277,6 +8280,33 @@ function _pickPath(dlg, kind, open) {
 // pickProjectDir 选一个工程目录，开成只读页（顶栏可推送到守护进程）。
 function pickProjectDir() {
   _pickPath(window.go.main.App.PickStlogDir(), 'session', openProjectTab);
+}
+
+// _mountLive 把会话页的显示区交给虚窗引擎（串口监视器 / 转发监视器）。
+//
+// 老的 history.js 渲染还在（搜索、缓存、状态栏这些还没搬），但它不再往 DOM 里写：
+// 数据帧由 Go 侧的实时文档攒着，前端只按像素取可见窗口。
+function _mountLive(tab) {
+  if (!tab || !tab.sessionId || tab._live) return;
+  var page = tab._page;
+  if (!page || !page.displayContent || typeof createLogView !== 'function') return;
+  var host = page.displayContent;
+  var reserve = 0;
+  try {
+    reserve = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue('--reserve-top'), 10) || 0;
+  } catch (e) { reserve = 0; }
+  host.innerHTML = '';
+  var view = createLogView(host, {
+    reserveTop: reserve,
+    disp: function () { return tab.disp; },
+    tsText: function (ms) { return stlogTimeText(new Date(ms)); },
+    onStatus: function (s) { tab._liveTotal = s.total || 0; }
+  });
+  tab._live = view;
+  view.openLive(tab.sessionId).catch(function (err) {
+    if (window.console) console.error('[live] ' + tab.sessionId, err);
+  });
 }
 
 // pickStlogFile 选一个 .stlog，开成只读文件页。

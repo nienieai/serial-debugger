@@ -27,6 +27,33 @@ import * as stlogview$0 from "./stlogview/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AppendFrames 批量追加（给前端补数据 / 测试用）。
+ * @param {string} id
+ * @param {stlogview$0.FrameIn[]} frames
+ * @returns {$CancellablePromise<stlogview$0.LiveInfo>}
+ */
+export function AppendFrames(id, frames) {
+    return $Call.ByName("main.LogView.AppendFrames", id, frames).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
+ * AppendSystem 把一条系统消息（sys.port_connected 之类）塞进实时文档。
+ * 
+ * 它不是串口字节，但用户在会话页上要看得到「什么时候连上/断开」；按 dir=system
+ * 追加一条，payload 就是消息文本的 UTF-8 字节，前端按文本行渲染。
+ * @param {string} id
+ * @param {string} text
+ * @returns {$CancellablePromise<stlogview$0.LiveInfo>}
+ */
+export function AppendSystem(id, text) {
+    return $Call.ByName("main.LogView.AppendSystem", id, text).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
  * Close 关掉一个文档（标签页销毁时调）。
  * @param {string} id
  * @returns {$CancellablePromise<void>}
@@ -57,7 +84,7 @@ export function CloseAll() {
  */
 export function Configure(id, charsPerLine, tsLineH2, dataLineH2, mode, anchorIdx, style) {
     return $Call.ByName("main.LogView.Configure", id, charsPerLine, tsLineH2, dataLineH2, mode, anchorIdx, style).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType0($result);
+        return $$createType1($result);
     }));
 }
 
@@ -69,7 +96,7 @@ export function Configure(id, charsPerLine, tsLineH2, dataLineH2, mode, anchorId
  */
 export function CopySelection(id, req) {
     return $Call.ByName("main.LogView.CopySelection", id, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType1($result);
+        return $$createType2($result);
     }));
 }
 
@@ -92,13 +119,24 @@ export function FrameDebug(id, idx) {
 }
 
 /**
+ * LiveInfo 取实时文档概况（前端定时轮一次）。
+ * @param {string} id
+ * @returns {$CancellablePromise<stlogview$0.LiveInfo>}
+ */
+export function LiveInfo(id) {
+    return $Call.ByName("main.LogView.LiveInfo", id).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
  * Meta 是打开后的一次性元信息（文件名、大小、页数、来源、时间范围）。
  * @param {string} id
  * @returns {$CancellablePromise<stlogview$0.MetaResult>}
  */
 export function Meta(id) {
     return $Call.ByName("main.LogView.Meta", id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType3($result);
     }));
 }
 
@@ -109,7 +147,44 @@ export function Meta(id) {
  */
 export function Open(path) {
     return $Call.ByName("main.LogView.Open", path).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType4($result);
+    }));
+}
+
+/**
+ * OpenLive 开一个实时文档（串口监视器 / 转发监视器）。
+ * 
+ * 同一个会话重复开（比如标签页挪了窗口）会复用同一个文档 —— 数据帧是按会话喂进来
+ * 的，重建文档等于把已经在文档里的历史丢掉。
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<$models.OpenDoc>}
+ */
+export function OpenLive(sessionID) {
+    return $Call.ByName("main.LogView.OpenLive", sessionID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
+    }));
+}
+
+/**
+ * PrependFrames 往回补更早的历史。
+ * @param {string} id
+ * @param {stlogview$0.FrameIn[]} frames
+ * @returns {$CancellablePromise<stlogview$0.LiveInfo>}
+ */
+export function PrependFrames(id, frames) {
+    return $Call.ByName("main.LogView.PrependFrames", id, frames).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
+ * ResetLive 清空实时文档（界面上的「清空」）。
+ * @param {string} id
+ * @returns {$CancellablePromise<stlogview$0.LiveInfo>}
+ */
+export function ResetLive(id) {
+    return $Call.ByName("main.LogView.ResetLive", id).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
     }));
 }
 
@@ -121,7 +196,7 @@ export function Open(path) {
  */
 export function Ruler(id, nb) {
     return $Call.ByName("main.LogView.Ruler", id, nb).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -143,7 +218,7 @@ export function SetOpt(id, name, on) {
  */
 export function Status(id) {
     return $Call.ByName("main.LogView.Status", id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -157,15 +232,16 @@ export function Status(id) {
  */
 export function Window(id, contentY, viewportH, overscanPx) {
     return $Call.ByName("main.LogView.Window", id, contentY, viewportH, overscanPx).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
 // Private type creation functions
-const $$createType0 = stlogview$0.ConfigureResult.createFrom;
-const $$createType1 = stlogview$0.CopyResult.createFrom;
-const $$createType2 = stlogview$0.MetaResult.createFrom;
-const $$createType3 = $models.OpenDoc.createFrom;
-const $$createType4 = stlogview$0.RulerResult.createFrom;
-const $$createType5 = stlogview$0.StatusResult.createFrom;
-const $$createType6 = stlogview$0.WindowResult.createFrom;
+const $$createType0 = stlogview$0.LiveInfo.createFrom;
+const $$createType1 = stlogview$0.ConfigureResult.createFrom;
+const $$createType2 = stlogview$0.CopyResult.createFrom;
+const $$createType3 = stlogview$0.MetaResult.createFrom;
+const $$createType4 = $models.OpenDoc.createFrom;
+const $$createType5 = stlogview$0.RulerResult.createFrom;
+const $$createType6 = stlogview$0.StatusResult.createFrom;
+const $$createType7 = stlogview$0.WindowResult.createFrom;

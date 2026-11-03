@@ -373,6 +373,13 @@ function _makeSysRow(text) {
 
 function appendSystemMsg(msg) {
   var display = pageEl('displayContent');
+  var liveTab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
+  if (liveTab && liveTab._live) {
+    // 系统消息（连上/断开/统计开始）也要进虚窗：它走 dir=system 的一条记录，
+    // 不按 Hex 画，直接显示文本。
+    liveTab._live.appendSystem(typeof formatSysMsg === 'function' ? formatSysMsg(msg) : msg);
+    return;
+  }
   if (!display) return;
   if (display.querySelector('.placeholder')) display.innerHTML = '';
   var line = document.createElement('div');
@@ -449,6 +456,12 @@ function _flushAppends() {
   var q = _appendQueue;
   _appendQueue = [];
   if (!display) return;
+  // 虚窗接管（会话页已挂 logview）：行由引擎按窗口画，老渲染器不再往 DOM 里写。
+  var liveTab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
+  if (liveTab && liveTab._live) {
+    if (typeof _updateUnreadChrome === 'function') _updateUnreadChrome(display);
+    return;
+  }
   if (q.length === 0) { _updateUnreadChrome(display); return; }
 
   var t0 = performance.now();
@@ -1196,6 +1209,11 @@ function clearDisplay() {
   if (!tab || !tab.sessionId) {
     display.innerHTML = '';
     return;
+  }
+  // 虚窗接管之后：清空 = 清掉 Go 侧实时文档（帧号从头开始），老的缓存与
+  // 渲染窗口一起重置，别的功能（搜索/统计）看到的还是同一份状态。
+  if (tab._live && typeof tab._live.clear === 'function') {
+    tab._live.clear();
   }
 
   const cacheKey = tab.sessionId;

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/nienieai/serial-debugger/sessionfile"
 	"github.com/nienieai/serial-debugger/stlogview"
 )
 
@@ -156,6 +159,22 @@ func (v *LogView) LiveInfo(id string) (stlogview.LiveInfo, error) {
 		return stlogview.LiveInfo{}, err
 	}
 	return s.LiveInfo(), nil
+}
+
+// AppendSystem 把一条系统消息（sys.port_connected 之类）塞进实时文档。
+//
+// 它不是串口字节，但用户在会话页上要看得到「什么时候连上/断开」；按 dir=system
+// 追加一条，payload 就是消息文本的 UTF-8 字节，前端按文本行渲染。
+func (v *LogView) AppendSystem(id, text string) (stlogview.LiveInfo, error) {
+	s, err := v.get(id)
+	if err != nil {
+		return stlogview.LiveInfo{}, err
+	}
+	return s.AppendFrame(stlogview.FrameIn{
+		Ts:  time.Now().UnixMilli(),
+		Dir: sessionfile.DirSystem,
+		Hex: hex.EncodeToString([]byte(text)),
+	}), nil
 }
 
 // Close 关掉一个文档（标签页销毁时调）。

@@ -329,6 +329,133 @@ export class CopyResult {
 }
 
 /**
+ * FrameIn 是一帧的输入（GUI 侧喂进来的形态）。
+ * 
+ * Hex 用字符串而不是 []byte：GUI 收到的本来就是十六进制串，省一次 JSON 数组的
+ * 解析；Go 这边 hex.DecodeString 一次就够。
+ */
+export class FrameIn {
+    /**
+     * Creates a new FrameIn instance.
+     * @param {Partial<FrameIn>} [$$source = {}] - The source object to create the FrameIn.
+     */
+    constructor($$source = {}) {
+        if (!("ts" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["ts"] = 0;
+        }
+        if (!("dir" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["dir"] = 0;
+        }
+        if (!("origin" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["origin"] = "";
+        }
+        if (!("hex" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["hex"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new FrameIn instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {FrameIn}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new FrameIn(/** @type {Partial<FrameIn>} */($$parsedSource));
+    }
+}
+
+/**
+ * LiveInfo 是实时文档的概况（前端定时轮一次，决定要不要重取窗口）。
+ */
+export class LiveInfo {
+    /**
+     * Creates a new LiveInfo instance.
+     * @param {Partial<LiveInfo>} [$$source = {}] - The source object to create the LiveInfo.
+     */
+    constructor($$source = {}) {
+        if (!("total" in $$source)) {
+            /**
+             * 绝对帧数（含已裁掉的）
+             * @member
+             * @type {number}
+             */
+            this["total"] = 0;
+        }
+        if (!("frames" in $$source)) {
+            /**
+             * 现在保留着几帧
+             * @member
+             * @type {number}
+             */
+            this["frames"] = 0;
+        }
+        if (!("evicted" in $$source)) {
+            /**
+             * 已经从头部裁掉几帧
+             * @member
+             * @type {number}
+             */
+            this["evicted"] = 0;
+        }
+        if (!("bytes" in $$source)) {
+            /**
+             * arena 占了多少字节
+             * @member
+             * @type {number}
+             */
+            this["bytes"] = 0;
+        }
+        if (!("contentH" in $$source)) {
+            /**
+             * ContentH 是内容总高度（像素）：前端轮询时拿它判断「要不要重取窗口」，
+             * 比每 120 ms 都取一次窗口便宜。
+             * @member
+             * @type {number}
+             */
+            this["contentH"] = 0;
+        }
+        if (!("phase" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["phase"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LiveInfo instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {LiveInfo}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new LiveInfo(/** @type {Partial<LiveInfo>} */($$parsedSource));
+    }
+}
+
+/**
  * MetaResult 是打开后一次性的元信息。
  */
 export class MetaResult {

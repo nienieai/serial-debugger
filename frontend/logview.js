@@ -49,6 +49,19 @@ function lvCall(method) {
   return api.Call.ByName.apply(api.Call, args);
 }
 
+function lvHexToText(hex) {
+  if (!hex) return '';
+  var s = String(hex).replace(/\s+/g, ''), out = '';
+  for (var i = 0; i + 1 < s.length; i += 2) {
+    var c = parseInt(s.substr(i, 2), 16);
+    if (c === 10) out += '\n';
+    else if (c === 13) out += '';
+    else if (c >= 32 && c < 127) out += String.fromCharCode(c);
+    else out += '\u00B7';
+  }
+  return out;
+}
+
 function lvClamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // tsClassOf / hexClassOf 与 history.js 的 makeDataRow 同一套类名，颜色才一致。
@@ -110,7 +123,10 @@ function createLogView(host, opts) {
     thumbH: LV_THUMB_MIN, trackH: 1,
     fetching: false, needFetch: false,
     ruler: null, rulerKey: '',
-    dead: false
+    dead: false,
+    // 实时模式（串口监视器 / 转发监视器）
+    live: false, atBottom: true, unread: 0, lastSeen: 0, pollTimer: null,
+    reserveTop: opts.reserveTop || 0
   };
 
   host.classList.add('lv-host');
@@ -139,6 +155,13 @@ function createLogView(host, opts) {
 
   host.appendChild(view);
   host.appendChild(rail);
+
+  // 「有新数据」胶囊：不贴底时显示，点一下回到底部（替代老的 .hist-unread）
+  var unreadEl = document.createElement('button');
+  unreadEl.className = 'lv-unread';
+  unreadEl.style.display = 'none';
+  unreadEl.addEventListener('click', function () { st.unread = 0; jumpBottom(); });
+  host.appendChild(unreadEl);
 
   // 选区盒子单独一层，跟着 layer 一起平移（用 row.y - base 定位，不受 LayoutUnit 上限影响）
   var selLayer = document.createElement('div');
@@ -189,7 +212,7 @@ function createLogView(host, opts) {
   }
 
   function layout() {
-    st.vh = Math.max(1, host.clientHeight);
+    st.vh = Math.max(1, host.clientHeight - st.reserveTop);
     st.trackH = Math.max(1, st.vh);
     measure();
     var avail = Math.max(1, host.clientWidth - LV_PAD_X - LV_PAD_R - LV_RAIL_W);
@@ -225,6 +248,7 @@ function createLogView(host, opts) {
   }
 
   function lineCount(r) {
+    if (r.dir === 'system' || r.dir === 'sys') return 1; // 系统消息固定一行
     if (st.mode === 'hex') {
       return Math.max(1, Math.ceil(r.size / Math.max(1, st.perLine)));
     }
@@ -237,6 +261,7 @@ function createLogView(host, opts) {
 
   // lineCells 是这一视觉行有几个显示格（Hex 模式按字符数，文本按格数）。
   function lineCells(r, vline) {
+    if (r.dir === 'system' || r.dir === 'sys') return 0;
     if (st.mode === 'hex') {
       var parts = lineParts(r);
       return parts[vline] ? parts[vline].length : 0;
@@ -263,7 +288,10 @@ function createLogView(host, opts) {
     ts.innerHTML = tsHTML(r);
     var dl = document.createElement('div');
     dl.className = 'data-line';
-    if (st.mode === 'hex') {
+    if (r.dir === 'system' || r.dir === 'sys') {
+      // 系统消息是文本（sys.port_connected|COM4|115200），不按 Hex 画
+      dl.textContent = lvHexToText(r.hex);
+    } else if (st.mode === 'hex') {
       var sp = document.createElement('span');
       sp.className = 'hex-data ' + lvHexClass(r.dir);
       sp.style.whiteSpace = 'pre';
@@ -339,7 +367,7 @@ function createLogView(host, opts) {
   // ---- 选区 ----
   function posAt(clientX, clientY) {
     var box = host.getBoundingClientRect();
-    var y = clientY - box.top;          // 视口内坐标
+    var y = clientY - box.top - st.reserveTop; // 视口内坐标（扣掉顶部让位）
     var x = clientX - box.left;
     var cy = st.offset + y;             // 内容坐标
     var rows = st.rows;
@@ -444,7 +472,7 @@ function createLogView(host, opts) {
     layer.innerHTML = '';
     layer.appendChild(selLayer);
     for (var i = 0; i < st.rows.length; i++) layer.appendChild(buildRow(st.rows[i]));
-    layer.style.transform = 'translate3d(0,' + (st.base - st.offset) + 'px,0)';
+    layerTransform();
     paintSelection();
     updateThumb();
     drawRuler(false);
@@ -459,11 +487,21 @@ function createLogView(host, opts) {
   }
 
   // ---- 滚动 ----
+  // 层位移：内容坐标 → 视口坐标，顶部再让出 reserveTop（会话页的悬浮工具条）。
+  function layerTransform() {
+    layer.style.transform = 'translate3d(0,' + (st.base - st.offset + st.reserveTop) + 'px,0)';
+  }
+
   function setOffset(v) {
     v = lvClamp(Math.round(v), 0, Math.round(st.maxOffset));
-    if (v === st.offset) return;
+    if (v === st.offset) {
+      st.atBottom = v >= Math.round(st.maxOffset) - 2;
+      return;
+    }
     st.offset = v;
-    layer.style.transform = 'translate3d(0,' + (st.base - st.offset) + 'px,0)';
+    st.atBottom = v >= Math.round(st.maxOffset) - 2;
+    if (st.atBottom) { st.unread = 0; updateUnread(); }
+    layerTransform();
     updateThumb();
     if (needsFetch()) fetchWindow();
   }
@@ -492,7 +530,7 @@ function createLogView(host, opts) {
     }).then(function (w) {
       applyWindow(w);
       st.offset = Math.min(top, st.maxOffset);
-      layer.style.transform = 'translate3d(0,' + (st.base - st.offset) + 'px,0)';
+      layerTransform();
       updateThumb();
     }).catch(function (e) {
       showMsg('刷新失败：' + String(e && e.message ? e.message : e));
@@ -706,10 +744,113 @@ function createLogView(host, opts) {
     ro.observe(host);
   }
 
+  // ---- 实时模式（串口监视器 / 转发监视器）----
+  //
+  // 帧不再由前端缓存，而是 Go 侧文档（LogView.OpenLive）攒着；这里每 120 ms 轮一次
+  // 概况，只有「帧数或内容高度变了」才重取窗口 —— 贴底时永远取最后一屏，
+  // 不贴底时只涨未读数，不打断用户往回翻。
+
+  function updateUnread() {
+    if (st.unread > 0 && !st.atBottom) {
+      unreadEl.textContent = '↓ ' + st.unread + ' 条新数据';
+      unreadEl.style.display = '';
+    } else {
+      unreadEl.style.display = 'none';
+    }
+  }
+
+  function jumpBottom() {
+    st.atBottom = true;
+    setOffset(st.maxOffset);
+    updateUnread();
+  }
+
+  function refreshLive() {
+    if (!st.id || st.dead) return Promise.resolve();
+    var chars = layout();
+    return lvCall('Configure', st.id, chars, Math.round(st.tsH * 2),
+      Math.round(st.dataH * 2), st.mode, 0, styleNow()).then(function (cfg) {
+      st.perLine = cfg.perLine;
+      st.maxOffset = cfg.maxOffset;
+      // 取一屏：contentY 给个超大值，Go 侧夹到 maxOffset，正好是最后一条
+      return lvCall('Window', st.id, 1 << 30, Math.round(st.vh), Math.round(st.vh));
+    }).then(function (w) {
+      applyWindow(w);
+      st.maxOffset = w.maxOffset;
+      if (st.atBottom) st.offset = Math.round(w.maxOffset);
+      layerTransform();
+      updateThumb();
+      st.lastSeen = st.total;
+      if (typeof opts.onStatus === 'function') {
+        opts.onStatus({ live: true, total: st.total, evicted: w.total - st.total });
+      }
+    }).catch(function (e) {
+      showMsg('刷新失败：' + String(e && e.message ? e.message : e));
+    });
+  }
+
+  function pollLive() {
+    if (st.dead || !st.live || !st.id) return;
+    lvCall('LiveInfo', st.id).then(function (info) {
+      if (st.dead) return;
+      var grew = info.total !== st.total || Math.abs(info.contentH - st.contentH) > 0.5;
+      var delta = info.total - st.total;
+      st.total = info.total;
+      if (typeof opts.onStatus === 'function') {
+        opts.onStatus({ live: true, total: info.total, evicted: info.evicted });
+      }
+      if (!grew) return;
+      if (st.atBottom) refreshLive();
+      else if (delta > 0) { st.unread += delta; updateUnread(); }
+    }).catch(function () {}).then(function () {
+      if (!st.dead) st.pollTimer = setTimeout(pollLive, 120);
+    });
+  }
+
+  function openLive(sessionID) {
+    st.live = true;
+    st.atBottom = true;
+    st.unread = 0;
+    layout();
+    return lvCall('OpenLive', sessionID).then(function (r) {
+      st.id = r.id;
+      return refreshLive();
+    }).then(function () {
+      pollLive();
+      return st.id;
+    }).catch(function (e) {
+      showMsg('打开失败：' + String(e && e.message ? e.message : e));
+      throw e;
+    });
+  }
+
+  function clearAll() {
+    if (!st.id) return Promise.resolve();
+    st.sel = null;
+    st.offset = 0;
+    st.unread = 0;
+    st.lastSeen = 0;
+    updateUnread();
+    return lvCall('ResetLive', st.id).then(function () {
+      return refreshLive();
+    }).catch(function () {});
+  }
+
+  function appendSystem(text) {
+    if (!st.id || st.dead) return;
+    lvCall('AppendSystem', st.id, text).catch(function () {});
+  }
+
   return {
     open: open,
+    openLive: openLive,
+    clear: clearAll,
+    appendSystem: appendSystem,
+    isLive: function () { return st.live; },
+    jumpBottom: jumpBottom,
     destroy: function () {
       st.dead = true;
+      if (st.pollTimer) clearTimeout(st.pollTimer);
       if (ro) ro.disconnect();
       host.removeEventListener('wheel', onWheel);
       host.removeEventListener('pointerdown', onPointerDown);

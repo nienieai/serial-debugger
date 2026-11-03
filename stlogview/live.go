@@ -34,11 +34,14 @@ type FrameIn struct {
 
 // LiveInfo 是实时文档的概况（前端定时轮一次，决定要不要重取窗口）。
 type LiveInfo struct {
-	Total   int    `json:"total"`   // 绝对帧数（含已裁掉的）
-	Frames  int    `json:"frames"`  // 现在保留着几帧
-	Evicted int    `json:"evicted"` // 已经从头部裁掉几帧
-	Bytes   int64  `json:"bytes"`   // arena 占了多少字节
-	Phase   string `json:"phase"`
+	Total   int   `json:"total"`   // 绝对帧数（含已裁掉的）
+	Frames  int   `json:"frames"`  // 现在保留着几帧
+	Evicted int   `json:"evicted"` // 已经从头部裁掉几帧
+	Bytes   int64 `json:"bytes"`   // arena 占了多少字节
+	// ContentH 是内容总高度（像素）：前端轮询时拿它判断「要不要重取窗口」，
+	// 比每 120 ms 都取一次窗口便宜。
+	ContentH float64 `json:"contentH"`
+	Phase    string  `json:"phase"`
 }
 
 // MarkLive 把文档切成实时模式：清空索引，之后只能 Append / Prepend。
@@ -152,6 +155,7 @@ func (s *Store) liveInfoLocked() LiveInfo {
 		out.Frames = s.ix.n
 		out.Bytes = int64(len(s.ix.arena))
 	}
+	out.ContentH = float64(s.totalH2) / 2
 	out.Evicted = s.absBase
 	out.Total = s.absBase + out.Frames
 	return out
