@@ -23,6 +23,7 @@ import (
 	"github.com/nienieai/serial-debugger/pipe"
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/sessionfile"
+	"github.com/nienieai/serial-debugger/stlogview"
 	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -447,7 +448,54 @@ func (a *App) emitSession(sid, name string, data ...any) {
 	// 调试面板窗口（?w=session）是同一个会话的另一个观察者，照旧收一份
 	if sid != "" {
 		a.sendFrame("session-"+sid, frame)
+		// 虚窗文档也吃一份：串口监视器/转发监视器换成按像素取窗口之后，
+		// 前端不再自己存 historyCache，这份得在 Go 里攒起来。
+		if f, ok := liveFrameFrom(name, payload); ok {
+			a.logview.appendSession(sid, f)
+		}
 	}
+}
+
+// liveFrameFrom 把一条数据帧的参数翻成虚窗文档的输入。
+//
+// 只认四个数据方向（rx/tx/1/2）与 system：别的帧（dialog-result、tab-drop-* 之类）
+// 走的是同一个 Stream，不能混进日志文档。
+func liveFrameFrom(name string, payload any) (stlogview.FrameIn, bool) {
+	var dir uint8
+	switch name {
+	case "rx":
+		dir = sessionfile.DirRx
+	case "tx":
+		dir = sessionfile.DirTx
+	case "1":
+		dir = sessionfile.DirP1
+	case "2":
+		dir = sessionfile.DirP2
+	case "system", "sys":
+		dir = sessionfile.DirSystem
+	default:
+		return stlogview.FrameIn{}, false
+	}
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return stlogview.FrameIn{}, false
+	}
+	hexStr, _ := m["hex"].(string)
+	if hexStr == "" {
+		return stlogview.FrameIn{}, false
+	}
+	f := stlogview.FrameIn{Dir: dir, Hex: hexStr}
+	if v, ok := m["tsMs"].(int64); ok {
+		f.Ts = v
+	} else if v, ok := m["ts"].(int64); ok {
+		f.Ts = v
+	} else if v, ok := m["tsMs"].(float64); ok {
+		f.Ts = int64(v)
+	}
+	if o, ok := m["origin"].(string); ok {
+		f.Origin = o
+	}
+	return f, true
 }
 
 // sendFrame 把一帧交给指定窗口的 Stream 连接。

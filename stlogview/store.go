@@ -72,6 +72,11 @@ type Store struct {
 	// 测试里都留 nil，包本身不依赖 Wails。
 	clip func(string)
 	hwnd func() uintptr
+
+	// 实时文档（见 live.go）：帧一帧一帧进来，超上限从头部裁。
+	live     bool
+	absBase  int   // 已经被裁掉的帧数（绝对帧号 = absBase + 下标）
+	maxBytes int64 // arena 上限
 }
 
 // NewStore 造一个空文档。布局默认按 15px 字体、120 格宽、Hex 模式。
@@ -234,6 +239,8 @@ func (s *Store) Open(path string) StatusResult {
 		s.stopFlag = nil
 	}
 	s.path = path
+	s.live = false
+	s.absBase = 0
 	s.ix = nil
 	s.phase = "scan"
 	s.scanErr = ""
@@ -316,7 +323,7 @@ func (s *Store) Status() StatusResult {
 		Err:    s.scanErr,
 	}
 	if s.ix != nil {
-		out.Frames = s.ix.n
+		out.Frames = s.absBase + s.ix.n
 		out.Size = s.ix.size
 		out.StoppedAt = s.ix.stoppedAt
 		if s.ix.stopErr != nil {
@@ -353,7 +360,7 @@ func (s *Store) Meta() MetaResult {
 	out.Size = ix.size
 	out.Pages = ix.pages
 	out.Records = ix.records
-	out.Frames = ix.n
+	out.Frames = s.absBase + ix.n
 	out.RxBytes = ix.rxBytes
 	out.TxBytes = ix.txBytes
 	out.StoppedAt = ix.stoppedAt
@@ -419,7 +426,7 @@ func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, a
 		MaxOffset:    s.maxOffsetLocked(),
 	}
 	if s.ix != nil {
-		out.RowCount = s.ix.n
+		out.RowCount = s.absBase + s.ix.n
 		if anchorIdx < 0 {
 			anchorIdx = 0
 		}
@@ -592,7 +599,7 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 		contentY = maxPx
 	}
 	out.ContentY = contentY
-	out.Total = ix.n
+	out.Total = s.absBase + ix.n
 
 	cy2 := int64(contentY) * 2
 	vh2 := int64(viewportH) * 2
@@ -600,12 +607,12 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 
 	from := lowerBound(s.prefix, cy2-ov2)
 	to := lowerBound(s.prefix, cy2+vh2+ov2)
-	out.RenderFrom, out.RenderTo = from, to-1
+	out.RenderFrom, out.RenderTo = s.absBase+from, s.absBase+to-1
 	out.Base = float64(s.prefix[from]) / 2
 
 	// 可见带（不带 overscan）单独算一次给信息块用。
-	out.VisibleFrom = lowerBound(s.prefix, cy2)
-	out.VisibleTo = lowerBound(s.prefix, cy2+vh2) - 1
+	out.VisibleFrom = s.absBase + lowerBound(s.prefix, cy2)
+	out.VisibleTo = s.absBase + lowerBound(s.prefix, cy2+vh2) - 1
 
 	rows := make([]Row, 0, to-from)
 	for i := from; i < to; i++ {
@@ -640,7 +647,7 @@ func (s *Store) makeRowLocked(i int) Row {
 	ix := s.ix
 	p := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
 	r := Row{
-		Idx:  i,
+		Idx:  s.absBase + i,
 		Y:    float64(s.prefix[i]) / 2,
 		H:    float64(s.prefix[i+1]-s.prefix[i]) / 2,
 		Ts:   ix.ts[i],
@@ -800,11 +807,12 @@ func (s *Store) FrameDebug(idx int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ix := s.ix
-	if ix == nil || idx < 0 || idx >= ix.n {
+	i := idx - s.absBase
+	if ix == nil || i < 0 || i >= ix.n {
 		return ""
 	}
-	p := ix.arena[ix.aoff[idx] : ix.aoff[idx]+int32(ix.ln[idx])]
-	segs := ix.seg[ix.segIdx[idx]:ix.segIdx[idx+1]]
+	p := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
+	segs := ix.seg[ix.segIdx[i]:ix.segIdx[i+1]]
 	fresh := cellsOf(p, s.style, nil)
 	out := formatHexLines(p, len(p), s.style)
 	if len(out) > 64 {

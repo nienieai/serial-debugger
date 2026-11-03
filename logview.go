@@ -18,13 +18,18 @@ import (
 type LogView struct {
 	app *App
 
-	mu   sync.Mutex
-	docs map[string]*stlogview.Store
-	seq  int
+	mu        sync.Mutex
+	docs      map[string]*stlogview.Store
+	bySession map[string]string // 会话 ID → 实时文档 id（数据帧按这个找文档）
+	seq       int
 }
 
 func newLogView(a *App) *LogView {
-	return &LogView{app: a, docs: make(map[string]*stlogview.Store)}
+	return &LogView{
+		app:       a,
+		docs:      make(map[string]*stlogview.Store),
+		bySession: make(map[string]string),
+	}
 }
 
 // OpenDoc 是 Open 的返回：文档 id + 首帧状态。
@@ -67,11 +72,102 @@ func (v *LogView) get(id string) (*stlogview.Store, error) {
 	return s, nil
 }
 
+// OpenLive 开一个实时文档（串口监视器 / 转发监视器）。
+//
+// 同一个会话重复开（比如标签页挪了窗口）会复用同一个文档 —— 数据帧是按会话喂进来
+// 的，重建文档等于把已经在文档里的历史丢掉。
+func (v *LogView) OpenLive(sessionID string) (OpenDoc, error) {
+	if sessionID == "" {
+		return OpenDoc{}, fmt.Errorf("会话 ID 为空")
+	}
+	v.mu.Lock()
+	if id, ok := v.bySession[sessionID]; ok {
+		if s := v.docs[id]; s != nil {
+			st := s.Status()
+			v.mu.Unlock()
+			return OpenDoc{ID: id, Status: st}, nil
+		}
+	}
+	v.mu.Unlock()
+
+	s := stlogview.NewStore()
+	s.SetClipboard(func(text string) {
+		if v.app == nil || v.app.wailsApp == nil || v.app.wailsApp.Clipboard == nil {
+			return
+		}
+		v.app.wailsApp.Clipboard.SetText(text)
+	})
+	s.MarkLive(0)
+
+	v.mu.Lock()
+	v.seq++
+	id := fmt.Sprintf("doc-%d", v.seq)
+	v.docs[id] = s
+	v.bySession[sessionID] = id
+	v.mu.Unlock()
+	return OpenDoc{ID: id, Status: s.Status()}, nil
+}
+
+// appendSession 是数据帧的入口：有实时文档就追加一帧，没有就什么都不做。
+//
+// 由 App.emitSession 调用（每帧一次），所以这里不取 v.mu 的写锁 —— 用读锁拿
+// 文档指针，追加本身在文档自己的锁里做。
+func (v *LogView) appendSession(sessionID string, f stlogview.FrameIn) {
+	v.mu.Lock()
+	id := v.bySession[sessionID]
+	s := v.docs[id]
+	v.mu.Unlock()
+	if s != nil {
+		s.AppendFrame(f)
+	}
+}
+
+// AppendFrames 批量追加（给前端补数据 / 测试用）。
+func (v *LogView) AppendFrames(id string, frames []stlogview.FrameIn) (stlogview.LiveInfo, error) {
+	s, err := v.get(id)
+	if err != nil {
+		return stlogview.LiveInfo{}, err
+	}
+	return s.AppendFrames(frames), nil
+}
+
+// PrependFrames 往回补更早的历史。
+func (v *LogView) PrependFrames(id string, frames []stlogview.FrameIn) (stlogview.LiveInfo, error) {
+	s, err := v.get(id)
+	if err != nil {
+		return stlogview.LiveInfo{}, err
+	}
+	return s.PrependFrames(frames), nil
+}
+
+// ResetLive 清空实时文档（界面上的「清空」）。
+func (v *LogView) ResetLive(id string) (stlogview.LiveInfo, error) {
+	s, err := v.get(id)
+	if err != nil {
+		return stlogview.LiveInfo{}, err
+	}
+	return s.ResetLive(), nil
+}
+
+// LiveInfo 取实时文档概况（前端定时轮一次）。
+func (v *LogView) LiveInfo(id string) (stlogview.LiveInfo, error) {
+	s, err := v.get(id)
+	if err != nil {
+		return stlogview.LiveInfo{}, err
+	}
+	return s.LiveInfo(), nil
+}
+
 // Close 关掉一个文档（标签页销毁时调）。
 func (v *LogView) Close(id string) error {
 	v.mu.Lock()
 	s := v.docs[id]
 	delete(v.docs, id)
+	for sid, did := range v.bySession {
+		if did == id {
+			delete(v.bySession, sid)
+		}
+	}
 	v.mu.Unlock()
 	if s == nil {
 		return nil
@@ -85,6 +181,7 @@ func (v *LogView) CloseAll() {
 	v.mu.Lock()
 	docs := v.docs
 	v.docs = make(map[string]*stlogview.Store)
+	v.bySession = make(map[string]string)
 	v.mu.Unlock()
 	for _, s := range docs {
 		s.Close()

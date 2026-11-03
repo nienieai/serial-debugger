@@ -57,9 +57,10 @@ type CopyResult struct {
 // 而且拼字符串本身在主线程/Go 里也都要时间。
 const maxCopyFrames = 50000
 
-// posToByte 把（第几帧，第几个视觉行，行内第几格）换算成 payload 里的字节偏移。
+// posToByte 把（绝对帧号，第几个视觉行，行内第几格）换算成 payload 里的字节偏移。
 // 落在半个字符/半个 /XX 里时向左贴齐 —— 选区不会把字节切开。
 func (s *Store) posToByteLocked(idx, vline, cell int) int {
+	idx -= s.absBase // 绝对帧号 → 下标（实时文档裁过头部）
 	ix := s.ix
 	if ix == nil || idx < 0 || idx >= ix.n {
 		return 0
@@ -127,8 +128,8 @@ func (s *Store) copyRangeLocked(req *CopyReq) (fromIdx, fromOff, toIdx, toOff in
 	if ix == nil || ix.n == 0 {
 		return 0, 0, -1, 0
 	}
-	fromIdx = clampInt(req.FromIdx, 0, ix.n-1)
-	toIdx = clampInt(req.ToIdx, 0, ix.n-1)
+	fromIdx = clampInt(req.FromIdx, s.absBase, s.absBase+ix.n-1)
+	toIdx = clampInt(req.ToIdx, s.absBase, s.absBase+ix.n-1)
 	if fromIdx > toIdx {
 		fromIdx, toIdx = toIdx, fromIdx
 		req.FromVline, req.ToVline = req.ToVline, req.FromVline
@@ -171,7 +172,8 @@ func (s *Store) CopySelection(req CopyReq) CopyResult {
 	var b strings.Builder
 	frames, nbytes, nuls := 0, 0, 0
 	for i := fromIdx; i <= toIdx; i++ {
-		p := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
+		li := i - s.absBase // 绝对帧号 → 下标
+		p := ix.arena[ix.aoff[li] : ix.aoff[li]+int32(ix.ln[li])]
 		lo, hi := 0, len(p)
 		if i == fromIdx {
 			lo = clampInt(fromOff, 0, len(p))
@@ -184,7 +186,7 @@ func (s *Store) CopySelection(req CopyReq) CopyResult {
 		}
 		part := p[lo:hi]
 		if req.WithTS || req.WithDir || req.WithLen {
-			b.WriteString(copyPrefix(ix.ts[i], dirName(ix.dir[i]), len(p), &req, showYear))
+			b.WriteString(copyPrefix(ix.ts[li], dirName(ix.dir[li]), len(p), &req, showYear))
 		}
 		b.WriteString(formatBytes(part, s.style, format, req.HexPrefix))
 		b.WriteByte('\n')
