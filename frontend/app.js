@@ -8287,10 +8287,19 @@ function pickProjectDir() {
 // 老的 history.js 渲染还在（搜索、缓存、状态栏这些还没搬），但它不再往 DOM 里写：
 // 数据帧由 Go 侧的实时文档攒着，前端只按像素取可见窗口。
 function _mountLive(tab) {
-  if (!tab || !tab.sessionId || tab._live) return;
-  var page = tab._page;
-  if (!page || !page.displayContent || typeof createLogView !== 'function') return;
-  var host = page.displayContent;
+  var why = '';
+  if (!tab) why = 'no-tab';
+  else if (!tab.sessionId) why = 'no-sid';
+  else if (tab._live) why = 'already';
+  else if (!tab._page) why = 'no-page';
+  else if (!tab._page.displayContent) why = 'no-display';
+  else if (typeof createLogView !== 'function') why = 'no-engine';
+  if (why) {
+    try { window.go.main.App.Log('[live] mount skip: ' + why); } catch (e) {}
+    return;
+  }
+  try { window.go.main.App.Log('[live] mount sid=' + tab.sessionId); } catch (e) {}
+  var host = tab._page.displayContent;
   var reserve = 0;
   try {
     reserve = parseInt(getComputedStyle(document.documentElement)
