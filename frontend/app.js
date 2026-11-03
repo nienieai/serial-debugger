@@ -8312,9 +8312,15 @@ function _mountLive(tab) {
   oldBox.style.display = 'none';
   var reserve = 0;
   try {
-    reserve = parseInt(getComputedStyle(document.documentElement)
-      .getPropertyValue('--reserve-top'), 10) || 0;
+    // 顶部让位取「悬浮配置栏 + 清空按钮」的实际底边：--reserve-top 是按老布局
+    // 推的常量，配置栏在这两种会话里高度不同，量一次比读变量准。
+    var bar = tab._page.root.querySelector('.config-bar');
+    if (bar) {
+      var mountTop = mount.getBoundingClientRect().top;
+      reserve = Math.max(0, Math.round(bar.getBoundingClientRect().bottom - mountTop) + 8);
+    }
   } catch (e) { reserve = 0; }
+  if (reserve < 40) reserve = 40;
   var view = createLogView(mount, {
     reserveTop: reserve,
     // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
