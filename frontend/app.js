@@ -6418,6 +6418,9 @@ function toggleDisplayMode() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
+  // 会话页已交给虚窗引擎：切模式要重算布局（折行数变了），不能只重渲染老缓存
+  var liveTab = getActiveTab();
+  if (liveTab && liveTab._live) liveTab._live.setMode(state.displayMode);
   _rerenderHistoryKeepingView();
   saveSettings();
 }
@@ -8299,15 +8302,23 @@ function _mountLive(tab) {
     return;
   }
   try { window.go.main.App.Log('[live] mount sid=' + tab.sessionId); } catch (e) {}
-  var host = tab._page.displayContent;
+  // 引擎**不**复用 .display-content：老渲染器还会往它里面写（切标签时的
+  // renderHistoryLines、系统消息等），两边抢同一个容器时 .lv-host 的 flex
+  // 会把老行摆成横向一排。这里单开一个挂载点，老容器留着但隐藏。
+  var oldBox = tab._page.displayContent;
+  var mount = document.createElement('div');
+  mount.className = 'lv-mount';
+  oldBox.parentNode.insertBefore(mount, oldBox.nextSibling);
+  oldBox.style.display = 'none';
   var reserve = 0;
   try {
     reserve = parseInt(getComputedStyle(document.documentElement)
       .getPropertyValue('--reserve-top'), 10) || 0;
   } catch (e) { reserve = 0; }
-  host.innerHTML = '';
-  var view = createLogView(host, {
+  var view = createLogView(mount, {
     reserveTop: reserve,
+    // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
+    mode: (state.displayMode === 'hex') ? 'hex' : 'text',
     disp: function () { return tab.disp; },
     tsText: function (ms) { return stlogTimeText(new Date(ms)); },
     onStatus: function (s) { tab._liveTotal = s.total || 0; }

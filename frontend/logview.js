@@ -12,12 +12,13 @@
 // 行的 DOM 复用主工程自己的类（.ts-line / .data-line / .hex-data / .seg-*），
 // 所以配色主题、字体、可见控制字符这些都跟着会话页走，不另起一套样式。
 
-var LV_PAD_X = 12;      // 行内左边距（与 .lv-row 的 padding-left 一致）
+var LV_PAD_X = 18;      // 行内左边距（4 + 5 + 5 + 4，两条竖条占中间 10px）
 var LV_PAD_R = 8;       // 行内右边距（与 .lv-row 的 padding-right 一致）
 var LV_TS_H = 21;       // 时间戳行高（首帧量出来之前的占位）
 var LV_DATA_H = 22.5;   // 数据行行高
 var LV_LANE_W = 5;      // 一道泳道 5px
-var LV_RAIL_W = 1 + 2 * LV_LANE_W; // 左边 1px 分界线 + 两道泳道
+var LV_LANES = 3;       // 读取 / 校验 / 落盘
+var LV_RAIL_W = 1 + LV_LANES * LV_LANE_W; // 左边 1px 分界线 + 三条泳道
 var LV_THUMB_MIN = 15;
 
 // 来源/发送方的配色（按来源序号取，1 起）。第七个之后回环。
@@ -116,7 +117,7 @@ function createLogView(host, opts) {
     id: '', phase: 'idle', err: '',
     total: 0, contentH: 0, maxOffset: 0,
     offset: 0, vh: 0, base: 0,
-    rows: [], mode: 'hex', perLine: 1, hexPrefix: false,
+    rows: [], mode: (opts.mode === 'text' ? 'text' : 'hex'), perLine: 1, hexPrefix: false,
     charW: 8, tsH: LV_TS_H, dataH: LV_DATA_H,
     showYear: true,
     sel: null, dragging: false, focus: null,
@@ -283,6 +284,13 @@ function createLogView(host, opts) {
     var el = document.createElement('div');
     el.className = 'lv-row';
     el.style.transform = 'translate3d(0,' + (r.y - st.base) + 'px,0)';
+    // 行首两条竖条（读取指示）：占位，有标记才填色
+    var g1 = document.createElement('i');
+    g1.className = 'lv-gut lv-gut-cli' + ((r.read & 1) ? ' is-cli' : '');
+    var g2 = document.createElement('i');
+    g2.className = 'lv-gut lv-gut-mcp' + ((r.read & 2) ? ' is-mcp' : '');
+    el.appendChild(g1);
+    el.appendChild(g2);
     var ts = document.createElement('div');
     ts.className = 'ts-line ' + lvTsClass(r.dir);
     ts.innerHTML = tsHTML(r);
@@ -339,27 +347,31 @@ function createLogView(host, opts) {
     lanes.innerHTML = '';
     var H = st.trackH;
     var step = H / nb;
-    // 第一道：来源/发送方（按该桶里发得最多的来源上色）
-    for (var b = 0; b < r.buckets.length; b++) {
-      var lead = r.buckets[b].lead;
-      if (!lead) continue;
-      var bar = document.createElement('i');
-      bar.className = 'lv-lane-bar';
-      bar.style.top = (b * step) + 'px';
-      bar.style.height = Math.max(1, step) + 'px';
-      bar.style.background = LV_ORIGIN_COLORS[(lead - 1) % LV_ORIGIN_COLORS.length];
-      lanes.appendChild(bar);
+    // 三道泳道先铺占位底（没有数据源的也保留几何，不伪装成有数据）
+    for (var l = 0; l < LV_LANES; l++) {
+      var laneEl = document.createElement('i');
+      laneEl.className = 'lv-lane lv-lane-' + ['read', 'check', 'disk'][l];
+      lanes.appendChild(laneEl);
     }
-    // 第二道：落盘完整性（整份文件在磁盘上 = 实底；缺头/断链/末帧未闭合 = 红细线）
-    var disk = document.createElement('i');
-    disk.className = 'lv-disk' + (r.diskOk ? '' : ' is-bad');
-    disk.style.top = '0px';
-    disk.style.height = H + 'px';
-    lanes.appendChild(disk);
+    // 第一道：读取（非交互 CLI / MCP 读到哪）。读取记录还没实现 —— 占位。
+    // 第二道：校验（Modbus 严重度）。校验引擎这一版不做 —— 占位。
+    // 第三道：落盘。静态文件 = 完整性；实时会话 = 是否在录（等守护进程事件）。
+    var diskLane = document.createElement('i');
+    diskLane.className = 'lv-lane-mark';
+    diskLane.style.left = (2 * LV_LANE_W) + 'px';
+    diskLane.style.top = '0px';
+    diskLane.style.height = H + 'px';
+    diskLane.style.background = r.diskOk
+      ? 'color-mix(in srgb, var(--fg) 22%, transparent)'
+      : 'color-mix(in srgb, var(--red) 22%, transparent)';
+    lanes.appendChild(diskLane);
     for (var i = 0; i < (r.diskLine || []).length; i++) {
       var ln = document.createElement('i');
-      ln.className = 'lv-disk-line';
+      ln.className = 'lv-lane-mark';
+      ln.style.left = (2 * LV_LANE_W) + 'px';
       ln.style.top = Math.round(r.diskLine[i] * H) + 'px';
+      ln.style.height = '1px';
+      ln.style.background = 'var(--red)';
       lanes.appendChild(ln);
     }
   }
@@ -866,6 +878,7 @@ function createLogView(host, opts) {
     refresh: refresh,
     setMode: function (mode) {
       st.mode = (mode === 'text') ? 'text' : 'hex';
+      if (st.live) return refreshLive();
       var anchor = st.rows.length ? st.rows[0].idx : 0;
       return configure(anchor).then(function () { return fetchWindow(); });
     },
