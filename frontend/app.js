@@ -8310,7 +8310,7 @@ function _mountLive(tab) {
   mount.className = 'lv-mount';
   oldBox.parentNode.insertBefore(mount, oldBox.nextSibling);
   oldBox.style.display = 'none';
-  var reserve = 0;
+  var reserve = 0, reserveBottom = 0;
   try {
     // 顶部让位取「悬浮配置栏 + 清空按钮」的实际底边：--reserve-top 是按老布局
     // 推的常量，配置栏在这两种会话里高度不同，量一次比读变量准。
@@ -8319,10 +8319,17 @@ function _mountLive(tab) {
       var mountTop = mount.getBoundingClientRect().top;
       reserve = Math.max(0, Math.round(bar.getBoundingClientRect().bottom - mountTop) + 8);
     }
-  } catch (e) { reserve = 0; }
+    // 底部同理：字/H/锁定滚动 那排浮动按钮压在内容上，最后一行得让开
+    var btns = tab._page.root.querySelector('.c-fwd-float-btns');
+    if (btns) {
+      var mountRect = mount.getBoundingClientRect();
+      reserveBottom = Math.max(0, Math.round(mountRect.bottom - btns.getBoundingClientRect().top) + 8);
+    }
+  } catch (e) { reserve = 0; reserveBottom = 0; }
   if (reserve < 40) reserve = 40;
   var view = createLogView(mount, {
     reserveTop: reserve,
+    reserveBottom: reserveBottom,
     // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
     mode: (state.displayMode === 'hex') ? 'hex' : 'text',
     disp: function () { return tab.disp; },
