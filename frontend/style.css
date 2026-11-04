@@ -3707,7 +3707,10 @@ body.is-tab-dragging .tab-new {
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--dc-sendText, var(--fg));
-  background: var(--input-bg);
+  /* 发送框里看得见的那层底色就是这里（textarea 本身是透明的，文字由这层画）。
+     原来写死 --input-bg(#1a1a1a)，和发送区/历史框的 --panel-bg(#0d0d0d) 差一档，
+     整块看起来像浮在面板上的灰盒子；改成同一档。 */
+  background: var(--panel-bg, var(--input-bg));
 }
 
 .send-input-mirror .send-mirror-placeholder {
