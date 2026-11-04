@@ -1000,8 +1000,16 @@ function createLogView(host, opts) {
       }
       if (!grew) return;
       if (st.atBottom) { refreshLive(); return; }
-      // 不贴底：用户在往回翻。裁头会把内容整体往上抬，这里把 offset 同步减掉
-      // 同样的高度，视口就锁在原地 —— 滚动条会自己缓慢上推。
+      // 不贴底：用户在往回翻，画面不动，但内容还在长 —— 滚动条必须跟着刷新
+      // （滑块比例与位置都按新的总高算），否则看起来像「数据没进来」。
+      if (info.contentH > 0) {
+        st.contentH = info.contentH;
+        st.maxOffset = Math.max(0, info.contentH - st.vh);
+      }
+      updateThumb();
+      drawRuler(false);
+      // 裁头会把内容整体往上抬，这里把 offset 同步减掉同样的高度，
+      // 视口就锁在原地 —— 滚动条会自己缓慢上推。
       if (dh > 0 && st.offset > 0) {
         setOffset(Math.max(0, st.offset - dh));
       } else {
