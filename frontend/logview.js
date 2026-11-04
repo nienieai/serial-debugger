@@ -428,16 +428,32 @@ function createLogView(host, opts) {
     }
     // 第一道：读取（非交互 CLI / MCP 读到哪）。读取记录还没实现 —— 占位。
     // 第二道：校验（Modbus 严重度）。校验引擎这一版不做 —— 占位。
-    // 第三道：落盘。静态文件 = 完整性；实时会话 = 是否在录（等守护进程事件）。
-    var diskLane = document.createElement('i');
-    diskLane.className = 'lv-lane-mark';
-    diskLane.style.left = (2 * LV_LANE_W) + 'px';
-    diskLane.style.top = '0px';
-    diskLane.style.height = H + 'px';
-    diskLane.style.background = r.diskOk
-      ? 'color-mix(in srgb, var(--fg) 22%, transparent)'
-      : 'color-mix(in srgb, var(--red) 22%, transparent)';
-    lanes.appendChild(diskLane);
+    //
+    // 第三道：落盘。按桶上色 —— 这一段全在磁盘上 = 绿，全没落 = 透明（不画），
+    // 一段里两种都有 = 黄（中途开关过落盘）。相邻同色的桶合成一条：节点数只跟
+    // 「状态切换几次」有关，不会因为桶上千就建上千个节点。
+    var bk = r.buckets || [];
+    var b0 = 0;
+    while (b0 < bk.length) {
+      var m0 = bk[b0].disk | 0;
+      var b1 = b0 + 1;
+      while (b1 < bk.length && ((bk[b1].disk | 0) === m0)) b1++;
+      if (m0) {
+        var col = (m0 & 3) === 3 ? 'var(--yellow)' : ((m0 & 1) ? 'var(--green)' : '');
+        if (col) {
+          var mark = document.createElement('i');
+          mark.className = 'lv-lane-mark';
+          mark.style.left = (2 * LV_LANE_W) + 'px';
+          mark.style.top = Math.round(b0 * step) + 'px';
+          mark.style.height = Math.max(1, Math.round((b1 - b0) * step)) + 'px';
+          mark.style.background = 'color-mix(in srgb, ' + col + ' 62%, transparent)';
+          lanes.appendChild(mark);
+        }
+      }
+      b0 = b1;
+    }
+    // 数据不完整的帧（缺头 / 断链 / 末帧未闭合）压一根红线在上面：
+    // 它和「落没落盘」是两件事，颜色也不同。
     for (var i = 0; i < (r.diskLine || []).length; i++) {
       var ln = document.createElement('i');
       ln.className = 'lv-lane-mark';
@@ -1515,6 +1531,15 @@ function createLogView(host, opts) {
     // 锁定滚动：只改跟随行为，不动视口（用户原地看着哪就还在哪）。
     setScrollLock: function (on) {
       st.scrollLocked = !!on;
+    },
+    // 落盘状态（滚动条第三条泳道）。会话级开关，中途改会在泳道上留一条分界：
+    // 之前透明（没落）、之后绿（在落），分界所在那一桶显示成黄。
+    // 宿主拿到守护进程的真实开关时推一次即可，不必每帧报。
+    setRecording: function (on) {
+      if (!st.live || !st.id || st.dead) return Promise.resolve();
+      return lvCall('SetRecording', st.id, !!on).then(function () {
+        drawRuler(true);
+      }).catch(function () {});
     },
     destroy: function () {
       st.dead = true;

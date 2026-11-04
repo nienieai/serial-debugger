@@ -58,6 +58,10 @@
        （~#3b3b3b）上只有 ~1.9:1，而卡上的字又小（11~12.5px）、还带一圈黑晕，
        看着就是糊的。单独给一档：约 4.8:1，明显弱于 --fg 但读得清。 */
     --tabpop-dim: #a9a9a9;
+    /* 数据区与滚动条的底色：深色下用纯黑，和窗口其余部分拉出层次；浅色沿用
+       原来的「输入区白 + 一档透明」。 */
+    --lv-bg: #000;
+    --rail-bg: #000;
     --green: #16c60c;
     --red: #ff5c5c;
     --yellow: #ffd740;
@@ -98,6 +102,8 @@
     --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
     --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
     --tabpop-dim: #6b6b6b;
+    --lv-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
+    --rail-bg: transparent;
     --green: #15803d;
     --red: #dc2626;
     --yellow: #b45309;
@@ -137,6 +143,8 @@
   --sel-bg: color-mix(in srgb, var(--accent) 42%, transparent);
   --menu-hover-bg: color-mix(in srgb, var(--accent) 30%, #4f4f4f);
   --tabpop-dim: #a9a9a9;
+  --lv-bg: #000;
+  --rail-bg: #000;
   --green: #16c60c;
   --red: #ff5c5c;
   --yellow: #ffd740;
@@ -172,6 +180,8 @@
   --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
   --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
   --tabpop-dim: #6b6b6b;
+  --lv-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  --rail-bg: transparent;
   --fwd-p1: #2563eb;
   --fwd-p2: #d97706;
   --fwd-p1-hover: #1d4ed8;

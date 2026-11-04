@@ -69,6 +69,14 @@ type Store struct {
 	rulerN      int
 	stopFlag    chan struct{}
 
+	// 落盘状态（第三条泳道）。落盘是**会话级**开关：开着的时候新进来的帧才写进
+	// 会话文件，中途来回关就会在同一条泳道里出现「有的落、有的没落」。
+	// 只记切换点（逻辑帧号 + 当时的状态）就够，不用给每帧存一位：
+	//   diskInit = 第一个切换点之前的状态（静态文件全为 true，实时文档默认 false）
+	//   diskSegs = 之后每次切换的位置，按帧号升序
+	diskInit bool
+	diskSegs []diskSeg
+
 	// 宿主注入的两个钩子：一个写剪贴板，一个取原生窗口句柄（切标题栏明暗）。
 	// 测试里都留 nil，包本身不依赖 Wails。
 	clip func(string)
@@ -223,6 +231,15 @@ type WindowResult struct {
 type Bucket struct {
 	Orig uint8 `json:"orig"` // bit i = 该段里出现过第 i 个来源（1 起，见 Origins）
 	Lead uint8 `json:"lead"` // 这一段里发得最多的那个来源（0 = 全是 rx，没人发）
+	// Disk 是这一段的落盘情况：bit0 = 有已落盘的帧，bit1 = 有没落盘的帧。
+	// 前端据此上色：1 绿、2 透明、3 黄（一段里两种都有）。
+	Disk uint8 `json:"disk"`
+}
+
+// diskSeg 是落盘状态的一次切换：从逻辑帧号 At 起，状态变成 On。
+type diskSeg struct {
+	At int  `json:"at"`
+	On bool `json:"on"`
 }
 
 type RulerResult struct {
@@ -255,6 +272,9 @@ func (s *Store) Open(path string) StatusResult {
 	s.totalH2 = 0
 	s.ruler = nil
 	s.rulerUpToResetLocked()
+	// 静态文件：里面的帧全都在磁盘上（不完整的那几帧由 DiskLine 单独标）。
+	s.diskInit = true
+	s.diskSegs = nil
 	stop := make(chan struct{})
 	s.stopFlag = stop
 	s.mu.Unlock()
@@ -842,10 +862,17 @@ func (s *Store) Ruler(nb int) RulerResult {
 			lo, hi := b*ix.n/nb, (b+1)*ix.n/nb
 			var orgN [8]int
 			var mask uint8
+			var disk uint8
 			for i := lo; i < hi; i++ {
 				if o := ix.org[ix.head+i]; o > 0 {
 					orgN[o]++
 					mask |= 1 << (o - 1)
+				}
+				// 落盘状态按逻辑帧号查切换点：这一段里两种都有就两个位都置上。
+				if s.diskAtLocked(s.absBase + i) {
+					disk |= 1
+				} else {
+					disk |= 2
 				}
 			}
 			lead := 0
@@ -856,6 +883,7 @@ func (s *Store) Ruler(nb int) RulerResult {
 			}
 			s.ruler[b].Orig = mask
 			s.ruler[b].Lead = uint8(lead)
+			s.ruler[b].Disk = disk
 		}
 		s.rulerOrigNB = nb
 		s.rulerN = ix.n

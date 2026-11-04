@@ -17,7 +17,7 @@
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   font-size: 15px;
   line-height: 1.6;
-  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  background: var(--lv-bg, color-mix(in srgb, var(--input-bg) 88%, transparent));
   /* 原生选区关掉：高亮是引擎自己画的（半透明、能跨未渲染区、不会被行重建打断）。
      从 stlog-viewer 往这边搬的时候漏了这一条 —— 结果是浏览器自己也会选一段
      DOM 文本，那份高亮和引擎的选区互不相干：看起来「选中了」，右键菜单里
@@ -99,12 +99,12 @@
   position: relative;
   flex: 0 0 16px;
   width: 16px;
-  /* 右边留 3px：无边框窗口最外 3px 是系统的调整大小热区，贴边的话滑块
-     最右一列点不到。之前按 8px 让过，但那 8px 是拿「面板分隔条抢滚轮」
-     误判出来的，收回到刚好避开边缘。 */
-  margin-right: 3px;
+  /* 贴到窗口右边缘：原先让开 3px 是怕「无边框窗口最外 3px 的系统调整大小热区」，
+     但滑块本身 16px 宽，让开之后只在右边多出一条缝，看着像滚动条没落到底。
+     右边那条竖线也去掉 —— 右边就是窗口边缘，一条线会把滚动条和窗口框割成两层。 */
+  margin-right: 0;
   border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  background: var(--rail-bg, transparent);
   overflow: hidden;
   cursor: pointer;
 }
@@ -138,11 +138,14 @@
   min-height: 15px;
   /* 半透明：让下面三条泳道透出来（和示例工程 #79797966 一个道理），
      实心滑块会把语义色整个盖住。 */
-  background: color-mix(in srgb, var(--scrollbar-thumb) 40%, transparent);
+  background: color-mix(in srgb, var(--scrollbar-thumb) 45%, transparent);
   will-change: transform;
   cursor: pointer;
 }
-.lv-thumb:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+/* 悬停 / 拖动只提「同一档灰有多实」，不换成主色 —— 蓝色高亮在深色数据区里
+   太跳，VS Code 那种「还是灰的、只是更实」更像系统滚动条。 */
+.lv-thumb:hover { background: color-mix(in srgb, var(--scrollbar-thumb) 85%, transparent); }
+.lv-thumb:active { background: var(--scrollbar-thumb); }
 
 /* 「回到底部」按钮：不贴底时出现（未读数去掉后，回底还得有个入口） */
 .lv-tobottom {

@@ -161,6 +161,19 @@ func (v *LogView) LiveInfo(id string) (stlogview.LiveInfo, error) {
 	return s.LiveInfo(), nil
 }
 
+// SetRecording 同步「这个会话现在开没开落盘」。
+//
+// 滚动条第三条泳道要按区间上色（全落 / 全没落 / 一段里两种都有），而落盘是
+// 会话级开关、中途可以改，所以文档要记下切换点。宿主在拿到守护进程的开关状态
+// 时（开标签、切设置、右键菜单勾选）推一次即可，不必每帧报。
+func (v *LogView) SetRecording(id string, on bool) (stlogview.LiveInfo, error) {
+	s, err := v.get(id)
+	if err != nil {
+		return stlogview.LiveInfo{}, err
+	}
+	return s.SetRecording(on), nil
+}
+
 // AppendSystem 把一条系统消息（sys.port_connected 之类）塞进实时文档。
 //
 // 它不是串口字节，但用户在会话页上要看得到「什么时候连上/断开」；按 dir=system

@@ -85,6 +85,10 @@ func (s *Store) MarkLive(maxBytes int64) {
 	s.rulerUpToResetLocked()
 	s.phase = "ready"
 	s.scanErr = ""
+	// 实时文档刚建：还不知道这个会话要不要落盘，先按「不落」画（透明），
+	// 宿主拿到真实开关后会调 SetRecording。
+	s.diskInit = false
+	s.diskSegs = nil
 }
 
 // IsLive 说明这个文档是不是实时模式。
@@ -155,8 +159,47 @@ func (s *Store) ResetLive() LiveInfo {
 		s.totalH2 = 0
 		s.ruler = nil
 		s.rulerUpToResetLocked()
+		// 清空之后帧号从头算，落盘切换点也跟着作废（保留当前状态）。
+		s.diskInit = s.recordingLocked()
+		s.diskSegs = nil
 	}
 	return s.liveInfoLocked()
+}
+
+// SetRecording 告诉文档「这个会话现在开没开落盘」。落盘是会话级开关，中途改
+// 就会在滚动条的第三条泳道上留下「这段落了、那段没落」的分界。
+//
+// 记的是切换点而不是每帧一位：切换很少发生，一段区间内所有帧的状态都一样。
+func (s *Store) SetRecording(on bool) LiveInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.live && s.ix != nil && on != s.recordingLocked() {
+		s.diskSegs = append(s.diskSegs, diskSeg{At: s.absBase + s.ix.n, On: on})
+		// 桶是按帧号范围缓存起来的，切换点变了就要重算一次，否则前端拿到的
+		// 还是旧的落盘掩码。
+		s.rulerOrigNB = 0
+	}
+	return s.liveInfoLocked()
+}
+
+// recordingLocked 返回「从 diskSegs 末尾这一帧继续往下」的落盘状态。
+func (s *Store) recordingLocked() bool {
+	if n := len(s.diskSegs); n > 0 {
+		return s.diskSegs[n-1].On
+	}
+	return s.diskInit
+}
+
+// diskAtLocked 返回逻辑帧号 idx 这一帧是不是落在磁盘上。
+func (s *Store) diskAtLocked(idx int) bool {
+	on := s.diskInit
+	for _, sg := range s.diskSegs {
+		if sg.At > idx {
+			break
+		}
+		on = sg.On
+	}
+	return on
 }
 
 // LiveInfo 取概况（前端每 50~120 ms 轮一次）。
@@ -278,6 +321,12 @@ func (s *Store) dropFrontLocked(cut int) {
 	ix.head += cut
 	ix.n -= cut
 	s.absBase += cut
+	// 落盘切换点：裁掉的帧不会再画到，把落在 absBase 之前的切换点折进基准状态，
+	// 段表就不会随运行时间无限长（环形缓冲下这段代码每帧都在跑）。
+	for len(s.diskSegs) > 0 && s.diskSegs[0].At <= s.absBase {
+		s.diskInit = s.diskSegs[0].On
+		s.diskSegs = s.diskSegs[1:]
+	}
 	// 记下这一刀裁掉多少高度（半像素），前端靠它把视口锚在原地。
 	s.trimmedH2 = s.prefix[ix.head]
 	if ix.n > 0 {
@@ -371,6 +420,15 @@ func (s *Store) prependLocked(fs []FrameIn) {
 	// 前插要整表重建：先把逻辑起点搬回物理 0，这样老数组就是纯逻辑帧
 	// （否则已经裁掉的头部会被一并复制进新表）。
 	s.compactLocked()
+	// 落盘切换点跟着整体后移 add —— 已有帧的逻辑帧号都变了。
+	// 补回来的历史是从会话文件里读的，那些帧一定在磁盘上，所以在接缝处插一个
+	// 切换点：接缝之前恒为「已落盘」，从接缝起回到原来第一帧的状态。
+	seam := s.diskAtLocked(s.absBase)
+	for i := range s.diskSegs {
+		s.diskSegs[i].At += add
+	}
+	s.diskSegs = append([]diskSeg{{At: add, On: seam}}, s.diskSegs...)
+	s.diskInit = true
 	oldN := ix.n
 	oldArena := ix.arena
 	oldSeg := ix.seg

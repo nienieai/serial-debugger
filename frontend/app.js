@@ -5092,6 +5092,7 @@ function _tabPopOpen(tabEl, idx) {
   if (tab.histOn === undefined) {
     window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
       tab.histOn = !!on;
+      _liveRecording(tab, on);
       if (_tabPop && _tabPop.tab === tab) _tabPopUpdate();
     }).catch(function () {});
   }
@@ -5404,6 +5405,7 @@ function _tabMenuOpen(clientX, clientY, idx) {
         // 标签上已经不再显示保存标记（它搬进悬浮卡了），这里只更新缓存，
         // 下次打开卡片能立刻显示正确的开/关。
         tab.histOn = saveOn;
+        _liveRecording(tab, saveOn);
         window.go.main.App.SetHistoryEnabledFor(tab.sessionId, saveOn).catch(function () {});
       }
     });
@@ -5411,6 +5413,7 @@ function _tabMenuOpen(clientX, clientY, idx) {
     window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
       saveOn = !!on;
       tab.histOn = saveOn;
+      _liveRecording(tab, saveOn);
       var chk = saveItem.querySelector('.menu-chk');
       if (chk) chk.classList.toggle('on', saveOn);
     }).catch(function () {});
@@ -5764,6 +5767,7 @@ function _ensureTabsHist() {
     window.go.main.App.GetHistoryStatusFor(sid).then(function (on) {
       delete _tabHistFetching[sid];
       tb.histOn = !!on;
+      _liveRecording(tb, on);
       if (state.tabs.indexOf(tb) >= 0) renderTabs();
     }).catch(function () {
       delete _tabHistFetching[sid];
@@ -6500,6 +6504,17 @@ function _liveReconfigure() {
   var tab = getActiveTab();
   if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
     tab._live.reconfigure();
+  }
+}
+
+// _liveRecording 把「这个标签落不落盘」同步给引擎：滚动条第三条泳道按区间上色
+// （全落 = 绿 / 全没落 = 透明 / 一段里两种都有 = 黄），引擎需要知道切换发生在
+// 第几帧。只在拿到守护进程的真实开关时推一次，不必每帧报。
+function _liveRecording(tab, on) {
+  if (!tab) return;
+  tab.histOn = !!on;
+  if (tab._live && typeof tab._live.setRecording === 'function') {
+    tab._live.setRecording(!!on);
   }
 }
 
@@ -8512,6 +8527,9 @@ function _mountLive(tab) {
     return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, 0, 0);
   }).then(function (data) {
     if (!data || view !== tab._live || !view.isLive()) return;
+    // 第三条泳道（落盘）按区间上色，引擎要知道这个会话开没开存：
+    // 有真实开关就用它，没有就先按「有没有会话文件」猜。
+    view.setRecording(tab.histOn === undefined ? !!data.historyFile : !!tab.histOn);
     view.setHistory({ file: data.historyFile || '', hasMore: !!data.hasMore });
     var frames = _liveFramesFromHistory(data.history);
     if (!frames.length) return;
