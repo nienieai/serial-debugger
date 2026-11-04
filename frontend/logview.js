@@ -630,6 +630,22 @@ function createLogView(host, opts) {
     if (st.offset > st.maxOffset) st.offset = Math.round(st.maxOffset);
   }
 
+  // 裁头补偿：内容整体上移了 dh，offset 跟着减，视口就锁在原地。
+  //
+  // 这里**不能**走 setOffset —— 那边会 snapCurrent 吸到行首，而裁头是每帧
+  // 都在发生的（环形缓冲语义下 50 ms 一次），每吸一次画面就被往上拽半行，
+  // 看起来就是持续抖动。补偿只做夹紧，不改变 offset 相对内容的位置。
+  function shiftBy(dh) {
+    if (!(dh > 0)) return;
+    st.offset = lvClamp(st.offset - dh, 0, Math.round(st.maxOffset));
+    st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
+    layerTransform();
+    updateThumb();
+    updateTrimTip();
+    updateBottomBtn();
+    if (needsFetch()) fetchWindow();
+  }
+
   function setOffset(v) {
     v = lvClamp(Math.round(v), 0, Math.round(st.maxOffset));
     if (v === st.offset) {
@@ -1011,7 +1027,7 @@ function createLogView(host, opts) {
       // 裁头会把内容整体往上抬，这里把 offset 同步减掉同样的高度，
       // 视口就锁在原地 —— 滚动条会自己缓慢上推。
       if (dh > 0 && st.offset > 0) {
-        setOffset(Math.max(0, st.offset - dh));
+        shiftBy(dh);
       } else {
         updateTrimTip();
       }
