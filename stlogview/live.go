@@ -19,7 +19,10 @@ import (
 //     插到最前面，帧号相应变小。
 
 // DefaultLiveBytes 是实时文档 arena 的默认上限：超过就从最旧的一段裁掉。
-const DefaultLiveBytes = 8 << 20
+//
+// 和守护进程的 5 MB 环形缓冲取同一个数：界面上「缓冲到 5 MB 就开始丢最旧的」
+// 才和用户看到的 Rx 字节数对得上（以前是 8 MB，5 MB 时什么都不发生）。
+const DefaultLiveBytes = 5 << 20
 
 // FrameIn 是一帧的输入（GUI 侧喂进来的形态）。
 //
