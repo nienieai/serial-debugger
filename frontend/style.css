@@ -624,21 +624,15 @@ button:disabled:active {
 
 /* 窗口图标：无边框窗口没有系统标题栏，图标放菜单栏最左边。
    和系统标题栏一样高（32px）—— 菜单项、图标、右上角按钮都吃这条高度。 */
+/* 用 exe 自己的 .ico：图标里就有 16×16 那一层，浏览器按 CSS 尺寸精确选层，
+   不会像 SVG 那样跟主题色走 —— 标题栏图标本来就该和任务栏一致。 */
 .app-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   width: 16px;
   height: 16px;
   margin: 0 8px 0 6px;
   flex-shrink: 0;
-  color: var(--fg);
-  opacity: 0.85;
-}
-
-.app-mark>svg {
-  width: 16px;
-  height: 16px;
+  object-fit: contain;
 }
 
 /* 无边框窗口的 1px 边框：没有它就分不清窗口边界（尤其窗口压在别的窗口上时）。

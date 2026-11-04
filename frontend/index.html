@@ -11,8 +11,9 @@
 
 <div id="app">
   <div class="header">
-    <!-- 窗口图标：无边框窗口没有系统标题栏，图标挪到菜单最左边 -->
-    <span class="app-mark" data-icon="terminal" data-icon-w="16" data-icon-h="16" aria-hidden="true"></span>
+    <!-- 窗口图标：无边框窗口没有系统标题栏，图标挪到菜单最左边。
+         直接用 exe 的 .ico（任务栏、资源管理器看到的是同一张图），不再用主题色 SVG。 -->
+    <img class="app-mark" src="/appicon.ico" alt="" aria-hidden="true" draggable="false">
     <div class="menu-bar">
       <div class="menu-item">
         <span class="menu-label">文件</span>
