@@ -3079,6 +3079,15 @@ body.is-tab-dragging .tab-new {
   height: 0;
 }
 
+/* 交给虚窗引擎之后（.is-engine）：滚动由引擎自己画（滚轮 + 轨道滑块 + 泳道），
+   这里的原生滚动、内边距和行高全部让开，只留尺寸与背景。 */
+.display-content.is-engine {
+  overflow: hidden;
+  padding: 0;
+  line-height: normal;
+  overflow-anchor: none;
+}
+
 /* 自绘滚动条：轨道 + 滑块，固定叠在显示区右侧 */
 .hist-scrollbar {
   position: absolute;

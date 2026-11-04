@@ -297,15 +297,19 @@ function createLogView(host, opts) {
       origin + '<span class="' + statClass + '">~' + r.size + 'B</span>';
   }
 
+  // 一帧该画 Hex 还是文本，由 **Go 按这一帧自己的方向**决定（转发页的 P1 / P2
+  // 可以各是各的模式）：hex 模式给 r.hex，文本模式给 r.segs。所以前端只能看
+  // r 上实际带了什么，不能看整页的 st.mode —— 那会把「Rx 切了 Hex、Tx 还是文本」
+  // 这种混排画成空白。
   function lineParts(r) {
     // Hex 行在 Go 侧就按 perLine 个字节折好了（用 \n 分隔），这里直接按 \n 拆。
-    if (st.mode === 'hex') return r.hex ? r.hex.split('\n') : [''];
+    if (r.hex) return r.hex.split('\n');
     return null;
   }
 
   function lineCount(r) {
     if (r.dir === 'system' || r.dir === 'sys') return 1; // 系统消息固定一行
-    if (st.mode === 'hex') {
+    if (r.hex) {
       return Math.max(1, Math.ceil(r.size / Math.max(1, st.perLine)));
     }
     var n = 0, per = Math.max(1, st.perLine);
@@ -318,7 +322,7 @@ function createLogView(host, opts) {
   // lineCells 是这一视觉行有几个显示格（Hex 模式按字符数，文本按格数）。
   function lineCells(r, vline) {
     if (r.dir === 'system' || r.dir === 'sys') return 0;
-    if (st.mode === 'hex') {
+    if (r.hex) {
       var parts = lineParts(r);
       return parts[vline] ? parts[vline].length : 0;
     }
@@ -358,11 +362,11 @@ function createLogView(host, opts) {
       if (typeof formatSysMsg === 'function') sysTxt = formatSysMsg(sysTxt);
       dl.className = 'data-line sys-msg';
       dl.textContent = '── ' + sysTxt + ' ──';
-    } else if (st.mode === 'hex') {
+    } else if (r.hex) {
       var sp = document.createElement('span');
       sp.className = 'hex-data ' + lvHexClass(r.dir);
       sp.style.whiteSpace = 'pre';
-      sp.textContent = r.hex || '';
+      sp.textContent = r.hex;
       dl.appendChild(sp);
     } else if (r.segs && r.segs.length) {
       if (typeof setDisplayContext === 'function') {
@@ -992,6 +996,11 @@ function createLogView(host, opts) {
   function maybeLoadOlder() {
     if (!st.live || st.dead || !st.id) return;
     if (st.loadingOlder || st.histDone || !st.histHasMore) return;
+    // 设置里关掉「自动回补」：只留顶部提示，不主动要（网络差 / 超大历史时由人控）
+    if (typeof opts.autoRefill === 'function' && !opts.autoRefill()) {
+      updateTrimTip();
+      return;
+    }
     // 贴底时不加载：内容不满一屏时 offset 也是 0，那时候要「更早的」没有意义
     if (st.offset > 2 || st.atBottom) return;
     if (typeof opts.onNeedOlder !== 'function') return;

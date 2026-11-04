@@ -341,7 +341,7 @@ async function _redecodeActiveTab(enc) {
   var tab = getActiveTab();
   if (!tab || !tab.sessionId) return;
   var entries = state.historyCache[tab.sessionId];
-  if (!entries || !entries.length) { _rerenderHistoryKeepingView(); return; }
+  if (!entries || !entries.length) { _liveReconfigure(); return; }
   var hexes = [];
   for (var i = 0; i < entries.length; i++) {
     if (entries[i].hex) hexes.push(entries[i].hex);
@@ -354,7 +354,7 @@ async function _redecodeActiveTab(enc) {
       }
     } catch (e) {}
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 // ---- settings persistence ----
@@ -1910,7 +1910,7 @@ function updateModeUI() {
   _syncPortSelectsFromTab();
   applySendRatio();
   applyQuickPanelRatio();
-  loadTabHistory();
+  _liveRefresh();
   refreshStatsDOM();
 }
 
@@ -2634,7 +2634,7 @@ function _afterActivePageChanged(opts) {
   updateDaemonUI();
   _syncTabDisplayChrome();
   if (opts.reloadHistory !== false && at && isSessionTab(at)) {
-    loadTabHistory();
+    _liveRefresh();
     refreshStatsDOM();
   }
 }
@@ -3651,7 +3651,7 @@ async function syncDaemonSessions(procData) {
     updatePortOccupied();
     _syncPortSelectsFromTab();
     syncAutoSendState(daemonSessions);
-    await loadTabHistory();
+    await _liveRefresh();
   }
   // 别的窗口拖过来的那一页（见 _activateSessionSoon）：标签这次同步才建出来的话，
   // 到这里就能切过去了。
@@ -3903,7 +3903,7 @@ function handleDaemonOffline() {
   updateEmptyState();
   renderTabs();
   updateModeUI();
-  loadTabHistory();
+  _liveRefresh();
   // activeTab 刚变过，遮罩的显示条件（按「活动标签是不是会话页」判定）得重算一次：
   // 否则 onDaemonGone 那条路上，遮罩是照旧会话页算的，会一直盖在工程页上。
   updateDaemonUI();
@@ -4160,10 +4160,8 @@ function initTabPage(pageRoot) {
   }
   // 端口下拉按本页 root 填充（不能用 getElementById：每个标签页都有一份同 id）
   _populateTabPortSelects(pageRoot);
-  // 自绘滚动条（原生条已隐藏），只反映真实内容
-  if (typeof initDisplayScrollbar === 'function') {
-    initDisplayScrollbar(pageRoot.querySelector('#displayContent'));
-  }
+  // 显示区不再有自绘滚动条 —— 那是虚窗引擎自己的两道轨道 + 泳道，挂载时由
+  // createLogView 负责。发送框那条还在（它只是输入框的横向滚动）。
   if (typeof initSendScrollbar === 'function') {
     initSendScrollbar(pageRoot.querySelector('#sendInput'));
   }
@@ -4352,7 +4350,7 @@ function _convertChooserToSession(tab, sid, mode) {
   updateOpenBtn();
   updateSyncIndicator();
   updateEmptyState();
-  loadTabHistory();
+  _liveRefresh();
 }
 
 // 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
@@ -4421,7 +4419,7 @@ function switchTab(idx) {
     } else if (newTab._page) {
       newTab._page.show();
       if (isSessionTab(newTab)) {
-        loadTabHistory();
+        _liveRefresh();
         refreshStatsDOM();
       }
     }
@@ -4490,7 +4488,7 @@ function switchTab(idx) {
   renderTabs();
   updateOpenBtn();
   restoreSendUI();
-  loadTabHistory();
+  _liveRefresh();
   refreshStatsDOM();
   updatePortOccupied();
   applySendRatio();
@@ -6386,14 +6384,22 @@ function updateOpenBtn() {
 
 // 切换显示模式后重绘历史：冻结/回看时保持原来的窗口与滚动位置，
 // 否则用户往回翻出来看的那一段会突然被拽回最新一条（未读提示也随之消失）。
-function _rerenderHistoryKeepingView() {
+// 引擎接管之后「重画」= 让活动标签页的引擎重发一次 Configure / 重取窗口。
+function _liveReconfigure() {
   var tab = getActiveTab();
-  if (!tab || !tab.sessionId || !state.historyCache[tab.sessionId]) return;
-  var display = pageEl('displayContent');
-  var keep = !!_frozen;
-  var st = display ? display.scrollTop : 0;
-  renderHistoryLines(state.historyCache[tab.sessionId], keep);
-  if (display && keep) display.scrollTop = st;
+  if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
+    tab._live.reconfigure();
+  }
+}
+
+// _liveRefresh 只重取一屏（不重算布局）：切标签、会话状态变化之后都用它。
+// 原来是 loadTabHistory()，那是老渲染器的加载入口，跟着窗口渲染一起删了。
+function _liveRefresh() {
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.refresh === 'function') {
+    return tab._live.refresh();
+  }
+  return Promise.resolve();
 }
 
 // ---- display ----
@@ -6432,7 +6438,7 @@ function toggleDisplayMode() {
   // 会话页已交给虚窗引擎：切模式要重算布局（折行数变了），不能只重渲染老缓存
   var liveTab = getActiveTab();
   if (liveTab && liveTab._live) liveTab._live.setMode(state.displayMode);
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
   saveSettings();
 }
 
@@ -6549,7 +6555,7 @@ function toggleP1Display() {
     }
   }
   _liveReconfigure();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function toggleP2Display() {
@@ -6568,16 +6574,6 @@ function toggleP2Display() {
     }
   }
   _liveReconfigure();
-  _rerenderHistoryKeepingView();
-}
-
-// _liveReconfigure 按方向的模式变了（P1 / P2 / 发送的 字↔H）：让虚窗引擎重算
-// 布局。整页的 mode 没变，所以不能走 setMode（那会把整页也翻过去）。
-function _liveReconfigure() {
-  var tab = getActiveTab();
-  if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
-    tab._live.reconfigure();
-  }
 }
 
 function toggleSendFormat() {
@@ -6605,14 +6601,10 @@ function toggleTxDisplay() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  var tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  // 引擎接管之后：发送侧的 字/H 只影响 dir=2（Tx）这一路，重发 Configure 即可
   _liveReconfigure();
   saveSettings();
 }
-
 function updateSendQuickBtn() {
   var btn = pageEl('btnSendQuick');
   if (!btn) return;
@@ -6834,7 +6826,7 @@ function toggleCrVisible() {
   _setDisp('crVisible', !_dispOf().crVisible);
   _syncDispUi();
   // Re-render to show/hide CR bubbles
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function updateTextMenu() {
@@ -6855,14 +6847,14 @@ function setHexEscapeMode(mode) {
   if (_dispOf().hexEscapeMode === mode) return;
   _setDisp('hexEscapeMode', mode);
   _syncDispUi();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function setHexEscapeFormat(fmt) {
   if (_dispOf().hexEscapeFormat === fmt) return;
   _setDisp('hexEscapeFormat', fmt);
   _syncDispUi();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function _updateHexEscFmtRow() {
@@ -6870,21 +6862,11 @@ function _updateHexEscFmtRow() {
   if (row) row.classList.toggle('is-hidden', _dispOf().hexEscapeMode !== 'show');
 }
 
+// refreshHexDisplay 显示设置（分隔符 / 大小写 / 0x 前缀）变了之后重算布局。
+// 只有 Hex 模式看得出差别，但引擎的 Configure 在参数没变时会自己早退，
+// 这里不必再判断一次模式（转发页还有 P1 / P2 两套方向，判断也判不全）。
 function refreshHexDisplay() {
-  // Only refresh if in hex display mode
-  if (activeMode() === 'forward') {
-    if (state.p1DisplayMode === 'hex' || state.p2DisplayMode === 'hex') {
-      const tab = getActiveTab();
-      if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-        renderHistoryLines(state.historyCache[tab.sessionId]);
-      }
-    }
-  } else if (state.displayMode === 'hex') {
-    const tab = getActiveTab();
-    if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-      renderHistoryLines(state.historyCache[tab.sessionId]);
-    }
-  }
+  _liveReconfigure();
 }
 
 // ---- threads ----
@@ -7865,17 +7847,13 @@ function applySendRatio() {
   var sbEl = document.querySelector('.statusbar');
   if (sbEl) sbEl.classList.toggle('is-flush-bottom', r <= 0.01);
   if (divider) divider.style.display = '';
-  // 改完高度后，如果本来就在跟最新（未冻结、未锁定），重新贴底。
-  // 否则视口一变，滚动位置就"掉队"了，看上去像"拖一下就再也不跟着滚了"。
-  var dc = page.displayContent;
-  if (dc && !state.scrollLocked && typeof _frozen !== 'undefined' && !_frozen) {
-    dc.scrollTop = dc.scrollHeight;
-  }
+  // 改完高度后不用手动贴底：引擎的 ResizeObserver 会重算视口并保持当前 offset，
+  // 贴底时 offset 本来就是 maxOffset，会跟着新的内容高度走。
+  //
   // 压到只剩配置栏那么高时，把显示区里的按钮/数据流/滚动条整体收起来：
   // 否则它们会从浮动配置栏的模糊层后面透出来（截图里的"数据流/按键没隐藏"）。
   var dispH = Math.round(displayArea.getBoundingClientRect().height);
   displayArea.classList.toggle('is-collapsed', dispH <= reserve + 4);
-  if (dc && typeof dc._syncScrollbarInset === 'function') dc._syncScrollbarInset();
 }
 
 
@@ -8315,8 +8293,9 @@ function pickProjectDir() {
 
 // _mountLive 把会话页的显示区交给虚窗引擎（串口监视器 / 转发监视器）。
 //
-// 老的 history.js 渲染还在（搜索、缓存、状态栏这些还没搬），但它不再往 DOM 里写：
-// 数据帧由 Go 侧的实时文档攒着，前端只按像素取可见窗口。
+// 数据帧由 Go 侧的实时文档攒着，前端只按像素取可见窗口。老的 history.js 渲染
+// 已经删干净，所以这里直接拿会话页自己的 display-content 当挂载点 —— 以前要
+// 单开一层 .lv-mount 去躲老渲染器，现在没必要了。
 function _mountLive(tab) {
   var why = '';
   if (!tab) why = 'no-tab';
@@ -8330,14 +8309,11 @@ function _mountLive(tab) {
     return;
   }
   try { window.go.main.App.Log('[live] mount sid=' + tab.sessionId); } catch (e) {}
-  // 引擎**不**复用 .display-content：老渲染器还会往它里面写（切标签时的
-  // renderHistoryLines、系统消息等），两边抢同一个容器时 .lv-host 的 flex
-  // 会把老行摆成横向一排。这里单开一个挂载点，老容器留着但隐藏。
-  var oldBox = tab._page.displayContent;
-  var mount = document.createElement('div');
-  mount.className = 'lv-mount';
-  oldBox.parentNode.insertBefore(mount, oldBox.nextSibling);
-  oldBox.style.display = 'none';
+  var mount = tab._page.displayContent;
+  // .display-content 原本是给老渲染器用的（overflow-y:auto + padding + 行高），
+  // 交给引擎之后滚动由引擎自己画，这些都要让开；is-engine 那几条就是干这个的。
+  mount.classList.add('is-engine');
+  mount.innerHTML = '';
   // 让位量不能在挂载这一瞬间量：此刻标签页还没布局，所有 rect 都是 0 —— 顶部
   // 靠 40px 兜底才没露馅，底部被算成 8px，最后一条帧的数据行就压在浮动按钮下面。
   // 改成每次 layout() 现量：等页面真正有了尺寸（ResizeObserver / 第一帧到达）再取值。
@@ -8395,9 +8371,19 @@ function _mountLive(tab) {
         return view.prepend(frames).then(function () { return { hasMore: more }; });
       });
     },
+    // 设置里可以关掉「自动回补」（默认开）：关掉后翻到顶只显示提示，不主动要。
+    autoRefill: function () { return state.autoRefillHistory !== false; },
     onStatus: function (s) { tab._liveTotal = s.total || 0; }
   });
   tab._live = view;
+  // 切回这一页时要重取窗口：页面隐藏期间尺寸可能变过（拖过分隔条、窗口改大小）。
+  // 原来这个职责在 _liveRefresh() 里，它跟着老渲染一起删了。销毁之后
+  // refresh() 自己会因为 st.dead 早退，不用另外挡。
+  var origShow = tab._page.show;
+  tab._page.show = function () {
+    origShow();
+    view.refresh();
+  };
   view.openLive(tab.sessionId).then(function () {
     // 打开即回放：把守护进程环 / 磁盘里已有的历史先灌进来，页面不再是空的。
     // 只取最近一页，更早的等用户翻到顶时由 onNeedOlder 一页一页往回要。

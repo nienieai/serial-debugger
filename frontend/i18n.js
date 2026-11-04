@@ -23,10 +23,11 @@ async function setLanguage(lang) {
   if (typeof _tabPop !== 'undefined' && _tabPop && typeof _tabPopRender === 'function') {
     try { _tabPopRender(); } catch (_) {}
   }
-  // Re-render history with new language
+  // 系统消息里的 sys.* 是在**渲染时**翻译的：重发一次 Configure，行 DOM 的签名
+  // 里带 rowGen，会整窗重建，新语言才会生效。
   var tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId], false);
+  if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
+    tab._live.reconfigure();
   }
   saveSettings();
   if (typeof _refreshThemeNames === 'function') _refreshThemeNames();
