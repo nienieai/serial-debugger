@@ -90,10 +90,6 @@
   position: relative;
   flex: 0 0 16px;
   width: 16px;
-  /* 无边框窗口：窗口最右边这 8px 是系统的调整大小热区（SM_CXSIZEFRAME +
-     SM_CXPADDEDBORDER），滚动条贴边的话滑块右半边根本点不到 —— 鼠标一进去
-     就变成窗口缩放手柄，拖它反而把窗口拉宽/拉窄。这 8px 必须让出来。 */
-  margin-right: 8px;
   border-left: 1px solid var(--border);
   overflow: hidden;
   cursor: pointer;
@@ -137,8 +133,7 @@
 /* 「回到底部」按钮：不贴底时出现（未读数去掉后，回底还得有个入口） */
 .lv-tobottom {
   position: absolute;
-  /* 让开滚动条（16px）+ 窗口右边的调整大小热区（8px） */
-  right: 28px;
+  right: 20px;
   bottom: 12px;
   z-index: 7;
   padding: 4px 10px;
