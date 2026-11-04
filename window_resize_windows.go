@@ -32,7 +32,10 @@ const (
 )
 
 // narrowRightEdge 是右侧热区保留的宽度（物理像素，和 WM_NCHITTEST 的坐标同单位）。
-const narrowRightEdge = 5
+//
+// 滚动条本身右移留了 3px 空隙（.lv-rail 的 margin-right），热区取 3px 正好落在
+// 空隙里 —— 再宽就会咬到滑块，再窄右侧就几乎没法拖窗口了。
+const narrowRightEdge = 3
 
 var (
 	procCallWindowProcW = modUser32NoActivate.NewProc("CallWindowProcW")

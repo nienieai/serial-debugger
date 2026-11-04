@@ -20,6 +20,7 @@
   }
 
   // 最大化状态没有事件可听，点完按钮主动问一次 + 窗口 resize 兜底。
+  // 顺便切 body 上的 is-max：窗口那圈 1px 边框在最大化时要藏起来。
   function syncMaxIcon() {
     var app = api();
     var btn = document.getElementById('winMax');
@@ -28,6 +29,7 @@
       btn.classList.toggle('is-max', !!max);
       btn.title = max ? '还原' : '最大化';
       btn.setAttribute('aria-label', btn.title);
+      document.body.classList.toggle('is-max', !!max);
     }).catch(function () {});
   }
 

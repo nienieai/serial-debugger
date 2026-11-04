@@ -90,7 +90,12 @@
   position: relative;
   flex: 0 0 16px;
   width: 16px;
+  /* 无边框窗口：右边留 3px 给窗口的边缘热区（见 window_resize_windows.go 的
+     narrowRightEdge），再在滚动条右侧补一条竖线 —— 不然滚动条直接压在窗口
+     边上，看不出内容区到哪儿为止。 */
+  margin-right: 3px;
   border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   overflow: hidden;
   cursor: pointer;
 }
@@ -133,7 +138,8 @@
 /* 「回到底部」按钮：不贴底时出现（未读数去掉后，回底还得有个入口） */
 .lv-tobottom {
   position: absolute;
-  right: 20px;
+  /* 让开滚动条（16px）+ 窗口右边的热区留白（3px） */
+  right: 23px;
   bottom: 12px;
   z-index: 7;
   padding: 4px 10px;
