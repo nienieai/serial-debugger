@@ -3709,6 +3709,10 @@ function _markOccupied(sel, owner) {
       // 「自己这个标签在用」要同时看 portOpen：断开的标签可能还留着 syncedParams，
       // 只按它判断会把这个口一直当成自家占用而不标（反过来就是自己的口标成占用）。
       const mine = !!(tab && tab.portOpen && _tabHasPort(tab, portName));
+      // daemon 报的占用如果就是本标签这个会话，同样不算「被占用」：关闭串口时
+      // 会话还没销毁、开启时连接尚未返回，都会在这里短暂命中，不拦就会闪一下。
+      const ownerIsMe = !!(tab && tab.sessionId && info.inUseBy === 'daemon' &&
+        String(info.ownerProcessId) === String(tab.sessionId));
       let sibling = null;
       if (!mine) {
         for (let j = 0; j < state.tabs.length; j++) {
@@ -3721,7 +3725,7 @@ function _markOccupied(sel, owner) {
       const selfForwardOther = !mine && !sibling && !!myPorts &&
         ((selId === 'portSelectA' && portName === myPorts[1]) ||
          (selId === 'portSelectB' && portName === myPorts[0]));
-      if (info.inUseBy === 'other') {
+      if (info.inUseBy === 'other' && !mine && !ownerIsMe) {
         cls = 'port-busy-other';
         suffix = t('port.busy_other', '（被其他程序占用）');
       } else if (sibling) {
@@ -3731,7 +3735,7 @@ function _markOccupied(sel, owner) {
       } else if (selfForwardOther) {
         cls = 'port-occupied';
         suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', t('port.own_forward', '本标签另一端口'));
-      } else if (!mine && info.inUseBy === 'daemon') {
+      } else if (!mine && !ownerIsMe && info.inUseBy === 'daemon') {
         cls = 'port-occupied';
         const on = info.ownerName || ('#' + (info.ownerProcessId || '?'));
         suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', on);

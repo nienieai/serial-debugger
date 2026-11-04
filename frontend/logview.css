@@ -130,24 +130,6 @@
 }
 .lv-thumb:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
 
-/* 未读胶囊：不贴底时出现，点一下回到底部 */
-.lv-unread {
-  position: absolute;
-  right: 20px;
-  bottom: 12px;
-  z-index: 7;
-  padding: 4px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--bg2);
-  color: var(--fg);
-  font-size: 12px;
-  line-height: 1.2;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
-}
-.lv-unread:hover { border-color: var(--accent); color: var(--accent); }
-
 /* 顶部提示：内存缓冲已经把更早的历史裁掉了。没落盘时这部分是真丢了；
    有磁盘文件的会话改成「向上可加载」。top 由 JS 按 reserveTop 定位。 */
 .lv-trim {

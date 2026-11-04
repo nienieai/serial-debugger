@@ -136,7 +136,7 @@ function createLogView(host, opts) {
     ruler: null, rulerKey: '',
     dead: false,
     // 实时模式（串口监视器 / 转发监视器）
-    live: false, atBottom: true, unread: 0, lastSeen: 0, pollTimer: null,
+    live: false, atBottom: true, lastSeen: 0, pollTimer: null,
     trimmedPx: 0, histFile: '', histHasMore: false,
     // 增量渲染用：rowGen 是"样式代号"，变了就强制重建所有行；
     // cfgChars/needConfigure 决定要不要再发一次 Configure。
@@ -178,13 +178,6 @@ function createLogView(host, opts) {
 
   host.appendChild(view);
   host.appendChild(rail);
-
-  // 「有新数据」胶囊：不贴底时显示，点一下回到底部（替代老的 .hist-unread）
-  var unreadEl = document.createElement('button');
-  unreadEl.className = 'lv-unread';
-  unreadEl.style.display = 'none';
-  unreadEl.addEventListener('click', function () { st.unread = 0; jumpBottom(); });
-  host.appendChild(unreadEl);
 
   // 顶部提示：更早的历史已经被内存缓冲裁掉了（没落盘时就是永久丢失）。
   var trimEl = document.createElement('div');
@@ -603,7 +596,6 @@ function createLogView(host, opts) {
     }
     st.offset = v;
     st.atBottom = v >= Math.round(st.maxOffset) - 2;
-    if (st.atBottom) { st.unread = 0; updateUnread(); }
     layerTransform();
     updateThumb();
     updateTrimTip();
@@ -862,18 +854,9 @@ function createLogView(host, opts) {
 
   // ---- 实时模式（串口监视器 / 转发监视器）----
   //
-  // 帧不再由前端缓存，而是 Go 侧文档（LogView.OpenLive）攒着；这里每 120 ms 轮一次
-  // 概况，只有「帧数或内容高度变了」才重取窗口 —— 贴底时永远取最后一屏，
-  // 不贴底时只涨未读数，不打断用户往回翻。
-
-  function updateUnread() {
-    if (st.unread > 0 && !st.atBottom) {
-      unreadEl.textContent = '↓ ' + st.unread + ' 条新数据';
-      unreadEl.style.display = '';
-    } else {
-      unreadEl.style.display = 'none';
-    }
-  }
+  // 帧不再由前端缓存，而是 Go 侧文档（LogView.OpenLive）攒着；数据帧事件一到
+  // 就 notify，只有「帧数或内容高度变了」才重取窗口 —— 贴底时永远取最后一屏，
+  // 不贴底时只更新滚动条（不再有「N 条新数据」气泡）。
 
   // 顶部提示：内存缓冲已经从头上裁过帧，而且用户正顶在最上面。
   // 有磁盘文件时历史还在，提示改成「向上可加载」；没落盘就是真丢了。
@@ -892,7 +875,6 @@ function createLogView(host, opts) {
   function jumpBottom() {
     st.atBottom = true;
     setOffset(st.maxOffset);
-    updateUnread();
     updateTrimTip();
   }
 
@@ -953,7 +935,6 @@ function createLogView(host, opts) {
     lvCall('LiveInfo', st.id).then(function (info) {
       if (st.dead) return;
       var grew = info.total !== st.total || Math.abs(info.contentH - st.contentH) > 0.5;
-      var delta = info.total - st.total;
       var dh = (info.trimmedPx || 0) - st.trimmedPx;
       st.total = info.total;
       st.trimmedPx = info.trimmedPx || 0;
@@ -969,7 +950,6 @@ function createLogView(host, opts) {
       } else {
         updateTrimTip();
       }
-      if (delta > 0) { st.unread += delta; updateUnread(); }
     }).catch(function () {}).then(function () {
       tickBusy = false;
     });
@@ -978,7 +958,6 @@ function createLogView(host, opts) {
   function openLive(sessionID) {
     st.live = true;
     st.atBottom = true;
-    st.unread = 0;
     st.trimmedPx = 0;
     st.histFile = '';
     st.histHasMore = false;
@@ -1001,12 +980,10 @@ function createLogView(host, opts) {
     if (!st.id) return Promise.resolve();
     st.sel = null;
     st.offset = 0;
-    st.unread = 0;
     st.lastSeen = 0;
     st.trimmedPx = 0;
     // 帧号从头开始，旧的行 DOM 不能再复用（否则会撞上同一 idx 的旧签名）
     resetRowEls();
-    updateUnread();
     updateTrimTip();
     return lvCall('ResetLive', st.id).then(function () {
       return refreshLive();
