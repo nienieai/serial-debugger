@@ -294,6 +294,11 @@ function TabPage(tabIndex, tabData) {
 	self.displayContent = displayContent;
 	self.displayArea = displayArea;
 	self.fwdFloatBtns = fwdFloatBtns;
+	// 名字必须和 pageEl('btnP1Display') 对得上：对不上就会退到
+	// document.getElementById，拿到的永远是**第一个**标签页上那个按钮
+	// —— 多开一个标签之后，点 P1 的 字/H 改的是别人的按钮。
+	self.btnP1Display = btnP1;
+	self.btnP2Display = btnP2;
 	self.btnP1 = btnP1;
 	self.btnP2 = btnP2;
 self.divider = divider;

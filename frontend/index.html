@@ -5,11 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>串口调试工具</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/logview.css">
 </head>
 <body data-file-drop-target>
 
 <div id="app">
   <div class="header">
+    <!-- 窗口图标：无边框窗口没有系统标题栏，图标挪到菜单最左边。
+         直接用 exe 的 .ico（任务栏、资源管理器看到的是同一张图），不再用主题色 SVG。 -->
+    <img class="app-mark" src="/appicon.ico" alt="" aria-hidden="true" draggable="false">
     <div class="menu-bar">
       <div class="menu-item">
         <span class="menu-label">文件</span>
@@ -104,7 +108,14 @@
         </div>
       </div>
     </div>
-    <button id="btnTheme" class="c-theme-btn" onclick="openSettingsPage()" data-icon="settings" data-icon-w="18" data-icon-h="18" data-i18n-title="settings.title" title="设置"></button>
+    <button id="btnTheme" class="c-theme-btn" onclick="openSettingsPage()" data-icon="more" data-icon-w="18" data-icon-h="18" data-i18n-title="settings.title" title="设置"></button>
+    <!-- 无边框窗口：系统标题栏拿掉了，最小化/最大化/关闭改成菜单栏右侧这三个。
+         菜单栏的空白处同时是拖动把手（见 style.css 里的 --wails-draggable）。 -->
+    <div class="win-ctrl">
+      <button id="winMin" class="win-ctrl__btn" title="最小化" aria-label="最小化"><span class="win-ico win-ico--min"></span></button>
+      <button id="winMax" class="win-ctrl__btn" title="最大化" aria-label="最大化"><span class="win-ico win-ico--max"></span></button>
+      <button id="winClose" class="win-ctrl__btn" title="关闭" aria-label="关闭"><span class="win-ico win-ico--close"></span></button>
+    </div>
   </div>
 
   <div class="tabs-bar" id="tabsBar">
@@ -145,6 +156,10 @@
   </div>
 
   <div class="statusbar" id="statusbar"></div>
+
+  <!-- 无边框窗口的 1px 边框：没有它就分不清窗口边界（尤其窗口压在别的浅色窗口上）。
+       最大化时由 body.is-max 隐藏 —— 铺满工作区时不该再画一圈线。 -->
+  <div class="win-frame" aria-hidden="true"></div>
 </div>
 
 <!--
@@ -160,7 +175,9 @@
 <script src="/color-picker.js"></script>
 <script src="/i18n.js"></script>
 <script src="/icons.js"></script>
+<script src="/wincontrols.js"></script>
 <script src="/decoder.js"></script>
+<script src="/logview.js"></script>
 <script src="/statusbar.js"></script>
 <script src="/tabpage.js"></script>
 <script src="/settingspage.js"></script>

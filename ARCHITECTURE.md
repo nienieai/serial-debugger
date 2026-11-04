@@ -771,7 +771,9 @@ decoder.js     — 编解码 (hexToBytes、formatHex、renderSegments 分段渲�
 statusbar.js   — 状态栏 (StatusDaemon+Clients 靠左, Encoding+Stats 靠右)
 tabpage.js     — TabPage 组件 (每标签页独立 DOM 子树) + createWelcomePage()
 settingspage.js— 设置页组件 (buildSettingsPage + createSettingsOverlay)
-history.js     — 历史渲染缓存 (renderHistoryLines、mergeRingBuffer, pageEl 访问)
+logview.js     — 虚窗引擎前端 (createLogView: 按像素取窗口、泳道滚动条、选区复制)
+history.js     — 会话页的三个引擎入口 (数据帧/系统消息/清空) + 发送框滚动条
+daemonlog.js   — 守护进程日志窗口
 app.js         — 状态管理 + 事件驱动 + 标签页生命周期 + 弹窗构建 + 发送 + 主题
 ```
 
@@ -952,7 +954,7 @@ stateDiagram-v2
 
 ### 4.9 JS 前端状态
 
-**文件结构**：8 模块按 `i18n.js` → `icons.js` → `decoder.js` → `statusbar.js` → `tabpage.js` → `settingspage.js` → `history.js` → `app.js` 顺序加载。
+**文件结构**：模块按 `i18n.js` → `icons.js` → `wincontrols.js` → `decoder.js` → `logview.js` → `statusbar.js` → `tabpage.js` → `settingspage.js` → `history.js` → `daemonlog.js` → `app.js` 顺序加载。
 
 | 文件 | 职责 |
 |------|------|
@@ -962,7 +964,10 @@ stateDiagram-v2
 | `statusbar.js` | StatusDaemon/Clients（靠左）/ Encoding/Stats（靠右），`update(data)` 增量更新 |
 | `tabpage.js` | TabPage 构造函数（独立 DOM 子树 + per-tab UI 状态）+ `createWelcomePage()` + `pageEl()` |
 | `settingspage.js` | `buildSettingsPage()` + `createSettingsOverlay()` |
-| `history.js` | `renderHistoryLines()`、`mergeRingBuffer()`、`loadTabHistory()`，通过 `pageEl()` 访问活动标签页 |
+| `logview.js` | `createLogView()`：虚窗引擎前端，只做「按像素取窗口 / 把可见几十行定位 / 画滚动条与泳道」；行高与折行全在 Go 侧算 |
+| `wincontrols.js` | 无边框窗口的最小化 / 最大化 / 关闭按钮，转发给 `App.WindowControl` |
+| `history.js` | 只剩三个入口：`appendLine()`（数据帧 → `view.notify()`）、`appendSystemMsg()`、`clearDisplay()`；外加发送框的自绘滚动条和 `_originLabel()` |
+| `daemonlog.js` | 守护进程日志窗口 |
 | `app.js` | 状态管理、标签页生命周期、弹窗构建、事件驱动、发送、主题、拖拽 |
 
 **核心状态**：

@@ -6,6 +6,10 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "/wails/runtime.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as stlogview$0 from "./stlogview/models.js";
+
 /**
  * AppSettings holds all user-facing GUI settings persisted to disk.
  * 
@@ -643,6 +647,48 @@ export class ExternalI18nInfo {
     }
 }
 
+/**
+ * OpenDoc 是 Open 的返回：文档 id + 首帧状态。
+ */
+export class OpenDoc {
+    /**
+     * Creates a new OpenDoc instance.
+     * @param {Partial<OpenDoc>} [$$source = {}] - The source object to create the OpenDoc.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("status" in $$source)) {
+            /**
+             * @member
+             * @type {stlogview$0.StatusResult}
+             */
+            this["status"] = (new stlogview$0.StatusResult());
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new OpenDoc instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {OpenDoc}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType6;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("status" in $$parsedSource) {
+            $$parsedSource["status"] = $$createField1_0($$parsedSource["status"]);
+        }
+        return new OpenDoc(/** @type {Partial<OpenDoc>} */($$parsedSource));
+    }
+}
+
 export class SerialConfig {
     /**
      * Creates a new SerialConfig instance.
@@ -762,3 +808,4 @@ const $$createType2 = AppendDefaults.createFrom;
 const $$createType3 = DialogButton.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = $Create.Map($Create.Any, $Create.Any);
+const $$createType6 = stlogview$0.StatusResult.createFrom;

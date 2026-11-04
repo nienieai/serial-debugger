@@ -341,7 +341,7 @@ async function _redecodeActiveTab(enc) {
   var tab = getActiveTab();
   if (!tab || !tab.sessionId) return;
   var entries = state.historyCache[tab.sessionId];
-  if (!entries || !entries.length) { _rerenderHistoryKeepingView(); return; }
+  if (!entries || !entries.length) { _liveReconfigure(); return; }
   var hexes = [];
   for (var i = 0; i < entries.length; i++) {
     if (entries[i].hex) hexes.push(entries[i].hex);
@@ -354,7 +354,7 @@ async function _redecodeActiveTab(enc) {
       }
     } catch (e) {}
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 // ---- settings persistence ----
@@ -1910,7 +1910,7 @@ function updateModeUI() {
   _syncPortSelectsFromTab();
   applySendRatio();
   applyQuickPanelRatio();
-  loadTabHistory();
+  _liveRefresh();
   refreshStatsDOM();
 }
 
@@ -2622,6 +2622,8 @@ function _afterActivePageChanged(opts) {
   var at = getActiveTab();
   if (at && at._page) at._page.show();
   else if (state._welcomePage) state._welcomePage.show();
+  // 切回的标签页在后台期间不会收到数据帧事件，这里补一次刷新
+  if (at && at._live && typeof at._live.notify === 'function') at._live.notify();
   state.currentMode = (at && at.mode) ? at.mode : 'single';
   updateModeUI();
   updateEmptyState();
@@ -2632,7 +2634,7 @@ function _afterActivePageChanged(opts) {
   updateDaemonUI();
   _syncTabDisplayChrome();
   if (opts.reloadHistory !== false && at && isSessionTab(at)) {
-    loadTabHistory();
+    _liveRefresh();
     refreshStatsDOM();
   }
 }
@@ -2954,6 +2956,19 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   updateEmptyState();
   renderTabs();
+
+  // 启动参数里的 .stlog / 工程目录（双击文件、命令行带路径）：等设置加载完再开，
+  // 否则新页拿到的是默认显示设置而不是用户配的。用「拉」不用「推」 —— Go 侧推
+  // 事件永远赶不上页面就绪，早了就丢。
+  (function takeStartupPath() {
+    var App = window.go && window.go.main && window.go.main.App;
+    if (!App || typeof App.TakeOpenPath !== 'function') return;
+    Promise.resolve().then(function () {
+      return App.TakeOpenPath();
+    }).then(function (p) {
+      if (p) openPathFromOS(p);
+    }).catch(function () {});
+  })();
 
   try {
     window.runtime.EventsOn('ports-changed', () => refreshPorts());
@@ -3484,6 +3499,7 @@ async function syncDaemonSessions(procData) {
       newTab._page = new TabPage(state.tabs.length, newTab);
       var mainContent = document.getElementById('mainContent');
       if (mainContent) { mainContent.appendChild(newTab._page.root); initTabPage(newTab._page.root); }
+      _mountLive(newTab);
       state.tabs.push(newTab);
       // Start per-tab Go decode worker
       if (ds.id && state.daemonOnline) {
@@ -3635,7 +3651,7 @@ async function syncDaemonSessions(procData) {
     updatePortOccupied();
     _syncPortSelectsFromTab();
     syncAutoSendState(daemonSessions);
-    await loadTabHistory();
+    await _liveRefresh();
   }
   // 别的窗口拖过来的那一页（见 _activateSessionSoon）：标签这次同步才建出来的话，
   // 到这里就能切过去了。
@@ -3693,6 +3709,10 @@ function _markOccupied(sel, owner) {
       // 「自己这个标签在用」要同时看 portOpen：断开的标签可能还留着 syncedParams，
       // 只按它判断会把这个口一直当成自家占用而不标（反过来就是自己的口标成占用）。
       const mine = !!(tab && tab.portOpen && _tabHasPort(tab, portName));
+      // daemon 报的占用如果就是本标签这个会话，同样不算「被占用」：关闭串口时
+      // 会话还没销毁、开启时连接尚未返回，都会在这里短暂命中，不拦就会闪一下。
+      const ownerIsMe = !!(tab && tab.sessionId && info.inUseBy === 'daemon' &&
+        String(info.ownerProcessId) === String(tab.sessionId));
       let sibling = null;
       if (!mine) {
         for (let j = 0; j < state.tabs.length; j++) {
@@ -3705,7 +3725,7 @@ function _markOccupied(sel, owner) {
       const selfForwardOther = !mine && !sibling && !!myPorts &&
         ((selId === 'portSelectA' && portName === myPorts[1]) ||
          (selId === 'portSelectB' && portName === myPorts[0]));
-      if (info.inUseBy === 'other') {
+      if (info.inUseBy === 'other' && !mine && !ownerIsMe) {
         cls = 'port-busy-other';
         suffix = t('port.busy_other', '（被其他程序占用）');
       } else if (sibling) {
@@ -3715,7 +3735,7 @@ function _markOccupied(sel, owner) {
       } else if (selfForwardOther) {
         cls = 'port-occupied';
         suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', t('port.own_forward', '本标签另一端口'));
-      } else if (!mine && info.inUseBy === 'daemon') {
+      } else if (!mine && !ownerIsMe && info.inUseBy === 'daemon') {
         cls = 'port-occupied';
         const on = info.ownerName || ('#' + (info.ownerProcessId || '?'));
         suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', on);
@@ -3883,7 +3903,7 @@ function handleDaemonOffline() {
   updateEmptyState();
   renderTabs();
   updateModeUI();
-  loadTabHistory();
+  _liveRefresh();
   // activeTab 刚变过，遮罩的显示条件（按「活动标签是不是会话页」判定）得重算一次：
   // 否则 onDaemonGone 那条路上，遮罩是照旧会话页算的，会一直盖在工程页上。
   updateDaemonUI();
@@ -4140,10 +4160,8 @@ function initTabPage(pageRoot) {
   }
   // 端口下拉按本页 root 填充（不能用 getElementById：每个标签页都有一份同 id）
   _populateTabPortSelects(pageRoot);
-  // 自绘滚动条（原生条已隐藏），只反映真实内容
-  if (typeof initDisplayScrollbar === 'function') {
-    initDisplayScrollbar(pageRoot.querySelector('#displayContent'));
-  }
+  // 显示区不再有自绘滚动条 —— 那是虚窗引擎自己的两道轨道 + 泳道，挂载时由
+  // createLogView 负责。发送框那条还在（它只是输入框的横向滚动）。
   if (typeof initSendScrollbar === 'function') {
     initSendScrollbar(pageRoot.querySelector('#sendInput'));
   }
@@ -4318,6 +4336,7 @@ function _convertChooserToSession(tab, sid, mode) {
   var mc = document.getElementById('mainContent');
   if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
   tab._page.show();
+  _mountLive(tab);
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
@@ -4331,7 +4350,7 @@ function _convertChooserToSession(tab, sid, mode) {
   updateOpenBtn();
   updateSyncIndicator();
   updateEmptyState();
-  loadTabHistory();
+  _liveRefresh();
 }
 
 // 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
@@ -4349,6 +4368,7 @@ async function autoCreateIdleSession(mode) {
   tab._page = new TabPage(state.tabs.length, tab);
   var mc = document.getElementById('mainContent');
   if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  _mountLive(tab);
   state.tabs.push(tab);
 
   if (state.daemonOnline) {
@@ -4399,7 +4419,7 @@ function switchTab(idx) {
     } else if (newTab._page) {
       newTab._page.show();
       if (isSessionTab(newTab)) {
-        loadTabHistory();
+        _liveRefresh();
         refreshStatsDOM();
       }
     }
@@ -4468,7 +4488,7 @@ function switchTab(idx) {
   renderTabs();
   updateOpenBtn();
   restoreSendUI();
-  loadTabHistory();
+  _liveRefresh();
   refreshStatsDOM();
   updatePortOccupied();
   applySendRatio();
@@ -4679,8 +4699,13 @@ function _tabPopValues() {
   if (live && _tabPop.uptimeAt) upSec += (Date.now() - _tabPop.uptimeAt) / 1000;
   var hasUptime = (s.uptimeSec || 0) > 0 || (live && _tabPop.uptimeAt);
   return {
-    rxRate: live ? (s.readRateBps || 0) : 0,
-    txRate: live ? (s.writeRateBps || 0) : 0,
+    // 转发模式下方向要倒过来：daemon 的 read/write 是站在 **B 口** 说的 ——
+    // readRateBps 是「从 B 口读到的」（B→A），writeRateBps 是「写到 B 口的」（A→B）。
+    // 而卡片第一条泳道在转发页是 A→B，所以这里必须交换；单端口时 read=RX、
+    // write=TX，不交换。不交换的后果是 A→B 累计涨着、速率却一直是 0，
+    // B→A 累计 0、速率却在跳（实测 5.086M / 0.0 B/s 配 0 / 16.0 kB/s）。
+    rxRate: live ? ((isFwd ? s.writeRateBps : s.readRateBps) || 0) : 0,
+    txRate: live ? ((isFwd ? s.readRateBps : s.writeRateBps) || 0) : 0,
     rxTotal: isFwd ? (s.bytesPort1 || 0) : (s.bytesRead || 0),
     txTotal: isFwd ? (s.bytesPort2 || 0) : (s.bytesWritten || 0),
     errRx: s.readErrors || 0,
@@ -4756,15 +4781,15 @@ function _tabPopT(key, fb) {
 
 // 文件标签的浮窗。文件标签没有会话概念（没 sessionId、没端口），套会话卡片只会
 // 得到一片 —，所以单独画：文件名 / 路径 / 大小 / 收发 / 时间范围 / 来源。
-// 数据来自 tab._stlog.info（stlogLoad 每次读回来都会存一份）。
+// 数据来自 tab._stlog.info（引擎打开完成时把 Meta 存一份）。
 function _tabPopRenderFile() {
   var el = _tabPopEl;
   var tab = _tabPop.tab;
   var st = tab._stlog || {};
   var info = st.info || {};
   var path = tab.path || '';
-  var fwd = info.forward === true;
-  var set = info.settings || {};
+  var fwd = info.mode === 'forward';
+  var set = { port: info.port, baud: info.baud };
   var portA = set.port || '';
   var portB = info.portB || '';
 
@@ -4798,14 +4823,14 @@ function _tabPopRenderFile() {
     '</div>';
   }
   var lanesHTML = fwd
-    ? lane('A→B', 'var(--fwd-p1)', info.bytesAB) + lane('B→A', 'var(--fwd-p2)', info.bytesBA)
-    : lane('⇃ RX', 'var(--green)', info.rxTotal) + lane('↾ TX', 'var(--accent)', info.txTotal);
+    ? lane('A→B', 'var(--fwd-p1)', info.p1Bytes) + lane('B→A', 'var(--fwd-p2)', info.p2Bytes)
+    : lane('⇃ RX', 'var(--green)', info.rxBytes) + lane('↾ TX', 'var(--accent)', info.txBytes);
 
   // 比例条：单口是收发比（绿/蓝），转发是分流比（P1/P2 两色）
   var cRx = fwd ? 'var(--fwd-p1)' : 'var(--green)';
   var cTx = fwd ? 'var(--fwd-p2)' : 'var(--accent)';
-  var partA = fwd ? (info.bytesAB || 0) : (info.rxTotal || 0);
-  var partB = fwd ? (info.bytesBA || 0) : (info.txTotal || 0);
+  var partA = fwd ? (info.p1Bytes || 0) : (info.rxBytes || 0);
+  var partB = fwd ? (info.p2Bytes || 0) : (info.txBytes || 0);
   var sum = partA + partB;
   var hasRatio = sum > 0;
   var rp = hasRatio ? Math.round(partA / sum * 100) : 0;
@@ -4819,9 +4844,9 @@ function _tabPopRenderFile() {
     '<span class="c-tabpop__rval" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
   '</div>';
 
-  // 页脚三项：帧（已载入/总数）、时长、来源数。绝对时间范围退到 title。
-  var loaded = (st.frames && st.frames.length) ? st.frames.length : 0;
-  var totalFrames = (typeof info.total === 'number') ? info.total : 0;
+  // 页脚三项：帧、时长、来源数。绝对时间范围退到 title。
+  var totalFrames = (typeof info.frames === 'number') ? info.frames : 0;
+  var loaded = totalFrames;
   var srcCount = (info.origins && info.origins.length) ? info.origins.length : 0;
   var range = stlogRangeText(info.firstTs, info.lastTs) || '';
 
@@ -4860,7 +4885,7 @@ function _tabPopSpanText(firstTs, lastTs) {
 function _tabPopFileSig() {
   var st = (_tabPop && _tabPop.tab && _tabPop.tab._stlog) || {};
   var info = st.info || {};
-  return ['file', info.path || '', info.total || 0, (st.frames ? st.frames.length : 0)].join('|');
+  return ['file', info.path || '', info.frames || 0].join('|');
 }
 
 function _tabPopRender() {
@@ -5892,10 +5917,15 @@ async function openPort() {
     updateSyncIndicator();
     updatePortOccupied();
     renderTabs();
-    state.statsBase[tab.sessionId] = { tx: 0, rx: 0 };
+    // 统计跟着会话走：守护进程侧的 bytesRead/Written 本来就是累计的，重连不清零。
+    if (!state.statsBase[tab.sessionId]) {
+      state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
+    }
     refreshStatsDOM();
     _updateStatsVisible();
-    await mergeRingBuffer(tab.sessionId);
+    // 不用再「合并守护进程环」了：虚窗引擎的文档是会话级的常驻对象
+    // （LogView.OpenLive 建、Close 才销毁），实时帧由 App.emitSession 逐帧喂进来，
+    // 重连不会重建它。老的 mergeRingBuffer 是给「前端缓存 + 打开时拉一次」那套用的。
     appendSystemMsg(`串口已打开: ${cfg.port} @ ${cfg.baud}`);
     saveSettings();
   } catch (e) {
@@ -5947,7 +5977,7 @@ async function openForwardPorts() {
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
     refreshStatsDOM();
     _updateStatsVisible();
-    await mergeRingBuffer(tab.sessionId);
+    // 同 openPort：引擎文档常驻，不需要重新合并环里的历史。
     appendSystemMsg('端口转发已启动: ' + cfgA.port + ' ↔ ' + cfgB.port);
     saveSettings();
   } catch (e) {
@@ -5963,13 +5993,16 @@ async function closePort() {
       await window.go.main.App.DisconnectSession(tab.sessionId);
     }
   } catch {}
-  await mergeRingBuffer(tab.sessionId);
+  // 断口时不合并历史：引擎文档不动，已收到的帧继续留在页面上（老渲染那套
+  // 是「前端缓存 + 重拉」，才需要这一步）。
   appendSystemMsg(t('sys.port_closed_label', '串口已关闭: %s').replace('%s', tab.label));
   tab.portOpen = false;
   tab.label = tab.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
   tab.syncedParams = null;
-  // 会话还在（空闲进程），但字节/速率是那次连接的，重连会从 0 重新计
-  delete state.statsBase[tab.sessionId];
+  // 统计保留这次连接的结果（关闭后还看得到这次收了多少），只把速率清零 ——
+  // 速率是 stats-rate 的 last-value，端口关了不会再推，留着会一直挂着旧数字。
+  const closedStats = state.statsBase[tab.sessionId];
+  if (closedStats) { closedStats.rxRate = 0; closedStats.txRate = 0; }
   updateOpenBtn();
   updateSyncIndicator();
   updatePortOccupied();
@@ -6359,14 +6392,22 @@ function updateOpenBtn() {
 
 // 切换显示模式后重绘历史：冻结/回看时保持原来的窗口与滚动位置，
 // 否则用户往回翻出来看的那一段会突然被拽回最新一条（未读提示也随之消失）。
-function _rerenderHistoryKeepingView() {
+// 引擎接管之后「重画」= 让活动标签页的引擎重发一次 Configure / 重取窗口。
+function _liveReconfigure() {
   var tab = getActiveTab();
-  if (!tab || !tab.sessionId || !state.historyCache[tab.sessionId]) return;
-  var display = pageEl('displayContent');
-  var keep = !!_frozen;
-  var st = display ? display.scrollTop : 0;
-  renderHistoryLines(state.historyCache[tab.sessionId], keep);
-  if (display && keep) display.scrollTop = st;
+  if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
+    tab._live.reconfigure();
+  }
+}
+
+// _liveRefresh 只重取一屏（不重算布局）：切标签、会话状态变化之后都用它。
+// 原来是 loadTabHistory()，那是老渲染器的加载入口，跟着窗口渲染一起删了。
+function _liveRefresh() {
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.refresh === 'function') {
+    return tab._live.refresh();
+  }
+  return Promise.resolve();
 }
 
 // ---- display ----
@@ -6402,7 +6443,10 @@ function toggleDisplayMode() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  _rerenderHistoryKeepingView();
+  // 会话页已交给虚窗引擎：切模式要重算布局（折行数变了），不能只重渲染老缓存
+  var liveTab = getActiveTab();
+  if (liveTab && liveTab._live) liveTab._live.setMode(state.displayMode);
+  _liveReconfigure();
   saveSettings();
 }
 
@@ -6485,8 +6529,12 @@ function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
   _persistDisplayModes();
   updateScrollLockBtns();
-  // 冻结/解冻与未读占位块由历史层负责（锁定时视图冻结，但滚动条仍随未读增长）
-  if (typeof onScrollLockChanged === 'function') onScrollLockChanged();
+  // 锁定 = 新数据进来也不自动贴底。老的实现靠历史层冻结，现在直接告诉引擎：
+  // 锁定期间即使视口正在底部也不跟随（点「回到底部」仍可手动解除）。
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.setScrollLock === 'function') {
+    tab._live.setScrollLock(state.scrollLocked);
+  }
 }
 
 function updateScrollLockBtns() {
@@ -6518,7 +6566,8 @@ function toggleP1Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
+  _liveReconfigure();
 }
 
 function toggleP2Display() {
@@ -6536,7 +6585,7 @@ function toggleP2Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function toggleSendFormat() {
@@ -6564,13 +6613,10 @@ function toggleTxDisplay() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  var tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  // 引擎接管之后：发送侧的 字/H 只影响 dir=2（Tx）这一路，重发 Configure 即可
+  _liveReconfigure();
   saveSettings();
 }
-
 function updateSendQuickBtn() {
   var btn = pageEl('btnSendQuick');
   if (!btn) return;
@@ -6668,15 +6714,20 @@ function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
   if (tab && tab.sessionId) {
-    // 端口没连上：一律显示 0（会话统计是按连接计的）。
-    // 不去读缓存、也不去拉 daemon —— 空闲进程的计数没有意义，读出来只会让
-    // 上一次连接的数字继续挂着（用户实测的那条 P2:389/s）。
+    // 端口没连上：累计字节保留（关闭后还看得到这次收了多少），速率清零。
+    // 速率来自 stats-rate 事件，端口关了不会再推，留着会停在上一次的读数上。
     if (!tab.portOpen) {
       if (_statusBar) {
         // 模式也得定：转发页空闲时箭头仍应是 P1/P2（此前提前返回，把它留在
         // 上一个标签页的 TX/RX 上）
         _statusBar.setStatsMode(activeMode() === 'forward');
-        _statusBar.resetStats();
+        const b = state.statsBase[tab.sessionId];
+        if (b) {
+          _statusBar.updateStatsBytes({ tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2 });
+          _statusBar.updateStatsRates({ txRate: 0, rxRate: 0, p1Rate: 0, p2Rate: 0, maxBps: 0 });
+        } else {
+          _statusBar.resetStats();
+        }
       }
       return;
     }
@@ -6787,7 +6838,7 @@ function toggleCrVisible() {
   _setDisp('crVisible', !_dispOf().crVisible);
   _syncDispUi();
   // Re-render to show/hide CR bubbles
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function updateTextMenu() {
@@ -6808,14 +6859,14 @@ function setHexEscapeMode(mode) {
   if (_dispOf().hexEscapeMode === mode) return;
   _setDisp('hexEscapeMode', mode);
   _syncDispUi();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function setHexEscapeFormat(fmt) {
   if (_dispOf().hexEscapeFormat === fmt) return;
   _setDisp('hexEscapeFormat', fmt);
   _syncDispUi();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function _updateHexEscFmtRow() {
@@ -6823,21 +6874,11 @@ function _updateHexEscFmtRow() {
   if (row) row.classList.toggle('is-hidden', _dispOf().hexEscapeMode !== 'show');
 }
 
+// refreshHexDisplay 显示设置（分隔符 / 大小写 / 0x 前缀）变了之后重算布局。
+// 只有 Hex 模式看得出差别，但引擎的 Configure 在参数没变时会自己早退，
+// 这里不必再判断一次模式（转发页还有 P1 / P2 两套方向，判断也判不全）。
 function refreshHexDisplay() {
-  // Only refresh if in hex display mode
-  if (activeMode() === 'forward') {
-    if (state.p1DisplayMode === 'hex' || state.p2DisplayMode === 'hex') {
-      const tab = getActiveTab();
-      if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-        renderHistoryLines(state.historyCache[tab.sessionId]);
-      }
-    }
-  } else if (state.displayMode === 'hex') {
-    const tab = getActiveTab();
-    if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-      renderHistoryLines(state.historyCache[tab.sessionId]);
-    }
-  }
+  _liveReconfigure();
 }
 
 // ---- threads ----
@@ -7818,17 +7859,13 @@ function applySendRatio() {
   var sbEl = document.querySelector('.statusbar');
   if (sbEl) sbEl.classList.toggle('is-flush-bottom', r <= 0.01);
   if (divider) divider.style.display = '';
-  // 改完高度后，如果本来就在跟最新（未冻结、未锁定），重新贴底。
-  // 否则视口一变，滚动位置就"掉队"了，看上去像"拖一下就再也不跟着滚了"。
-  var dc = page.displayContent;
-  if (dc && !state.scrollLocked && typeof _frozen !== 'undefined' && !_frozen) {
-    dc.scrollTop = dc.scrollHeight;
-  }
+  // 改完高度后不用手动贴底：引擎的 ResizeObserver 会重算视口并保持当前 offset，
+  // 贴底时 offset 本来就是 maxOffset，会跟着新的内容高度走。
+  //
   // 压到只剩配置栏那么高时，把显示区里的按钮/数据流/滚动条整体收起来：
   // 否则它们会从浮动配置栏的模糊层后面透出来（截图里的"数据流/按键没隐藏"）。
   var dispH = Math.round(displayArea.getBoundingClientRect().height);
   displayArea.classList.toggle('is-collapsed', dispH <= reserve + 4);
-  if (dc && typeof dc._syncScrollbarInset === 'function') dc._syncScrollbarInset();
 }
 
 
@@ -7842,9 +7879,50 @@ function applySendRatio() {
 // 行渲染直接调 history.js 的 makeDataRow：Rx/Tx 配色、Hex/文本开关、等宽字体、
 // 屏外不绘制全部继承，不另起一套渲染器。
 
-// 首屏/每批 500 帧。一帧最大 4016 B，转十六进制就是 8 KB 字符串，一次给太多
-// 会把过桥的 JSON 和 DOM 一起撑爆；其余靠底部的「加载更多」。
-var STLOG_PAGE_SIZE = 500;
+// .stlog 文件页的数据在 Go 侧（服务 main.LogView → 包 stlogview）：文档只留一份
+// arena 与定长帧表，前端按像素取窗口、只挂可见的几十行，行高由 Go 算。
+// 这里只剩顶栏（文件名/元信息/年份/Hex-文本/导出/推送）与句柄。
+
+// stlogBarText 把 Meta 拼成顶栏那一行。
+//
+// Meta 是「文件这一次打开」的静态快照，和会话页的 stats 不是一回事：没有速率、
+// 没有客户端，只有文件自己写下来的东西（模式/端口/时间范围/来源/完整性）。
+function stlogBarText(m) {
+  if (!m) return '';
+  var parts = [];
+  var range = stlogRangeText(m.firstTs, m.lastTs);
+  if (range) parts.push(range);
+  parts.push(m.size + ' B');
+  parts.push(m.pages + ' 页');
+  parts.push(m.records + ' 记录');
+  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
+  if (m.mode === 'forward') {
+    parts.push('A→B ' + (m.p1Bytes || 0) + ' / B→A ' + (m.p2Bytes || 0) + ' B');
+    parts.push('转发 ' + (m.port ? m.port + ' ↔ ' : '') + (m.portB || ''));
+  } else {
+    parts.push('rx/tx ' + (m.rxBytes || 0) + '/' + (m.txBytes || 0) + ' B');
+  }
+  if (m.label) parts.push('设置 ' + m.label);
+  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
+  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
+  if (m.origins && m.origins.length) {
+    var kinds = [];
+    m.origins.forEach(function (o) {
+      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
+      if (kinds.indexOf(label) < 0) kinds.push(label);
+    });
+    parts.push('来源 ' + kinds.join(' · '));
+  } else {
+    parts.push('无来源');
+  }
+  if (m.recovered && m.recovered.length) parts.push('影子恢复 ' + m.recovered.length + ' 页');
+  if (m.truncated) parts.push('末帧未结束');
+  if (m.broken) parts.push('续片链被切断');
+  if (m.noHead) parts.push('缺头');
+  if (m.stoppedAt) parts.push('停在 0x' + Number(m.stoppedAt).toString(16).toUpperCase());
+  if (m.stopErr) parts.push(m.stopErr);
+  return parts.join(' · ');
+}
 
 function stlogBaseName(p) {
   // 去掉尾部分隔符：拖放给的目录路径可能带 '\'，否则取到的是空串
@@ -7889,134 +7967,41 @@ function stlogRangeText(first, last) {
     (stlogDateText(a) === stlogDateText(b) ? stlogTimeText(b) : stlogFullTs(last));
 }
 
-function stlogSysRow(tab, text) {
-  var line = document.createElement('div');
-  line.className = 'sys-msg';
-  line.textContent = '── ' + text + ' ──';
-  var st = tab._stlog;
-  st.content.insertBefore(line, st.more);
-  return line;
-}
-
-// 顶栏一行元信息：时间范围 / 大小 / 页 / 记录 / rx-tx / 设置 / 异常标记。
-function stlogBarText(info) {
-  var parts = [];
-  var range = stlogRangeText(info.firstTs, info.lastTs);
-  if (range) parts.push(range);
-  parts.push(info.size + ' B');
-  parts.push(info.pages + ' 页');
-  parts.push(info.records + ' 记录');
-  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
-  if (info.forward) {
-    parts.push('A→B ' + (info.bytesAB || 0) + ' / B→A ' + (info.bytesBA || 0) + ' B');
-    var setA = (info.settings && info.settings.port) ? info.settings.port : '';
-    parts.push('转发 ' + (setA ? setA + ' ↔ ' : '') + (info.portB || ''));
-  } else {
-    parts.push('rx/tx ' + info.rxTotal + '/' + info.txTotal + ' B');
-  }
-  if (info.settings && info.settings.label) parts.push('设置 ' + info.settings.label);
-  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
-  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
-  if (info.origins && info.origins.length) {
-    var kinds = [];
-    info.origins.forEach(function (o) {
-      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
-      if (kinds.indexOf(label) < 0) kinds.push(label);
-    });
-    parts.push('来源 ' + kinds.join(' · '));
-  } else {
-    parts.push('无来源');
-  }
-  if (info.recovered && info.recovered.length) parts.push('影子恢复 ' + info.recovered.length + ' 页');
-  if (info.truncated) parts.push('末帧未结束');
-  if (info.brokenChain) parts.push('续片链被切断');
-  if (info.stoppedAt) parts.push('停在 0x' + Number(info.stoppedAt).toString(16).toUpperCase());
-  if (info.stopErr) parts.push(info.stopErr);
-  return parts.join(' · ');
-}
-
+// stlogUpdateChrome 刷新顶栏：元信息那行、完整来源串（title）、帧数。
 function stlogUpdateChrome(tab) {
   var st = tab._stlog;
   var info = st.info || {};
   st.meta.textContent = stlogBarText(info);
-  // 完整来源串放进 title：顶栏只显示种类，鼠标停上去能看到具体是哪个客户端
   st.meta.title = (info.origins && info.origins.length)
     ? info.origins.join(', ')
     : '这个文件里没有来源信息（Rx 恒无来源；样本文件通常是合成的）';
-  var loaded = st.frames.length;
-  var total = (typeof info.total === 'number') ? info.total : loaded;
-  st.count.textContent = '帧 ' + loaded + ' / ' + total;
-  if (st.exhausted) {
-    st.more.style.display = 'none';
-  } else {
-    st.more.style.display = '';
-    st.moreBtn.textContent = '加载更多（还有 ' + Math.max(0, total - loaded) + ' 帧）';
-  }
+  var total = st.view ? st.view.total() : 0;
+  st.count.textContent = '帧 ' + total;
 }
 
-// stlogLoad 加载下一批帧。
-//
-// 文件页只有一个数据源——本地文件，分页从第一帧往后翻（_stlogLoadLocal）。
-// 工程目录不走这里：它被恢复成真正的会话页，历史由会话那套接口提供。
-function stlogLoad(tab) {
-  _stlogLoadLocal(tab);
-}
-
-// _stlogLoadLocal 直接读本地文件，从第一帧往后翻。
-function _stlogLoadLocal(tab) {
+// stlogFlash 在顶栏帧数那个位置闪一行提示（复制结果之类），1.6 s 后恢复。
+function stlogFlash(tab, msg) {
   var st = tab._stlog;
-  if (st.loading || (st.loaded && st.offset >= st.total)) return;
-  st.loading = true;
-  st.moreBtn.disabled = true;
-  window.go.main.App.ReadStlogFrames(tab.path, st.offset, STLOG_PAGE_SIZE).then(function (info) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    st.loaded = true;
-    st.info = info || {};
-    st.total = info.total || 0;
-    var frames = (info.frames || []).map(function (f) {
-      return { ts: f.ts, tsMs: f.ts, dir: f.dir, hex: f.hex, origin: f.origin };
-    });
-    st.offset = (info.offset || 0) + frames.length;
-    st.frames = st.frames.concat(frames);
-    st.rendered = true;
-    st.exhausted = st.offset >= st.total;
-    stlogRerender(tab);
+  if (st._flashTimer) clearTimeout(st._flashTimer);
+  st.count.textContent = msg;
+  st._flashTimer = setTimeout(function () {
+    st._flashTimer = null;
     stlogUpdateChrome(tab);
-    if (!st.firstLoadDone) {
-      st.firstLoadDone = true;
-      st.content.scrollTop = 0; // 离线正序：从第一帧开始看
-    }
-    if (st.total === 0) stlogSysRow(tab, '文件里没有帧');
-  }).catch(function (err) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    if (window.console) console.error('[stlog] ' + tab.path, err);
-    stlogSysRow(tab, '读取失败: ' + String(err));
-  });
+  }, 1600);
 }
 
 // stlogToggleMode 切换文件页的 Hex / 文本 视图。
 //
 // 文件页不复用全局 state.displayMode：会话页默认文本（用户在那儿发的是 ASCII），
 // 而 .stlog 里是原始字节，一打开就该按 Hex 看。两边各存一份，谁也别改对方的设置。
+// 切模式要重算布局（折行数变了），所以走 Go 的 Configure，锚点取当前第一行。
 function stlogToggleMode(tab) {
   var st = tab._stlog;
-  st.mode = (st.mode === 'hex') ? 'text' : 'hex';
-  stlogRerender(tab);
-}
-
-// stlogRerender 用缓存的帧按当前 mode 重画（不重新读文件、不动 offset）。
-function stlogRerender(tab) {
-  var st = tab._stlog;
-  st.content.innerHTML = '';
-  st.frames.forEach(function (f) {
-    makeDataRow(st.content, stlogDirName(f.dir),
-                stlogTsText(f.ts, state.stlogShowYear !== false), f.hex,
-                null, { displayMode: st.mode }, f.origin || '');
-  });
-  st.content.appendChild(st.more);
-  st.modeBtn.textContent = (st.mode === 'hex') ? 'Hex' : '文本';
+  if (!st.view) return;
+  var next = (st.mode === 'hex') ? 'text' : 'hex';
+  st.mode = next;
+  if (st.modeBtn) st.modeBtn.textContent = (next === 'hex') ? 'Hex' : '文本';
+  st.view.setMode(next).then(function () { stlogUpdateChrome(tab); });
 }
 
 function stlogExport(path, btn) {
@@ -8075,7 +8060,8 @@ function openStlogTab(path, kind) {
   yearBtn.addEventListener('click', function () {
     state.stlogShowYear = !(state.stlogShowYear !== false);
     yearBtn.classList.toggle('is-on', state.stlogShowYear);
-    stlogRerender(tab);
+    if (tab._stlog.view) tab._stlog.view.setShowYear(state.stlogShowYear);
+    stlogUpdateChrome(tab);
     if (typeof saveSettings === 'function') saveSettings();
   });
   var countEl = document.createElement('span');
@@ -8107,18 +8093,10 @@ function openStlogTab(path, kind) {
   bar.appendChild(actions);
   page.appendChild(bar);
 
+  // 内容区就是引擎的视口（.lv-host）：没有分页、没有「加载更多」。
   var content = document.createElement('div');
   content.className = 'o-stlog-rows t-stlog-rows';
   page.appendChild(content);
-
-  var more = document.createElement('div');
-  more.className = 'o-stlog-more';
-  var moreBtn = document.createElement('button');
-  moreBtn.className = 't-stlog-btn';
-  moreBtn.textContent = '加载更多';
-  more.addEventListener('click', function () { stlogLoad(tab); });
-  more.appendChild(moreBtn);
-  content.appendChild(more);
 
   var oldPage = getActivePage();
   if (oldPage) oldPage.hide();
@@ -8135,20 +8113,22 @@ function openStlogTab(path, kind) {
     mode: 'single',
     source: 'gui',
     _stlog: {
-      offset: 0, total: 0, loaded: false, loading: false, rendered: false,
       // isDir：工程目录（可以推给守护进程）；单个 .stlog 一律只读
       isDir: kind === 'session',
-      mode: 'hex', frames: [], modeBtn: modeBtn, pushBtn: pushBtn,
-      content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
+      mode: 'hex', info: null, view: null,
+      modeBtn: modeBtn, pushBtn: pushBtn, meta: metaEl, count: countEl
     },
     _page: {
       root: page,
       show: function () {
         page.style.display = '';
-        if (!tab._stlog.loaded && !tab._stlog.loading) stlogLoad(tab);
+        if (tab._stlog.view) tab._stlog.view.refresh();
       },
       hide: function () { page.style.display = 'none'; },
-      destroy: function () { page.remove(); }
+      destroy: function () {
+        if (tab._stlog.view) tab._stlog.view.destroy();
+        page.remove();
+      }
     }
   };
   state.tabs.push(tab);
@@ -8165,7 +8145,20 @@ function openStlogTab(path, kind) {
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
   stlogSyncPushBtn(tab);
-  stlogLoad(tab);
+
+  // 引擎在 tab 建好之后再挂：它的回调要用到 tab 本身。
+  var view = createLogView(content, {
+    disp: function () { return tab.disp; },
+    tsText: function (ms) { return stlogTsText(ms, state.stlogShowYear !== false); },
+    onMeta: function (m) { tab._stlog.info = m; stlogUpdateChrome(tab); },
+    onStatus: function () { stlogUpdateChrome(tab); },
+    onFlash: function (msg) { stlogFlash(tab, msg); }
+  });
+  tab._stlog.view = view;
+  view.open(path).catch(function (err) {
+    if (window.console) console.error('[stlog] ' + path, err);
+    stlogFlash(tab, '打开失败');
+  });
   return tab;
 }
 
@@ -8310,9 +8303,205 @@ function pickProjectDir() {
   _pickPath(window.go.main.App.PickStlogDir(), 'session', openProjectTab);
 }
 
+// _mountLive 把会话页的显示区交给虚窗引擎（串口监视器 / 转发监视器）。
+//
+// 数据帧由 Go 侧的实时文档攒着，前端只按像素取可见窗口。老的 history.js 渲染
+// 已经删干净，所以这里直接拿会话页自己的 display-content 当挂载点 —— 以前要
+// 单开一层 .lv-mount 去躲老渲染器，现在没必要了。
+function _mountLive(tab) {
+  var why = '';
+  if (!tab) why = 'no-tab';
+  else if (!tab.sessionId) why = 'no-sid';
+  else if (tab._live) why = 'already';
+  else if (!tab._page) why = 'no-page';
+  else if (!tab._page.displayContent) why = 'no-display';
+  else if (typeof createLogView !== 'function') why = 'no-engine';
+  if (why) {
+    try { window.go.main.App.Log('[live] mount skip: ' + why); } catch (e) {}
+    return;
+  }
+  try { window.go.main.App.Log('[live] mount sid=' + tab.sessionId); } catch (e) {}
+  var mount = tab._page.displayContent;
+  // .display-content 原本是给老渲染器用的（overflow-y:auto + padding + 行高），
+  // 交给引擎之后滚动由引擎自己画，这些都要让开；is-engine 那几条就是干这个的。
+  mount.classList.add('is-engine');
+  mount.innerHTML = '';
+  // 让位量不能在挂载这一瞬间量：此刻标签页还没布局，所有 rect 都是 0 —— 顶部
+  // 靠 40px 兜底才没露馅，底部被算成 8px，最后一条帧的数据行就压在浮动按钮下面。
+  // 改成每次 layout() 现量：等页面真正有了尺寸（ResizeObserver / 第一帧到达）再取值。
+  //
+  // 页面**隐藏**时（切到别的标签）clientHeight 是 0，这时候量不到东西，必须沿用上
+  // 一次的结果：返回兜底 40px 的话，layout() 会拿它盖掉真正量到的顶边（转发页的
+  // 配置栏是两行端口选择框，让位约 118px），切一次标签内容就整体上移一次。
+  var lastReserve = null;
+  function reserveOf() {
+    if (!mount.clientHeight && lastReserve) return lastReserve;
+    var out = { top: 40, bottom: 0, trackTop: 40 };
+    if (!mount.clientHeight) return out; // 第一次还没布局，先用兜底值
+    try {
+      // 顶部：滚动条上边界压在悬浮配置栏（毛玻璃）的底边上，内容再让 8px
+      var bar = tab._page.root.querySelector('.config-bar');
+      if (bar) {
+        var barBottom = Math.round(bar.getBoundingClientRect().bottom - mount.getBoundingClientRect().top);
+        if (barBottom > 0) {
+          out.trackTop = barBottom;
+          out.top = Math.max(40, barBottom + 8);
+        }
+      }
+      // 底部：字 / H / 锁定滚动 那排浮动按钮压在内容上，最后一行得让开
+      var btns = tab._page.root.querySelector('.c-fwd-float-btns');
+      if (btns && btns.offsetParent !== null) {
+        var b = Math.round(mount.getBoundingClientRect().bottom - btns.getBoundingClientRect().top) + 8;
+        if (b > 0) out.bottom = b;
+      }
+      lastReserve = out;
+    } catch (e) { /* 量不到就用兜底值 */ }
+    return out;
+  }
+  var view = createLogView(mount, {
+    reserve: reserveOf,
+    // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
+    mode: (state.displayMode === 'hex') ? 'hex' : 'text',
+    // 「锁定滚动」是跨会话的用户偏好，建视图时带上当前状态
+    scrollLocked: !!state.scrollLocked,
+    disp: function () { return tab.disp; },
+    tsText: function (ms) { return stlogTimeText(new Date(ms)); },
+    // 按方向的模式覆盖：下标 = sessionfile 方向号（0 系统 / 1 读取 / 2 发送 /
+    // 3 P1 / 4 P2），空串 = 沿用整页的 mode。转发页 P1 / P2 各有独立的「字 / H」，
+    // 老渲染按 dir 取 p1DisplayMode 之类，引擎也得按方向算，否则那两个按钮是死键。
+    dirModes: function () {
+      return ['', '', state.txDisplayMode, state.p1DisplayMode, state.p2DisplayMode];
+    },
+    // 顶到最上面时再要一页更早的。游标由引擎给（最旧帧的毫秒 + 同毫秒条数）：
+    // 毫秒会撞车，只按 ts 要会重复或漏帧。
+    onNeedOlder: function (cur) {
+      var App = window.go && window.go.main && window.go.main.App;
+      if (!App || typeof App.GetSessionHistory !== 'function') return null;
+      return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, cur.ts, cur.same).then(function (data) {
+        if (!data || view !== tab._live || !view.isLive()) return { hasMore: false };
+        var frames = _liveFramesFromHistory(data.history);
+        var more = !!data.hasMore;
+        if (!frames.length) return { hasMore: more };
+        return view.prepend(frames).then(function () { return { hasMore: more }; });
+      });
+    },
+    // 设置里可以关掉「自动回补」（默认开）：关掉后翻到顶只显示提示，不主动要。
+    autoRefill: function () { return state.autoRefillHistory !== false; },
+    onStatus: function (s) { tab._liveTotal = s.total || 0; }
+  });
+  tab._live = view;
+  // 切回这一页时要重取窗口：页面隐藏期间尺寸可能变过（拖过分隔条、窗口改大小）。
+  // 原来这个职责在 _liveRefresh() 里，它跟着老渲染一起删了。销毁之后
+  // refresh() 自己会因为 st.dead 早退，不用另外挡。
+  var origShow = tab._page.show;
+  tab._page.show = function () {
+    origShow();
+    view.refresh();
+  };
+  view.openLive(tab.sessionId).then(function () {
+    // 打开即回放：把守护进程环 / 磁盘里已有的历史先灌进来，页面不再是空的。
+    // 只取最近一页，更早的等用户翻到顶时由 onNeedOlder 一页一页往回要。
+    var App = window.go && window.go.main && window.go.main.App;
+    if (!App || typeof App.GetSessionHistory !== 'function') return null;
+    return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, 0, 0);
+  }).then(function (data) {
+    if (!data || view !== tab._live || !view.isLive()) return;
+    view.setHistory({ file: data.historyFile || '', hasMore: !!data.hasMore });
+    var frames = _liveFramesFromHistory(data.history);
+    if (!frames.length) return;
+    // 铺完历史必须显式回到底部：prepend 里那套「贴底就 refreshLive」依赖
+    // st.atBottom，而打开这一瞬间页面可能还没布局（vh=0），贴底算不出来，
+    // 结果视口停在第 1 帧上，看起来像「历史没灌进来」。
+    return view.prepend(frames).then(function () { view.jumpBottom(); });
+  }).catch(function (err) {
+    if (window.console) console.error('[live] ' + tab.sessionId, err);
+  });
+}
+
+// _LIVE_PAGE 是首次回放和一页往回翻的条数：一页就够一屏，多了只是白过桥。
+var _LIVE_PAGE = 500;
+
+// _liveFramesFromHistory 把守护进程的历史条目翻成引擎要的帧。
+//
+// 系统帧在历史里存的是**文本**（daemon/history.go 的约定），引擎要十六进制串，
+// 这里补转一次；不然回放出来的系统消息只剩时间戳一行。
+function _liveFramesFromHistory(list) {
+  var frames = [];
+  list = list || [];
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!e || !e.hex) continue;
+    var isSys = (e.direction === 'system' || e.direction === 'sys');
+    frames.push({
+      ts: e.tsMs || 0,
+      dir: isSys ? 0 : _liveDirNum(e.direction),
+      origin: e.origin || '',
+      hex: isSys ? _liveTextToHex(e.hex) : e.hex
+    });
+  }
+  return frames;
+}
+
+// _liveDirNum 把守护进程历史里的方向串翻成 sessionfile 的方向号
+// （DirSystem=0 / DirRx=1 / DirTx=2 / DirP1=3 / DirP2=4）。
+function _liveDirNum(s) {
+  switch (s) {
+    case 'tx': return 2;
+    case '1': return 3;
+    case '2': return 4;
+    case 'system': case 'sys': return 0;
+    default: return 1; // rx
+  }
+}
+
+// _liveTextToHex 把系统消息的原文编成引擎要的十六进制串。
+// 系统帧在协议和历史里都是「hex 字段存文本」，别的地方（liveFrameFrom）已在
+// Go 侧转过；历史回放这条路在前端转，两边口径要一致。
+function _liveTextToHex(s) {
+  var bytes;
+  try {
+    bytes = new TextEncoder().encode(String(s == null ? '' : s));
+  } catch (_) {
+    bytes = null;
+  }
+  if (!bytes) {
+    var out0 = '';
+    var str = String(s == null ? '' : s);
+    for (var k = 0; k < str.length; k++) {
+      var c = str.charCodeAt(k) & 0xff;
+      out0 += (c < 16 ? '0' : '') + c.toString(16);
+    }
+    return out0;
+  }
+  var out = '';
+  for (var i = 0; i < bytes.length; i++) {
+    out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+  }
+  return out;
+}
+
 // pickStlogFile 选一个 .stlog，开成只读文件页。
 function pickStlogFile() {
   _pickPath(window.go.main.App.PickStlogFile(), 'file', openStlogTab);
+}
+
+// openPathFromOS 打开一个「外部给的路径」：启动参数里的 .stlog / 工程目录。
+//
+// 与拖放、选文件共用同一套预检：路径可能是 .stlog，也可能是工程目录，
+// 还可能是早就被删掉的文件（那样就当没给，静默跳过）。
+function openPathFromOS(path) {
+  if (!path) return;
+  var App = window.go && window.go.main && window.go.main.App;
+  function go(kind) {
+    if (kind === 'session') openProjectTab(path);
+    else openStlogTab(path);
+  }
+  if (!App || typeof App.ProbeDroppedPaths !== 'function') { go('file'); return; }
+  App.ProbeDroppedPaths([path]).then(function (probes) {
+    var pr = probes && probes[0];
+    if (!pr) return;
+    if (pr.kind === 'file' || pr.kind === 'session') go(pr.kind);
+  }).catch(function () {});
 }
 
 // ---- 拖入注册 ----

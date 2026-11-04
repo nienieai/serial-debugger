@@ -4,6 +4,8 @@ import (
 	"embed"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nienieai/serial-debugger/version"
@@ -33,14 +35,41 @@ var assets embed.FS
 //go:embed assets/icon-gui.ico
 var appIcon []byte
 
+// startupPath 从命令行里挑出「能当只读页打开」的那个路径：.stlog 包文件或工程目录。
+//
+// 双击文件关联、命令行带路径都走这里；挑不出来返回空（正常启动，不报错）。
+// 预检复用拖放那套 probeDropPath：扩展名对但内容不是会话的文件不在这里开。
+func startupPath(args []string) string {
+	for _, arg := range args {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		abs, err := filepath.Abs(arg)
+		if err != nil {
+			continue
+		}
+		switch probeDropPath(abs).Kind {
+		case "file", "session":
+			return abs
+		}
+	}
+	return ""
+}
+
 func main() {
 	svc := NewApp()
+	if p := startupPath(os.Args[1:]); p != "" {
+		svc.setStartupPath(p)
+		log.Printf("[startup] 启动时打开: %s", p)
+	}
 
 	wailsApp := application.New(application.Options{
 		Name:        "串口调试工具",
 		Description: "串口调试工具 图形界面",
 		Services: []application.Service{
 			application.NewService(svc),
+			// 虚窗文档服务（stlogview.Store 按 id 分文档的那层壳）。
+			application.NewService(svc.logview),
 		},
 		// 必须用 BundledAssetFileServer 而不是 AssetFileServerFS：
 		// bindings 生成物里写死了 `import ... from "/wails/runtime.js"`，
@@ -73,6 +102,8 @@ func main() {
 		Height:         780,
 		MinWidth:       640,
 		MinHeight:      480,
+		Frameless:      true,
+		Windows:        framelessChrome,
 		EnableFileDrop: true,
 		URL:            "/",
 	})

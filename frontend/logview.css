@@ -1,0 +1,173 @@
+/* ---- 虚窗日志视图（logview）----
+   一行一个绝对定位的 .lv-row，整层 translate3d 平移；行里的 .ts-line / .data-line
+   用的是会话页同一套类，所以配色主题、字体、可见控制字符都跟着走。
+   这里只管几何：视口、行容器、选区盒子、滚动条两道 + 滑块。 */
+
+/* 会话页的挂载点：display-area 是 flex 列，这里占满剩下的高度 */
+.lv-mount { flex: 1 1 auto; min-height: 0; position: relative; }
+
+.lv-host {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  /* .t-stlog-rows 原来给分页内容留的 padding 对虚窗没用：几何全由引擎算，
+     留着会让行起点和选区坐标差 12px、轨道也不贴边。 */
+  padding: 0;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+}
+.lv-view {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  cursor: text;
+}
+.lv-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+.lv-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  padding-left: 18px; /* 4 + 5 + 5 + 4：两条竖条 + 两侧留白 */
+  padding-right: 8px;
+}
+
+/* 每行最左边两条 5px 竖条：读取指示（非交互 CLI / MCP）。
+   读取记录还没实现（要等工程文件记「谁读过」），所以现在是**占位**：
+   有标记才填色，没有就是空的透明条，但几何位置与宽度先留着。 */
+.lv-gut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  pointer-events: none;
+}
+.lv-gut-cli { left: 4px; }
+.lv-gut-mcp { left: 9px; }
+.lv-gut.is-cli { background: var(--gut-cli, #f59e0b); }
+.lv-gut.is-mcp { background: var(--gut-mcp, #a855f7); }
+.lv-row .ts-line { line-height: 1.4; }
+.lv-row .data-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+/* 量字体宽度与行高的探针：不进布局，量完立刻删 */
+.lv-probe {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  visibility: hidden;
+  white-space: pre;
+}
+.lv-msg {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  color: var(--placeholder);
+  font-style: italic;
+  pointer-events: none;
+}
+
+/* 选区：一行可能有多个视觉行，各画一块，跟着 layer 一起平移 */
+.lv-sel-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.lv-selbox {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  pointer-events: none;
+}
+
+/* 滚动条：左边 1px 分界线 + 三条 5px 泳道，满高、贴右、直角。
+   三道语义：① 读取（CLI/MCP 读到哪）② 校验（Modbus 严重度）③ 落盘。
+   前两道的数据源还没做，先按占位画（极淡的底），不伪装成有数据。 */
+.lv-rail {
+  position: relative;
+  flex: 0 0 16px;
+  width: 16px;
+  /* 右边留 3px：无边框窗口最外 3px 是系统的调整大小热区，贴边的话滑块
+     最右一列点不到。之前按 8px 让过，但那 8px 是拿「面板分隔条抢滚轮」
+     误判出来的，收回到刚好避开边缘。 */
+  margin-right: 3px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  cursor: pointer;
+}
+.lv-lanes { position: relative; width: 15px; height: 100%; }
+/* 轨道本体：上边界落在顶部毛玻璃栏的底边（top 由 JS 设），一直落到底 ——
+   底部那 48px 是浮动按钮条，它的模糊垫底已经向右让开 16px（见 style.css），
+   所以滑块拖到底也看得见。只有会话页（有毛玻璃栏）才画那条上边界横线。 */
+.lv-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+}
+.lv-track-rule { border-top: 1px solid var(--border); }
+.lv-lane {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.lv-lane-read { left: 0; }
+.lv-lane-check { left: 5px; }
+.lv-lane-disk { left: 10px; }
+.lv-lane-mark { position: absolute; left: 0; width: 5px; }
+.lv-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  min-height: 15px;
+  /* 半透明：让下面三条泳道透出来（和示例工程 #79797966 一个道理），
+     实心滑块会把语义色整个盖住。 */
+  background: color-mix(in srgb, var(--scrollbar-thumb) 40%, transparent);
+  will-change: transform;
+  cursor: pointer;
+}
+.lv-thumb:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+/* 「回到底部」按钮：不贴底时出现（未读数去掉后，回底还得有个入口） */
+.lv-tobottom {
+  position: absolute;
+  /* 让开滚动条（16px）+ 窗口右边的热区留白（3px） */
+  right: 23px;
+  bottom: 12px;
+  z-index: 7;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+.lv-tobottom:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 顶部提示：内存缓冲已经把更早的历史裁掉了。没落盘时这部分是真丢了；
+   有磁盘文件的会话改成「向上可加载」。top 由 JS 按 reserveTop 定位。 */
+.lv-trim {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--placeholder);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
