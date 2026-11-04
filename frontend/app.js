@@ -8341,9 +8341,15 @@ function _mountLive(tab) {
   // 让位量不能在挂载这一瞬间量：此刻标签页还没布局，所有 rect 都是 0 —— 顶部
   // 靠 40px 兜底才没露馅，底部被算成 8px，最后一条帧的数据行就压在浮动按钮下面。
   // 改成每次 layout() 现量：等页面真正有了尺寸（ResizeObserver / 第一帧到达）再取值。
+  //
+  // 页面**隐藏**时（切到别的标签）clientHeight 是 0，这时候量不到东西，必须沿用上
+  // 一次的结果：返回兜底 40px 的话，layout() 会拿它盖掉真正量到的顶边（转发页的
+  // 配置栏是两行端口选择框，让位约 118px），切一次标签内容就整体上移一次。
+  var lastReserve = null;
   function reserveOf() {
+    if (!mount.clientHeight && lastReserve) return lastReserve;
     var out = { top: 40, bottom: 0, trackTop: 40 };
-    if (!mount.clientHeight) return out; // 还没布局，先用兜底值
+    if (!mount.clientHeight) return out; // 第一次还没布局，先用兜底值
     try {
       // 顶部：滚动条上边界压在悬浮配置栏（毛玻璃）的底边上，内容再让 8px
       var bar = tab._page.root.querySelector('.config-bar');
@@ -8360,6 +8366,7 @@ function _mountLive(tab) {
         var b = Math.round(mount.getBoundingClientRect().bottom - btns.getBoundingClientRect().top) + 8;
         if (b > 0) out.bottom = b;
       }
+      lastReserve = out;
     } catch (e) { /* 量不到就用兜底值 */ }
     return out;
   }
