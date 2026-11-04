@@ -18,7 +18,6 @@ var LV_TS_H = 21;       // 时间戳行高（首帧量出来之前的占位）
 var LV_DATA_H = 22.5;   // 数据行行高
 var LV_LANE_W = 5;      // 一道泳道 5px
 var LV_LANES = 3;       // 读取 / 校验 / 落盘
-var LV_RAIL_W = 1 + LV_LANES * LV_LANE_W; // 左边 1px 分界线 + 三条泳道
 var LV_THUMB_MIN = 15;
 
 // 来源/发送方的配色（按来源序号取，1 起）。第七个之后回环。
@@ -272,7 +271,12 @@ function createLogView(host, opts) {
     if (key === st.layoutKey && st.cfgChars) return st.cfgChars;
     st.layoutKey = key;
     measure();
-    var avail = Math.max(1, host.clientWidth - LV_PAD_X - LV_PAD_R - LV_RAIL_W);
+    // 一行放几格要按**数据区自己**的宽度算：.lv-view 是 host 里除滚动条之外
+    // 那个 flex 子项，clientWidth 已经把 rail（16px + 2px 边框 + 3px 右距）扣掉了。
+    // 之前用 host.clientWidth 再减 16，比真实可用宽度多算 3px —— 正好落在字符
+    // 边界上时就会多算一格，浏览器于是提前一个字符折行，格模型和真渲染对不上
+    // （行高、选区宽度全跟着偏）。
+    var avail = Math.max(1, view.clientWidth - LV_PAD_X - LV_PAD_R);
     st.cfgChars = fitChars(avail);
     return st.cfgChars;
   }
@@ -485,6 +489,51 @@ function createLogView(host, opts) {
     return { from: a, to: b };
   }
 
+  // rowBoxes 量一帧里每条**真实**视觉行的左右边界（相对行盒子），按行缓存。
+  //
+  // 为什么光有格模型不够：格数（Go 的 cells）和浏览器的断行点并不总是一致 ——
+  // 等宽字的步进不是整数像素，边界上差半格就会「我算 4 行、它画 3 行」。
+  // 参考实现为此把每条视觉行都量出来（Range.getClientRects），只有「行内第
+  // 几格」还按格算。缓存挂在行的 DOM 记录上：行内容不变就不重量，拖动时反复
+  // 重画不会一直触发布局；行重建（rowGen 变化 / 滚出窗口）时缓存自然失效。
+  function rowBoxes(rec) {
+    if (rec.boxes !== undefined) return rec.boxes;
+    rec.boxes = null;
+    var dl = rec.el && rec.el.querySelector ? rec.el.querySelector('.data-line') : null;
+    if (dl) {
+      try {
+        var rg = document.createRange();
+        rg.selectNodeContents(dl);
+        var rr = rec.el.getBoundingClientRect();
+        var out = [];
+        var rects = rg.getClientRects();
+        for (var i = 0; i < rects.length; i++) {
+          var q = rects[i];
+          if (q.width < 0.5 || q.height < 0.5) continue;
+          var top = q.top - rr.top;
+          var l = q.left - rr.left;
+          var rt = q.right - rr.left;
+          // 同一个视觉行可能被切成几段（分段着色、控制字符各是一个 span），合并成一条
+          var hit = null;
+          for (var j = 0; j < out.length; j++) {
+            if (Math.abs(out[j].top - top) < 2) { hit = out[j]; break; }
+          }
+          if (hit) {
+            if (l < hit.l) hit.l = l;
+            if (rt > hit.r) hit.r = rt;
+          } else {
+            out.push({ top: top, l: l, r: rt });
+          }
+        }
+        if (out.length) {
+          out.sort(function (a, b) { return a.top - b.top; });
+          rec.boxes = out;
+        }
+      } catch (_) { rec.boxes = null; }
+    }
+    return rec.boxes;
+  }
+
   function paintSelection() {
     selLayer.innerHTML = '';
     var rng = selRange();
@@ -494,21 +543,45 @@ function createLogView(host, opts) {
       var r = st.rows[i];
       if (r.idx < rng.from.idx || r.idx > rng.to.idx) continue;
       var lines = lineCount(r);
-      var lf = (r.idx === rng.from.idx) ? rng.from.vline : 0;
-      var cf = (r.idx === rng.from.idx) ? rng.from.cell : 0;
-      var lt = (r.idx === rng.to.idx) ? rng.to.vline : lines - 1;
-      var ct = (r.idx === rng.to.idx) ? rng.to.cell : lineCells(r, lines - 1);
+      // 端点可能给到「行号远超本帧」（双击选整帧给的是 1<<20），一律夹回本帧
+      var lf = lvClamp((r.idx === rng.from.idx) ? rng.from.vline : 0, 0, lines - 1);
+      var lt = lvClamp((r.idx === rng.to.idx) ? rng.to.vline : lines - 1, 0, lines - 1);
       if (lt < lf) continue;
+      var cf = (r.idx === rng.from.idx) ? rng.from.cell : 0;
+      var ct = (r.idx === rng.to.idx && rng.to.vline <= lines - 1)
+        ? rng.to.cell : lineCells(r, lines - 1);
+      var rec = rowEls[r.idx];
+      var boxes = rec ? rowBoxes(rec) : null;
+      var used = -1;
       for (var L = lf; L <= lt; L++) {
         var w = lineCells(r, L);
-        var x0 = LV_PAD_X + ((L === lf) ? cf * cw : 0);
-        var x1 = LV_PAD_X + ((L === lt) ? Math.min(ct, w) * cw : w * cw);
-        if (x1 <= x0) continue;
+        var c0 = (L === lf) ? Math.min(cf, w) : 0;
+        var c1 = (L === lt) ? Math.min(ct, w) : w;
+        if (c1 <= c0) continue;
+        // 真渲染出来的行数可能和格模型算的不一样：按行号取，取不到就贴到最后一条真行
+        var k = boxes ? (boxes.length === lines ? L : Math.min(L, boxes.length - 1)) : L;
+        if (k === used) continue; // 同一真行别画两遍
+        used = k;
+        var b = boxes ? boxes[k] : null;
+        var left;
+        var right;
+        var top;
+        if (b) {
+          left = Math.min(b.l + c0 * cw, b.r);
+          // 选到行尾就用真实文字末尾，别用格数乘出来的值（那会漏到右边空白里）
+          right = (c1 >= w) ? b.r : Math.min(b.r, b.l + c1 * cw);
+          top = b.top;
+        } else {
+          left = LV_PAD_X + c0 * cw;
+          right = LV_PAD_X + c1 * cw;
+          top = tsH + L * dataH;
+        }
+        if (right - left <= 0.5) continue;
         var box = document.createElement('i');
         box.className = 'lv-selbox';
-        box.style.top = (r.y - st.base + tsH + L * dataH) + 'px';
-        box.style.left = x0 + 'px';
-        box.style.width = (x1 - x0) + 'px';
+        box.style.top = (r.y - st.base + top) + 'px';
+        box.style.left = left + 'px';
+        box.style.width = (right - left) + 'px';
         box.style.height = dataH + 'px';
         selLayer.appendChild(box);
       }
@@ -643,6 +716,17 @@ function createLogView(host, opts) {
     if (st.offset > st.maxOffset) st.offset = Math.round(st.maxOffset);
   }
 
+  // 行是按「内容坐标 - base」定位的：base 一动（裁头补偿），所有行的位移都要
+  // 跟着重算。只改 base 不重算行的话，行留在原处、而按新 base 画的选区盒子会
+  // 整体漂开 —— 拖动选区时这个偏差每裁一次就累一点。
+  function syncRowTransforms() {
+    for (var i = 0; i < st.rows.length; i++) {
+      var r = st.rows[i];
+      var rec = rowEls[r.idx];
+      if (rec && rec.el) rec.el.style.transform = 'translate3d(0,' + (r.y - st.base) + 'px,0)';
+    }
+  }
+
   // 裁头补偿：内容整体上移了 dh，offset 跟着减，视口就锁在原地。
   //
   // 这里**不能**走 setOffset —— 那边会 snapCurrent 吸到行首，而裁头是每帧
@@ -651,7 +735,6 @@ function createLogView(host, opts) {
   //
   // base 也要一起减：layer 的位移是 base - offset，两个同时减 dh 才互相抵消。
   // 只减 offset 的话，层会被多推 dh 像素，画面看起来是「往更早的方向猛跳」。
-  // 行元素不用动：它们用的是内容坐标，坐标整体平移不影响 base - offset + y。
   function shiftBy(dh) {
     if (!(dh > 0)) return;
     var next = st.offset - dh;
@@ -660,6 +743,8 @@ function createLogView(host, opts) {
       // 视口被推到内容顶部：坐标全变了，得重新取一屏
       st.offset = 0;
       st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
+      syncRowTransforms();
+      layerTransform();
       updateThumb();
       updateTrimTip();
       updateBottomBtn();
@@ -669,6 +754,7 @@ function createLogView(host, opts) {
     }
     st.offset = next;
     st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
+    syncRowTransforms();
     layerTransform();
     updateThumb();
     updateTrimTip();
@@ -678,14 +764,32 @@ function createLogView(host, opts) {
   function setOffset(v) {
     v = lvClamp(Math.round(v), 0, Math.round(st.maxOffset));
     if (v === st.offset) {
-      st.atBottom = v >= Math.round(st.maxOffset) - 2;
+      st.atBottom = !st.dragging && v >= Math.round(st.maxOffset) - 2;
       updateTrimTip();
+      updateBottomBtn();
       return;
     }
     st.offset = v;
     snapCurrent();
-    // 吸附之后重新判贴底：吸到行首可能就差几十像素，别看错成「还在底部」
-    st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
+    // 吸附之后重新判贴底：吸到行首可能就差几十像素，别看错成「还在底部」。
+    // 拖动中一律不算贴底：滚轮把视口推到末尾时高亮还在手上，这时候恢复
+    // 跟随会把画面从选区底下拽走。
+    st.atBottom = !st.dragging && st.offset >= Math.round(st.maxOffset) - 2;
+    layerTransform();
+    updateThumb();
+    updateTrimTip();
+    updateBottomBtn();
+    if (needsFetch()) fetchWindow();
+    maybeLoadOlder();
+  }
+
+  // scrollBy 与 setOffset 的区别：**不吸附行首**。
+  // 拖动到边缘时的自动滚动是连续的小位移，每帧吸一次行首会变成一格一格地跳。
+  function scrollBy(d) {
+    var v = lvClamp(st.offset + d, 0, Math.round(st.maxOffset));
+    st.atBottom = false; // 页面自己在滚，就不是「贴底跟随」了
+    if (v === st.offset) { updateBottomBtn(); return; }
+    st.offset = v;
     layerTransform();
     updateThumb();
     updateTrimTip();
@@ -737,6 +841,40 @@ function createLogView(host, opts) {
     }).catch(function (e) {
       showMsg('刷新失败：' + String(e && e.message ? e.message : e));
       throw e;
+    });
+  }
+
+  // reconfigureNow 重发 Configure 并重取窗口，**视口停在原来那一帧上**。
+  //
+  // 切「字 / H」会改折行，同一帧的 y 就变了。以前这里（实时页）直接走
+  // refreshLive，而 refreshLive 永远取最后一屏 —— 不贴底时行换成了文档末尾、
+  // offset 还停在用户看的地方，两者差出几万像素，整屏被推出视口：切一次模式
+  // 空一屏，而且不会自愈。
+  //
+  // 参考实现的做法：记下锚点帧在屏幕上的 y，Configure 回来拿 Go 给的 anchorY
+  // （同一帧在新布局里的 y）反算 offset，画面原地不动。anchorY 一直在
+  // ConfigureResult 里，只是前端从来没读过。
+  function reconfigureNow() {
+    if (!st.id || st.dead) return Promise.resolve();
+    var anchor = null;
+    if (st.rows.length) {
+      anchor = { idx: st.rows[0].idx, screenY: st.rows[0].y - st.offset };
+    }
+    return configure(anchor ? anchor.idx : 0).then(function (cfg) {
+      if (st.dead) return null;
+      if (anchor && cfg && typeof cfg.anchorY === 'number') {
+        st.offset = lvClamp(Math.round(cfg.anchorY - anchor.screenY), 0, Math.round(st.maxOffset));
+      }
+      if (st.live && follows()) return refreshLive(); // 贴底：切完还是看最新一条
+      st.atBottom = !st.dragging && st.offset >= Math.round(st.maxOffset) - 2;
+      layerTransform();
+      updateThumb();
+      updateTrimTip();
+      updateBottomBtn();
+      return fetchWindow();
+    }).catch(function (e) {
+      showMsg('切换显示失败：' + String(e && e.message ? e.message : e));
+      return null;
     });
   }
 
@@ -866,6 +1004,57 @@ function createLogView(host, opts) {
     setOffset(st.offset + d);
   }
 
+  // ---- 拖选 ----
+  //
+  // 拖动期间单独跑一个 rAF（参考实现的 frame 循环里那两段）：
+  //   ① 指针拖到视口上下边缘 10px 内就自动滚 —— 否则一屏以外的内容根本选不到，
+  //      只能「松手 → 滚 → 再按 Shift 续选」；
+  //   ② **每一帧**都按「光标下那一格」重算终点：滚轮 / 翻页改的是视口，光标
+  //      没动但它下面的内容变了，只在 pointermove 里更新的话高亮会停在原地，
+  //      复制出来的范围就比你看到/以为的少（看起来像「选漏了」）。
+  var pressPt = null;  // 按下时的屏幕坐标（3px 阈值：点一下不该关掉跟随）
+  var dragPt = null;   // 最近一次指针位置（拖出视口后自动滚动要用）
+  var dragRAF = 0;
+
+  // 拖动期间给 .display-area 挂 is-selecting：底部浮动按钮条的模糊垫底会把
+  // 选区高亮一起糊掉，CSS 里那条规则就是干这个的（迁移时只搬了 CSS，没人加类）。
+  function setSelecting(on) {
+    var area = (host.closest && host.closest('.display-area')) || null;
+    if (area) area.classList.toggle('is-selecting', !!on);
+  }
+
+  function startDragLoop() {
+    if (dragRAF) return;
+    dragRAF = requestAnimationFrame(dragTick);
+  }
+
+  function stopDragLoop() {
+    if (dragRAF) { cancelAnimationFrame(dragRAF); dragRAF = 0; }
+  }
+
+  function dragTick() {
+    dragRAF = 0;
+    if (st.dead || !st.dragging) return;
+    dragRAF = requestAnimationFrame(dragTick);
+    var pt = dragPt;
+    if (!pt || !st.sel) return;
+    var box = host.getBoundingClientRect();
+    var top = box.top + st.reserveTop;
+    var bottom = top + st.vh;
+    var d = 0;
+    if (pt.y < top + 10) d = -Math.min(28, (top + 10 - pt.y) * 1.2);
+    else if (pt.y > bottom - 10) d = Math.min(28, (pt.y - (bottom - 10)) * 1.2);
+    if (d !== 0) scrollBy(d);
+    // 指针已经在视口外：贴到最近的可见行/格上，别按看不见的行继续算
+    var p = posAt(lvClamp(pt.x, box.left + 1, box.left + view.clientWidth - 2),
+      lvClamp(pt.y, top + 1, bottom - 1));
+    if (!p) return;
+    var b = st.sel.b;
+    if (b && p.idx === b.idx && p.vline === b.vline && p.cell === b.cell) return;
+    st.sel.b = p;
+    paintSelection();
+  }
+
   function onPointerDown(e) {
     if (e.button !== 0) return;
     if (e.target === thumb) return;
@@ -875,9 +1064,18 @@ function createLogView(host, opts) {
     if (e.target !== view && !(view.contains && view.contains(e.target))) return;
     var p = posAt(e.clientX, e.clientY);
     if (!p) return;
-    host.focus(); // 键盘兜底（Ctrl+C / PageUp / Home）靠焦点落在视口上
+    // 下面要 preventDefault（否则浏览器会起一个原生选区、跟自绘的那套打架），
+    // 而 preventDefault 会顺手吃掉「点一下把焦点给文档」的默认行为，之后
+    // Ctrl+C / 翻页键就收不到了 —— 所以手动把焦点还回去。preventScroll 不能省：
+    // 焦点会让最近的滚动容器把元素滚进视野（参考实现里就踩过）。
+    try { host.focus({ preventScroll: true }); } catch (_) { host.focus(); }
+    pressPt = { x: e.clientX, y: e.clientY };
+    dragPt = { x: e.clientX, y: e.clientY };
     st.dragging = true;
-    st.sel = { a: p, b: p };
+    if (e.shiftKey && st.sel) st.sel.b = p; // Shift+点 = 从原锚点续选
+    else st.sel = { a: p, b: p };
+    setSelecting(true);
+    startDragLoop();
     host.setPointerCapture(e.pointerId);
     paintSelection();
     e.preventDefault();
@@ -885,10 +1083,12 @@ function createLogView(host, opts) {
 
   function onPointerMove(e) {
     if (!st.dragging) return;
+    dragPt = { x: e.clientX, y: e.clientY };
     // 真开始拖了就先别贴底：数据每秒几十帧往下长，跟着滚的话刚选中的行
-    // 两三百毫秒就跑出视口，用户看到的就是「选不中」。单击不走这里，
-    // 所以点一下不会关掉跟随；要恢复跟随点「↓ 回到底部」。
-    if (st.live && st.atBottom) {
+    // 两三百毫秒就跑出视口，用户看到的就是「选不中」。但手抖 1px 也算「移动过」
+    // 的话，点一下就把跟随关掉了 —— 留个 3px 阈值。要恢复跟随点「↓ 回到底部」。
+    if (st.live && st.atBottom && pressPt &&
+      (Math.abs(e.clientX - pressPt.x) > 3 || Math.abs(e.clientY - pressPt.y) > 3)) {
       st.atBottom = false;
       updateBottomBtn();
     }
@@ -901,6 +1101,10 @@ function createLogView(host, opts) {
   function onPointerUp(e) {
     if (!st.dragging) return;
     st.dragging = false;
+    pressPt = null;
+    dragPt = null;
+    stopDragLoop();
+    setSelecting(false);
     try { host.releasePointerCapture(e.pointerId); } catch (_) {}
     // 单击（没拖出范围）当成取消选区
     if (st.sel && st.sel.a.idx === st.sel.b.idx &&
@@ -908,6 +1112,24 @@ function createLogView(host, opts) {
       st.sel = null;
       paintSelection();
     }
+  }
+
+  // 双击 = 选整帧。端点给一个远超任何一帧行数的值，画的时候夹回本帧，
+  // 复制时由 Go 侧夹到帧尾（与「复制全部」同一条路子）。
+  function onDblClick(e) {
+    var p = posAt(e.clientX, e.clientY);
+    if (!p) return;
+    e.preventDefault();
+    st.dragging = false;
+    pressPt = null;
+    dragPt = null;
+    stopDragLoop();
+    setSelecting(false);
+    st.sel = {
+      a: { idx: p.idx, vline: 0, cell: 0 },
+      b: { idx: p.idx, vline: 1 << 20, cell: 1 << 20 }
+    };
+    paintSelection();
   }
 
   // 右键：宿主想要自己的菜单就让给宿主（实时页是「复制 / 清空 / 自动滚动 / 页设置」），
@@ -974,6 +1196,7 @@ function createLogView(host, opts) {
   host.addEventListener('pointermove', onPointerMove);
   host.addEventListener('pointerup', onPointerUp);
   host.addEventListener('pointercancel', onPointerUp);
+  host.addEventListener('dblclick', onDblClick);
   host.addEventListener('contextmenu', onContextMenu);
   host.addEventListener('keydown', onKeyDown);
   rail.addEventListener('pointerdown', railDown);
@@ -985,8 +1208,7 @@ function createLogView(host, opts) {
   if (typeof ResizeObserver === 'function') {
     // 贴底跟随 = 视口在底部 **且** 用户没点「锁定滚动」。锁定的语义就是
     // 「新数据进来也别自动滚」，所以这两个条件要一起看。
-    function follows() { return st.atBottom && !st.scrollLocked; }
-
+    // （follows 提到了外层：refreshLive / reconfigureNow 也要用它）
     var lastW = 0, lastH = 0;
     ro = new ResizeObserver(function () {
       if (host.clientWidth === lastW && host.clientHeight === lastH) return;
@@ -1074,14 +1296,21 @@ function createLogView(host, opts) {
     bottomBtn.style.display = st.atBottom ? 'none' : '';
   }
 
+  // 贴底跟随 = 视口在底部 **且** 用户没点「锁定滚动」。锁定的语义就是
+  // 「新数据进来也别自动滚」，所以这两个条件要一起看。
+  function follows() { return st.atBottom && !st.scrollLocked; }
+
   function jumpBottom() {
     st.atBottom = true;
-    // 贴底不能走 setOffset（那里会吸附到行首，永远差半行），直接落到 maxOffset。
+    updateBottomBtn();
+    // 实时页贴底位置以 Go 回来的 maxOffset 为准：本地那个在窗口缩放/切模式之后
+    // 可能就是旧的，拿它定位会滚过头，画面停在半屏。走一次 refreshLive 正好。
+    if (st.live && st.id && !st.dead) { refreshLive(); return; }
+    // 静态文件页：贴底不能走 setOffset（那里会吸附到行首，永远差半行）。
     st.offset = Math.round(st.maxOffset);
     layerTransform();
     updateThumb();
     updateTrimTip();
-    updateBottomBtn();
     if (needsFetch()) fetchWindow();
   }
 
@@ -1103,13 +1332,18 @@ function createLogView(host, opts) {
     } else {
       cfgStep = Promise.resolve();
     }
+    // 取哪一屏在发请求之前就定下来：Configure 是异步的，回来之后 atBottom
+    // 可能已经被用户操作改掉了。贴底取末尾，不贴底取**当前 offset** ——
+    // 否则行和 offset 对不上，整屏会被推出视口（切模式空屏就是这条）。
+    var atTail = follows();
     return cfgStep.then(function () {
-      // 取一屏：contentY 给个超大值，Go 侧夹到 maxOffset，正好是最后一条
-      return lvCall('Window', st.id, 1 << 30, Math.round(st.vh), Math.round(st.vh));
+      // 贴底：contentY 给个超大值，Go 侧夹到 maxOffset，正好是最后一条
+      var contentY = atTail ? (1 << 30) : Math.round(st.offset);
+      return lvCall('Window', st.id, contentY, Math.round(st.vh), Math.round(st.vh));
     }).then(function (w) {
       applyWindow(w);
       st.maxOffset = w.maxOffset;
-      if (follows()) st.offset = Math.round(w.maxOffset);
+      if (atTail) st.offset = Math.round(w.maxOffset);
       layerTransform();
       updateThumb();
       updateTrimTip();
@@ -1284,6 +1518,9 @@ function createLogView(host, opts) {
     },
     destroy: function () {
       st.dead = true;
+      st.dragging = false;
+      stopDragLoop();
+      setSelecting(false);
       if (tickTimer) clearTimeout(tickTimer);
       if (st.pollTimer) clearTimeout(st.pollTimer);
       if (ro) ro.disconnect();
@@ -1291,6 +1528,8 @@ function createLogView(host, opts) {
       host.removeEventListener('pointerdown', onPointerDown);
       host.removeEventListener('pointermove', onPointerMove);
       host.removeEventListener('pointerup', onPointerUp);
+      host.removeEventListener('pointercancel', onPointerUp);
+      host.removeEventListener('dblclick', onDblClick);
       host.removeEventListener('contextmenu', onContextMenu);
       host.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('pointermove', thumbMove);
@@ -1299,23 +1538,19 @@ function createLogView(host, opts) {
       host.innerHTML = '';
     },
     refresh: refresh,
+    // 切「字 / H」：改折行 → 重发 Configure，然后**原地**重取一屏（不回末尾）。
     setMode: function (mode) {
       st.mode = (mode === 'text') ? 'text' : 'hex';
-      // 换模式会改行高/内容，必须重发 Configure（refreshLive 里按这个标志判断）
       st.needConfigure = true;
       st.cfgChars = 0;
-      if (st.live) return refreshLive();
-      var anchor = st.rows.length ? st.rows[0].idx : 0;
-      return configure(anchor).then(function () { return fetchWindow(); });
+      return reconfigureNow();
     },
     // reconfigure 只重发 Configure：按方向的模式（P1 / P2 / 发送）变了，
     // 整页的 mode 没变。折行与行高全在 Go 侧算，所以必须走一次完整重算。
     reconfigure: function () {
       st.needConfigure = true;
       st.cfgChars = 0;
-      if (st.live) return refreshLive();
-      var anchor = st.rows.length ? st.rows[0].idx : 0;
-      return configure(anchor).then(function () { return fetchWindow(); });
+      return reconfigureNow();
     },
     setShowYear: function (on) {
       st.showYear = !!on;
