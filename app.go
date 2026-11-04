@@ -3022,9 +3022,24 @@ func (a *App) TriggerSend(processID string) error {
 
 // ---- devtools ----
 
-// OpenDevTools toggles the WebView2 DevTools window.
-// Requires the GUI to be built with `wails build -devtools`.
-func (a *App) OpenDevTools() {
+// OpenDevTools 打开当前窗口的 WebView2 开发者工具。
+//
+// 需要 dev 构建（build.ps1 默认带 `devtools` tag）；production 构建里
+// Wails 把 DevTools 关掉了（openDevTools 是空实现、AreDevToolsEnabled(false)），
+// 调了也不会有反应。
+func (a *App) OpenDevTools(ctx context.Context) {
+	if a.wailsApp == nil {
+		return
+	}
+	w := a.windowByName(winNameFromCtx(ctx))
+	if w == nil {
+		w = a.window
+	}
+	if w != nil {
+		w.OpenDevTools()
+		return
+	}
+	// 兜底：没有窗口对象时模拟 Ctrl+Shift+F12（老路子）
 	openDevToolsWindow()
 }
 
