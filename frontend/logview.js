@@ -185,6 +185,14 @@ function createLogView(host, opts) {
   trimEl.style.display = 'none';
   host.appendChild(trimEl);
 
+  // 「回到底部」按钮：不贴底时出现。未读数去掉了，回底还得有个入口。
+  var bottomBtn = document.createElement('button');
+  bottomBtn.className = 'lv-tobottom';
+  bottomBtn.textContent = '↓ 回到底部';
+  bottomBtn.style.display = 'none';
+  bottomBtn.addEventListener('click', function () { jumpBottom(); });
+  host.appendChild(bottomBtn);
+
   // 选区盒子单独一层，跟着 layer 一起平移（用 row.y - base 定位，不受 LayoutUnit 上限影响）
   var selLayer = document.createElement('div');
   selLayer.className = 'lv-sel-layer';
@@ -570,6 +578,7 @@ function createLogView(host, opts) {
     layerTransform();
     paintSelection();
     updateThumb();
+    updateBottomBtn();
     drawRuler(false);
     if (typeof opts.onStatus === 'function') {
       opts.onStatus({ total: st.total, contentH: st.contentH, offset: st.offset, mode: st.mode });
@@ -587,21 +596,37 @@ function createLogView(host, opts) {
     layer.style.transform = 'translate3d(0,' + (st.base - st.offset + st.reserveTop) + 'px,0)';
   }
 
-  // 行对齐：offset 落在行中间时贴到该行的上边界。这样翻页/滚轮永远停在行首，
-  // 顶部不会露半行、也不会空一块 —— 「一页一行」的分页就是靠它落位的。
+  // 行对齐：offset 落在某一行中间时贴到该行的上边界。「一页一行」靠它落位。
+  // 注意 st.rows 是「帧」粒度（一帧有 ts 行 + N 个数据行），所以帧内还要按
+  // tsH + k*dataH 再拆一次 —— 只吸到帧首的话，一帧两千多像素，向下滚 22px
+  // 会被吸回原处，看起来就是「滚不动」。
   function snapCurrent() {
     var rows = st.rows;
     if (!rows.length) return;
     var last = rows[rows.length - 1];
-    // offset 已经滚出当前窗口：交给 fetchWindow 去取新窗口，这里不能把它拉回来，
-    // 否则一次滚轮/翻页就原地打转（实测滚不动的那个 bug）。
+    // offset 已经滚出当前窗口：交给 fetchWindow 去取新窗口，这里不能把它拉回来。
     if (st.offset < rows[0].y - 0.5 || st.offset > last.y + last.h) return;
-    var best = rows[0].y;
-    for (var i = 1; i < rows.length; i++) {
-      if (rows[i].y <= st.offset + 0.5) best = rows[i].y;
-      else break;
+    var r = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].y <= st.offset && st.offset < rows[i].y + rows[i].h) { r = rows[i]; break; }
+      if (rows[i].y > st.offset) break;
     }
-    if (Math.abs(best - st.offset) > 0.5) st.offset = best;
+    var y = st.offset;
+    if (!r) {
+      for (var j = 0; j < rows.length; j++) {
+        if (rows[j].y > st.offset) { y = rows[j].y; break; }
+      }
+    } else {
+      var rel = st.offset - r.y;
+      if (rel <= st.tsH) {
+        y = r.y;
+      } else {
+        var k = Math.floor((rel - st.tsH) / st.dataH);
+        y = r.y + st.tsH + k * st.dataH;
+        if (y > r.y + r.h - st.dataH) y = r.y + r.h - st.dataH;
+      }
+    }
+    if (Math.abs(y - st.offset) > 0.5) st.offset = y;
     if (st.offset > st.maxOffset) st.offset = Math.round(st.maxOffset);
   }
 
@@ -613,11 +638,13 @@ function createLogView(host, opts) {
       return;
     }
     st.offset = v;
-    st.atBottom = v >= Math.round(st.maxOffset) - 2;
     snapCurrent();
+    // 吸附之后重新判贴底：吸到行首可能就差几十像素，别看错成「还在底部」
+    st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
     layerTransform();
     updateThumb();
     updateTrimTip();
+    updateBottomBtn();
     if (needsFetch()) fetchWindow();
   }
 
@@ -811,7 +838,7 @@ function createLogView(host, opts) {
     if (e.key === 'PageDown') { e.preventDefault(); pageBy(1); return; }
     if (e.key === 'PageUp') { e.preventDefault(); pageBy(-1); return; }
     if (e.key === 'Home') { e.preventDefault(); setOffset(0); return; }
-    if (e.key === 'End') { e.preventDefault(); setOffset(st.maxOffset); return; }
+    if (e.key === 'End') { e.preventDefault(); jumpBottom(); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); setOffset(st.offset + st.dataH * 3); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); setOffset(st.offset - st.dataH * 3); return; }
     if (e.key === ' ') { e.preventDefault(); pageBy(e.shiftKey ? -1 : 1); return; }
@@ -892,10 +919,20 @@ function createLogView(host, opts) {
     trimEl.style.display = '';
   }
 
+  // 「回到底部」只在离开底部时出现；贴底时藏起来。
+  function updateBottomBtn() {
+    bottomBtn.style.display = st.atBottom ? 'none' : '';
+  }
+
   function jumpBottom() {
     st.atBottom = true;
-    setOffset(st.maxOffset);
+    // 贴底不能走 setOffset（那里会吸附到行首，永远差半行），直接落到 maxOffset。
+    st.offset = Math.round(st.maxOffset);
+    layerTransform();
+    updateThumb();
     updateTrimTip();
+    updateBottomBtn();
+    if (needsFetch()) fetchWindow();
   }
 
   function refreshLive() {
@@ -982,6 +1019,7 @@ function createLogView(host, opts) {
     st.histFile = '';
     st.histHasMore = false;
     updateTrimTip();
+    updateBottomBtn();
     layout();
     return lvCall('OpenLive', sessionID).then(function (r) {
       st.id = r.id;
