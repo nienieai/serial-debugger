@@ -50,17 +50,27 @@ function lvCall(method) {
   return api.Call.ByName.apply(api.Call, args);
 }
 
+// 系统消息的 Hex 是本地事件文本的 UTF-8 字节，要整串按 UTF-8 解码。
+// 逐字节 fromCharCode 会把每个汉字拆成三个乱码字符（显示成一串点/中点），
+// 也会把带 0x 前缀的 Hex 串当数据 —— 前缀必须先剥掉。
 function lvHexToText(hex) {
   if (!hex) return '';
-  var s = String(hex).replace(/\s+/g, ''), out = '';
-  for (var i = 0; i + 1 < s.length; i += 2) {
-    var c = parseInt(s.substr(i, 2), 16);
-    if (c === 10) out += '\n';
-    else if (c === 13) out += '';
-    else if (c >= 32 && c < 127) out += String.fromCharCode(c);
-    else out += '\u00B7';
+  var s = String(hex).replace(/0x/gi, '').replace(/\s+/g, '');
+  if (s.length % 2) s = s.slice(0, -1);
+  var bytes = new Uint8Array(s.length / 2);
+  for (var i = 0; i < bytes.length; i++) {
+    var v = parseInt(s.substr(i * 2, 2), 16);
+    bytes[i] = isNaN(v) ? 0x2E : v;
   }
-  return out;
+  try {
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch (_) {
+    var out = '';
+    for (var j = 0; j < bytes.length; j++) {
+      out += (bytes[j] >= 32 && bytes[j] < 127) ? String.fromCharCode(bytes[j]) : '\u00B7';
+    }
+    return out;
+  }
 }
 
 function lvClamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -128,6 +138,9 @@ function createLogView(host, opts) {
     // 实时模式（串口监视器 / 转发监视器）
     live: false, atBottom: true, unread: 0, lastSeen: 0, pollTimer: null,
     trimmedPx: 0, histFile: '', histHasMore: false,
+    // 增量渲染用：rowGen 是"样式代号"，变了就强制重建所有行；
+    // cfgChars/needConfigure 决定要不要再发一次 Configure。
+    rowGen: 0, cfgChars: 0, needConfigure: true, rulerAt: 0, layoutKey: '',
     reserveTop: opts.reserveTop || 0,
     reserveBottom: opts.reserveBottom || 0,
     trackTop: 0
@@ -136,6 +149,9 @@ function createLogView(host, opts) {
   host.classList.add('lv-host');
   host.tabIndex = 0;
   host.innerHTML = '';
+
+  // 当前窗口里的行 DOM：帧号 → { el, sig }（增量渲染用）
+  var rowEls = {};
 
   var view = document.createElement('div');
   view.className = 'lv-view';
@@ -243,9 +259,16 @@ function createLogView(host, opts) {
     track.style.height = st.trackH + 'px';
     // 上边界横线只在会话页画（文件页 trackTop=0，不需要一条压住首行的线）
     track.classList.toggle('lv-track-rule', st.trackTop > 0);
+    // 尺寸没变就别再量一遍：measure/fitChars 都要建探针节点，每 60~120 ms
+    // 跑一次是白烧 CPU（数据密集时是仅次于整窗重建的开销）。
+    var key = host.clientWidth + 'x' + host.clientHeight + ':' +
+      st.reserveTop + ':' + st.reserveBottom + ':' + st.trackTop;
+    if (key === st.layoutKey && st.cfgChars) return st.cfgChars;
+    st.layoutKey = key;
     measure();
     var avail = Math.max(1, host.clientWidth - LV_PAD_X - LV_PAD_R - LV_RAIL_W);
-    return fitChars(avail);
+    st.cfgChars = fitChars(avail);
+    return st.cfgChars;
   }
 
   function styleNow() { return lvStyleOf(typeof opts.disp === 'function' ? opts.disp() : opts.disp); }
@@ -361,9 +384,13 @@ function createLogView(host, opts) {
 
   function drawRuler(force) {
     var nb = lvClamp(Math.round(st.trackH), 32, 4000);
-    var key = nb + ':' + st.total + ':' + st.phase;
-    if (!force && key === st.rulerKey) return;
+    // 泳道是"按桶统计来源/落盘"的概览，不需要跟着每一帧重算：帧数涨一点就
+    // 重发 Ruler（Go 侧还要 O(n) 重分桶）在数据密集时是纯负担。
+    var now = Date.now();
+    var key = nb + ':' + st.phase;
+    if (!force && key === st.rulerKey && now - st.rulerAt < 500) return;
     st.rulerKey = key;
+    st.rulerAt = now;
     lvCall('Ruler', st.id, nb).then(function (r) {
       if (st.dead) return;
       st.ruler = r;
@@ -500,6 +527,20 @@ function createLogView(host, opts) {
       });
   }
 
+  // 行内容签名：帧只追加、不会原地改，所以 idx/dir/size/ts 加上"样式代号"
+  // 就能判断能不能复用 DOM；样式或模式变了 rowGen 会加一，强制重建。
+  function rowSig(r) {
+    return st.rowGen + '|' + r.dir + '|' + r.size + '|' + r.ts;
+  }
+
+  function resetRowEls() {
+    for (var k in rowEls) {
+      var o = rowEls[k];
+      if (o && o.el && o.el.parentNode) o.el.parentNode.removeChild(o.el);
+    }
+    rowEls = {};
+  }
+
   function applyWindow(w) {
     st.total = w.total || 0;
     st.contentH = w.contentHeight || 0;
@@ -509,9 +550,30 @@ function createLogView(host, opts) {
     st.hexPrefix = !!w.hexPrefix;
     st.base = w.base || 0;
     st.rows = w.rows || [];
-    layer.innerHTML = '';
-    layer.appendChild(selLayer);
-    for (var i = 0; i < st.rows.length; i++) layer.appendChild(buildRow(st.rows[i]));
+    // 增量更新：数据密集时每 120 ms 整窗重建（innerHTML='' + 重新 buildRow）
+    // 是 CPU 的大头。按帧号复用 DOM，只新建进入窗口的行、删掉离开窗口的。
+    var keep = {};
+    for (var i = 0; i < st.rows.length; i++) {
+      var r = st.rows[i];
+      keep[r.idx] = 1;
+      var sig = rowSig(r);
+      var rec = rowEls[r.idx];
+      if (rec && rec.sig === sig) {
+        rec.el.style.transform = 'translate3d(0,' + (r.y - st.base) + 'px,0)';
+      } else {
+        if (rec && rec.el.parentNode) rec.el.parentNode.removeChild(rec.el);
+        var el = buildRow(r);
+        layer.appendChild(el);
+        rowEls[r.idx] = { el: el, sig: sig };
+      }
+    }
+    for (var k in rowEls) {
+      if (!keep[k]) {
+        var old = rowEls[k];
+        if (old.el.parentNode) layer.removeChild(old.el);
+        delete rowEls[k];
+      }
+    }
     layerTransform();
     paintSelection();
     updateThumb();
@@ -560,6 +622,10 @@ function createLogView(host, opts) {
       st.contentH = cfg.contentHeight;
       st.maxOffset = cfg.maxOffset;
       st.hexPrefix = !!cfg.hexPrefix;
+      // 布局/样式变了：行内容要重建（增量渲染靠 rowGen 判断签名）
+      st.rowGen++;
+      st.cfgChars = chars;
+      st.needConfigure = false;
       return cfg;
     });
   }
@@ -616,6 +682,7 @@ function createLogView(host, opts) {
     st.phase = 'scan';
     st.rows = [];
     st.sel = null;
+    resetRowEls();
     layer.innerHTML = '';
     layer.appendChild(selLayer);
     showMsg('打开中…');
@@ -832,10 +899,22 @@ function createLogView(host, opts) {
   function refreshLive() {
     if (!st.id || st.dead) return Promise.resolve();
     var chars = layout();
-    return lvCall('Configure', st.id, chars, Math.round(st.tsH * 2),
-      Math.round(st.dataH * 2), st.mode, 0, styleNow()).then(function (cfg) {
-      st.perLine = cfg.perLine;
-      st.maxOffset = cfg.maxOffset;
+    // 尺寸与样式没变就别再发 Configure：参数没变时 Go 侧也是早退，但跨桥
+    // RPC 本身要钱，每 60 ms 一次是纯浪费。
+    var cfgStep;
+    if (st.needConfigure || chars !== st.cfgChars) {
+      cfgStep = lvCall('Configure', st.id, chars, Math.round(st.tsH * 2),
+        Math.round(st.dataH * 2), st.mode, 0, styleNow()).then(function (cfg) {
+        st.cfgChars = chars;
+        st.needConfigure = false;
+        st.perLine = cfg.perLine;
+        st.maxOffset = cfg.maxOffset;
+        st.rowGen++;
+      });
+    } else {
+      cfgStep = Promise.resolve();
+    }
+    return cfgStep.then(function () {
       // 取一屏：contentY 给个超大值，Go 侧夹到 maxOffset，正好是最后一条
       return lvCall('Window', st.id, 1 << 30, Math.round(st.vh), Math.round(st.vh));
     }).then(function (w) {
@@ -854,8 +933,23 @@ function createLogView(host, opts) {
     });
   }
 
-  function pollLive() {
-    if (st.dead || !st.live || !st.id) return;
+  // 事件驱动：数据帧一到（history.js 的 _flushAppends）就 notify，50 ms 内合并，
+  // 到点只拉一次 LiveInfo。空闲时没有任何定时器 —— 之前的 60 ms 轮询即使没数据
+  // 也在跨桥问，一个核白掉三分之一。
+  var tickTimer = null;
+  var tickBusy = false;
+
+  function notify() {
+    if (st.dead || !st.live || !st.id || tickTimer) return;
+    tickTimer = setTimeout(function () {
+      tickTimer = null;
+      tickLive();
+    }, 50);
+  }
+
+  function tickLive() {
+    if (st.dead || !st.live || !st.id || tickBusy) return;
+    tickBusy = true;
     lvCall('LiveInfo', st.id).then(function (info) {
       if (st.dead) return;
       var grew = info.total !== st.total || Math.abs(info.contentH - st.contentH) > 0.5;
@@ -877,7 +971,7 @@ function createLogView(host, opts) {
       }
       if (delta > 0) { st.unread += delta; updateUnread(); }
     }).catch(function () {}).then(function () {
-      if (!st.dead) st.pollTimer = setTimeout(pollLive, 120);
+      tickBusy = false;
     });
   }
 
@@ -894,7 +988,8 @@ function createLogView(host, opts) {
       st.id = r.id;
       return refreshLive();
     }).then(function () {
-      pollLive();
+      // 打开时取一次概况（此时可能已经有帧），之后全靠数据帧事件驱动。
+      tickLive();
       return st.id;
     }).catch(function (e) {
       showMsg('打开失败：' + String(e && e.message ? e.message : e));
@@ -909,6 +1004,8 @@ function createLogView(host, opts) {
     st.unread = 0;
     st.lastSeen = 0;
     st.trimmedPx = 0;
+    // 帧号从头开始，旧的行 DOM 不能再复用（否则会撞上同一 idx 的旧签名）
+    resetRowEls();
     updateUnread();
     updateTrimTip();
     return lvCall('ResetLive', st.id).then(function () {
@@ -918,7 +1015,7 @@ function createLogView(host, opts) {
 
   function appendSystem(text) {
     if (!st.id || st.dead) return;
-    lvCall('AppendSystem', st.id, text).catch(function () {});
+    lvCall('AppendSystem', st.id, text).then(function () { notify(); }).catch(function () {});
   }
 
   // prepend 把更早的历史插到文档最前面（打开回放 / 往回翻补历史共用）。
@@ -956,9 +1053,12 @@ function createLogView(host, opts) {
     prepend: prepend,
     setHistory: setHistory,
     isLive: function () { return st.live; },
+    // 数据帧到达时由 history.js 调用；事件驱动，空闲时没有定时器。
+    notify: notify,
     jumpBottom: jumpBottom,
     destroy: function () {
       st.dead = true;
+      if (tickTimer) clearTimeout(tickTimer);
       if (st.pollTimer) clearTimeout(st.pollTimer);
       if (ro) ro.disconnect();
       host.removeEventListener('wheel', onWheel);
@@ -975,15 +1075,20 @@ function createLogView(host, opts) {
     refresh: refresh,
     setMode: function (mode) {
       st.mode = (mode === 'text') ? 'text' : 'hex';
+      // 换模式会改行高/内容，必须重发 Configure（refreshLive 里按这个标志判断）
+      st.needConfigure = true;
+      st.cfgChars = 0;
       if (st.live) return refreshLive();
       var anchor = st.rows.length ? st.rows[0].idx : 0;
       return configure(anchor).then(function () { return fetchWindow(); });
     },
     setShowYear: function (on) {
       st.showYear = !!on;
-      // 只影响时间戳串，不用重算布局：重画可见行即可
+      // 只影响时间戳串，不用重算布局：重画可见行的时间戳即可。
+      // 行 DOM 是按帧号存的（增量渲染），不能再按下标猜 layer.children。
       for (var i = 0; i < st.rows.length; i++) {
-        var rowEl = layer.children[i + 1]; // 0 是 selLayer
+        var rec = rowEls[st.rows[i].idx];
+        var rowEl = rec && rec.el;
         if (rowEl) {
           var tsEl = rowEl.firstChild;
           if (tsEl) tsEl.innerHTML = tsHTML(st.rows[i]);

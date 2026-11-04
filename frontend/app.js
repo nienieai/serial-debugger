@@ -2622,6 +2622,8 @@ function _afterActivePageChanged(opts) {
   var at = getActiveTab();
   if (at && at._page) at._page.show();
   else if (state._welcomePage) state._welcomePage.show();
+  // 切回的标签页在后台期间不会收到数据帧事件，这里补一次刷新
+  if (at && at._live && typeof at._live.notify === 'function') at._live.notify();
   state.currentMode = (at && at.mode) ? at.mode : 'single';
   updateModeUI();
   updateEmptyState();
@@ -5908,7 +5910,10 @@ async function openPort() {
     updateSyncIndicator();
     updatePortOccupied();
     renderTabs();
-    state.statsBase[tab.sessionId] = { tx: 0, rx: 0 };
+    // 统计跟着会话走：守护进程侧的 bytesRead/Written 本来就是累计的，重连不清零。
+    if (!state.statsBase[tab.sessionId]) {
+      state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
+    }
     refreshStatsDOM();
     _updateStatsVisible();
     await mergeRingBuffer(tab.sessionId);
@@ -5984,8 +5989,10 @@ async function closePort() {
   tab.portOpen = false;
   tab.label = tab.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
   tab.syncedParams = null;
-  // 会话还在（空闲进程），但字节/速率是那次连接的，重连会从 0 重新计
-  delete state.statsBase[tab.sessionId];
+  // 统计保留这次连接的结果（关闭后还看得到这次收了多少），只把速率清零 ——
+  // 速率是 stats-rate 的 last-value，端口关了不会再推，留着会一直挂着旧数字。
+  const closedStats = state.statsBase[tab.sessionId];
+  if (closedStats) { closedStats.rxRate = 0; closedStats.txRate = 0; }
   updateOpenBtn();
   updateSyncIndicator();
   updatePortOccupied();
@@ -6687,15 +6694,20 @@ function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
   if (tab && tab.sessionId) {
-    // 端口没连上：一律显示 0（会话统计是按连接计的）。
-    // 不去读缓存、也不去拉 daemon —— 空闲进程的计数没有意义，读出来只会让
-    // 上一次连接的数字继续挂着（用户实测的那条 P2:389/s）。
+    // 端口没连上：累计字节保留（关闭后还看得到这次收了多少），速率清零。
+    // 速率来自 stats-rate 事件，端口关了不会再推，留着会停在上一次的读数上。
     if (!tab.portOpen) {
       if (_statusBar) {
         // 模式也得定：转发页空闲时箭头仍应是 P1/P2（此前提前返回，把它留在
         // 上一个标签页的 TX/RX 上）
         _statusBar.setStatsMode(activeMode() === 'forward');
-        _statusBar.resetStats();
+        const b = state.statsBase[tab.sessionId];
+        if (b) {
+          _statusBar.updateStatsBytes({ tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2 });
+          _statusBar.updateStatsRates({ txRate: 0, rxRate: 0, p1Rate: 0, p2Rate: 0, maxBps: 0 });
+        } else {
+          _statusBar.resetStats();
+        }
       }
       return;
     }

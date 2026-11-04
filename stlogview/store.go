@@ -608,7 +608,10 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 	vh2 := int64(viewportH) * 2
 	ov2 := int64(overscanPx) * 2
 
-	from := lowerBound(s.prefix, cy2-ov2)
+	from := floorIndex(s.prefix, cy2-ov2)
+	if from > ix.n-1 {
+		from = ix.n - 1
+	}
 	to := lowerBound(s.prefix, cy2+vh2+ov2)
 	out.RenderFrom, out.RenderTo = s.absBase+from, s.absBase+to-1
 	out.Base = float64(s.prefix[from]) / 2
@@ -624,6 +627,26 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 	out.Rows = rows
 	out.FetchUs = int(time.Since(t0) / time.Microsecond)
 	return out
+}
+
+// floorIndex 找最后一个 prefix[i] <= y 的 i（y 落在行中间时取那一行本身）。
+//
+// 窗口起点必须用它：用上界（lowerBound）会把 offset 所在的那一行整行跳过，
+// Base 落到下一行，整层被往下推，顶部空出最多一整行高（帧很高时就是一整屏）。
+func floorIndex(prefix []int64, y int64) int {
+	if len(prefix) == 0 {
+		return 0
+	}
+	lo, hi := 0, len(prefix)-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if prefix[mid] <= y {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
 }
 
 // lowerBound 找第一个 prefix[i] >= y 的 i（prefix 单调不减）。
@@ -662,7 +685,13 @@ func (s *Store) makeRowLocked(i int) Row {
 	}
 	r.Cells = append(r.Cells, ix.seg[ix.segIdx[i]:ix.segIdx[i+1]]...)
 	if s.mode == "hex" {
-		r.Hex = formatHexLines(p, s.perLine, s.style)
+		// 系统消息在界面上固定按文本渲染，Hex 串只是给前端解码回文本用的：
+		// 不能带 0x 前缀 —— 前缀会被解码器当成两个十六进制字符，显示成一串点。
+		st := s.style
+		if ix.dir[i] == sessionfile.DirSystem {
+			st.HexPrefix = false
+		}
+		r.Hex = formatHexLines(p, s.perLine, st)
 	} else {
 		r.Segs = decode.Decode(hex.EncodeToString(p), encName(s.style.Enc))
 	}

@@ -460,6 +460,8 @@ function _flushAppends() {
   var liveTab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
   if (liveTab && liveTab._live) {
     if (typeof _updateUnreadChrome === 'function') _updateUnreadChrome(display);
+    // 事件驱动：让引擎在下一拍去拉一次 LiveInfo（内部 50 ms 合并）。
+    if (typeof liveTab._live.notify === 'function') liveTab._live.notify();
     return;
   }
   if (q.length === 0) { _updateUnreadChrome(display); return; }

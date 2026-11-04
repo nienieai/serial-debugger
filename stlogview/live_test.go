@@ -6,6 +6,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/nienieai/serial-debugger/sessionfile"
 )
 
 // newLiveDoc 造一个已经配好布局的实时文档。
@@ -122,6 +124,28 @@ func TestLiveTrimmedPx(t *testing.T) {
 	// 清空之后必须归零，否则新会话一打开就顶着「历史被覆盖」。
 	if r := s.ResetLive(); r.TrimmedPx != 0 || r.Evicted != 0 || r.Total != 0 {
 		t.Fatalf("清空后 %+v", r)
+	}
+}
+
+// TestSystemRowHexNoPrefix 系统消息行在前端固定按文本渲染，Hex 串不能带 0x
+// 前缀 —— 解码器会把前缀当两个十六进制字符，中文会显示成一串点。
+func TestSystemRowHexNoPrefix(t *testing.T) {
+	s := NewStore()
+	s.MarkLive(0)
+	st := DefaultStyle(0)
+	st.HexPrefix = true
+	s.Configure(120, 42, 45, "hex", 0, st)
+	s.AppendFrame(FrameIn{Ts: 1000, Dir: sessionfile.DirSystem, Hex: hex.EncodeToString([]byte("串口已关闭: COM4"))})
+	s.AppendFrame(FrameIn{Ts: 1001, Dir: sessionfile.DirRx, Hex: "41"})
+	w := s.Window(0, 400, 0)
+	if len(w.Rows) != 2 {
+		t.Fatalf("行数 %d", len(w.Rows))
+	}
+	if strings.Contains(w.Rows[0].Hex, "0x") {
+		t.Fatalf("系统行带了 0x 前缀：%q", w.Rows[0].Hex)
+	}
+	if !strings.Contains(w.Rows[1].Hex, "0x41") {
+		t.Fatalf("数据行丢了 0x 前缀：%q", w.Rows[1].Hex)
 	}
 }
 
