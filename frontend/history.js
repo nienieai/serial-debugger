@@ -26,6 +26,91 @@ function _originLabel(origin) {
   return src ? src.toUpperCase() : s;
 }
 
+// ---- 设置页颜色预览用的单行渲染 ----
+//
+// 显示区已经不走这条路了（虚窗引擎用 logview.js 的 buildRow），但设置页的
+// 配色预览要在一屏里同时画出「文本」和「Hex」两种渲染，用的是这套 `.data-row`
+// DOM —— 键名、类名与引擎保持一致，预览和实际显示才对得上颜色。
+//
+// opts（可选）：{ displayMode, disp } —— 只给预览用，让它画指定模式/主题，
+// 而不必去改全局 state。
+function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
+  // 显示设置按标签页走：这里把渲染上下文设成当前标签页（或调用方显式指定的
+  // opts.disp），下面 decoder.js 的渲染函数就用这一份，不再读全局 state。
+  var _disp = (opts && opts.disp) || _dispOf();
+  setDisplayContext(_disp);
+  const row = document.createElement('div');
+  row.className = 'data-row';
+
+  const tsLine = document.createElement('div');
+  const isFwd = (dir === '1' || dir === '2');
+  // 系统行（sys.port_connected / sys.stats_started 这类事件）既不是 Rx 也不是 Tx。
+  const isSys = (dir === 'system' || dir === 'sys');
+  const arrow = (isFwd || isSys) ? '' : (dir === 'tx' ? ' ↾' : ' ⇃');
+  const label = isFwd ? 'P' + dir : (dir === 'rx' ? 'Rx' : (isSys ? 'Sys' : 'Tx'));
+  var byteLen = hex ? hex.length / 2 : 0;
+  var tsDirClass = dir === '1' ? 'ts-1' : dir === '2' ? 'ts-2'
+    : (dir === 'rx' ? 'ts-rx' : (isSys ? 'ts-sys' : 'ts-tx'));
+  tsLine.className = 'ts-line ' + tsDirClass;
+  var statClass = isFwd ? 'ts-fstat' : 'ts-stat';
+  // 只有 Tx 有来源；老历史（没写来源的包）origin 为空，不渲染任何标记。
+  var originHtml = '';
+  if (dir === 'tx' && origin) {
+    originHtml = '<span class="t-origin" title="' + escHtml(origin) + '">' +
+      escHtml(_originLabel(origin)) + '</span>';
+  }
+  tsLine.innerHTML = '<span class="ts-text">[' + (timestamp || '') + '] ' + label + arrow + ' </span>' +
+    originHtml + '<span class="' + statClass + '">~' + byteLen + 'B</span>';
+  row.appendChild(tsLine);
+
+  const dataLine = document.createElement('div');
+  dataLine.className = 'data-line';
+
+  let dm;
+  if (isSys) {
+    // 系统行的 payload 是本地事件文本（sys.port_connected|COM16|230400），
+    // 不是串口字节；固定按文本显示。
+    dm = 'text';
+  } else if (opts && opts.displayMode) {
+    dm = opts.displayMode;
+  } else {
+    dm = state.displayMode;
+    if (activeMode() === 'forward') {
+      if (dir === '1') dm = state.p1DisplayMode;
+      else if (dir === '2') dm = state.p2DisplayMode;
+    } else if (dir === 'tx') {
+      dm = state.txDisplayMode;
+    }
+  }
+  if (dm === 'hex') {
+    const hexSpan = document.createElement('span');
+    var hexDirClass = dir === '1' ? 'hex-1' : dir === '2' ? 'hex-2'
+      : (dir === 'rx' ? 'hex-rx' : (isSys ? 'hex-sys' : 'hex-tx'));
+    hexSpan.className = 'hex-data ' + hexDirClass;
+    // 直接从 hex 串格式化（formatHexString 少一次数组分配）
+    hexSpan.textContent = (typeof formatHexString === 'function')
+      ? formatHexString(hex)
+      : formatHex(hexToBytes(hex));
+    dataLine.appendChild(hexSpan);
+  } else if (segments && segments.length > 0) {
+    // Go-decoded segments — zero-innerHTML rendering
+    renderSegments(dataLine, segments, dir);
+  } else {
+    // Legacy fallback: JS-side hexToText
+    let text;
+    if (_disp.encoding === 'ascii') {
+      text = sanitizeText(hexToText(hex));
+    } else {
+      text = hexToText(hex);
+    }
+    dataLine.innerHTML = text;
+  }
+
+  row.appendChild(dataLine);
+  container.appendChild(row);
+  return row;
+}
+
 // ---- 引擎的三个入口 ----
 //
 // 数据本身不用前端搬：Go 侧的 emitSession 每帧都会喂给实时文档

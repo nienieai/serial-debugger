@@ -137,6 +137,8 @@ function createLogView(host, opts) {
     dead: false,
     // 实时模式（串口监视器 / 转发监视器）
     live: false, atBottom: true, lastSeen: 0, pollTimer: null,
+    // 用户点了「锁定滚动」：新数据进来也不自动贴底（贴底跟随要 atBottom 且没锁）
+    scrollLocked: !!opts.scrollLocked,
     trimmedPx: 0, histFile: '', histHasMore: false,
     // 往回翻的分页：oldestTs/oldestSame 是文档最旧帧的游标（Go 侧算，裁头会跟着
     // 前移），loadingOlder 保证一次只问一页，histDone 表示环里再没有更早的了。
@@ -940,13 +942,17 @@ function createLogView(host, opts) {
 
   var ro = null;
   if (typeof ResizeObserver === 'function') {
+    // 贴底跟随 = 视口在底部 **且** 用户没点「锁定滚动」。锁定的语义就是
+    // 「新数据进来也别自动滚」，所以这两个条件要一起看。
+    function follows() { return st.atBottom && !st.scrollLocked; }
+
     var lastW = 0, lastH = 0;
     ro = new ResizeObserver(function () {
       if (host.clientWidth === lastW && host.clientHeight === lastH) return;
       lastW = host.clientWidth; lastH = host.clientHeight;
       // 会话页贴底时尺寸一变（窗口缩放、按钮条出现）就让位量重算并重新贴底，
       // 否则 maxOffset 还按旧视口算，最后一行会跑到浮动按钮底下。
-      if (st.live && st.atBottom) { refreshLive(); return; }
+      if (st.live && follows()) { refreshLive(); return; }
       refresh();
     });
     ro.observe(host);
@@ -1062,7 +1068,7 @@ function createLogView(host, opts) {
     }).then(function (w) {
       applyWindow(w);
       st.maxOffset = w.maxOffset;
-      if (st.atBottom) st.offset = Math.round(w.maxOffset);
+      if (follows()) st.offset = Math.round(w.maxOffset);
       layerTransform();
       updateThumb();
       updateTrimTip();
@@ -1107,9 +1113,9 @@ function createLogView(host, opts) {
         opts.onStatus({ live: true, total: info.total, evicted: info.evicted });
       }
       if (!grew) return;
-      if (st.atBottom) { refreshLive(); return; }
-      // 不贴底：用户在往回翻，画面不动，但内容还在长 —— 滚动条必须跟着刷新
-      // （滑块比例与位置都按新的总高算），否则看起来像「数据没进来」。
+      if (follows()) { refreshLive(); return; }
+      // 不贴底（或用户锁定了滚动）：画面不动，但内容还在长 —— 滚动条必须跟着
+      // 刷新（滑块比例与位置都按新的总高算），否则看起来像「数据没进来」。
       if (info.contentH > 0) {
         st.contentH = info.contentH;
         st.maxOffset = Math.max(0, info.contentH - st.vh);
@@ -1231,6 +1237,10 @@ function createLogView(host, opts) {
     // 数据帧到达时由 history.js 调用；事件驱动，空闲时没有定时器。
     notify: notify,
     jumpBottom: jumpBottom,
+    // 锁定滚动：只改跟随行为，不动视口（用户原地看着哪就还在哪）。
+    setScrollLock: function (on) {
+      st.scrollLocked = !!on;
+    },
     destroy: function () {
       st.dead = true;
       if (tickTimer) clearTimeout(tickTimer);

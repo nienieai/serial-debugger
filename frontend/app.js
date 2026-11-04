@@ -5918,7 +5918,9 @@ async function openPort() {
     }
     refreshStatsDOM();
     _updateStatsVisible();
-    await mergeRingBuffer(tab.sessionId);
+    // 不用再「合并守护进程环」了：虚窗引擎的文档是会话级的常驻对象
+    // （LogView.OpenLive 建、Close 才销毁），实时帧由 App.emitSession 逐帧喂进来，
+    // 重连不会重建它。老的 mergeRingBuffer 是给「前端缓存 + 打开时拉一次」那套用的。
     appendSystemMsg(`串口已打开: ${cfg.port} @ ${cfg.baud}`);
     saveSettings();
   } catch (e) {
@@ -5970,7 +5972,7 @@ async function openForwardPorts() {
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
     refreshStatsDOM();
     _updateStatsVisible();
-    await mergeRingBuffer(tab.sessionId);
+    // 同 openPort：引擎文档常驻，不需要重新合并环里的历史。
     appendSystemMsg('端口转发已启动: ' + cfgA.port + ' ↔ ' + cfgB.port);
     saveSettings();
   } catch (e) {
@@ -5986,7 +5988,8 @@ async function closePort() {
       await window.go.main.App.DisconnectSession(tab.sessionId);
     }
   } catch {}
-  await mergeRingBuffer(tab.sessionId);
+  // 断口时不合并历史：引擎文档不动，已收到的帧继续留在页面上（老渲染那套
+  // 是「前端缓存 + 重拉」，才需要这一步）。
   appendSystemMsg(t('sys.port_closed_label', '串口已关闭: %s').replace('%s', tab.label));
   tab.portOpen = false;
   tab.label = tab.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
@@ -6521,8 +6524,12 @@ function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
   _persistDisplayModes();
   updateScrollLockBtns();
-  // 冻结/解冻与未读占位块由历史层负责（锁定时视图冻结，但滚动条仍随未读增长）
-  if (typeof onScrollLockChanged === 'function') onScrollLockChanged();
+  // 锁定 = 新数据进来也不自动贴底。老的实现靠历史层冻结，现在直接告诉引擎：
+  // 锁定期间即使视口正在底部也不跟随（点「回到底部」仍可手动解除）。
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.setScrollLock === 'function') {
+    tab._live.setScrollLock(state.scrollLocked);
+  }
 }
 
 function updateScrollLockBtns() {
@@ -8350,6 +8357,8 @@ function _mountLive(tab) {
     reserve: reserveOf,
     // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
     mode: (state.displayMode === 'hex') ? 'hex' : 'text',
+    // 「锁定滚动」是跨会话的用户偏好，建视图时带上当前状态
+    scrollLocked: !!state.scrollLocked,
     disp: function () { return tab.disp; },
     tsText: function (ms) { return stlogTimeText(new Date(ms)); },
     // 按方向的模式覆盖：下标 = sessionfile 方向号（0 系统 / 1 读取 / 2 发送 /
