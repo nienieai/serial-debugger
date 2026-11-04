@@ -217,6 +217,13 @@ function createLogView(host, opts) {
   }
 
   function layout() {
+    // 会话页的让位量（顶部悬浮配置栏、底部浮动按钮）随窗口尺寸和布局变，而且
+    // 挂载那一刻标签页往往还没布局、rect 全是 0。所以交给调用方现量。
+    if (typeof opts.reserve === 'function') {
+      var rs = opts.reserve() || {};
+      st.reserveTop = rs.top || 0;
+      st.reserveBottom = rs.bottom || 0;
+    }
     st.vh = Math.max(1, host.clientHeight - st.reserveTop - st.reserveBottom);
     st.trackH = Math.max(1, st.vh);
     // 滚动条避让：轨道从 reserveTop 开始、到 reserveBottom 结束（分界线仍满高）
@@ -762,6 +769,9 @@ function createLogView(host, opts) {
     ro = new ResizeObserver(function () {
       if (host.clientWidth === lastW && host.clientHeight === lastH) return;
       lastW = host.clientWidth; lastH = host.clientHeight;
+      // 会话页贴底时尺寸一变（窗口缩放、按钮条出现）就让位量重算并重新贴底，
+      // 否则 maxOffset 还按旧视口算，最后一行会跑到浮动按钮底下。
+      if (st.live && st.atBottom) { refreshLive(); return; }
       refresh();
     });
     ro.observe(host);

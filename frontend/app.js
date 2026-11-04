@@ -8310,26 +8310,30 @@ function _mountLive(tab) {
   mount.className = 'lv-mount';
   oldBox.parentNode.insertBefore(mount, oldBox.nextSibling);
   oldBox.style.display = 'none';
-  var reserve = 0, reserveBottom = 0;
-  try {
-    // 顶部让位取「悬浮配置栏 + 清空按钮」的实际底边：--reserve-top 是按老布局
-    // 推的常量，配置栏在这两种会话里高度不同，量一次比读变量准。
-    var bar = tab._page.root.querySelector('.config-bar');
-    if (bar) {
-      var mountTop = mount.getBoundingClientRect().top;
-      reserve = Math.max(0, Math.round(bar.getBoundingClientRect().bottom - mountTop) + 8);
-    }
-    // 底部同理：字/H/锁定滚动 那排浮动按钮压在内容上，最后一行得让开
-    var btns = tab._page.root.querySelector('.c-fwd-float-btns');
-    if (btns) {
-      var mountRect = mount.getBoundingClientRect();
-      reserveBottom = Math.max(0, Math.round(mountRect.bottom - btns.getBoundingClientRect().top) + 8);
-    }
-  } catch (e) { reserve = 0; reserveBottom = 0; }
-  if (reserve < 40) reserve = 40;
+  // 让位量不能在挂载这一瞬间量：此刻标签页还没布局，所有 rect 都是 0 —— 顶部
+  // 靠 40px 兜底才没露馅，底部被算成 8px，最后一条帧的数据行就压在浮动按钮下面。
+  // 改成每次 layout() 现量：等页面真正有了尺寸（ResizeObserver / 第一帧到达）再取值。
+  function reserveOf() {
+    var out = { top: 40, bottom: 0 };
+    if (!mount.clientHeight) return out; // 还没布局，先用兜底值
+    try {
+      // 顶部：悬浮配置栏（含「清空」按钮）的实际底边
+      var bar = tab._page.root.querySelector('.config-bar');
+      if (bar) {
+        var t = Math.round(bar.getBoundingClientRect().bottom - mount.getBoundingClientRect().top) + 8;
+        if (t > 0) out.top = Math.max(40, t);
+      }
+      // 底部：字 / H / 锁定滚动 那排浮动按钮压在内容上，最后一行得让开
+      var btns = tab._page.root.querySelector('.c-fwd-float-btns');
+      if (btns && btns.offsetParent !== null) {
+        var b = Math.round(mount.getBoundingClientRect().bottom - btns.getBoundingClientRect().top) + 8;
+        if (b > 0) out.bottom = b;
+      }
+    } catch (e) { /* 量不到就用兜底值 */ }
+    return out;
+  }
   var view = createLogView(mount, {
-    reserveTop: reserve,
-    reserveBottom: reserveBottom,
+    reserve: reserveOf,
     // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
     mode: (state.displayMode === 'hex') ? 'hex' : 'text',
     disp: function () { return tab.disp; },
