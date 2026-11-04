@@ -86,7 +86,9 @@
 .lv-sel-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; }
 .lv-selbox {
   position: absolute;
-  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  /* 选区底色按主题各给一档（--sel-bg）：26% 的 accent 在白底上只有 1.46:1，
+     基本看不出选中；深色下 1.75:1 也偏淡。色调仍跟着主题的 --accent 走。 */
+  background: var(--sel-bg, color-mix(in srgb, var(--accent) 42%, transparent));
   pointer-events: none;
 }
 
