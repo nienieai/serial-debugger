@@ -660,6 +660,10 @@ function createLogView(host, opts) {
   function onPointerDown(e) {
     if (e.button !== 0) return;
     if (e.target === thumb) return;
+    // 滚动条轨道和「新数据」胶囊也挂在 host 里。这里若把指针 capture 到 host，
+    // 它们的 pointerup 会被 host 抢走，按钮的 click 就合成不出来（胶囊点不动、
+    // 点轨道还会顺手清掉选区）。只接管内容区（.lv-view）里的按下。
+    if (e.target !== view && !(view.contains && view.contains(e.target))) return;
     var p = posAt(e.clientX, e.clientY);
     if (!p) return;
     host.focus(); // 键盘兜底（Ctrl+C / PageUp / Home）靠焦点落在视口上
