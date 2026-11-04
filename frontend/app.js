@@ -8375,37 +8375,64 @@ function _mountLive(tab) {
     dirModes: function () {
       return ['', '', state.txDisplayMode, state.p1DisplayMode, state.p2DisplayMode];
     },
+    // 顶到最上面时再要一页更早的。游标由引擎给（最旧帧的毫秒 + 同毫秒条数）：
+    // 毫秒会撞车，只按 ts 要会重复或漏帧。
+    onNeedOlder: function (cur) {
+      var App = window.go && window.go.main && window.go.main.App;
+      if (!App || typeof App.GetSessionHistory !== 'function') return null;
+      return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, cur.ts, cur.same).then(function (data) {
+        if (!data || view !== tab._live || !view.isLive()) return { hasMore: false };
+        var frames = _liveFramesFromHistory(data.history);
+        var more = !!data.hasMore;
+        if (!frames.length) return { hasMore: more };
+        return view.prepend(frames).then(function () { return { hasMore: more }; });
+      });
+    },
     onStatus: function (s) { tab._liveTotal = s.total || 0; }
   });
   tab._live = view;
   view.openLive(tab.sessionId).then(function () {
     // 打开即回放：把守护进程环 / 磁盘里已有的历史先灌进来，页面不再是空的。
-    // 只取最近一页（500 条），更早的历史等「往回翻到顶」再接（下一轮）。
+    // 只取最近一页，更早的等用户翻到顶时由 onNeedOlder 一页一页往回要。
     var App = window.go && window.go.main && window.go.main.App;
     if (!App || typeof App.GetSessionHistory !== 'function') return null;
-    return App.GetSessionHistory(tab.sessionId, 500, 0, 0);
+    return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, 0, 0);
   }).then(function (data) {
     if (!data || view !== tab._live || !view.isLive()) return;
     view.setHistory({ file: data.historyFile || '', hasMore: !!data.hasMore });
-    var list = data.history || [];
-    var frames = [];
-    for (var i = 0; i < list.length; i++) {
-      var e = list[i];
-      if (!e || !e.hex) continue;
-      var isSys = (e.direction === 'system' || e.direction === 'sys');
-      frames.push({
-        ts: e.tsMs || 0,
-        dir: isSys ? 0 : _liveDirNum(e.direction),
-        origin: e.origin || '',
-        // 系统帧在历史里存的是文本（daemon/history.go 的约定），引擎要的是
-        // 十六进制串，这里补转一次；不然回放出来的系统消息只剩时间戳一行。
-        hex: isSys ? _liveTextToHex(e.hex) : e.hex
-      });
-    }
-    if (frames.length) view.prepend(frames);
+    var frames = _liveFramesFromHistory(data.history);
+    if (!frames.length) return;
+    // 铺完历史必须显式回到底部：prepend 里那套「贴底就 refreshLive」依赖
+    // st.atBottom，而打开这一瞬间页面可能还没布局（vh=0），贴底算不出来，
+    // 结果视口停在第 1 帧上，看起来像「历史没灌进来」。
+    return view.prepend(frames).then(function () { view.jumpBottom(); });
   }).catch(function (err) {
     if (window.console) console.error('[live] ' + tab.sessionId, err);
   });
+}
+
+// _LIVE_PAGE 是首次回放和一页往回翻的条数：一页就够一屏，多了只是白过桥。
+var _LIVE_PAGE = 500;
+
+// _liveFramesFromHistory 把守护进程的历史条目翻成引擎要的帧。
+//
+// 系统帧在历史里存的是**文本**（daemon/history.go 的约定），引擎要十六进制串，
+// 这里补转一次；不然回放出来的系统消息只剩时间戳一行。
+function _liveFramesFromHistory(list) {
+  var frames = [];
+  list = list || [];
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!e || !e.hex) continue;
+    var isSys = (e.direction === 'system' || e.direction === 'sys');
+    frames.push({
+      ts: e.tsMs || 0,
+      dir: isSys ? 0 : _liveDirNum(e.direction),
+      origin: e.origin || '',
+      hex: isSys ? _liveTextToHex(e.hex) : e.hex
+    });
+  }
+  return frames;
 }
 
 // _liveDirNum 把守护进程历史里的方向串翻成 sessionfile 的方向号

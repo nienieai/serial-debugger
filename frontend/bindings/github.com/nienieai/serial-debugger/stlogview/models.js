@@ -449,6 +449,23 @@ export class LiveInfo {
              */
             this["phase"] = "";
         }
+        if (!("oldestTsMs" in $$source)) {
+            /**
+             * OldestTs / OldestSameMs 是文档里最旧那一帧的时间戳，以及它所在的这一
+             * 毫秒在文档里有几帧（含它自己）。往回翻要靠这两个当游标向守护进程再要
+             * 一页：毫秒会撞车，只用 ts 做游标会重复或漏帧（见 ringbuf.SnapshotPage）。
+             * @member
+             * @type {number}
+             */
+            this["oldestTsMs"] = 0;
+        }
+        if (!("oldestSameMs" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["oldestSameMs"] = 0;
+        }
 
         Object.assign(this, $$source);
     }

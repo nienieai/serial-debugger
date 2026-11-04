@@ -50,6 +50,11 @@ type LiveInfo struct {
 	// 前端按它的增量把 offset 往下减，视口就锁在原地、滚动条缓慢上推。
 	TrimmedPx float64 `json:"trimmedPx"`
 	Phase     string  `json:"phase"`
+	// OldestTs / OldestSameMs 是文档里最旧那一帧的时间戳，以及它所在的这一
+	// 毫秒在文档里有几帧（含它自己）。往回翻要靠这两个当游标向守护进程再要
+	// 一页：毫秒会撞车，只用 ts 做游标会重复或漏帧（见 ringbuf.SnapshotPage）。
+	OldestTs     int64 `json:"oldestTsMs"`
+	OldestSameMs int   `json:"oldestSameMs"`
 }
 
 // MarkLive 把文档切成实时模式：清空索引，之后只能 Append / Prepend。
@@ -175,6 +180,16 @@ func (s *Store) liveInfoLocked() LiveInfo {
 	out.TrimmedPx = float64(s.trimmedH2) / 2
 	out.Evicted = s.absBase
 	out.Total = s.absBase + out.Frames
+	if s.ix != nil && s.ix.n > 0 {
+		// 最旧帧取自逻辑起点（head）而不是物理 0：裁过头的那些已经不在文档里了。
+		oldest := s.ix.ts[s.ix.head]
+		n := 1
+		for s.ix.head+n < len(s.ix.ts) && s.ix.ts[s.ix.head+n] == oldest {
+			n++
+		}
+		out.OldestTs = oldest
+		out.OldestSameMs = n
+	}
 	return out
 }
 

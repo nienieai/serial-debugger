@@ -192,6 +192,35 @@ func TestLiveEvictCompacts(t *testing.T) {
 	}
 }
 
+// TestLiveOldestCursor 往回翻的游标：文档最旧帧的 ts，以及它所在那一毫秒
+// 在文档里有几帧。毫秒会撞车，只有 ts 不够（会重复或漏帧）。
+func TestLiveOldestCursor(t *testing.T) {
+	s := newLiveDoc(t, 1<<20)
+	s.AppendFrame(liveFrame(1000, 1, []byte("a")))
+	s.AppendFrame(liveFrame(1000, 1, []byte("b")))
+	s.AppendFrame(liveFrame(1001, 1, []byte("c")))
+	if info := s.LiveInfo(); info.OldestTs != 1000 || info.OldestSameMs != 2 {
+		t.Fatalf("游标应当是 1000/2，得到 %d/%d", info.OldestTs, info.OldestSameMs)
+	}
+
+	// 裁到只剩最后一帧：游标要跟着前移，否则往回翻会把已经有的帧再要一遍。
+	tiny := newLiveDoc(t, 1)
+	tiny.AppendFrame(liveFrame(1000, 1, []byte("a")))
+	tiny.AppendFrame(liveFrame(1000, 1, []byte("b")))
+	tiny.AppendFrame(liveFrame(1001, 1, []byte("c")))
+	info := tiny.LiveInfo()
+	if info.Frames != 1 || info.OldestTs != 1001 || info.OldestSameMs != 1 {
+		t.Fatalf("裁头后游标应当是 1001/1（只剩 1 帧），得到 %d/%d（%d 帧）",
+			info.OldestTs, info.OldestSameMs, info.Frames)
+	}
+
+	// 清空之后没有游标（不能让前端拿 0 去问「比 0 更早的」）
+	tiny.ResetLive()
+	if info := tiny.LiveInfo(); info.OldestTs != 0 || info.OldestSameMs != 0 {
+		t.Fatalf("空文档不该有游标：%d/%d", info.OldestTs, info.OldestSameMs)
+	}
+}
+
 // TestLiveEvictAll 单帧就超过上限时会被整帧丢掉（文档暂时是空的），
 // 之后再来一帧能留住的，帧号和高度都要从正确的位置接着算。
 func TestLiveEvictAll(t *testing.T) {

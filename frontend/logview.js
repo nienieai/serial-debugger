@@ -138,6 +138,9 @@ function createLogView(host, opts) {
     // 实时模式（串口监视器 / 转发监视器）
     live: false, atBottom: true, lastSeen: 0, pollTimer: null,
     trimmedPx: 0, histFile: '', histHasMore: false,
+    // 往回翻的分页：oldestTs/oldestSame 是文档最旧帧的游标（Go 侧算，裁头会跟着
+    // 前移），loadingOlder 保证一次只问一页，histDone 表示环里再没有更早的了。
+    oldestTs: 0, oldestSame: 0, loadingOlder: false, histDone: false,
     // 增量渲染用：rowGen 是"样式代号"，变了就强制重建所有行；
     // cfgChars/needConfigure 决定要不要再发一次 Configure。
     rowGen: 0, cfgChars: 0, needConfigure: true, rulerAt: 0, layoutKey: '',
@@ -655,6 +658,7 @@ function createLogView(host, opts) {
       updateTrimTip();
       updateBottomBtn();
       fetchWindow();
+      maybeLoadOlder();
       return;
     }
     st.offset = next;
@@ -681,6 +685,7 @@ function createLogView(host, opts) {
     updateTrimTip();
     updateBottomBtn();
     if (needsFetch()) fetchWindow();
+    maybeLoadOlder();
   }
 
   // 一页 = 一行：PageUp/PageDown 一次只走一行（滚动位置已经对齐行首）。
@@ -949,18 +954,63 @@ function createLogView(host, opts) {
   // 就 notify，只有「帧数或内容高度变了」才重取窗口 —— 贴底时永远取最后一屏，
   // 不贴底时只更新滚动条（不再有「N 条新数据」气泡）。
 
-  // 顶部提示：内存缓冲已经从头上裁过帧，而且用户正顶在最上面。
-  // 有磁盘文件时历史还在，提示改成「向上可加载」；没落盘就是真丢了。
+  // 顶部提示：三种情况要分开说 ——
+  //   ① 正在往回要一页（自动加载，用户什么都不用做）
+  //   ② 还有更早的记录没取（首次回放只取一页，这是默认状态）
+  //   ③ 内存缓冲已经裁过帧，更早的确实不在了
+  // 之前只在 trimmedPx > 0 时提示，于是「首次只回放 500 条」这种情况完全没提示，
+  // 用户翻到顶以为到头了。
   function updateTrimTip() {
     trimEl.style.top = (st.reserveTop + 8) + 'px';
-    if (!(st.trimmedPx > 0) || st.atBottom || st.offset > 2) {
+    var atTop = st.offset <= 2 && !st.atBottom;
+    if (!atTop) {
       trimEl.style.display = 'none';
       return;
     }
-    trimEl.textContent = st.histFile
-      ? '↑ 已到内存缓冲起点，向上可加载磁盘历史'
-      : '↑ 更早的历史数据已被覆盖（本次会话未保存到文件）';
+    var text = '';
+    if (st.loadingOlder) {
+      text = '↑ 正在加载更早的记录…';
+    } else if (st.histHasMore && !st.histDone) {
+      text = '↑ 上面还有更早的记录';
+    } else if (st.trimmedPx > 0) {
+      text = st.histFile
+        ? '↑ 已到内存缓冲起点（更早的在会话文件里）'
+        : '↑ 更早的历史数据已被覆盖（本次会话未保存到文件）';
+    }
+    if (!text) {
+      trimEl.style.display = 'none';
+      return;
+    }
+    trimEl.textContent = text;
     trimEl.style.display = '';
+  }
+
+  // maybeLoadOlder 顶到最上面时向宿主再要一页更早的记录。
+  //
+  // 一次只要一页（一页就够一屏）：滚到顶再要下一页，用户不会察觉。正在加载时
+  // 不会重复要；宿主回 hasMore=false 之后就不再问，否则滚到顶会变成 RPC 风暴。
+  function maybeLoadOlder() {
+    if (!st.live || st.dead || !st.id) return;
+    if (st.loadingOlder || st.histDone || !st.histHasMore) return;
+    // 贴底时不加载：内容不满一屏时 offset 也是 0，那时候要「更早的」没有意义
+    if (st.offset > 2 || st.atBottom) return;
+    if (typeof opts.onNeedOlder !== 'function') return;
+    if (!st.oldestTs) return;
+    st.loadingOlder = true;
+    updateTrimTip();
+    var cur = { ts: st.oldestTs, same: st.oldestSame };
+    Promise.resolve()
+      .then(function () { return opts.onNeedOlder(cur); })
+      .then(function (r) {
+        st.loadingOlder = false;
+        if (st.dead) return;
+        if (!r || r.hasMore === false) {
+          st.histHasMore = false;
+          st.histDone = true;
+        }
+      })
+      .catch(function () { st.loadingOlder = false; })
+      .then(function () { if (!st.dead) updateTrimTip(); });
   }
 
   // 「回到底部」只在离开底部时出现；贴底时藏起来。
@@ -1039,6 +1089,11 @@ function createLogView(host, opts) {
       var dh = (info.trimmedPx || 0) - st.trimmedPx;
       st.total = info.total;
       st.trimmedPx = info.trimmedPx || 0;
+      // 往回翻的游标跟着文档走（裁头会让它前移）
+      if (info.oldestTsMs) {
+        st.oldestTs = info.oldestTsMs;
+        st.oldestSame = info.oldestSameMs || 1;
+      }
       if (typeof opts.onStatus === 'function') {
         opts.onStatus({ live: true, total: info.total, evicted: info.evicted });
       }
@@ -1074,6 +1129,10 @@ function createLogView(host, opts) {
     st.trimmedPx = 0;
     st.histFile = '';
     st.histHasMore = false;
+    st.oldestTs = 0;
+    st.oldestSame = 0;
+    st.loadingOlder = false;
+    st.histDone = false;
     updateTrimTip();
     updateBottomBtn();
     layout();
@@ -1099,6 +1158,10 @@ function createLogView(host, opts) {
     st.atBottom = true;
     st.lastSeen = 0;
     st.trimmedPx = 0;
+    st.oldestTs = 0;
+    st.oldestSame = 0;
+    st.loadingOlder = false;
+    st.histDone = false;
     // 帧号从头开始，旧的行 DOM 不能再复用（否则会撞上同一 idx 的旧签名）
     resetRowEls();
     updateTrimTip();
@@ -1120,9 +1183,15 @@ function createLogView(host, opts) {
   function prepend(frames) {
     if (!frames || !frames.length || !st.id || st.dead) return Promise.resolve();
     var h0 = st.contentH;
+    lvLog('prepend in=' + frames.length + ' id=' + st.id + ' h0=' + h0);
     return lvCall('PrependFrames', st.id, frames).then(function (info) {
       if (st.dead || !info) return info;
+      lvLog('prepend ok total=' + info.total + ' contentH=' + info.contentH + ' trimmed=' + info.trimmedPx);
       st.trimmedPx = info.trimmedPx || st.trimmedPx;
+      if (info.oldestTsMs) {
+        st.oldestTs = info.oldestTsMs;
+        st.oldestSame = info.oldestSameMs || 1;
+      }
       var delta = (info.contentH || 0) - h0;
       if (delta > 0) {
         if (st.atBottom) return refreshLive();
@@ -1132,11 +1201,14 @@ function createLogView(host, opts) {
     }).catch(function () {});
   }
 
-  // setHistory 记下这个会话有没有磁盘历史：顶部提示的文案按它分流。
+  // setHistory 记下这个会话有没有更早的历史：顶部提示和「要不要往回要一页」
+  // 都按它分流。
   function setHistory(h) {
     st.histFile = (h && h.file) || '';
     st.histHasMore = !!(h && h.hasMore);
+    st.histDone = false;
     updateTrimTip();
+    maybeLoadOlder();
   }
 
   return {
