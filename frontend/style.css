@@ -1651,7 +1651,9 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   background: linear-gradient(to right, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
   transition: background 0.15s; position: relative; z-index: 3;
 }
-.o-divider--quick::before { content: ""; position: absolute; top: 0; left: -3px; bottom: 0; width: 10px; }
+/* 命中区只往面板那一侧（右）扩，**不往内容区扩** —— 左边是内容区的滚动条，
+   往左伸 3px 就会把滑块的右边缘抢走，panel 拖到最窄时尤其明显。 */
+.o-divider--quick::before { content: ""; position: absolute; top: 0; left: 0; bottom: 0; width: 8px; }
 .o-divider--quick:hover, .o-divider--quick.is-active { background: var(--accent); }
 
 /* 收起态（面板 display:none）：
