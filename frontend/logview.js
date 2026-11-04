@@ -634,16 +634,31 @@ function createLogView(host, opts) {
   //
   // 这里**不能**走 setOffset —— 那边会 snapCurrent 吸到行首，而裁头是每帧
   // 都在发生的（环形缓冲语义下 50 ms 一次），每吸一次画面就被往上拽半行，
-  // 看起来就是持续抖动。补偿只做夹紧，不改变 offset 相对内容的位置。
+  // 看起来就是持续抖动。
+  //
+  // base 也要一起减：layer 的位移是 base - offset，两个同时减 dh 才互相抵消。
+  // 只减 offset 的话，层会被多推 dh 像素，画面看起来是「往更早的方向猛跳」。
+  // 行元素不用动：它们用的是内容坐标，坐标整体平移不影响 base - offset + y。
   function shiftBy(dh) {
     if (!(dh > 0)) return;
-    st.offset = lvClamp(st.offset - dh, 0, Math.round(st.maxOffset));
+    var next = st.offset - dh;
+    st.base -= dh;
+    if (next < 0) {
+      // 视口被推到内容顶部：坐标全变了，得重新取一屏
+      st.offset = 0;
+      st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
+      updateThumb();
+      updateTrimTip();
+      updateBottomBtn();
+      fetchWindow();
+      return;
+    }
+    st.offset = next;
     st.atBottom = st.offset >= Math.round(st.maxOffset) - 2;
     layerTransform();
     updateThumb();
     updateTrimTip();
     updateBottomBtn();
-    if (needsFetch()) fetchWindow();
   }
 
   function setOffset(v) {
