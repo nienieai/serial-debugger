@@ -5458,6 +5458,109 @@ function _tabMenuOpen(clientX, clientY, idx) {
   window.addEventListener('resize', _tabMenuClose);
 }
 
+// ---- 数据区右键菜单（单端 / 转发页）----
+//
+// 与标签右键菜单同一套皮肤和条目构造器：.menu-dropdown 的毛玻璃挂在 ::before 上，
+// 所以这里只要挂上这个类、再补一条 fixed 定位就有同样的效果（见 style.css 的
+// .menu-dropdown.disp-menu）。定位和贴边翻转的规则也照抄标签菜单。
+//
+// 为什么菜单项不写进引擎（logview.js）：清空、自动滚动、标签页设置改的都是
+// 标签页级状态，引擎只该认识自己那篇文档；它把右键坐标报上来，菜单在这里画。
+var _dispMenuEl = null;
+
+function _dispMenuOnDown(e) {
+  if (_dispMenuEl && !_dispMenuEl.contains(e.target)) _dispMenuClose();
+}
+
+function _dispMenuOnKey(e) {
+  if (e.key === 'Escape') _dispMenuClose();
+}
+
+function _dispMenuClose() {
+  if (!_dispMenuEl) return;
+  var el = _dispMenuEl;
+  _dispMenuEl = null;
+  if (el.parentNode) el.parentNode.removeChild(el);
+  document.removeEventListener('pointerdown', _dispMenuOnDown, true);
+  document.removeEventListener('keydown', _dispMenuOnKey, true);
+  window.removeEventListener('blur', _dispMenuClose);
+  window.removeEventListener('resize', _dispMenuClose);
+}
+
+// 条目复用标签菜单的四栏按钮，另外补三件事：禁用态、点完就收菜单、
+// 以及勾选态由调用方按当前状态给（标签菜单的勾选是异步回填的，这里不需要）。
+function _dispMenuItem(label, opts) {
+  opts = opts || {};
+  var run = opts.onClick;
+  var btn = _tabMenuItem(label, {
+    checked: opts.checked,
+    onClick: function () { _dispMenuClose(); if (run) run(); }
+  });
+  if (opts.disabled) btn.disabled = true;
+  return btn;
+}
+
+// 复制失败要说话。数据区没有「一行提示」的通道（文件页那个 onFlash 是挂在顶栏
+// 帧计数上的），静默失败比弹一次提示更糟：比如整篇超过 5 万帧的上限，用户会以为
+// 剪贴板里是全部内容。成功不弹，只有 err 才弹。
+function _dispCopyErr(r) {
+  if (r && r.err) showAlert(_tabMenuItemT('ctxmenu.copy_fail', '复制失败'), r.err);
+}
+
+function openDisplayMenu(tab, clientX, clientY) {
+  _tabMenuClose();   // 两种浮层不会同时出现，先收掉可能开着的标签菜单
+  _dispMenuClose();
+  var view = tab && tab._live;
+  if (!view) return;
+
+  var menu = document.createElement('div');
+  menu.className = 'menu-dropdown disp-menu';
+  menu.setAttribute('role', 'menu');
+
+  // 「复制」只对选区有效；没有选区时宁可灰掉，也别点了没反应。
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.copy', '复制'), {
+    disabled: !view.hasSelection(),
+    onClick: function () { view.copy().then(_dispCopyErr); }
+  }));
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.copy_all', '复制全部'), {
+    disabled: !view.total(),
+    onClick: function () { view.copyAll().then(_dispCopyErr); }
+  }));
+
+  menu.appendChild(_tabMenuSep());
+
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.clear', '清空显示'), {
+    onClick: function () { clearDisplay(); }
+  }));
+  // 勾选 = 没锁。按钮上写的是「自动滚动 / 锁定滚动」两副文案，菜单里统一叫自动滚动。
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.autoscroll', '自动滚动'), {
+    checked: !state.scrollLocked,
+    onClick: function () { toggleScrollLock(); }
+  }));
+
+  menu.appendChild(_tabMenuSep());
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.tab_settings', '标签页设置…'), {
+    onClick: function () { openTabSettings(tab); }
+  }));
+
+  document.body.appendChild(menu);
+  // 贴边翻转：右侧 / 底部放不下就翻到鼠标另一侧，并至少留 4px 边距。
+  var mw = menu.offsetWidth || 168;
+  var mh = menu.offsetHeight || 40;
+  var x = clientX, y = clientY;
+  if (x + mw + 4 > window.innerWidth) x = Math.max(4, x - mw);
+  if (y + mh + 4 > window.innerHeight) y = Math.max(4, y - mh);
+  menu.style.left = Math.round(x) + 'px';
+  menu.style.top = Math.round(y) + 'px';
+
+  _dispMenuEl = menu;
+  document.addEventListener('pointerdown', _dispMenuOnDown, true);
+  document.addEventListener('keydown', _dispMenuOnKey, true);
+  // 同样**不能**监听 scroll：数据区刷屏时每帧都在滚，菜单会刚出来就被自己关掉。
+  window.addEventListener('blur', _dispMenuClose);
+  window.addEventListener('resize', _dispMenuClose);
+}
+
 // ---- 标签栏内容：类型图标 + 状态点 + 信息槽 ----
 //
 // 设计稿 0.8.4-dev/tab-icon-preview-v2.html 的 P4 方案。要解决的是「六套信号说三件事」：
@@ -8387,7 +8490,10 @@ function _mountLive(tab) {
     },
     // 设置里可以关掉「自动回补」（默认开）：关掉后翻到顶只显示提示，不主动要。
     autoRefill: function () { return state.autoRefillHistory !== false; },
-    onStatus: function (s) { tab._liveTotal = s.total || 0; }
+    onStatus: function (s) { tab._liveTotal = s.total || 0; },
+    // 数据区右键：菜单交给 app.js 画 —— 清空 / 自动滚动 / 页设置改的都是标签页级
+    // 状态，引擎那边不认识。文件页不传这个钩子，右键仍是「有选中就复制」。
+    onContextMenu: function (x, y) { openDisplayMenu(tab, x, y); }
   });
   tab._live = view;
   // 切回这一页时要重取窗口：页面隐藏期间尺寸可能变过（拖过分隔条、窗口改大小）。

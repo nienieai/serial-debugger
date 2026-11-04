@@ -843,6 +843,26 @@ body.is-max .win-frame {
   padding: 5px 8px;
 }
 
+/* 数据区右键菜单（单端 / 转发页）：与标签菜单同一套皮肤 —— 毛玻璃来自
+   .menu-dropdown::before，这里只把它从「菜单栏下拉」改成跟着鼠标的浮层。 */
+.menu-dropdown.disp-menu {
+  position: fixed;
+  display: block;
+  z-index: 4500;
+  min-width: 168px;
+  padding: 4px;
+}
+
+.menu-dropdown.disp-menu button {
+  padding: 5px 8px;
+}
+
+/* 禁用项：没有选区时的「复制」、空文档时的「复制全部」。 */
+.menu-dropdown button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .menu-sep {
   height: 1px;
   background: var(--border);

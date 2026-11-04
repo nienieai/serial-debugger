@@ -831,6 +831,31 @@ function createLogView(host, opts) {
     });
   }
 
+  // copyAll 复制整篇文档，不要求选区（右键菜单里的「复制全部」）。
+  //
+  // 端点给 0 / total-1：trimmed 过的文档里 absBase > 0，帧号会被 Go 侧夹回
+  // [absBase, absBase+n-1]；行内偏移给一个远大于任何一行的值，由 posToByteLocked
+  // 夹到帧尾。所以这里不用先知道每帧折了几行。
+  function copyAll(format) {
+    if (!st.id || !st.total || st.dead) return Promise.resolve(null);
+    var req = {
+      fromIdx: 0, fromVline: 0, fromCell: 0,
+      toIdx: st.total - 1, toVline: 1 << 20, toCell: 1 << 20,
+      format: format || (st.mode === 'hex' ? 'hex' : 'escaped'),
+      withTs: false, withDir: false, withLen: false, hexPrefix: st.hexPrefix
+    };
+    return lvCall('CopySelection', st.id, req).then(function (r) {
+      if (r.err) { if (typeof opts.onFlash === 'function') opts.onFlash(r.err); return r; }
+      if (typeof opts.onFlash === 'function') {
+        opts.onFlash('已复制 ' + r.frames + ' 帧 · ' + r.bytes + ' B');
+      }
+      return r;
+    }).catch(function (e) {
+      if (typeof opts.onFlash === 'function') opts.onFlash('复制失败：' + String(e));
+      return null;
+    });
+  }
+
   // ---- 事件 ----
   function onWheel(e) {
     if (e.ctrlKey) return; // 缩放交给浏览器
@@ -878,7 +903,16 @@ function createLogView(host, opts) {
     }
   }
 
+  // 右键：宿主想要自己的菜单就让给宿主（实时页是「复制 / 清空 / 自动滚动 / 页设置」），
+  // 没给就保持老行为 —— 有选中直接复制（.stlog 文件页走这条）。
+  //
+  // 菜单不在引擎里画：那些项改的是标签页级状态，引擎不认识；这边只负责报位置。
   function onContextMenu(e) {
+    if (typeof opts.onContextMenu === 'function') {
+      e.preventDefault();
+      if (st.id) opts.onContextMenu(e.clientX, e.clientY);
+      return;
+    }
     if (!selRange()) return;
     e.preventDefault();
     copySelection();
@@ -1295,6 +1329,7 @@ function createLogView(host, opts) {
     offset: function () { return st.offset; },
     hasSelection: function () { return !!selRange(); },
     copy: copySelection,
+    copyAll: copyAll,
     clearSelection: function () { st.sel = null; paintSelection(); },
     // 调试/验收用：行高对账与当前几何
     debug: function () {
