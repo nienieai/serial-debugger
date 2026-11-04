@@ -1041,7 +1041,11 @@ function createLogView(host, opts) {
       drawRuler(false);
       // 裁头会把内容整体往上抬，这里把 offset 同步减掉同样的高度，
       // 视口就锁在原地 —— 滚动条会自己缓慢上推。
-      if (dh > 0 && st.offset > 0) {
+      //
+      // offset 已经贴到顶（0）时也必须走这里：内容还在被裁，顶部一直在变，
+      // 不重取窗口的话画面会冻结在「某一时刻的顶部」，而实际最早那帧早就
+      // 往前推了好几屏 —— 看起来就是「数据在进、画面不动」。
+      if (dh > 0) {
         shiftBy(dh);
       } else {
         updateTrimTip();
