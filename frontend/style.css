@@ -420,6 +420,50 @@ button:disabled:active { transform: none; box-shadow: none; }
    禁止收缩，否则仍是 0 宽。 */
 .c-theme-btn > svg { width: 18px; height: 18px; flex-shrink: 0; pointer-events: none; }
 
+/* ---- 无边框窗口：菜单栏就是标题栏 ----
+   系统标题栏拿掉之后，整条 .header 当拖动把手：--wails-draggable 会被子元素继承，
+   菜单项 / 设置按钮 / 窗口按钮各自 no-drag，剩下的空白区域就能拖。
+   下拉菜单是 .header 的后代，同样要 no-drag，否则在菜单里按住拖动会带着窗口跑。 */
+.header { --wails-draggable: drag; }
+.header .menu-item,
+.header .menu-dropdown,
+.header .c-theme-btn,
+.header .win-ctrl { --wails-draggable: no-drag; }
+
+.win-ctrl { display: flex; align-items: center; height: 100%; flex-shrink: 0; margin-right: -4px; }
+.win-ctrl__btn {
+  width: 44px; height: 100%; padding: 0; border: none; border-radius: 0;
+  background: transparent; color: var(--fg);
+  display: flex; align-items: center; justify-content: center;
+  cursor: default;
+}
+.win-ctrl__btn:hover { background: var(--hover); }
+.win-ctrl__btn:active { background: var(--bg3); }
+#winClose:hover { background: #e81123; color: #fff; }
+#winClose:active { background: #f1707a; color: #fff; }
+
+/* 图标用 CSS 画：图标包里没有 minimize/maximize，线条粗细照系统按钮来 */
+.win-ico { position: relative; display: block; width: 10px; height: 10px; }
+.win-ico--min::before {
+  content: ''; position: absolute; left: 0; top: 5px; width: 10px; height: 1px; background: currentColor;
+}
+.win-ico--max { border: 1px solid currentColor; box-sizing: border-box; }
+/* 最大化之后按钮变「还原」：两个叠起来的小方框 */
+#winMax.is-max .win-ico--max { border-color: transparent; }
+#winMax.is-max .win-ico--max::before,
+#winMax.is-max .win-ico--max::after {
+  content: ''; position: absolute; width: 8px; height: 8px;
+  border: 1px solid currentColor; box-sizing: border-box;
+}
+#winMax.is-max .win-ico--max::before { left: 0; bottom: 0; }
+#winMax.is-max .win-ico--max::after { right: 0; top: 0; background: var(--header-glass-bg); }
+.win-ico--close::before,
+.win-ico--close::after {
+  content: ''; position: absolute; left: -1px; top: 4.5px; width: 12px; height: 1px; background: currentColor;
+}
+.win-ico--close::before { transform: rotate(45deg); }
+.win-ico--close::after { transform: rotate(-45deg); }
+
 .cr-bubble {
   display: inline; color: var(--fg); background: var(--border);
   border-radius: 3px; padding: 0 4px; font-size: 12px;

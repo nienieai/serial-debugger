@@ -45,6 +45,14 @@ type App struct {
 	windows map[string]*application.WebviewWindow
 	winSeq  int
 
+	// 无边框窗口的最大化状态：窗口名 → 最大化之前的位置和大小。
+	//
+	// 为什么自己记：Wails 对 frameless 窗口的 ToggleMaximise 只把 WS_MAXIMIZE
+	// 状态位置上了（IsMaximised 会跟着变 true），窗口尺寸却一动不动 —— 那个
+	// ShowWindow(SW_MAXIMIZE) 在无边框窗口上不管用。这里干脆按屏幕工作区自己摆。
+	restMu  sync.Mutex
+	winRest map[string]winRect
+
 	// 单实例：又启动了一份 GUI 时，v3 把通知交给我们（见 onSecondInstanceLaunch）。
 	//
 	// secondPending 是「要开的窗口」的队列（每项是那次启动的命令行参数，目前只用于
@@ -236,13 +244,17 @@ func (a *App) registerWindow(name string, w *application.WebviewWindow) {
 
 func (a *App) unregisterWindow(name string) {
 	a.winMu.Lock()
-	defer a.winMu.Unlock()
 	delete(a.windows, name)
 	// 主窗口没了就把指针清掉：OpenDialog / CloseMainWindow 会回退到它，
 	// 拿一个已经销毁的窗口去 Position()/Close() 会出问题。
 	if name == "main" {
 		a.window = nil
 	}
+	a.winMu.Unlock()
+
+	a.restMu.Lock()
+	delete(a.winRest, name)
+	a.restMu.Unlock()
 }
 
 func (a *App) windowByName(name string) *application.WebviewWindow {
@@ -372,6 +384,78 @@ func (a *App) WhoAmI(ctx context.Context) string {
 	return "(unknown)"
 }
 
+// WindowControl 是无边框窗口右上角三个按钮的入口（minimise / toggle-maximise / close）。
+//
+// 为什么不用运行时的 window.wails.Window：那条路对无边框窗口实测不生效 ——
+// Size / IsMaximised 这类读方法都正常，说明通道是通的，但 ToggleMaximise 调完
+// 窗口纹丝不动。走服务方法还有个好处：Close 会经过 onWindowClosingFor 的
+// 「这个窗口里的会话要不要一起销毁」确认，和点系统关闭按钮完全同一条路。
+//
+// 用 ctx 里的 WindowKey 认领调用方：多窗口时各点各的，不依赖主窗口单例。
+func (a *App) WindowControl(ctx context.Context, action string) string {
+	name := winNameFromCtx(ctx)
+	w := a.windowByName(name)
+	if w == nil {
+		return "窗口不存在"
+	}
+	switch action {
+	case "minimise":
+		// Wails 的 Minimise 在无边框窗口上不落地，直接对原生窗口发 SW_MINIMIZE
+		if !minimiseNative(uintptr(w.NativeWindow())) {
+			w.Minimise()
+		}
+	case "toggle-maximise":
+		a.toggleMaximise(w, name)
+	case "close":
+		w.Close()
+	default:
+		return "未知操作: " + action
+	}
+	return name
+}
+
+// winRect 是窗口在「最大化之前」的位置和大小（DIP）。
+type winRect struct{ x, y, w, h int }
+
+// toggleMaximise 在「铺满工作区」和「最大化之前的尺寸」之间来回切。
+//
+// 不用 Wails 自己的 Maximise：frameless 窗口上那个 ShowWindow(SW_MAXIMIZE) 只
+// 把状态位置上了，尺寸一动不动。自己按屏幕工作区摆还有额外好处 —— 铺的是去掉
+// 任务栏的区域，和原生最大化一致，也不会因为多显示器跑错屏幕。
+func (a *App) toggleMaximise(w *application.WebviewWindow, name string) {
+	a.restMu.Lock()
+	defer a.restMu.Unlock()
+	if a.winRest == nil {
+		a.winRest = make(map[string]winRect)
+	}
+	if b, ok := a.winRest[name]; ok {
+		delete(a.winRest, name)
+		w.SetPosition(b.x, b.y)
+		w.SetSize(b.w, b.h)
+		return
+	}
+	x, y := w.Position()
+	width, height := w.Size()
+	// 先记原来的位置再铺满：铺满之后 Position/Size 就查不到原值了
+	a.winRest[name] = winRect{x, y, width, height}
+	scr, err := w.GetScreen()
+	if err != nil || scr == nil {
+		return
+	}
+	wa := scr.WorkArea
+	w.SetPosition(wa.X, wa.Y)
+	w.SetSize(wa.Width, wa.Height)
+}
+
+// IsMaximised 报告调用方窗口是否被本程序铺满了工作区（前端切「还原」图标用）。
+func (a *App) IsMaximised(ctx context.Context) bool {
+	name := winNameFromCtx(ctx)
+	a.restMu.Lock()
+	_, ok := a.winRest[name]
+	a.restMu.Unlock()
+	return ok
+}
+
 // OpenProbeWindow 打开（或聚焦）多窗口验证窗口。
 func (a *App) OpenProbeWindow() string {
 	const name = "probe"
@@ -381,11 +465,13 @@ func (a *App) OpenProbeWindow() string {
 		return name
 	}
 	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:   name,
-		Title:  "多窗口原型",
-		Width:  560,
-		Height: 480,
-		URL:    "/?w=probe",
+		Name:      name,
+		Title:     "多窗口原型",
+		Width:     560,
+		Height:    480,
+		Frameless: true,
+		Windows:   framelessChrome,
+		URL:       "/?w=probe",
 	})
 	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		a.unregisterWindow(name)
@@ -583,11 +669,13 @@ func (a *App) OpenSessionWindow(sessionID string) string {
 		return name
 	}
 	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:   name,
-		Title:  "会话 " + sessionID,
-		Width:  720,
-		Height: 560,
-		URL:    "/?w=session&sid=" + url.QueryEscape(sessionID),
+		Name:      name,
+		Title:     "会话 " + sessionID,
+		Width:     720,
+		Height:    560,
+		Frameless: true,
+		Windows:   framelessChrome,
+		URL:       "/?w=session&sid=" + url.QueryEscape(sessionID),
 	})
 	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		a.unregisterWindow(name)
@@ -621,11 +709,18 @@ const (
 	//
 	// 要落在标签上：按下标签时鼠标在标签上，窗口跟过来以后光标也应该还在标签上，
 	// 否则一拖出来光标就跑到标题栏/内容区，手感是「页面从手里飞了」。
-	// 窗口内坐标 = 标题栏（约 31px）+ 标签栏顶部 + 半个标签高度；
+	// 窗口内坐标 = 标签栏顶部 + 半个标签高度（无边框窗口没有系统标题栏）。
 	// x 取第一个标签的左侧内缩，避免落在横向滚动箭头上。
 	tearOffGrabX = 24
-	tearOffGrabY = 76
+	tearOffGrabY = 45
 )
+
+// framelessChrome 是无边框窗口的 Windows 专有选项：去掉 Win11 的圆角与投影。
+//
+// 不设它的话系统仍会给无边框窗口留一圈 DWM 圆角和投影 —— 看起来像「边框没裁
+// 干净」，最大化时四周还会露出一条桌面。标题栏交给前端画（见 index.html 的
+// .win-ctrl），所以窗口本身用 Frameless。
+var framelessChrome = application.WindowsWindow{DisableFramelessWindowDecorations: true}
 
 func (a *App) createWindowNamed(name, title string, hidden bool, width, height int) (*application.WebviewWindow, error) {
 	if a.wailsApp == nil {
@@ -644,6 +739,8 @@ func (a *App) createWindowNamed(name, title string, hidden bool, width, height i
 		Height:    height,
 		MinWidth:  320,
 		MinHeight: 200,
+		Frameless: true,
+		Windows:   framelessChrome,
 		Hidden:    hidden, // 拖动中先隐藏，设好 no-activate 再显示，避免闪一下抢焦点
 		URL:       "/",
 	})
@@ -1025,12 +1122,13 @@ func absInt(v int) int {
 	return v
 }
 
-// tabBandHeight 是「窗口顶部属于标签栏的那一带」的高度（标题栏 + 菜单栏 + 标签栏）。
+// tabBandHeight 是「窗口顶部属于标签栏的那一带」的高度（菜单栏 + 标签栏）。
 //
 // 拖拽落点落在这条带子里 = 插到那排标签里；落在下面（内容区）不算。
-// 96 px 是按现有布局量的：标题栏 ~40 + 菜单栏 ~22 + 标签栏 ~34。
+// 56 px 是按现有布局量的：菜单栏 26 + 标签栏 36，单行标签；双行再加 18。
+// （无边框窗口没有系统标题栏，原来那 40 px 已经拿掉。）
 // 这里没法做精确的 DOM 命中（松手时源页面拿不到坐标），所以用布局常量近似。
-const tabBandHeight = 96
+const tabBandHeight = 56
 
 // tabBandWindowAt 返回「屏幕坐标 (x,y) 落在哪个窗口的标签栏带上」，没有则返回空。
 //

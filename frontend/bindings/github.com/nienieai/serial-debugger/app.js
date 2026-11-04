@@ -540,6 +540,14 @@ export function GetWatchedSessions() {
 }
 
 /**
+ * IsMaximised 报告调用方窗口是否被本程序铺满了工作区（前端切「还原」图标用）。
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function IsMaximised() {
+    return $Call.ByName("main.App.IsMaximised");
+}
+
+/**
  * @returns {$CancellablePromise<config$0.ExternalThemeInfo[]>}
  */
 export function ListExternalColorThemes() {
@@ -1202,6 +1210,22 @@ export function WatchSession(processID) {
  */
 export function WhoAmI() {
     return $Call.ByName("main.App.WhoAmI");
+}
+
+/**
+ * WindowControl 是无边框窗口右上角三个按钮的入口（minimise / toggle-maximise / close）。
+ * 
+ * 为什么不用运行时的 window.wails.Window：那条路对无边框窗口实测不生效 ——
+ * Size / IsMaximised 这类读方法都正常，说明通道是通的，但 ToggleMaximise 调完
+ * 窗口纹丝不动。走服务方法还有个好处：Close 会经过 onWindowClosingFor 的
+ * 「这个窗口里的会话要不要一起销毁」确认，和点系统关闭按钮完全同一条路。
+ * 
+ * 用 ctx 里的 WindowKey 认领调用方：多窗口时各点各的，不依赖主窗口单例。
+ * @param {string} action
+ * @returns {$CancellablePromise<string>}
+ */
+export function WindowControl(action) {
+    return $Call.ByName("main.App.WindowControl", action);
 }
 
 /**

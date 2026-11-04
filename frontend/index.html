@@ -106,6 +106,13 @@
       </div>
     </div>
     <button id="btnTheme" class="c-theme-btn" onclick="openSettingsPage()" data-icon="settings" data-icon-w="18" data-icon-h="18" data-i18n-title="settings.title" title="设置"></button>
+    <!-- 无边框窗口：系统标题栏拿掉了，最小化/最大化/关闭改成菜单栏右侧这三个。
+         菜单栏的空白处同时是拖动把手（见 style.css 里的 --wails-draggable）。 -->
+    <div class="win-ctrl">
+      <button id="winMin" class="win-ctrl__btn" title="最小化" aria-label="最小化"><span class="win-ico win-ico--min"></span></button>
+      <button id="winMax" class="win-ctrl__btn" title="最大化" aria-label="最大化"><span class="win-ico win-ico--max"></span></button>
+      <button id="winClose" class="win-ctrl__btn" title="关闭" aria-label="关闭"><span class="win-ico win-ico--close"></span></button>
+    </div>
   </div>
 
   <div class="tabs-bar" id="tabsBar">
@@ -161,6 +168,7 @@
 <script src="/color-picker.js"></script>
 <script src="/i18n.js"></script>
 <script src="/icons.js"></script>
+<script src="/wincontrols.js"></script>
 <script src="/decoder.js"></script>
 <script src="/logview.js"></script>
 <script src="/statusbar.js"></script>

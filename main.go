@@ -102,6 +102,8 @@ func main() {
 		Height:         780,
 		MinWidth:       640,
 		MinHeight:      480,
+		Frameless:      true,
+		Windows:        framelessChrome,
 		EnableFileDrop: true,
 		URL:            "/",
 	})
