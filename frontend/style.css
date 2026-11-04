@@ -3159,11 +3159,14 @@ body.is-tab-dragging .tab-new {
 .hist-scrollbar {
   position: absolute;
   top: 6px;
-  right: 3px;
+  /* 贴右边：历史区那道（.lv-rail）已经贴到窗口右边缘，这里不再让 3px，
+     两处滚动条才在同一列上。 */
+  right: 0;
   bottom: 6px;
   width: 8px;
   z-index: 6;
-  border-radius: 4px;
+  /* 直角：历史区那道是方的，这里再圆角就成了两套皮肤 */
+  border-radius: 0;
   background: transparent;
 }
 
@@ -3176,18 +3179,19 @@ body.is-tab-dragging .tab-new {
   left: 0;
   top: 0;
   width: 100%;
-  background: var(--scrollbar-thumb);
-  border-radius: 4px;
+  /* 与 .lv-thumb 同一档：常态 45%、悬停 85%、拖动 100%，都是同一格灰，
+     不再换成主色蓝。 */
+  background: color-mix(in srgb, var(--scrollbar-thumb) 45%, transparent);
+  border-radius: 0;
   transition: background .12s;
 }
 
 .hist-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--scrollbar-thumb) 85%, transparent);
 }
 
 .hist-scrollbar-thumb.is-frozen {
-  background: var(--accent);
-  opacity: .55;
+  background: color-mix(in srgb, var(--scrollbar-thumb) 85%, transparent);
 }
 
 /* 未读提示：冻结时右下角的小胶囊，点一下回到最新一条 */
