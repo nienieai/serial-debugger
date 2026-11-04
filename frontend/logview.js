@@ -1077,6 +1077,9 @@ function createLogView(host, opts) {
     if (!st.id) return Promise.resolve();
     st.sel = null;
     st.offset = 0;
+    // 清空之后内容从零开始：视口也要算「贴底」，否则新数据进来时
+    // tickLive 走的是「不贴底」分支，永远不重取窗口，画面会一直空着。
+    st.atBottom = true;
     st.lastSeen = 0;
     st.trimmedPx = 0;
     // 帧号从头开始，旧的行 DOM 不能再复用（否则会撞上同一 idx 的旧签名）
