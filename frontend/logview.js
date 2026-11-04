@@ -1075,9 +1075,9 @@ function createLogView(host, opts) {
     });
   }
 
-  // 事件驱动：数据帧一到（history.js 的 _flushAppends）就 notify，50 ms 内合并，
-  // 到点只拉一次 LiveInfo。空闲时没有任何定时器 —— 之前的 60 ms 轮询即使没数据
-  // 也在跨桥问，一个核白掉三分之一。
+  // 事件驱动：数据帧一到（history.js 的 appendLine → notify）就合并，
+  // 50 ms 内只拉一次 LiveInfo。空闲时没有任何定时器 —— 之前的 60 ms 轮询即使
+  // 没数据也在跨桥问，一个核白掉三分之一。
   var tickTimer = null;
   var tickBusy = false;
 
