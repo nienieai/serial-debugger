@@ -54,6 +54,10 @@
     /* 菜单项悬停。原来的 --hover(#444) 压在毛玻璃菜单（~#3b3b3b）上只有 1.1:1，
        鼠标划过去几乎没有反馈；换成 accent 兑深灰的实色，约 2.1:1。 */
     --menu-hover-bg: color-mix(in srgb, var(--accent) 30%, #4f4f4f);
+    /* 标签悬浮卡（c-tabpop）里的次要文字。--placeholder(#666) 压在那张毛玻璃卡
+       （~#3b3b3b）上只有 ~1.9:1，而卡上的字又小（11~12.5px）、还带一圈黑晕，
+       看着就是糊的。单独给一档：约 4.8:1，明显弱于 --fg 但读得清。 */
+    --tabpop-dim: #a9a9a9;
     --green: #16c60c;
     --red: #ff5c5c;
     --yellow: #ffd740;
@@ -93,6 +97,7 @@
        约 2.5:1；菜单悬停同理，原 --hover(#d0d0d0) 压在近白菜单上只有 1.5:1。 */
     --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
     --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
+    --tabpop-dim: #6b6b6b;
     --green: #15803d;
     --red: #dc2626;
     --yellow: #b45309;
@@ -131,6 +136,7 @@
   --accent: #4cc2ff;
   --sel-bg: color-mix(in srgb, var(--accent) 42%, transparent);
   --menu-hover-bg: color-mix(in srgb, var(--accent) 30%, #4f4f4f);
+  --tabpop-dim: #a9a9a9;
   --green: #16c60c;
   --red: #ff5c5c;
   --yellow: #ffd740;
@@ -165,6 +171,7 @@
   --accent: #2563eb;
   --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
   --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
+  --tabpop-dim: #6b6b6b;
   --fwd-p1: #2563eb;
   --fwd-p2: #d97706;
   --fwd-p1-hover: #1d4ed8;
@@ -1793,7 +1800,7 @@ body.is-tab-dragging .tab-new {
 }
 
 .c-tabpop__badge.is-dim {
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
 }
 
 .c-tabpop__dot {
@@ -1821,7 +1828,7 @@ body.is-tab-dragging .tab-new {
 
 .c-tabpop__ptag {
   flex: none;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 
@@ -1834,14 +1841,14 @@ body.is-tab-dragging .tab-new {
 
 .c-tabpop__pdev {
   min-width: 0;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
   overflow-wrap: anywhere;
 }
 
 .c-tabpop__meta {
   margin-top: 2px;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-size: 12px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
@@ -1853,7 +1860,7 @@ body.is-tab-dragging .tab-new {
   gap: 6px;
   margin-top: 5px;
   font-size: 11.5px;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
 }
 
 .c-tabpop__save b {
@@ -1897,7 +1904,7 @@ body.is-tab-dragging .tab-new {
 
 .c-tabpop__total {
   grid-area: 1 / 2 / 2 / 3;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
   font-size: 12px;
 }
@@ -1935,7 +1942,7 @@ body.is-tab-dragging .tab-new {
   align-items: center;
   margin-top: 7px;
   font-size: 11px;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 
@@ -1973,7 +1980,7 @@ body.is-tab-dragging .tab-new {
 }
 
 .c-tabpop__rval-dim {
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
 }
 
 .c-tabpop__foot {
@@ -1981,7 +1988,7 @@ body.is-tab-dragging .tab-new {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-size: 11px;
 }
 
@@ -1993,7 +2000,7 @@ body.is-tab-dragging .tab-new {
 
 .c-tabpop__hint {
   margin-top: 6px;
-  color: var(--placeholder);
+  color: var(--tabpop-dim, var(--placeholder));
   font-size: 11px;
 }
 
