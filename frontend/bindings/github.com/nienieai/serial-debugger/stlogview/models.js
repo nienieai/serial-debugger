@@ -40,6 +40,15 @@ export class Bucket {
              */
             this["lead"] = 0;
         }
+        if (!("disk" in $$source)) {
+            /**
+             * Disk 是这一段的落盘情况：bit0 = 有已落盘的帧，bit1 = 有没落盘的帧。
+             * 前端据此上色：1 绿、2 透明、3 黄（一段里两种都有）。
+             * @member
+             * @type {number}
+             */
+            this["disk"] = 0;
+        }
 
         Object.assign(this, $$source);
     }

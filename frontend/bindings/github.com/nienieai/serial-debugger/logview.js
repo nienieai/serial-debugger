@@ -216,6 +216,22 @@ export function SetOpt(id, name, on) {
 }
 
 /**
+ * SetRecording 同步「这个会话现在开没开落盘」。
+ * 
+ * 滚动条第三条泳道要按区间上色（全落 / 全没落 / 一段里两种都有），而落盘是
+ * 会话级开关、中途可以改，所以文档要记下切换点。宿主在拿到守护进程的开关状态
+ * 时（开标签、切设置、右键菜单勾选）推一次即可，不必每帧报。
+ * @param {string} id
+ * @param {boolean} on
+ * @returns {$CancellablePromise<stlogview$0.LiveInfo>}
+ */
+export function SetRecording(id, on) {
+    return $Call.ByName("main.LogView.SetRecording", id, on).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
  * Status 是扫描进度（前端每 100~150 ms 轮一次）。
  * @param {string} id
  * @returns {$CancellablePromise<stlogview$0.StatusResult>}
