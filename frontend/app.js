@@ -4699,8 +4699,13 @@ function _tabPopValues() {
   if (live && _tabPop.uptimeAt) upSec += (Date.now() - _tabPop.uptimeAt) / 1000;
   var hasUptime = (s.uptimeSec || 0) > 0 || (live && _tabPop.uptimeAt);
   return {
-    rxRate: live ? (s.readRateBps || 0) : 0,
-    txRate: live ? (s.writeRateBps || 0) : 0,
+    // 转发模式下方向要倒过来：daemon 的 read/write 是站在 **B 口** 说的 ——
+    // readRateBps 是「从 B 口读到的」（B→A），writeRateBps 是「写到 B 口的」（A→B）。
+    // 而卡片第一条泳道在转发页是 A→B，所以这里必须交换；单端口时 read=RX、
+    // write=TX，不交换。不交换的后果是 A→B 累计涨着、速率却一直是 0，
+    // B→A 累计 0、速率却在跳（实测 5.086M / 0.0 B/s 配 0 / 16.0 kB/s）。
+    rxRate: live ? ((isFwd ? s.writeRateBps : s.readRateBps) || 0) : 0,
+    txRate: live ? ((isFwd ? s.readRateBps : s.writeRateBps) || 0) : 0,
     rxTotal: isFwd ? (s.bytesPort1 || 0) : (s.bytesRead || 0),
     txTotal: isFwd ? (s.bytesPort2 || 0) : (s.bytesWritten || 0),
     errRx: s.readErrors || 0,
