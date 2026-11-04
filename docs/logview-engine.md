@@ -35,6 +35,23 @@
 | `8f7e4da` `cfdd52e` | 裁头补偿不再走 `setOffset`（会吸到行首、每 50 ms 抖一次）；补偿要把 `base` 一起平移，只减 `offset` 画面会往更早方向猛跳 |
 | `287df72` | 不贴底时清空后回到贴底，否则新数据进来永远不重取窗口，画面一直空着 |
 | `2f83b34` | 顶在内容顶部时也跟随裁头（`offset == 0` 原来不进补偿，窗口不再重取，画面冻结在某一刻的顶部） |
+| `2b2230f` | 菜单左边的窗口图标改用 exe 自己的 `.ico`（不再是主题色 SVG 字形） |
+| `251b864` | 系统消息在文本模式下整行空白：`Row.Hex` 只在 hex 模式填 / `liveFrameFrom` 把系统帧的文本当 hex 解码 / `formatSysMsg` 把 `COM4` 当 i18n key 翻成空 |
+| `2778004` | 按方向的显示模式：`Store.dirMode[5]` + `Configure(dirModes)`，转发页 P1 / P2 各自切换 字 / H |
+| `358c874` | 往回翻到顶自动加载更早的历史（`LiveInfo` 带游标、`maybeLoadOlder`、顶部提示三态） |
+
+### 往回翻的分页（本提交）
+
+- 游标是「文档最旧帧的毫秒 + 它所在那一毫秒在文档里有几帧」，由 Go 侧
+  `LiveInfo.oldestTsMs / oldestSameMs` 给出（取逻辑起点 `head`，裁头会跟着
+  前移）。只用 ts 会重复或漏帧，见 `ringbuf.SnapshotPage`。
+- 前端 `maybeLoadOlder` 在 `offset <= 2 && !atBottom` 时向宿主 `onNeedOlder`
+  要一页（500 条），宿主回 `hasMore=false` 后不再问。
+- **坑**：打开回放后视口会停在第 1 帧而不是底部 —— `prepend` 里「贴底就
+  `refreshLive`」依赖 `st.atBottom`，而打开这一瞬间页面还没布局（`vh=0`），
+  贴底算不出来。改成回放完成后显式 `jumpBottom()`。
+- 实测：600 帧 + 3 条系统消息，打开显示 p-0591~p-0600，Home 到顶补 103 条
+  （total 603），再 Home 看到最早的 `seed-001` / `p-0001` 与「串口已打开」。
 
 ### 裁头的实现（本提交）
 
@@ -67,22 +84,36 @@
 
 ## 未完成（按优先级）
 
-1. **往回翻到顶后的分页加载**：打开时只回放最近一页（500 条），再往前的历史还没接
-   `GetSessionHistory` 分页（游标 + `PrependFrames` + 前插后的锚定）。有 `historyFile`
-   的会话，顶部提示已经写成「向上可加载磁盘历史」，但点了还没反应。
-2. **磁盘按需（窗口外的帧从会话文件取）**：现在整份 arena 都在内存里，5 MB 上限之外
-   的帧裁掉就没了。要做「引擎不设上限、用到哪取哪」，得先给会话文件建「帧号 → 文件
-   偏移」索引（追加式变长记录现在只能从头扫），再换成分段前缀和 + 页缓存。
-   **规划中的配套**：块状估算行高（块首精确、块内按字节数估），用来替掉无限长文档里
-   的全量 `prefix`。两项一起做才有意义。
-3. **会话页的 Hex↔文本 / 清空**：代码已接（`setMode()`、`clear()`），但还没逐项实测。
-4. **转发页（P1/P2）**：`TabPage` 已统一挂载，但转发页的双方向配色与三泳道口径没验；
-   老的分方向字号按钮（字 / H）切换要接到 `view.setMode`。
-5. **收尾**：删掉 `history.js` 的窗口渲染（`_flushAppends` / `renderHistoryLines` /
-   `_trimCache` / 自绘滚动条 / 未读块），把搜索、统计、磁盘提示并进引擎，
+1. **磁盘历史（比环更早的那部分）**：现在整份 arena 都在内存里，5 MB 上限之外
+   的帧裁掉就没了。要做「引擎不设上限、用到哪取哪」，得先给会话文件建「帧号 →
+   文件偏移」索引（追加式变长记录现在只能从头扫），再换成分段前缀和 + 页缓存。
+   **规划中的配套**：块状估算行高（块首精确、块内按字节数估），用来替掉无限长
+   文档里的全量 `prefix`。两项一起做才有意义。
+   老的 `SearchHistory(file,'',200,offset)` **不能用**：它从文件头顺序读、`offset`
+   还被当成条数传（`history.js:1080`），方向和「往上翻」相反。
+2. **转发页 P1 / P2 模式的界面实测**：Go 侧 `TestDirModes` 已过，`tab.mode` 也
+   确认是 `forward`（P1 文 / P2 文 按钮能出来）。但点 P1 之后出现三件怪事：
+   按钮文字没变、系统消息显示成两份、行距整体压缩。怀疑 `reconfigure()`
+   走 `refreshLive()` 重取窗口时和已有布局打架，下一轮先查这个再接回 UI。
+3. **会话页的 Hex↔文本 / 清空**：已实测通过（字/H 双向、清空、清空后继续收）。
+4. **收尾**：删掉 `history.js` 的窗口渲染（`_flushAppends` / `renderHistoryLines` /
+   `_trimCache` / 自绘滚动条 / 未读块），把统计、磁盘提示并进引擎，
    同步 README / ARCHITECTURE / TODO / CHANGELOG。
-6. **Modbus 校验道**：本轮按用户要求不做（将来是「可自定义规则文件」的校验引擎，
+5. **Modbus 校验道**：本轮按用户要求不做（将来是「可自定义规则文件」的校验引擎，
    不是硬编码检查），泳道先占位。
+
+## 诊断技巧
+
+GUI 是 hotreload 构建，前端改完直接拷进部署目录、400 ms 自动重载。要让
+`App.Log`（前端 `console.log` 也走它）落到文件，用重定向启动：
+
+```powershell
+Start-Process -FilePath .\serial-gui-dev.exe -WorkingDirectory . `
+  -RedirectStandardError "$env:TEMP\gui-diag.log"
+```
+
+日志里 `[js]` 前缀的是前端打的，`[logview]` 是 `logview.js` 自己的。
+
 
 ## 怎么验
 
