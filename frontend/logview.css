@@ -18,6 +18,13 @@
   font-size: 15px;
   line-height: 1.6;
   background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  /* 原生选区关掉：高亮是引擎自己画的（半透明、能跨未渲染区、不会被行重建打断）。
+     从 stlog-viewer 往这边搬的时候漏了这一条 —— 结果是浏览器自己也会选一段
+     DOM 文本，那份高亮和引擎的选区互不相干：看起来「选中了」，右键菜单里
+     「复制」却还是灰的，或者两段高亮同时出现。
+     关掉原生选区后浏览器不再给 I 形光标，由 .lv-view 的 cursor: text 补上。 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .lv-view {
   position: relative;

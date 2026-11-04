@@ -885,6 +885,13 @@ function createLogView(host, opts) {
 
   function onPointerMove(e) {
     if (!st.dragging) return;
+    // 真开始拖了就先别贴底：数据每秒几十帧往下长，跟着滚的话刚选中的行
+    // 两三百毫秒就跑出视口，用户看到的就是「选不中」。单击不走这里，
+    // 所以点一下不会关掉跟随；要恢复跟随点「↓ 回到底部」。
+    if (st.live && st.atBottom) {
+      st.atBottom = false;
+      updateBottomBtn();
+    }
     var p = posAt(e.clientX, e.clientY);
     if (!p) return;
     st.sel.b = p;
