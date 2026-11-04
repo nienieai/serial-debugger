@@ -234,8 +234,6 @@ func (a *App) registerWindow(name string, w *application.WebviewWindow) {
 	if name == "" || w == nil {
 		return
 	}
-	// 无边框窗口的右侧热区收窄（滚动条压在窗口右边上，不缩窄就点不到）
-	installNarrowResizeEdge(w)
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
 	if a.windows == nil {
@@ -246,7 +244,6 @@ func (a *App) registerWindow(name string, w *application.WebviewWindow) {
 
 func (a *App) unregisterWindow(name string) {
 	a.winMu.Lock()
-	w := a.windows[name]
 	delete(a.windows, name)
 	// 主窗口没了就把指针清掉：OpenDialog / CloseMainWindow 会回退到它，
 	// 拿一个已经销毁的窗口去 Position()/Close() 会出问题。
@@ -254,9 +251,6 @@ func (a *App) unregisterWindow(name string) {
 		a.window = nil
 	}
 	a.winMu.Unlock()
-
-	// 摘掉热区钩子：窗口还在（closing 阶段），把原过程还回去
-	forgetNarrowResizeEdge(w)
 
 	a.restMu.Lock()
 	delete(a.winRest, name)
