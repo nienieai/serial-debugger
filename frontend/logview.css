@@ -95,13 +95,16 @@
   cursor: pointer;
 }
 .lv-lanes { position: relative; width: 15px; height: 100%; }
-/* 轨道本体：上/下按 reserveTop / reserveBottom 让位（顶部悬浮工具条、底部按钮），
-   左边那条 1px 分界线仍然满高 —— 和 VS Code 一样，分隔线到底，滑块让开。 */
+/* 轨道本体：上边界落在顶部毛玻璃栏的底边（top 由 JS 设），一直落到底 ——
+   底部那 48px 是浮动按钮条，它的模糊垫底已经向右让开 16px（见 style.css），
+   所以滑块拖到底也看得见。只有会话页（有毛玻璃栏）才画那条上边界横线。 */
 .lv-track {
   position: absolute;
   left: 0;
   right: 0;
+  box-sizing: border-box;
 }
+.lv-track-rule { border-top: 1px solid var(--border); }
 .lv-lane {
   position: absolute;
   top: 0;
@@ -119,11 +122,13 @@
   top: 0;
   width: 100%;
   min-height: 15px;
-  background: var(--scrollbar-thumb);
+  /* 半透明：让下面三条泳道透出来（和示例工程 #79797966 一个道理），
+     实心滑块会把语义色整个盖住。 */
+  background: color-mix(in srgb, var(--scrollbar-thumb) 40%, transparent);
   will-change: transform;
   cursor: pointer;
 }
-.lv-thumb:hover { background: var(--accent); }
+.lv-thumb:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
 
 /* 未读胶囊：不贴底时出现，点一下回到底部 */
 .lv-unread {

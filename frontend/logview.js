@@ -129,7 +129,8 @@ function createLogView(host, opts) {
     live: false, atBottom: true, unread: 0, lastSeen: 0, pollTimer: null,
     trimmedPx: 0, histFile: '', histHasMore: false,
     reserveTop: opts.reserveTop || 0,
-    reserveBottom: opts.reserveBottom || 0
+    reserveBottom: opts.reserveBottom || 0,
+    trackTop: 0
   };
 
   host.classList.add('lv-host');
@@ -230,12 +231,18 @@ function createLogView(host, opts) {
       var rs = opts.reserve() || {};
       st.reserveTop = rs.top || 0;
       st.reserveBottom = rs.bottom || 0;
+      st.trackTop = (rs.trackTop == null) ? st.reserveTop : (rs.trackTop || 0);
+    } else {
+      st.trackTop = st.reserveTop;
     }
     st.vh = Math.max(1, host.clientHeight - st.reserveTop - st.reserveBottom);
-    st.trackH = Math.max(1, st.vh);
-    // 滚动条避让：轨道从 reserveTop 开始、到 reserveBottom 结束（分界线仍满高）
-    track.style.top = st.reserveTop + 'px';
+    // 滚动条：上边界落在顶部毛玻璃栏的底边，然后一直落到底 —— 底部那 48px
+    // 虽然要给浮动按钮让位，但滚动条本身不该被按钮的模糊垫底盖住（垫底已右让 16px）。
+    st.trackH = Math.max(1, host.clientHeight - st.trackTop);
+    track.style.top = st.trackTop + 'px';
     track.style.height = st.trackH + 'px';
+    // 上边界横线只在会话页画（文件页 trackTop=0，不需要一条压住首行的线）
+    track.classList.toggle('lv-track-rule', st.trackTop > 0);
     measure();
     var avail = Math.max(1, host.clientWidth - LV_PAD_X - LV_PAD_R - LV_RAIL_W);
     return fitChars(avail);
@@ -338,8 +345,8 @@ function createLogView(host, opts) {
   }
 
   // ---- 滚动条 ----
+  // trackH 只在 layout() 里定（上边界毛玻璃底边、下边界窗口底），这里不能覆盖它。
   function updateThumb() {
-    st.trackH = Math.max(1, st.vh);
     var thumbH = st.thumbH;
     if (st.contentH > 0) {
       thumbH = st.trackH * Math.min(1, st.vh / st.contentH);

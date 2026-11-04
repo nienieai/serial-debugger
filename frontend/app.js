@@ -8314,14 +8314,17 @@ function _mountLive(tab) {
   // 靠 40px 兜底才没露馅，底部被算成 8px，最后一条帧的数据行就压在浮动按钮下面。
   // 改成每次 layout() 现量：等页面真正有了尺寸（ResizeObserver / 第一帧到达）再取值。
   function reserveOf() {
-    var out = { top: 40, bottom: 0 };
+    var out = { top: 40, bottom: 0, trackTop: 40 };
     if (!mount.clientHeight) return out; // 还没布局，先用兜底值
     try {
-      // 顶部：悬浮配置栏（含「清空」按钮）的实际底边
+      // 顶部：滚动条上边界压在悬浮配置栏（毛玻璃）的底边上，内容再让 8px
       var bar = tab._page.root.querySelector('.config-bar');
       if (bar) {
-        var t = Math.round(bar.getBoundingClientRect().bottom - mount.getBoundingClientRect().top) + 8;
-        if (t > 0) out.top = Math.max(40, t);
+        var barBottom = Math.round(bar.getBoundingClientRect().bottom - mount.getBoundingClientRect().top);
+        if (barBottom > 0) {
+          out.trackTop = barBottom;
+          out.top = Math.max(40, barBottom + 8);
+        }
       }
       // 底部：字 / H / 锁定滚动 那排浮动按钮压在内容上，最后一行得让开
       var btns = tab._page.root.querySelector('.c-fwd-float-btns');

@@ -1524,12 +1524,16 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
 .c-fwd-float-btns {
   position: absolute; bottom: 0; left: 0; right: 0; z-index: 3;
   display: flex; gap: 6px; padding: 8px 8px 4px 8px;
+  /* 容器铺满整行，但空白处（尤其是右下角 16px 滚动条列）不能挡鼠标：
+     否则滚动条拖到底时那一段点不中。 */
+  pointer-events: none;
 }
 /* 浮动按钮条的垫底：模糊优先，模糊不可用时退回渐变遮罩。
    以前只写了 backdrop-filter，且只在 .c-fwd-display 下生效 —— 一旦模糊层没
-   渲染（软件合成/层叠上下文变化），按钮就直接压在数据行上，文字全透出来。 */
+   渲染（软件合成/层叠上下文变化），按钮就直接压在数据行上，文字全透出来。
+   右边让开 16px 给滚动条：滚动条要一直落到窗口底，不能被这层模糊盖住。 */
 .c-fwd-float-btns::before {
-  content: ''; position: absolute; inset: 0; z-index: -1;
+  content: ''; position: absolute; inset: 0 16px 0 0; z-index: -1;
   backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
   background: linear-gradient(to top,
     color-mix(in srgb, var(--input-bg) 88%, transparent) 0%,
@@ -1538,7 +1542,11 @@ body.is-tab-dragging .tab-new { position: relative; z-index: 10050; }
   mask-image: linear-gradient(to top, black 75%, transparent 100%);
   -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
 }
-.c-fwd-float-btns button { font-size: 13px; padding: 0 10px; height: 28px; line-height: 28px; border-radius: 6px; width: max-content; }
+.c-fwd-float-btns button {
+  font-size: 13px; padding: 0 10px; height: 28px; line-height: 28px;
+  border-radius: 6px; width: max-content;
+  pointer-events: auto;
+}
 
 /* 选中数据文本时撤掉垫底：模糊会把选择高亮一起糊掉，看不出选中了哪几行 */
 .display-area.is-selecting .c-fwd-float-btns::before { display: none; }
