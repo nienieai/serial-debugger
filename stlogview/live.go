@@ -465,7 +465,10 @@ func (ix *index) originIDStr(s string) uint8 {
 			return uint8(i + 1)
 		}
 	}
-	if len(ix.orgNames) >= 7 {
+	if len(ix.orgNames) >= 200 {
+		// 上限 200（uint8 存得下）：origin 是**每次客户端会话**的 id，CLI / MCP
+		// 每条命令都会注册一个新的，7 种根本不够 —— 实测 serial-cli 连发 30 条，
+		// 从第 8 条起角标就全没了。
 		return 0
 	}
 	ix.orgNames = append(ix.orgNames, s)

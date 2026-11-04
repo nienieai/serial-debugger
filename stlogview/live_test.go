@@ -192,6 +192,26 @@ func TestLiveEvictCompacts(t *testing.T) {
 	}
 }
 
+// TestOriginManyNames 来源超过 7 种时后面的也要能显示。
+// origin 是**每次客户端会话**的 id（CLI / MCP 每条命令一个），7 种的旧上限
+// 会让连发几十条之后一半以上的行都没有角标。
+func TestOriginManyNames(t *testing.T) {
+	s := newLiveDoc(t, 1<<20)
+	for i := 0; i < 30; i++ {
+		s.AppendFrame(FrameIn{
+			Ts: int64(1000 + i), Dir: sessionfile.DirTx, Hex: "41",
+			Origin: fmt.Sprintf("cli-%08x", i),
+		})
+	}
+	w := s.Window(0, 4000, 0)
+	if len(w.Rows) != 30 {
+		t.Fatalf("行数 %d", len(w.Rows))
+	}
+	if got, want := w.Rows[29].Origin, "cli-0000001d"; got != want {
+		t.Fatalf("第 30 条的来源应当是 %q，得到 %q", want, got)
+	}
+}
+
 // TestLiveOldestCursor 往回翻的游标：文档最旧帧的 ts，以及它所在那一毫秒
 // 在文档里有几帧。毫秒会撞车，只有 ts 不够（会重复或漏帧）。
 func TestLiveOldestCursor(t *testing.T) {
