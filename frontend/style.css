@@ -3163,7 +3163,10 @@ body.is-tab-dragging .tab-new {
      两处滚动条才在同一列上。 */
   right: 0;
   bottom: 6px;
-  width: 8px;
+  /* 宽度与 .lv-rail 一致（16px）：两边滚动条同宽同色，视觉上是一条通道。
+     发送框的左右内边距跟着放宽到 20px（见 #sendInput / .send-input-mirror），
+     否则最后 4px 的字会钻到滑块底下。 */
+  width: 16px;
   z-index: 6;
   /* 直角：历史区那道是方的，这里再圆角就成了两套皮肤 */
   border-radius: 0;
@@ -3704,7 +3707,8 @@ body.is-tab-dragging .tab-new {
   z-index: 0;
   overflow: auto;
   pointer-events: none;
-  padding: 42px 12px 40px 12px;
+  /* 右边 20px = 16px 自绘滚动条 + 4px 间隙，与 #sendInput 逐格一致 */
+  padding: 42px 20px 40px 12px;
   font-size: 15px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   line-height: 1.5;
@@ -3836,7 +3840,8 @@ body.is-tab-dragging .tab-new {
   caret-color: var(--fg);
   -webkit-appearance: none;
   appearance: none;
-  padding: 42px 12px 40px 12px;
+  /* 与 .send-input-mirror 逐格一致：右边 20px = 16px 自绘滚动条 + 4px 间隙 */
+  padding: 42px 20px 40px 12px;
   font-size: 15px;
   font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
   resize: none;
