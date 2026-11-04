@@ -3998,7 +3998,7 @@ body.is-tab-dragging .tab-new {
   top: 0;
   left: 0;
   bottom: 0;
-  width: 3px;
+  width: 5px;
 }
 
 .o-divider--quick:hover,
