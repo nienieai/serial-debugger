@@ -58,10 +58,12 @@
        （~#3b3b3b）上只有 ~1.9:1，而卡上的字又小（11~12.5px）、还带一圈黑晕，
        看着就是糊的。单独给一档：约 4.8:1，明显弱于 --fg 但读得清。 */
     --tabpop-dim: #a9a9a9;
-    /* 数据区与滚动条的底色：深色下用纯黑，和窗口其余部分拉出层次；浅色沿用
-       原来的「输入区白 + 一档透明」。 */
-    --lv-bg: #000;
-    --rail-bg: #000;
+    /* 面板底色：多字符串、发送区、历史框（数据区）三块共用一档。
+       深色取比输入区(#1a1a1a)更深的黑，但不是纯黑 —— 纯黑和窗口边框、滚动条
+       之间会显得发死；浅色沿用原来的「输入区白 + 一档透明」。 */
+    --panel-bg: #0d0d0d;
+    --lv-bg: var(--panel-bg);
+    --rail-bg: var(--panel-bg);
     --green: #16c60c;
     --red: #ff5c5c;
     --yellow: #ffd740;
@@ -102,7 +104,8 @@
     --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
     --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
     --tabpop-dim: #6b6b6b;
-    --lv-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
+    --panel-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
+    --lv-bg: var(--panel-bg);
     --rail-bg: transparent;
     --green: #15803d;
     --red: #dc2626;
@@ -143,8 +146,9 @@
   --sel-bg: color-mix(in srgb, var(--accent) 42%, transparent);
   --menu-hover-bg: color-mix(in srgb, var(--accent) 30%, #4f4f4f);
   --tabpop-dim: #a9a9a9;
-  --lv-bg: #000;
-  --rail-bg: #000;
+  --panel-bg: #0d0d0d;
+  --lv-bg: var(--panel-bg);
+  --rail-bg: var(--panel-bg);
   --green: #16c60c;
   --red: #ff5c5c;
   --yellow: #ffd740;
@@ -180,7 +184,8 @@
   --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
   --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
   --tabpop-dim: #6b6b6b;
-  --lv-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  --panel-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  --lv-bg: var(--panel-bg);
   --rail-bg: transparent;
   --fwd-p1: #2563eb;
   --fwd-p2: #d97706;
@@ -3062,6 +3067,13 @@ body.is-tab-dragging .tab-new {
   z-index: -1;
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
+  /* 上边缘的模糊必须和下面浮动按钮条那层用**同一档底色和同样的渐变**：
+     之前这层只有 blur 没有底色，顶边是「内容原色被糊」，底边是「糊 + 面板色」，
+     两条边缘看起来两个颜色。方向镜像一下（to bottom ↔ to top）就对齐了。 */
+  background: linear-gradient(to bottom,
+      color-mix(in srgb, var(--panel-bg, var(--input-bg)) 88%, transparent) 0%,
+      color-mix(in srgb, var(--panel-bg, var(--input-bg)) 55%, transparent) 55%,
+      transparent 100%);
   mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
 }
@@ -3474,7 +3486,9 @@ body.is-tab-dragging .tab-new {
 /* Send area */
 .send-area {
   position: relative;
-  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  /* 与多字符串面板、历史框共用一档底色（--panel-bg）：深色下比输入区更深，
+     三块拼在一起不会有色差。 */
+  background: var(--panel-bg, color-mix(in srgb, var(--input-bg) 88%, transparent));
   border-top: none;
   flex-shrink: 0;
   overflow: hidden;
@@ -3899,7 +3913,8 @@ body.is-tab-dragging .tab-new {
 /* 浮动按钮条的垫底：模糊优先，模糊不可用时退回渐变遮罩。
    以前只写了 backdrop-filter，且只在 .c-fwd-display 下生效 —— 一旦模糊层没
    渲染（软件合成/层叠上下文变化），按钮就直接压在数据行上，文字全透出来。
-   右边让开 16px 给滚动条：滚动条要一直落到窗口底，不能被这层模糊盖住。 */
+   右边让开 16px 给滚动条：滚动条要一直落到窗口底，不能被这层模糊盖住。
+   渐变用的底色和上边缘那层（config-bar::before）是同一档（--panel-bg）。 */
 .c-fwd-float-btns::before {
   content: '';
   position: absolute;
@@ -3908,8 +3923,8 @@ body.is-tab-dragging .tab-new {
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
   background: linear-gradient(to top,
-      color-mix(in srgb, var(--input-bg) 88%, transparent) 0%,
-      color-mix(in srgb, var(--input-bg) 55%, transparent) 55%,
+      color-mix(in srgb, var(--panel-bg, var(--input-bg)) 88%, transparent) 0%,
+      color-mix(in srgb, var(--panel-bg, var(--input-bg)) 55%, transparent) 55%,
       transparent 100%);
   mask-image: linear-gradient(to top, black 75%, transparent 100%);
   -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
@@ -4084,7 +4099,7 @@ body.is-tab-dragging .tab-new {
 }
 
 .quick-panel {
-  background: color-mix(in srgb, var(--input-bg) 88%, transparent);
+  background: var(--panel-bg, color-mix(in srgb, var(--input-bg) 88%, transparent));
   min-width: 0;
   overflow: hidden;
   display: flex;
