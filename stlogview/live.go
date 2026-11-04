@@ -41,7 +41,10 @@ type LiveInfo struct {
 	// ContentH 是内容总高度（像素）：前端轮询时拿它判断「要不要重取窗口」，
 	// 比每 120 ms 都取一次窗口便宜。
 	ContentH float64 `json:"contentH"`
-	Phase    string  `json:"phase"`
+	// TrimmedPx 是从头部裁掉的内容总高度（像素）。用户顶着旧数据看的时候，
+	// 前端按它的增量把 offset 往下减，视口就锁在原地、滚动条缓慢上推。
+	TrimmedPx float64 `json:"trimmedPx"`
+	Phase     string  `json:"phase"`
 }
 
 // MarkLive 把文档切成实时模式：清空索引，之后只能 Append / Prepend。
@@ -62,6 +65,7 @@ func (s *Store) MarkLive(maxBytes int64) {
 	s.path = ""
 	s.ix = &index{segIdx: []int32{0}}
 	s.absBase = 0
+	s.trimmedH2 = 0
 	s.perLine = s.perLineLocked()
 	s.prefix = []int64{0}
 	s.totalH2 = 0
@@ -134,6 +138,7 @@ func (s *Store) ResetLive() LiveInfo {
 	if s.live {
 		s.ix = &index{segIdx: []int32{0}}
 		s.absBase = 0
+		s.trimmedH2 = 0
 		s.prefix = []int64{0}
 		s.totalH2 = 0
 		s.ruler = nil
@@ -156,6 +161,7 @@ func (s *Store) liveInfoLocked() LiveInfo {
 		out.Bytes = int64(len(s.ix.arena))
 	}
 	out.ContentH = float64(s.totalH2) / 2
+	out.TrimmedPx = float64(s.trimmedH2) / 2
 	out.Evicted = s.absBase
 	out.Total = s.absBase + out.Frames
 	return out
@@ -237,6 +243,9 @@ func (s *Store) dropFrontLocked(cut int) {
 	n := ix.n - cut
 	base := ix.aoff[cut]
 	segBase := ix.segIdx[cut]
+	// 记下这一刀裁掉多少高度（半像素），前端靠它把视口锚在原地。
+	// 必须用裁之前的 prefix —— 下面 rebuildLayoutLocked 会把它重算。
+	s.trimmedH2 += s.prefix[cut]
 
 	// 数组左移（dst 在 src 之前，copy 允许重叠）
 	copy(ix.ts, ix.ts[cut:])

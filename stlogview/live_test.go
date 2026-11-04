@@ -3,6 +3,7 @@ package stlogview
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,38 @@ func TestLiveEvict(t *testing.T) {
 	last := s.Window(int(w.MaxOffset), 200, 0)
 	if len(last.Rows) == 0 || last.Rows[len(last.Rows)-1].Idx != 199 {
 		t.Fatalf("滚到底最后一帧 = %+v", last.Rows[len(last.Rows)-1].Idx)
+	}
+}
+
+// TestLiveTrimmedPx 裁头时要把「被裁掉多少像素」报给前端：用户顶着旧数据看时，
+// 前端按这个增量把 offset 减下去，画面才不会往下滑。
+func TestLiveTrimmedPx(t *testing.T) {
+	s := newLiveDoc(t, 4096)
+	payload := make([]byte, 100)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	for i := 0; i < 300; i++ {
+		s.AppendFrame(liveFrame(int64(1000+i), 1, payload))
+	}
+	info := s.LiveInfo()
+	if info.Evicted <= 0 {
+		t.Fatalf("没有触发裁剪：%+v", info)
+	}
+	if info.TrimmedPx <= 0 {
+		t.Fatalf("TrimmedPx 没算：%+v", info)
+	}
+	w := s.Window(0, 100, 0)
+	if len(w.Rows) == 0 {
+		t.Fatal("没有行")
+	}
+	// 每帧 payload 相同 → 行高相同，被裁掉的高度应正好是 evicted × 行高。
+	if got, want := info.TrimmedPx, float64(info.Evicted)*w.Rows[0].H; math.Abs(got-want) > 0.6 {
+		t.Fatalf("TrimmedPx = %v，期望 %v（%d 帧 × %v）", got, want, info.Evicted, w.Rows[0].H)
+	}
+	// 清空之后必须归零，否则新会话一打开就顶着「历史被覆盖」。
+	if r := s.ResetLive(); r.TrimmedPx != 0 || r.Evicted != 0 || r.Total != 0 {
+		t.Fatalf("清空后 %+v", r)
 	}
 }
 

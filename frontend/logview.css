@@ -142,3 +142,21 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
 }
 .lv-unread:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 顶部提示：内存缓冲已经把更早的历史裁掉了。没落盘时这部分是真丢了；
+   有磁盘文件的会话改成「向上可加载」。top 由 JS 按 reserveTop 定位。 */
+.lv-trim {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--placeholder);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}

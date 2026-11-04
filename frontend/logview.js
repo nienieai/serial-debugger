@@ -127,6 +127,7 @@ function createLogView(host, opts) {
     dead: false,
     // 实时模式（串口监视器 / 转发监视器）
     live: false, atBottom: true, unread: 0, lastSeen: 0, pollTimer: null,
+    trimmedPx: 0, histFile: '', histHasMore: false,
     reserveTop: opts.reserveTop || 0,
     reserveBottom: opts.reserveBottom || 0
   };
@@ -167,6 +168,12 @@ function createLogView(host, opts) {
   unreadEl.style.display = 'none';
   unreadEl.addEventListener('click', function () { st.unread = 0; jumpBottom(); });
   host.appendChild(unreadEl);
+
+  // 顶部提示：更早的历史已经被内存缓冲裁掉了（没落盘时就是永久丢失）。
+  var trimEl = document.createElement('div');
+  trimEl.className = 'lv-trim';
+  trimEl.style.display = 'none';
+  host.appendChild(trimEl);
 
   // 选区盒子单独一层，跟着 layer 一起平移（用 row.y - base 定位，不受 LayoutUnit 上限影响）
   var selLayer = document.createElement('div');
@@ -522,6 +529,7 @@ function createLogView(host, opts) {
     v = lvClamp(Math.round(v), 0, Math.round(st.maxOffset));
     if (v === st.offset) {
       st.atBottom = v >= Math.round(st.maxOffset) - 2;
+      updateTrimTip();
       return;
     }
     st.offset = v;
@@ -529,6 +537,7 @@ function createLogView(host, opts) {
     if (st.atBottom) { st.unread = 0; updateUnread(); }
     layerTransform();
     updateThumb();
+    updateTrimTip();
     if (needsFetch()) fetchWindow();
   }
 
@@ -792,10 +801,25 @@ function createLogView(host, opts) {
     }
   }
 
+  // 顶部提示：内存缓冲已经从头上裁过帧，而且用户正顶在最上面。
+  // 有磁盘文件时历史还在，提示改成「向上可加载」；没落盘就是真丢了。
+  function updateTrimTip() {
+    trimEl.style.top = (st.reserveTop + 8) + 'px';
+    if (!(st.trimmedPx > 0) || st.atBottom || st.offset > 2) {
+      trimEl.style.display = 'none';
+      return;
+    }
+    trimEl.textContent = st.histFile
+      ? '↑ 已到内存缓冲起点，向上可加载磁盘历史'
+      : '↑ 更早的历史数据已被覆盖（本次会话未保存到文件）';
+    trimEl.style.display = '';
+  }
+
   function jumpBottom() {
     st.atBottom = true;
     setOffset(st.maxOffset);
     updateUnread();
+    updateTrimTip();
   }
 
   function refreshLive() {
@@ -813,6 +837,7 @@ function createLogView(host, opts) {
       if (st.atBottom) st.offset = Math.round(w.maxOffset);
       layerTransform();
       updateThumb();
+      updateTrimTip();
       st.lastSeen = st.total;
       if (typeof opts.onStatus === 'function') {
         opts.onStatus({ live: true, total: st.total, evicted: w.total - st.total });
@@ -828,13 +853,22 @@ function createLogView(host, opts) {
       if (st.dead) return;
       var grew = info.total !== st.total || Math.abs(info.contentH - st.contentH) > 0.5;
       var delta = info.total - st.total;
+      var dh = (info.trimmedPx || 0) - st.trimmedPx;
       st.total = info.total;
+      st.trimmedPx = info.trimmedPx || 0;
       if (typeof opts.onStatus === 'function') {
         opts.onStatus({ live: true, total: info.total, evicted: info.evicted });
       }
       if (!grew) return;
-      if (st.atBottom) refreshLive();
-      else if (delta > 0) { st.unread += delta; updateUnread(); }
+      if (st.atBottom) { refreshLive(); return; }
+      // 不贴底：用户在往回翻。裁头会把内容整体往上抬，这里把 offset 同步减掉
+      // 同样的高度，视口就锁在原地 —— 滚动条会自己缓慢上推。
+      if (dh > 0 && st.offset > 0) {
+        setOffset(Math.max(0, st.offset - dh));
+      } else {
+        updateTrimTip();
+      }
+      if (delta > 0) { st.unread += delta; updateUnread(); }
     }).catch(function () {}).then(function () {
       if (!st.dead) st.pollTimer = setTimeout(pollLive, 120);
     });
@@ -844,6 +878,10 @@ function createLogView(host, opts) {
     st.live = true;
     st.atBottom = true;
     st.unread = 0;
+    st.trimmedPx = 0;
+    st.histFile = '';
+    st.histHasMore = false;
+    updateTrimTip();
     layout();
     return lvCall('OpenLive', sessionID).then(function (r) {
       st.id = r.id;
@@ -863,7 +901,9 @@ function createLogView(host, opts) {
     st.offset = 0;
     st.unread = 0;
     st.lastSeen = 0;
+    st.trimmedPx = 0;
     updateUnread();
+    updateTrimTip();
     return lvCall('ResetLive', st.id).then(function () {
       return refreshLive();
     }).catch(function () {});
@@ -874,11 +914,40 @@ function createLogView(host, opts) {
     lvCall('AppendSystem', st.id, text).catch(function () {});
   }
 
+  // prepend 把更早的历史插到文档最前面（打开回放 / 往回翻补历史共用）。
+  //
+  // 前插之后所有内容下移了 delta 像素，把 offset 也加回去，画面才不会跳；
+  // 贴底时照旧贴底。取窗口必须用 fetchWindow（按 offset 取），不能用 refreshLive
+  // —— 后者永远取最后一屏，不贴底的人会被拉到别处。
+  function prepend(frames) {
+    if (!frames || !frames.length || !st.id || st.dead) return Promise.resolve();
+    var h0 = st.contentH;
+    return lvCall('PrependFrames', st.id, frames).then(function (info) {
+      if (st.dead || !info) return info;
+      st.trimmedPx = info.trimmedPx || st.trimmedPx;
+      var delta = (info.contentH || 0) - h0;
+      if (delta > 0) {
+        if (st.atBottom) return refreshLive();
+        st.offset += delta;
+      }
+      return fetchWindow().then(function () { updateTrimTip(); });
+    }).catch(function () {});
+  }
+
+  // setHistory 记下这个会话有没有磁盘历史：顶部提示的文案按它分流。
+  function setHistory(h) {
+    st.histFile = (h && h.file) || '';
+    st.histHasMore = !!(h && h.hasMore);
+    updateTrimTip();
+  }
+
   return {
     open: open,
     openLive: openLive,
     clear: clearAll,
     appendSystem: appendSystem,
+    prepend: prepend,
+    setHistory: setHistory,
     isLive: function () { return st.live; },
     jumpBottom: jumpBottom,
     destroy: function () {

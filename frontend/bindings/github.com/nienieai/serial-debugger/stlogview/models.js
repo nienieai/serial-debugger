@@ -433,6 +433,15 @@ export class LiveInfo {
              */
             this["contentH"] = 0;
         }
+        if (!("trimmedPx" in $$source)) {
+            /**
+             * TrimmedPx 是从头部裁掉的内容总高度（像素）。用户顶着旧数据看的时候，
+             * 前端按它的增量把 offset 往下减，视口就锁在原地、滚动条缓慢上推。
+             * @member
+             * @type {number}
+             */
+            this["trimmedPx"] = 0;
+        }
         if (!("phase" in $$source)) {
             /**
              * @member

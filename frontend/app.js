@@ -8341,9 +8341,43 @@ function _mountLive(tab) {
     onStatus: function (s) { tab._liveTotal = s.total || 0; }
   });
   tab._live = view;
-  view.openLive(tab.sessionId).catch(function (err) {
+  view.openLive(tab.sessionId).then(function () {
+    // 打开即回放：把守护进程环 / 磁盘里已有的历史先灌进来，页面不再是空的。
+    // 只取最近一页（500 条），更早的历史等「往回翻到顶」再接（下一轮）。
+    var App = window.go && window.go.main && window.go.main.App;
+    if (!App || typeof App.GetSessionHistory !== 'function') return null;
+    return App.GetSessionHistory(tab.sessionId, 500, 0, 0);
+  }).then(function (data) {
+    if (!data || view !== tab._live || !view.isLive()) return;
+    view.setHistory({ file: data.historyFile || '', hasMore: !!data.hasMore });
+    var list = data.history || [];
+    var frames = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (!e || !e.hex || e.direction === 'system') continue;
+      frames.push({
+        ts: e.tsMs || 0,
+        dir: _liveDirNum(e.direction),
+        origin: e.origin || '',
+        hex: e.hex
+      });
+    }
+    if (frames.length) view.prepend(frames);
+  }).catch(function (err) {
     if (window.console) console.error('[live] ' + tab.sessionId, err);
   });
+}
+
+// _liveDirNum 把守护进程历史里的方向串翻成 sessionfile 的方向号
+// （DirSystem=0 / DirRx=1 / DirTx=2 / DirP1=3 / DirP2=4）。
+function _liveDirNum(s) {
+  switch (s) {
+    case 'tx': return 2;
+    case '1': return 3;
+    case '2': return 4;
+    case 'system': case 'sys': return 0;
+    default: return 1; // rx
+  }
 }
 
 // pickStlogFile 选一个 .stlog，开成只读文件页。

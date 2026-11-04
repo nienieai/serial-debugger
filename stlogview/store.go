@@ -77,6 +77,9 @@ type Store struct {
 	live     bool
 	absBase  int   // 已经被裁掉的帧数（绝对帧号 = absBase + 下标）
 	maxBytes int64 // arena 上限
+	// trimmedH2 是从头部裁掉的内容总高度（半像素）。前端靠它把视口锚在用户
+	// 正在看的那几帧上：裁掉多少像素，offset 就减多少，画面才不会往下滑。
+	trimmedH2 int64
 }
 
 // NewStore 造一个空文档。布局默认按 15px 字体、120 格宽、Hex 模式。
