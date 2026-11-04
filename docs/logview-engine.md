@@ -41,6 +41,7 @@
 | `358c874` | 往回翻到顶自动加载更早的历史（`LiveInfo` 带游标、`maybeLoadOlder`、顶部提示三态） |
 | `37ae358` | P1 / P2 的 字↔H：`TabPage` 导出的名字和 `pageEl` 找不到一起，改的永远是第一个标签页的按钮 |
 | `a4e9ac4` | 切标签后内容整体上移：页面隐藏时量不到让位量，兜底 40px 盖掉了真值（转发页约 118px） |
+| `51a3c54` | 删掉 `history.js` 的窗口渲染（1239 → 155 行），会话页直接拿 `.display-content` 当挂载点 |
 
 ### 往回翻的分页（本提交）
 
@@ -92,19 +93,26 @@
    **规划中的配套**：块状估算行高（块首精确、块内按字节数估），用来替掉无限长
    文档里的全量 `prefix`。两项一起做才有意义。
    老的 `SearchHistory(file,'',200,offset)` **不能用**：它从文件头顺序读、`offset`
-   还被当成条数传（`history.js:1080`），方向和「往上翻」相反。
-2. **转发页 P1 / P2 模式的验收**：Go 侧 `TestDirModes` 过；界面也验过 ——
-   `tab.mode` 是 `forward`、`P1 文 / P2 文` 能出来、点 P1 会变成 `P1 H`（蓝色
-   高亮）而 P2 不动。**但「P1 的行真的按 Hex 画」没验**：转发会话的
-   `serial-cli send` 一直报 `send buffer full`（`sendCh` 32 个待发没人消费，
-   既有问题，与本分支无关），而没有第二套工具能往 COM3/COM4 里写数据做回环。
-   有硬件回环时补这一条。
-3. **会话页的 Hex↔文本 / 清空**：已实测通过（字/H 双向、清空、清空后继续收）。
-4. **收尾**：删掉 `history.js` 的窗口渲染（`_flushAppends` / `renderHistoryLines` /
-   `_trimCache` / 自绘滚动条 / 未读块），把统计、磁盘提示并进引擎，
-   同步 README / ARCHITECTURE / TODO / CHANGELOG。
-5. **Modbus 校验道**：本轮按用户要求不做（将来是「可自定义规则文件」的校验引擎，
+   还被当成条数传（原 `history.js:1080`，这段代码已随窗口渲染删除），方向和
+   「往上翻」相反。
+2. **转发页 P1 / P2 模式的真实数据验收**：Go 侧 `TestDirModes` 过；界面验过 ——
+   `tab.mode` 是 `forward`、`P1 文 / P2 文` 能出来、点 P1 变成 `P1 H`（P2 不动）。
+   **但「P1 的行真的按 Hex 画」没验**：转发会话的 `serial-cli send` 一直报
+   `send buffer full`（`sendCh` 32 个待发没人消费，既有问题，与本分支无关），
+   也没有第二套工具能往 COM3/COM4 写数据做回环。有硬件回环时补这一条。
+3. **`TODO.md` 里那几条老渲染待办要收掉**：P2 的「按视口字符预算限制历史缓存」
+   「完全虚拟窗口（虚拟滚动）」「高级自绘滚动条」都是针对 `history.js` 的，
+   现在部分已被虚窗引擎实现、部分口径变了，需要逐条改成现状或结案。
+4. **Modbus 校验道**：本轮按用户要求不做（将来是「可自定义规则文件」的校验引擎，
    不是硬编码检查），泳道先占位。
+
+## 已完成的口径（本轮收尾后）
+
+- `history.js` 只剩三个入口（`appendLine` / `appendSystemMsg` / `clearDisplay`）
+  + 发送框滚动条 + `_originLabel`，**不要再往这里加渲染逻辑**。
+- 会话页的 `.display-content` 加了 `.is-engine`，直接当引擎挂载点；老的
+  `overflow-y: auto` / `padding` / 行高全部让开。
+- 「历史窗口行数」设置项已删；「自动回补更早历史」接到引擎的 `opts.autoRefill`。
 
 ## 诊断技巧
 
