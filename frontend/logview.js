@@ -587,6 +587,24 @@ function createLogView(host, opts) {
     layer.style.transform = 'translate3d(0,' + (st.base - st.offset + st.reserveTop) + 'px,0)';
   }
 
+  // 行对齐：offset 落在行中间时贴到该行的上边界。这样翻页/滚轮永远停在行首，
+  // 顶部不会露半行、也不会空一块 —— 「一页一行」的分页就是靠它落位的。
+  function snapCurrent() {
+    var rows = st.rows;
+    if (!rows.length) return;
+    var last = rows[rows.length - 1];
+    // offset 已经滚出当前窗口：交给 fetchWindow 去取新窗口，这里不能把它拉回来，
+    // 否则一次滚轮/翻页就原地打转（实测滚不动的那个 bug）。
+    if (st.offset < rows[0].y - 0.5 || st.offset > last.y + last.h) return;
+    var best = rows[0].y;
+    for (var i = 1; i < rows.length; i++) {
+      if (rows[i].y <= st.offset + 0.5) best = rows[i].y;
+      else break;
+    }
+    if (Math.abs(best - st.offset) > 0.5) st.offset = best;
+    if (st.offset > st.maxOffset) st.offset = Math.round(st.maxOffset);
+  }
+
   function setOffset(v) {
     v = lvClamp(Math.round(v), 0, Math.round(st.maxOffset));
     if (v === st.offset) {
@@ -596,13 +614,15 @@ function createLogView(host, opts) {
     }
     st.offset = v;
     st.atBottom = v >= Math.round(st.maxOffset) - 2;
+    snapCurrent();
     layerTransform();
     updateThumb();
     updateTrimTip();
     if (needsFetch()) fetchWindow();
   }
 
-  function pageBy(dir) { setOffset(st.offset + dir * (st.vh - st.dataH * 2)); }
+  // 一页 = 一行：PageUp/PageDown 一次只走一行（滚动位置已经对齐行首）。
+  function pageBy(dir) { setOffset(st.offset + dir * st.dataH); }
 
   function configure(anchorIdx) {
     var chars = layout();
