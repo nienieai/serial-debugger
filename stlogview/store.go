@@ -695,15 +695,20 @@ func (s *Store) makeRowLocked(i int) Row {
 		r.Origin = ix.orgNames[o-1]
 	}
 	r.Cells = append(r.Cells, ix.seg[ix.segIdx[i]:ix.segIdx[i+1]]...)
-	if s.mode == "hex" {
-		// 系统消息在界面上固定按文本渲染，Hex 串只是给前端解码回文本用的：
-		// 不能带 0x 前缀 —— 前缀会被解码器当成两个十六进制字符，显示成一串点。
+	// 系统消息在界面上固定按文本渲染，Hex 串只是给前端解码回文本用的：
+	// 不能带 0x 前缀 —— 前缀会被解码器当成两个十六进制字符，显示成一串点。
+	//
+	// 文本模式下也得填：前端的 system 行只认 r.Hex（见 logview.js 的 buildRow），
+	// 之前只在 hex 模式下填，切到「字」之后系统消息就整行空白（只剩时间戳和字节数）。
+	isSys := ix.dir[i] == sessionfile.DirSystem
+	if s.mode == "hex" || isSys {
 		st := s.style
-		if ix.dir[i] == sessionfile.DirSystem {
+		if isSys {
 			st.HexPrefix = false
 		}
 		r.Hex = formatHexLines(p, s.perLine, st)
-	} else {
+	}
+	if s.mode != "hex" {
 		r.Segs = decode.Decode(hex.EncodeToString(p), encName(s.style.Enc))
 	}
 	return r

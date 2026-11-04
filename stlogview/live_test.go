@@ -245,6 +245,37 @@ func TestSystemRowHexNoPrefix(t *testing.T) {
 	}
 }
 
+// TestSystemRowHexInTextMode 文本模式下系统消息也要带 Hex 串。
+//
+// 前端 system 行只认 r.Hex（解码回文本），之前只在 hex 模式填，
+// 切到「字」之后系统消息整行空白 —— 只剩时间戳和字节数。
+func TestSystemRowHexInTextMode(t *testing.T) {
+	s := NewStore()
+	s.MarkLive(0)
+	s.Configure(120, 42, 45, "text", 0, DefaultStyle(0))
+	want := "串口已关闭: COM4"
+	s.AppendFrame(FrameIn{Ts: 1000, Dir: sessionfile.DirSystem, Hex: hex.EncodeToString([]byte(want))})
+	s.AppendFrame(FrameIn{Ts: 1001, Dir: sessionfile.DirRx, Hex: "41"})
+	w := s.Window(0, 400, 0)
+	if len(w.Rows) != 2 {
+		t.Fatalf("行数 %d", len(w.Rows))
+	}
+	sys := w.Rows[0]
+	if sys.Hex == "" {
+		t.Fatal("文本模式下系统行没带 Hex，前端会渲染成空白行")
+	}
+	if strings.Contains(sys.Hex, "0x") {
+		t.Fatalf("系统行带了 0x 前缀：%q", sys.Hex)
+	}
+	raw, err := hex.DecodeString(strings.ReplaceAll(sys.Hex, " ", ""))
+	if err != nil || string(raw) != want {
+		t.Fatalf("系统行解不回原文：%q -> %q %v", sys.Hex, raw, err)
+	}
+	if w.Rows[1].Hex != "" {
+		t.Fatalf("文本模式下数据行不该带 Hex：%q", w.Rows[1].Hex)
+	}
+}
+
 // TestLivePrepend 往回补历史：插到最前面、重叠的部分丢掉。
 func TestLivePrepend(t *testing.T) {
 	s := newLiveDoc(t, 1<<20)

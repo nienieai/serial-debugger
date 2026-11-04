@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/nienieai/serial-debugger/sessionfile"
@@ -20,7 +21,7 @@ func TestLiveFrameFrom(t *testing.T) {
 		{"tx", map[string]any{"hex": "4142", "tsMs": int64(1000), "origin": "gui-1"}, true, sessionfile.DirTx},
 		{"1", map[string]any{"hex": "4142"}, true, sessionfile.DirP1},
 		{"2", map[string]any{"hex": "4142"}, true, sessionfile.DirP2},
-		{"system", map[string]any{"hex": "737973"}, true, sessionfile.DirSystem},
+		{"system", map[string]any{"hex": "sys.port_opened|COM4"}, true, sessionfile.DirSystem},
 		{"dialog-result", map[string]any{"hex": "4142"}, false, 0},
 		{"tab-drop-begin", map[string]any{"hex": "4142"}, false, 0},
 		{"rx", map[string]any{"hex": ""}, false, 0},
@@ -37,6 +38,12 @@ func TestLiveFrameFrom(t *testing.T) {
 	}
 	if f, _ := liveFrameFrom("tx", map[string]any{"hex": "41", "tsMs": int64(77), "origin": "gui-9"}); f.Ts != 77 || f.Origin != "gui-9" {
 		t.Fatalf("ts/origin 没取对：%+v", f)
+	}
+	// 系统帧的 hex 字段是**文本**（daemon/history.go 的约定），进文档前要转成
+	// 十六进制串 —— 不转的话 hex.DecodeString 会失败，界面上只剩一行「Sys ~0B」。
+	sys := "sys.port_opened|COM4|115200"
+	if f, _ := liveFrameFrom("system", map[string]any{"hex": sys}); f.Hex != hex.EncodeToString([]byte(sys)) {
+		t.Fatalf("系统帧没转成十六进制：%q", f.Hex)
 	}
 }
 

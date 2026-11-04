@@ -349,8 +349,12 @@ function createLogView(host, opts) {
     var dl = document.createElement('div');
     dl.className = 'data-line';
     if (r.dir === 'system' || r.dir === 'sys') {
-      // 系统消息是文本（sys.port_connected|COM4|115200），不按 Hex 画
-      dl.textContent = lvHexToText(r.hex);
+      // 系统消息是文本（sys.port_connected|COM4|115200），要先过 i18n 再显示，
+      // 否则界面上是一串 key。老渲染把它包成「── 文本 ──」，这里照抄。
+      var sysTxt = lvHexToText(r.hex);
+      if (typeof formatSysMsg === 'function') sysTxt = formatSysMsg(sysTxt);
+      dl.className = 'data-line sys-msg';
+      dl.textContent = '── ' + sysTxt + ' ──';
     } else if (st.mode === 'hex') {
       var sp = document.createElement('span');
       sp.className = 'hex-data ' + lvHexClass(r.dir);

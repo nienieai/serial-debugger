@@ -570,6 +570,13 @@ func liveFrameFrom(name string, payload any) (stlogview.FrameIn, bool) {
 	if hexStr == "" {
 		return stlogview.FrameIn{}, false
 	}
+	// 系统帧在协议和历史里存的是**文本**（daemon/history.go 的注释：系统帧存
+	// text 而不是 hex），而 stlogview 的 FrameIn.Hex 一律是十六进制串。这里补
+	// 一次转码，否则系统消息会被 hex.DecodeString 判成非法输入、解成空 payload，
+	// 界面上只剩一行「Sys ~0B」没有正文。
+	if dir == sessionfile.DirSystem {
+		hexStr = hex.EncodeToString([]byte(hexStr))
+	}
 	f := stlogview.FrameIn{Dir: dir, Hex: hexStr}
 	if v, ok := m["tsMs"].(int64); ok {
 		f.Ts = v

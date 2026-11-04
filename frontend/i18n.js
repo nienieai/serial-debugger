@@ -126,6 +126,9 @@ function formatSysMsg(raw) {
   for (var i = 1; i < parts.length; i++) {
     var arg = parts[i];
     var val = t(arg); // translate if arg is an i18n key
+    // t() 对未知 key 返回空串：COM4 / 115200 这类运行时值不是 i18n key，
+    // 不兜底就会被 replace 成空，界面上剩下「串口已断开: 」这种断尾巴。
+    if (!val) val = arg;
     tmpl = tmpl.replace(/%[sd]/, val);
   }
   return tmpl;

@@ -8373,12 +8373,15 @@ function _mountLive(tab) {
     var frames = [];
     for (var i = 0; i < list.length; i++) {
       var e = list[i];
-      if (!e || !e.hex || e.direction === 'system') continue;
+      if (!e || !e.hex) continue;
+      var isSys = (e.direction === 'system' || e.direction === 'sys');
       frames.push({
         ts: e.tsMs || 0,
-        dir: _liveDirNum(e.direction),
+        dir: isSys ? 0 : _liveDirNum(e.direction),
         origin: e.origin || '',
-        hex: e.hex
+        // 系统帧在历史里存的是文本（daemon/history.go 的约定），引擎要的是
+        // 十六进制串，这里补转一次；不然回放出来的系统消息只剩时间戳一行。
+        hex: isSys ? _liveTextToHex(e.hex) : e.hex
       });
     }
     if (frames.length) view.prepend(frames);
@@ -8397,6 +8400,32 @@ function _liveDirNum(s) {
     case 'system': case 'sys': return 0;
     default: return 1; // rx
   }
+}
+
+// _liveTextToHex 把系统消息的原文编成引擎要的十六进制串。
+// 系统帧在协议和历史里都是「hex 字段存文本」，别的地方（liveFrameFrom）已在
+// Go 侧转过；历史回放这条路在前端转，两边口径要一致。
+function _liveTextToHex(s) {
+  var bytes;
+  try {
+    bytes = new TextEncoder().encode(String(s == null ? '' : s));
+  } catch (_) {
+    bytes = null;
+  }
+  if (!bytes) {
+    var out0 = '';
+    var str = String(s == null ? '' : s);
+    for (var k = 0; k < str.length; k++) {
+      var c = str.charCodeAt(k) & 0xff;
+      out0 += (c < 16 ? '0' : '') + c.toString(16);
+    }
+    return out0;
+  }
+  var out = '';
+  for (var i = 0; i < bytes.length; i++) {
+    out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+  }
+  return out;
 }
 
 // pickStlogFile 选一个 .stlog，开成只读文件页。
