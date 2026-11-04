@@ -62,7 +62,7 @@ func TestLogViewDocRegistry(t *testing.T) {
 	}
 
 	// 几何：Configure 之后能取到窗口
-	cfg, err := lv.Configure(first.ID, 120, 42, 45, "hex", 0, stlogview.DefaultStyle(0))
+	cfg, err := lv.Configure(first.ID, 120, 42, 45, "hex", nil, 0, stlogview.DefaultStyle(0))
 	if err != nil || cfg.RowCount != 5 {
 		t.Fatalf("Configure: %+v %v", cfg, err)
 	}

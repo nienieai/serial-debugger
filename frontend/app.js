@@ -6548,6 +6548,7 @@ function toggleP1Display() {
       btn.classList.remove('btn-hex');
     }
   }
+  _liveReconfigure();
   _rerenderHistoryKeepingView();
 }
 
@@ -6566,7 +6567,17 @@ function toggleP2Display() {
       btn.classList.remove('btn-hex');
     }
   }
+  _liveReconfigure();
   _rerenderHistoryKeepingView();
+}
+
+// _liveReconfigure 按方向的模式变了（P1 / P2 / 发送的 字↔H）：让虚窗引擎重算
+// 布局。整页的 mode 没变，所以不能走 setMode（那会把整页也翻过去）。
+function _liveReconfigure() {
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
+    tab._live.reconfigure();
+  }
 }
 
 function toggleSendFormat() {
@@ -6598,6 +6609,7 @@ function toggleTxDisplay() {
   if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
     renderHistoryLines(state.historyCache[tab.sessionId]);
   }
+  _liveReconfigure();
   saveSettings();
 }
 
@@ -8357,6 +8369,12 @@ function _mountLive(tab) {
     mode: (state.displayMode === 'hex') ? 'hex' : 'text',
     disp: function () { return tab.disp; },
     tsText: function (ms) { return stlogTimeText(new Date(ms)); },
+    // 按方向的模式覆盖：下标 = sessionfile 方向号（0 系统 / 1 读取 / 2 发送 /
+    // 3 P1 / 4 P2），空串 = 沿用整页的 mode。转发页 P1 / P2 各有独立的「字 / H」，
+    // 老渲染按 dir 取 p1DisplayMode 之类，引擎也得按方向算，否则那两个按钮是死键。
+    dirModes: function () {
+      return ['', '', state.txDisplayMode, state.p1DisplayMode, state.p2DisplayMode];
+    },
     onStatus: function (s) { tab._liveTotal = s.total || 0; }
   });
   tab._live = view;

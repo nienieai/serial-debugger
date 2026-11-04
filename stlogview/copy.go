@@ -70,9 +70,10 @@ func (s *Store) posToByteLocked(idx, vline, cell int) int {
 	if cell < 0 {
 		cell = 0
 	}
-	if s.mode == "hex" {
+	perLine := s.perLineFor(ix.dir[idx])
+	if s.modeOf(ix.dir[idx]) == "hex" {
 		per := s.style.hexPerByte() // "AA " 三格、带 0x 五格、无分隔两格……
-		off := vline*s.perLine + cell/per
+		off := vline*perLine + cell/per
 		if off > len(p) {
 			off = len(p)
 		}
@@ -88,9 +89,9 @@ func (s *Store) posToByteLocked(idx, vline, cell int) int {
 	}
 	v := vline
 	for L, c := range segs {
-		wrap := linesFor(c, s.perLine)
+		wrap := linesFor(c, perLine)
 		if v < wrap {
-			want := v*s.perLine + cell
+			want := v*perLine + cell
 			if want > int(c) {
 				want = int(c)
 			}

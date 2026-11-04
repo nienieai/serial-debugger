@@ -73,17 +73,21 @@ export function CloseAll() {
 /**
  * Configure 重算布局：宽度（每行几格）、两种行高、Hex/文本、显示样式
  * （编码 / 控制字符 / 转义字节 / Hex 分隔与前缀）。行高按半像素传（前端量出来 ×2）。
+ * 
+ * dirModes 是按方向的模式覆盖（下标 = sessionfile 方向号，空串 = 沿用 mode）：
+ * 转发页的 P1 / P2 各有独立的「字 / H」开关。
  * @param {string} id
  * @param {number} charsPerLine
  * @param {number} tsLineH2
  * @param {number} dataLineH2
  * @param {string} mode
+ * @param {string[]} dirModes
  * @param {number} anchorIdx
  * @param {stlogview$0.Style} style
  * @returns {$CancellablePromise<stlogview$0.ConfigureResult>}
  */
-export function Configure(id, charsPerLine, tsLineH2, dataLineH2, mode, anchorIdx, style) {
-    return $Call.ByName("main.LogView.Configure", id, charsPerLine, tsLineH2, dataLineH2, mode, anchorIdx, style).then(/** @type {($result: any) => any} */(($result) => {
+export function Configure(id, charsPerLine, tsLineH2, dataLineH2, mode, dirModes, anchorIdx, style) {
+    return $Call.ByName("main.LogView.Configure", id, charsPerLine, tsLineH2, dataLineH2, mode, dirModes, anchorIdx, style).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType1($result);
     }));
 }

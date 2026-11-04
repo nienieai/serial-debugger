@@ -15,7 +15,7 @@ func newLiveDoc(t *testing.T, maxBytes int64) *Store {
 	t.Helper()
 	s := NewStore()
 	s.MarkLive(maxBytes)
-	s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
+	s.Configure(120, 42, 45, "hex", nil, 0, DefaultStyle(0))
 	return s
 }
 
@@ -230,7 +230,7 @@ func TestSystemRowHexNoPrefix(t *testing.T) {
 	s.MarkLive(0)
 	st := DefaultStyle(0)
 	st.HexPrefix = true
-	s.Configure(120, 42, 45, "hex", 0, st)
+	s.Configure(120, 42, 45, "hex", nil, 0, st)
 	s.AppendFrame(FrameIn{Ts: 1000, Dir: sessionfile.DirSystem, Hex: hex.EncodeToString([]byte("串口已关闭: COM4"))})
 	s.AppendFrame(FrameIn{Ts: 1001, Dir: sessionfile.DirRx, Hex: "41"})
 	w := s.Window(0, 400, 0)
@@ -252,7 +252,7 @@ func TestSystemRowHexNoPrefix(t *testing.T) {
 func TestSystemRowHexInTextMode(t *testing.T) {
 	s := NewStore()
 	s.MarkLive(0)
-	s.Configure(120, 42, 45, "text", 0, DefaultStyle(0))
+	s.Configure(120, 42, 45, "text", nil, 0, DefaultStyle(0))
 	want := "串口已关闭: COM4"
 	s.AppendFrame(FrameIn{Ts: 1000, Dir: sessionfile.DirSystem, Hex: hex.EncodeToString([]byte(want))})
 	s.AppendFrame(FrameIn{Ts: 1001, Dir: sessionfile.DirRx, Hex: "41"})
@@ -376,13 +376,13 @@ func TestLiveTextStyleRecompute(t *testing.T) {
 	}
 	s.AppendFrame(liveFrame(1000, 1, payload))
 	hexH := s.Window(0, 200, 0).ContentHeight
-	s.Configure(120, 42, 45, "text", 0, DefaultStyle(0))
+	s.Configure(120, 42, 45, "text", nil, 0, DefaultStyle(0))
 	textH := s.Window(0, 200, 0).ContentHeight
 	if textH >= hexH {
 		t.Fatalf("文本模式 %v 不比 Hex %v 矮", textH, hexH)
 	}
 	// 再切回来，行高要恢复
-	s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
+	s.Configure(120, 42, 45, "hex", nil, 0, DefaultStyle(0))
 	if got := s.Window(0, 200, 0).ContentHeight; got != hexH {
 		t.Fatalf("切回 Hex 高度 %v，期望 %v", got, hexH)
 	}

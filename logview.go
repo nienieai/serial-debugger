@@ -234,12 +234,15 @@ func (v *LogView) Meta(id string) (stlogview.MetaResult, error) {
 
 // Configure 重算布局：宽度（每行几格）、两种行高、Hex/文本、显示样式
 // （编码 / 控制字符 / 转义字节 / Hex 分隔与前缀）。行高按半像素传（前端量出来 ×2）。
-func (v *LogView) Configure(id string, charsPerLine, tsLineH2, dataLineH2 int, mode string, anchorIdx int, style stlogview.Style) (stlogview.ConfigureResult, error) {
+//
+// dirModes 是按方向的模式覆盖（下标 = sessionfile 方向号，空串 = 沿用 mode）：
+// 转发页的 P1 / P2 各有独立的「字 / H」开关。
+func (v *LogView) Configure(id string, charsPerLine, tsLineH2, dataLineH2 int, mode string, dirModes []string, anchorIdx int, style stlogview.Style) (stlogview.ConfigureResult, error) {
 	s, err := v.get(id)
 	if err != nil {
 		return stlogview.ConfigureResult{}, err
 	}
-	return s.Configure(charsPerLine, tsLineH2, dataLineH2, mode, anchorIdx, style), nil
+	return s.Configure(charsPerLine, tsLineH2, dataLineH2, mode, dirModes, anchorIdx, style), nil
 }
 
 // SetOpt 切年份 / 0x 前缀。

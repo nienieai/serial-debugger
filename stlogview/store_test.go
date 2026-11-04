@@ -1,6 +1,7 @@
 package stlogview
 
 import (
+	"encoding/hex"
 	"math"
 	"path/filepath"
 	"testing"
@@ -9,13 +10,55 @@ import (
 	"github.com/nienieai/serial-debugger/sessionfile"
 )
 
+// TestDirModes 模式可以按方向覆盖：同一文档里 rx 走文本、P1 走 Hex，
+// 两边的行数/内容各按各的算（转发页的 P1 / P2 是独立的「字 / H」开关）。
+func TestDirModes(t *testing.T) {
+	payload := make([]byte, 100)
+	for i := range payload {
+		payload[i] = 'A'
+	}
+	hexStr := hex.EncodeToString(payload)
+
+	s := NewStore()
+	s.MarkLive(0)
+	s.AppendFrame(FrameIn{Ts: 1, Dir: sessionfile.DirRx, Hex: hexStr})
+	s.AppendFrame(FrameIn{Ts: 2, Dir: sessionfile.DirP1, Hex: hexStr})
+
+	// 全文本：20 格一行，100 个字符 → 5 行
+	textCfg := s.Configure(20, 42, 45, "text", nil, 0, DefaultStyle(0))
+	// 只有 P1 是 Hex：一行 7 字节，100 字节 → 15 行
+	mixCfg := s.Configure(20, 42, 45, "text", []string{"", "", "", "hex", ""}, 0, DefaultStyle(0))
+
+	if mixCfg.ContentH <= textCfg.ContentH {
+		t.Fatalf("P1 换成 Hex 后行数变多，内容高度应当更大：%v → %v", textCfg.ContentH, mixCfg.ContentH)
+	}
+
+	w := s.Window(0, 4000, 0)
+	if len(w.Rows) != 2 {
+		t.Fatalf("行数 %d", len(w.Rows))
+	}
+	if w.Rows[0].Hex != "" || len(w.Rows[0].Segs) == 0 {
+		t.Fatalf("rx 应当仍是文本：hex=%q segs=%d", w.Rows[0].Hex, len(w.Rows[0].Segs))
+	}
+	if w.Rows[1].Hex == "" || len(w.Rows[1].Segs) != 0 {
+		t.Fatalf("P1 应当走 Hex：hex=%q segs=%d", w.Rows[1].Hex, len(w.Rows[1].Segs))
+	}
+
+	// 再把 dirModes 传回空：应当退回全文本（覆盖是可逆的）
+	s.Configure(20, 42, 45, "text", nil, 0, DefaultStyle(0))
+	w = s.Window(0, 4000, 0)
+	if w.Rows[1].Hex != "" || len(w.Rows[1].Segs) == 0 {
+		t.Fatalf("清掉覆盖后 P1 应当回到文本：hex=%q segs=%d", w.Rows[1].Hex, len(w.Rows[1].Segs))
+	}
+}
+
 // TestOpenWindow 打开文件后按像素取窗口：行数、行高、base、几何都要自洽。
 func TestOpenWindow(t *testing.T) {
 	s := NewStore()
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
 
-	cfg := s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
+	cfg := s.Configure(120, 42, 45, "hex", nil, 0, DefaultStyle(0))
 	if cfg.RowCount != len(defaultFrames()) {
 		t.Fatalf("行数 %d", cfg.RowCount)
 	}
@@ -76,8 +119,8 @@ func TestConfigureTextRebuild(t *testing.T) {
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
 
-	hexCfg := s.Configure(60, 42, 45, "hex", 0, DefaultStyle(0))
-	textCfg := s.Configure(60, 42, 45, "text", 3, DefaultStyle(0))
+	hexCfg := s.Configure(60, 42, 45, "hex", nil, 0, DefaultStyle(0))
+	textCfg := s.Configure(60, 42, 45, "text", nil, 3, DefaultStyle(0))
 	if textCfg.Mode != "text" {
 		t.Fatalf("mode %q", textCfg.Mode)
 	}
@@ -114,10 +157,10 @@ func TestSetOptPrefix(t *testing.T) {
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
 
-	before := s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
+	before := s.Configure(120, 42, 45, "hex", nil, 0, DefaultStyle(0))
 	st := DefaultStyle(0)
 	st.HexPrefix = true
-	after := s.Configure(120, 42, 45, "hex", 0, st)
+	after := s.Configure(120, 42, 45, "hex", nil, 0, st)
 	if after.PerLine >= before.PerLine {
 		t.Fatalf("加 0x 前缀后 perLine 反而没变小：%d → %d", before.PerLine, after.PerLine)
 	}
@@ -127,7 +170,7 @@ func TestSetOptPrefix(t *testing.T) {
 	// 分隔符也会改宽度：逗号与空格同宽，无分隔更窄（一行能塞更多字节）
 	st2 := DefaultStyle(0)
 	st2.HexSep = 2
-	none := s.Configure(120, 42, 45, "hex", 0, st2)
+	none := s.Configure(120, 42, 45, "hex", nil, 0, st2)
 	if none.PerLine <= before.PerLine {
 		t.Fatalf("无分隔应该一行放更多字节：%d → %d", before.PerLine, none.PerLine)
 	}
@@ -138,7 +181,7 @@ func TestRulerOrigins(t *testing.T) {
 	s := NewStore()
 	s.Open(writeTestFile(t, defaultFrames()))
 	waitReady(t, s)
-	s.Configure(120, 42, 45, "hex", 0, DefaultStyle(0))
+	s.Configure(120, 42, 45, "hex", nil, 0, DefaultStyle(0))
 
 	r := s.Ruler(64)
 	if r.Total != len(defaultFrames()) {

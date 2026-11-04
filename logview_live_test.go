@@ -71,7 +71,7 @@ func TestLogViewLive(t *testing.T) {
 		t.Fatalf("LiveInfo: %+v %v", info, err)
 	}
 
-	cfg, err := lv.Configure(doc.ID, 120, 42, 45, "hex", 0, stlogview.DefaultStyle(0))
+	cfg, err := lv.Configure(doc.ID, 120, 42, 45, "hex", nil, 0, stlogview.DefaultStyle(0))
 	if err != nil || cfg.RowCount != 2 {
 		t.Fatalf("Configure: %+v %v", cfg, err)
 	}

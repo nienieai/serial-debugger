@@ -686,11 +686,20 @@ function createLogView(host, opts) {
   // 一页 = 一行：PageUp/PageDown 一次只走一行（滚动位置已经对齐行首）。
   function pageBy(dir) { setOffset(st.offset + dir * st.dataH); }
 
+  // dirModes 是按方向的模式覆盖（下标 = sessionfile 方向号：0 系统 / 1 读取 /
+  // 2 发送 / 3 P1 / 4 P2，空串 = 沿用整页的 mode）。转发页的 P1 / P2 各有
+  // 独立的「字 / H」，一个整页 mode 表达不了，所以每次 Configure 都带上。
+  function dirModesNow() {
+    if (typeof opts.dirModes !== 'function') return null;
+    var v = opts.dirModes();
+    return (v && v.length) ? v : null;
+  }
+
   function configure(anchorIdx) {
     var chars = layout();
     var want = Math.max(0, anchorIdx | 0);
     return lvCall('Configure', st.id, chars, Math.round(st.tsH * 2),
-      Math.round(st.dataH * 2), st.mode, want, styleNow()).then(function (cfg) {
+      Math.round(st.dataH * 2), st.mode, dirModesNow(), want, styleNow()).then(function (cfg) {
       if (st.dead) return cfg;
       st.perLine = cfg.perLine;
       st.contentH = cfg.contentHeight;
@@ -978,7 +987,7 @@ function createLogView(host, opts) {
     var cfgStep;
     if (st.needConfigure || chars !== st.cfgChars) {
       cfgStep = lvCall('Configure', st.id, chars, Math.round(st.tsH * 2),
-        Math.round(st.dataH * 2), st.mode, 0, styleNow()).then(function (cfg) {
+        Math.round(st.dataH * 2), st.mode, dirModesNow(), 0, styleNow()).then(function (cfg) {
         st.cfgChars = chars;
         st.needConfigure = false;
         st.perLine = cfg.perLine;
@@ -1161,6 +1170,15 @@ function createLogView(host, opts) {
     setMode: function (mode) {
       st.mode = (mode === 'text') ? 'text' : 'hex';
       // 换模式会改行高/内容，必须重发 Configure（refreshLive 里按这个标志判断）
+      st.needConfigure = true;
+      st.cfgChars = 0;
+      if (st.live) return refreshLive();
+      var anchor = st.rows.length ? st.rows[0].idx : 0;
+      return configure(anchor).then(function () { return fetchWindow(); });
+    },
+    // reconfigure 只重发 Configure：按方向的模式（P1 / P2 / 发送）变了，
+    // 整页的 mode 没变。折行与行高全在 Go 侧算，所以必须走一次完整重算。
+    reconfigure: function () {
       st.needConfigure = true;
       st.cfgChars = 0;
       if (st.live) return refreshLive();

@@ -52,6 +52,7 @@ type Store struct {
 	// 布局
 	viewportH    int
 	mode         string
+	dirMode      [5]string // 按方向覆盖 mode（索引 = sessionfile 方向号）；空串 = 沿用 mode
 	charsPerLine int
 	perLine      int
 	tsLineH2     int
@@ -402,21 +403,31 @@ func (s *Store) Meta() MetaResult {
 
 // Configure 重算布局：改了宽度、行高、模式或显示样式（控制字符 / 转义字节 /
 // Hex 分隔与前缀），都要重来一遍格子缓存与前缀和。
-func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, anchorIdx int, style Style) ConfigureResult {
+//
+// dirModes 是按方向的模式覆盖（下标 = sessionfile 方向号，空串表示沿用 mode）：
+// 转发页的 P1 / P2 各有独立的「字 / H」，一个全局 mode 表达不了。
+func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, dirModes []string, anchorIdx int, style Style) ConfigureResult {
 	if mode != "hex" {
 		mode = "text"
 	}
 	charsPerLine = clampInt(charsPerLine, minChars, maxChars)
 	tsLineH2 = clampInt(tsLineH2, minLine*2, maxLine*2)
 	dataLineH2 = clampInt(dataLineH2, minLine*2, maxLine*2)
+	var dm [5]string
+	for i := 0; i < len(dm) && i < len(dirModes); i++ {
+		// 只认这两个值：空串 / 不认识的写法一律当「没覆盖」，回落到 mode。
+		if v := dirModes[i]; v == "hex" || v == "text" {
+			dm[i] = v
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	changed := mode != s.mode || charsPerLine != s.charsPerLine ||
+	changed := mode != s.mode || dm != s.dirMode || charsPerLine != s.charsPerLine ||
 		tsLineH2 != s.tsLineH2 || dataLineH2 != s.dataLineH2 ||
 		style != s.style || s.prefix == nil
-	s.mode, s.charsPerLine, s.tsLineH2, s.dataLineH2, s.style = mode, charsPerLine, tsLineH2, dataLineH2, style
+	s.mode, s.dirMode, s.charsPerLine, s.tsLineH2, s.dataLineH2, s.style = mode, dm, charsPerLine, tsLineH2, dataLineH2, style
 	if changed {
 		s.buildLayoutLocked()
 	}
@@ -469,13 +480,27 @@ func (s *Store) SetTheme(dark bool) bool {
 	return false
 }
 
-// perLineLocked 是一行放几个单位：文本=格，Hex=字节（尽量用满宽度）。
-func (s *Store) perLineLocked() int {
-	if s.mode == "hex" {
+// modeOf 返回某个方向实际用的显示模式（hex / text）。
+//
+// 转发页的 P1 / P2 各有独立的「字 / H」开关（老渲染按 dir 取 p1DisplayMode
+// 之类），所以模式不能只有一个全局值：dirMode 里没写的方向沿用 mode。
+func (s *Store) modeOf(dir uint8) string {
+	if d := sessionfile.DirBase(dir); d < 5 && s.dirMode[d] != "" {
+		return s.dirMode[d]
+	}
+	return s.mode
+}
+
+// perLineFor 是某个方向一行放几个单位：文本=格，Hex=字节（尽量用满宽度）。
+func (s *Store) perLineFor(dir uint8) int {
+	if s.modeOf(dir) == "hex" {
 		return hexBytesPerLine(s.charsPerLine, s.style)
 	}
 	return s.charsPerLine
 }
+
+// perLineLocked 是**默认方向**的每行单位数（滚动条桶、没有方向的地方用）。
+func (s *Store) perLineLocked() int { return s.perLineFor(sessionfile.DirRx) }
 
 // hexBytesPerLine 按满宽折行：再塞一个字节就会超，不留 8 字节对齐的余量
 // （对齐会白扔最多 7 个字节 ≈ 155 px，宽窗口下很明显）。
@@ -505,14 +530,15 @@ func linesFor(units uint32, perLine int) int {
 // i 是物理下标（逻辑帧号 = absBase + i - head）。
 func (s *Store) linesOfLocked(i int) int {
 	ix := s.ix
-	if s.mode == "hex" {
-		return linesFor(ix.ln[i], s.perLine)
+	per := s.perLineFor(ix.dir[i])
+	if s.modeOf(ix.dir[i]) == "hex" {
+		return linesFor(ix.ln[i], per)
 	}
 	lo := ix.segIdx[i]
 	hi := ix.segIdx[i+1]
 	n := 0
 	for _, c := range ix.seg[lo:hi] {
-		n += linesFor(c, s.perLine)
+		n += linesFor(c, per)
 	}
 	return n
 }
@@ -701,14 +727,15 @@ func (s *Store) makeRowLocked(i int) Row {
 	// 文本模式下也得填：前端的 system 行只认 r.Hex（见 logview.js 的 buildRow），
 	// 之前只在 hex 模式下填，切到「字」之后系统消息就整行空白（只剩时间戳和字节数）。
 	isSys := ix.dir[i] == sessionfile.DirSystem
-	if s.mode == "hex" || isSys {
+	isHex := s.modeOf(ix.dir[i]) == "hex"
+	if isHex || isSys {
 		st := s.style
 		if isSys {
 			st.HexPrefix = false
 		}
-		r.Hex = formatHexLines(p, s.perLine, st)
+		r.Hex = formatHexLines(p, s.perLineFor(ix.dir[i]), st)
 	}
-	if s.mode != "hex" {
+	if !isHex {
 		r.Segs = decode.Decode(hex.EncodeToString(p), encName(s.style.Enc))
 	}
 	return r
