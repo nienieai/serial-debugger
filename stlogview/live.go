@@ -12,9 +12,11 @@ import (
 // 与静态文件的三点不同：
 //   - 索引是增量的：每帧只追加 ts/aoff/ln/dir/org + 格子数，前缀和也只追加一行，
 //     不重扫整体（高吞吐时这是硬要求）。
-//   - 有上限：arena 超过 maxBytes 就从最旧的一段裁掉（默认 8 MB，与守护进程的
-//     5 MB 环同量级）。裁掉的帧号不回收 —— 对外用「绝对帧号」= absBase + 下标，
-//     界面上的行号一直往前涨，不会因为裁剪而跳位。
+//   - 有上限：arena 超过 maxBytes 就从最旧的一端裁掉（默认 5 MB，与守护进程的
+//     5 MB 环同量级）。裁头是 O(1) 的：只把逻辑起点往前挪，不搬 arena、也不重算
+//     前缀和 —— 语义上就是守护进程那个环形缓冲，超一帧丢一帧。裁掉的帧号不回收
+//     —— 对外用「绝对帧号」= absBase + 下标，界面上的行号一直往前涨，不会因为
+//     裁剪而跳位。
 //   - 可以往前补：PrependFrames 把更早的历史（GetSessionHistory 回来的那批）
 //     插到最前面，帧号相应变小。
 
@@ -52,9 +54,11 @@ type LiveInfo struct {
 
 // MarkLive 把文档切成实时模式：清空索引，之后只能 Append / Prepend。
 //
-// maxBytes <= 0 取 DefaultLiveBytes。
+// maxBytes 是 arena 的字节上限：0 取 DefaultLiveBytes，负数表示不设上限
+// （磁盘上有会话文件、窗口外的帧能按页取回来时才敢这么开；按需读盘还没接，
+// 调用方目前一律传 0 或正数）。
 func (s *Store) MarkLive(maxBytes int64) {
-	if maxBytes <= 0 {
+	if maxBytes == 0 {
 		maxBytes = DefaultLiveBytes
 	}
 	s.mu.Lock()
@@ -161,7 +165,11 @@ func (s *Store) liveInfoLocked() LiveInfo {
 	out := LiveInfo{Phase: s.phase}
 	if s.ix != nil {
 		out.Frames = s.ix.n
-		out.Bytes = int64(len(s.ix.arena))
+		// 只报逻辑占用：物理 arena 里还留着已经裁掉的帧（等 compact 才搬走），
+		// 报物理长度会让「缓冲区 5 MB」对不上用户看到的数字。
+		if s.ix.n > 0 {
+			out.Bytes = int64(len(s.ix.arena)) - int64(s.ix.aoff[s.ix.head])
+		}
 	}
 	out.ContentH = float64(s.totalH2) / 2
 	out.TrimmedPx = float64(s.trimmedH2) / 2
@@ -178,7 +186,7 @@ func (s *Store) appendFrameLocked(f FrameIn) {
 		s.ix = ix
 	}
 	if s.prefix == nil {
-		s.prefix = []int64{0}
+		s.prefix = []int64{s.trimmedH2}
 		s.perLine = s.perLineLocked()
 	}
 	payload, err := hex.DecodeString(f.Hex)
@@ -211,58 +219,116 @@ func (s *Store) appendFrameLocked(f FrameIn) {
 	ix.addStats(d, len(payload), ts)
 	ix.n++
 
-	// 前缀和只追加一行：高度 = 时间戳行 + 若干数据行 + 间距
-	lines := s.linesOfLocked(ix.n - 1)
+	// 前缀和只追加一行：高度 = 时间戳行 + 若干数据行 + 间距。
+	// 前缀和是按物理下标存的，绝对高度；逻辑第 i 帧的顶部 = prefix[head+i]。
+	lines := s.linesOfLocked(ix.head + ix.n - 1)
 	h2 := int64(s.tsLineH2 + lines*s.dataLineH2 + rowGap2)
 	last := s.prefix[len(s.prefix)-1]
 	s.prefix = append(s.prefix, last+h2)
-	s.totalH2 = last + h2
+	s.totalH2 = last + h2 - s.prefix[ix.head]
 }
 
-// evictLocked 在 arena 超上限时从最旧的一端裁到 75%，并把前缀和重建一次。
+// evictLocked 按守护进程环形缓冲的语义裁头：超一帧丢一帧，丢到不超上限为止。
+//
+// 不攒「裁到 75%」那种批量：批量会让实际占用在 75%~100% 之间来回摆，用户看到的
+// 是「缓冲区一会儿 3.7 MB、一会儿 5 MB」；逐帧丢才是环形缓冲的样子。
+// 代价本来在 dropFrontLocked（以前要搬 5 MB arena + 重算整张前缀和），
+// 改成挪逻辑起点之后这里只剩一个循环，摊销 O(1)。
 func (s *Store) evictLocked() {
 	ix := s.ix
-	if ix == nil || s.maxBytes <= 0 || int64(len(ix.arena)) <= s.maxBytes {
+	if ix == nil || ix.n == 0 || s.maxBytes < 0 {
 		return
 	}
-	target := s.maxBytes * 3 / 4
-	cut, kept := 0, int64(len(ix.arena))
-	for cut < ix.n && kept > target {
-		kept -= int64(ix.ln[cut])
+	used := int64(len(ix.arena)) - int64(ix.aoff[ix.head])
+	if used <= s.maxBytes {
+		return
+	}
+	cut := 0
+	for cut < ix.n && used > s.maxBytes {
+		used -= int64(ix.ln[ix.head+cut])
 		cut++
-	}
-	if cut <= 0 || cut >= ix.n {
-		return
 	}
 	s.dropFrontLocked(cut)
 }
 
-// dropFrontLocked 丢掉最前面的 cut 帧（裁旧用）。
+// dropFrontLocked 丢掉最前面的 cut 帧（裁旧用）：只挪逻辑起点，不搬数据。
+//
+// 物理数组原样留着，head 指到新的第一帧；前缀和（绝对高度）也不用重算，
+// 新起点的顶部高度正好就是「已经裁掉多少像素」。
 func (s *Store) dropFrontLocked(cut int) {
 	ix := s.ix
 	if cut <= 0 || cut > ix.n {
 		return
 	}
-	n := ix.n - cut
-	base := ix.aoff[cut]
-	segBase := ix.segIdx[cut]
+	ix.head += cut
+	ix.n -= cut
+	s.absBase += cut
 	// 记下这一刀裁掉多少高度（半像素），前端靠它把视口锚在原地。
-	// 必须用裁之前的 prefix —— 下面 rebuildLayoutLocked 会把它重算。
-	s.trimmedH2 += s.prefix[cut]
+	s.trimmedH2 = s.prefix[ix.head]
+	if ix.n > 0 {
+		ix.firstTs = ix.ts[ix.head]
+	} else {
+		ix.firstTs, ix.lastTs = 0, 0
+	}
+	s.totalH2 = s.prefix[ix.head+ix.n] - s.prefix[ix.head]
+	s.maybeCompactLocked()
+}
 
-	// 数组左移（dst 在 src 之前，copy 允许重叠）
-	copy(ix.ts, ix.ts[cut:])
+// maybeCompactLocked 在 head 攒得够多时把数组整体搬回去一次。
+//
+// 判据是「被裁的比留着的还多」：这样每帧平摊下来只被搬常数次，裁头仍然是
+// 摊销 O(1)，而物理数组不会无限长下去。
+func (s *Store) maybeCompactLocked() {
+	ix := s.ix
+	if ix == nil || ix.head == 0 || ix.head < 1024 || ix.head*2 < ix.n {
+		return
+	}
+	s.compactLocked()
+}
+
+// compactLocked 把逻辑起点搬回物理 0：数组左移 head 帧，arena 与格子缓存跟着
+// 前移，前缀和裁掉前 head 项（绝对值不变，所以第一项还是 trimmedH2）。
+//
+// 只由 maybeCompactLocked / 重建布局调用，不参与逐帧路径。
+func (s *Store) compactLocked() {
+	ix := s.ix
+	if ix == nil {
+		return
+	}
+	h := ix.head
+	if h <= 0 {
+		return
+	}
+	if ix.n == 0 {
+		// 全裁光了：数组清空，起点归零（prefix 只留 trimmedH2 那一项）。
+		ix.ts = ix.ts[:0]
+		ix.aoff = ix.aoff[:0]
+		ix.ln = ix.ln[:0]
+		ix.dir = ix.dir[:0]
+		ix.org = ix.org[:0]
+		ix.seg = ix.seg[:0]
+		ix.segIdx = ix.segIdx[:1]
+		ix.segIdx[0] = 0
+		ix.arena = ix.arena[:0]
+		s.prefix = s.prefix[:1]
+		ix.head = 0
+		return
+	}
+	n := ix.n
+	base := ix.aoff[h]
+	segBase := ix.segIdx[h]
+	copy(ix.ts, ix.ts[h:])
 	ix.ts = ix.ts[:n]
-	copy(ix.aoff, ix.aoff[cut:])
+	copy(ix.aoff, ix.aoff[h:])
 	ix.aoff = ix.aoff[:n]
-	copy(ix.ln, ix.ln[cut:])
+	copy(ix.ln, ix.ln[h:])
 	ix.ln = ix.ln[:n]
-	copy(ix.dir, ix.dir[cut:])
+	copy(ix.dir, ix.dir[h:])
 	ix.dir = ix.dir[:n]
-	copy(ix.org, ix.org[cut:])
+	copy(ix.org, ix.org[h:])
 	ix.org = ix.org[:n]
 	// segIdx 有 n+1 项：移位后整体减去被切掉的那段长度
-	copy(ix.segIdx, ix.segIdx[cut:])
+	copy(ix.segIdx, ix.segIdx[h:])
 	ix.segIdx = ix.segIdx[:n+1]
 	for i := range ix.segIdx {
 		ix.segIdx[i] -= segBase
@@ -274,14 +340,10 @@ func (s *Store) dropFrontLocked(cut int) {
 	for i := range ix.aoff {
 		ix.aoff[i] -= base
 	}
-	ix.n = n
-	s.absBase += cut
-	if n > 0 {
-		ix.firstTs = ix.ts[0]
-	} else {
-		ix.firstTs, ix.lastTs = 0, 0
-	}
-	s.rebuildLayoutLocked()
+	// 前缀和是绝对高度：裁掉前面 h 项，第一项仍然等于 trimmedH2。
+	copy(s.prefix, s.prefix[h:])
+	s.prefix = s.prefix[:n+1]
+	ix.head = 0
 }
 
 // prependLocked 把一批更早的帧插到最前面（整表重建一次，很少发生）。
@@ -291,6 +353,9 @@ func (s *Store) prependLocked(fs []FrameIn) {
 	if add == 0 {
 		return
 	}
+	// 前插要整表重建：先把逻辑起点搬回物理 0，这样老数组就是纯逻辑帧
+	// （否则已经裁掉的头部会被一并复制进新表）。
+	s.compactLocked()
 	oldN := ix.n
 	oldArena := ix.arena
 	oldSeg := ix.seg
@@ -352,7 +417,7 @@ func (s *Store) prependLocked(fs []FrameIn) {
 		ix.addStats(d, len(payload), f.Ts)
 	}
 	ix.firstTs = ix.ts[0]
-	s.rebuildLayoutLocked()
+	s.buildLayoutLocked()
 }
 
 // addStats 把一帧算进统计块（字节数 / 时间范围）。
@@ -390,28 +455,4 @@ func (ix *index) originIDStr(s string) uint8 {
 	}
 	ix.orgNames = append(ix.orgNames, s)
 	return uint8(len(ix.orgNames))
-}
-
-// rebuildLayoutLocked 从头重算前缀和（裁剪 / 前插 / 改样式之后）。
-func (s *Store) rebuildLayoutLocked() {
-	ix := s.ix
-	if ix == nil || ix.n == 0 {
-		s.prefix = []int64{0}
-		s.totalH2 = 0
-		s.perLine = s.perLineLocked()
-		return
-	}
-	s.perLine = s.perLineLocked()
-	if cap(s.prefix) < ix.n+1 {
-		s.prefix = make([]int64, ix.n+1)
-	}
-	buf := s.prefix[:ix.n+1]
-	var y int64
-	buf[0] = 0
-	for i := 0; i < ix.n; i++ {
-		y += int64(s.tsLineH2 + s.linesOfLocked(i)*s.dataLineH2 + rowGap2)
-		buf[i+1] = y
-	}
-	s.prefix = buf
-	s.totalH2 = y
 }

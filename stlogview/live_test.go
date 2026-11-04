@@ -127,6 +127,102 @@ func TestLiveTrimmedPx(t *testing.T) {
 	}
 }
 
+// TestLiveEvictCompacts 逐帧裁头攒够一批会把物理数组搬回去（compact）。
+// 搬之前和搬之后，帧号、行高、复制出来的内容都必须一样。
+func TestLiveEvictCompacts(t *testing.T) {
+	s := newLiveDoc(t, 4096) // 每帧 4 字节，能留 1024 帧
+	const total = 6000
+	for i := 0; i < total; i++ {
+		s.AppendFrame(liveFrame(int64(1000+i), 1, []byte(fmt.Sprintf("F%03d", i%1000))))
+		if i%997 == 0 {
+			if info := s.LiveInfo(); info.Bytes > 4096 {
+				t.Fatalf("第 %d 帧时 arena 超限：%d", i, info.Bytes)
+			}
+		}
+	}
+	info := s.LiveInfo()
+	if info.Total != total {
+		t.Fatalf("总帧数 %d，期望 %d", info.Total, total)
+	}
+	if info.Evicted < 1024 {
+		t.Fatalf("被裁帧数 %d，没触发 compact", info.Evicted)
+	}
+	if s.ix.head >= 1024 {
+		t.Fatalf("head=%d，物理数组没搬回去", s.ix.head)
+	}
+	// 物理 arena 不能无限涨：逻辑占用 4 KB，物理留到 ~2 倍就该搬了。
+	if n := len(s.ix.arena); n > 4096*3 {
+		t.Fatalf("物理 arena 涨到 %d", n)
+	}
+	w := s.Window(0, 200, 0)
+	if len(w.Rows) == 0 {
+		t.Fatal("没有行")
+	}
+	if w.Rows[0].Idx != info.Evicted {
+		t.Fatalf("首行帧号 %d，期望 %d", w.Rows[0].Idx, info.Evicted)
+	}
+	for i := 1; i < len(w.Rows); i++ {
+		if w.Rows[i].Idx != w.Rows[i-1].Idx+1 {
+			t.Fatalf("帧号跳了：%d -> %d", w.Rows[i-1].Idx, w.Rows[i].Idx)
+		}
+	}
+	// 行高一致（payload 等长），被裁掉的高度 = 帧数 × 行高
+	if got, want := info.TrimmedPx, float64(info.Evicted)*w.Rows[0].H; math.Abs(got-want) > 0.6 {
+		t.Fatalf("TrimmedPx = %v，期望 %v", got, want)
+	}
+	// 复制首行：内容要正好是被裁到的那一帧
+	var copied string
+	s.SetClipboard(func(text string) { copied = text })
+	r := s.CopySelection(CopyReq{
+		FromIdx: info.Evicted, FromVline: 0, FromCell: 0,
+		ToIdx: info.Evicted, ToVline: 1 << 30, ToCell: 1 << 30,
+		Format: "escaped",
+	})
+	if r.Err != "" {
+		t.Fatal(r.Err)
+	}
+	want := fmt.Sprintf("F%03d\n", info.Evicted%1000)
+	if r.Text != want || copied != want {
+		t.Fatalf("复制 %q / 剪贴板 %q，期望 %q", r.Text, copied, want)
+	}
+	// 滚到底看最后一帧
+	last := s.Window(int(s.Window(0, 200, 0).MaxOffset), 200, 0)
+	if n := len(last.Rows); n == 0 || last.Rows[n-1].Idx != total-1 {
+		t.Fatalf("滚到底最后一帧 = %+v", last.Rows)
+	}
+}
+
+// TestLiveEvictAll 单帧就超过上限时会被整帧丢掉（文档暂时是空的），
+// 之后再来一帧能留住的，帧号和高度都要从正确的位置接着算。
+func TestLiveEvictAll(t *testing.T) {
+	s := newLiveDoc(t, 4)
+	s.AppendFrame(liveFrame(1000, 1, []byte("abcde"))) // 5 B > 4 B，留不住
+	info := s.LiveInfo()
+	if info.Frames != 0 || info.Total != 1 || info.Evicted != 1 {
+		t.Fatalf("全裁之后 %+v", info)
+	}
+	if info.ContentH != 0 || info.TrimmedPx <= 0 {
+		t.Fatalf("高度 %v / 裁掉 %v", info.ContentH, info.TrimmedPx)
+	}
+	s.AppendFrame(liveFrame(1001, 1, []byte("fghij")))
+	if info := s.LiveInfo(); info.Frames != 0 || info.Total != 2 {
+		t.Fatalf("第二帧之后 %+v", info)
+	}
+	// 这一帧只有 2 B，留得住
+	s.AppendFrame(liveFrame(1002, 1, []byte("xy")))
+	info = s.LiveInfo()
+	if info.Frames != 1 || info.Total != 3 || info.Evicted != 2 {
+		t.Fatalf("小帧之后 %+v", info)
+	}
+	w := s.Window(0, 100, 0)
+	if len(w.Rows) != 1 || w.Rows[0].Idx != 2 {
+		t.Fatalf("窗口 %+v", w.Rows)
+	}
+	if w.ContentHeight <= 0 || w.Rows[0].Y != 0 {
+		t.Fatalf("高度 %v / 首行 Y %v", w.ContentHeight, w.Rows[0].Y)
+	}
+}
+
 // TestSystemRowHexNoPrefix 系统消息行在前端固定按文本渲染，Hex 串不能带 0x
 // 前缀 —— 解码器会把前缀当两个十六进制字符，中文会显示成一串点。
 func TestSystemRowHexNoPrefix(t *testing.T) {

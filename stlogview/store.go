@@ -244,6 +244,7 @@ func (s *Store) Open(path string) StatusResult {
 	s.path = path
 	s.live = false
 	s.absBase = 0
+	s.trimmedH2 = 0
 	s.ix = nil
 	s.phase = "scan"
 	s.scanErr = ""
@@ -312,6 +313,7 @@ func (s *Store) Close() {
 	s.phase = "idle"
 	s.prefix = nil
 	s.totalH2 = 0
+	s.trimmedH2 = 0
 	s.ruler = nil
 	s.rulerUpToResetLocked()
 }
@@ -436,8 +438,9 @@ func (s *Store) Configure(charsPerLine, tsLineH2, dataLineH2 int, mode string, a
 		if anchorIdx >= s.ix.n {
 			anchorIdx = s.ix.n - 1
 		}
-		if anchorIdx >= 0 && anchorIdx+1 < len(s.prefix) {
-			out.AnchorY = float64(s.prefix[anchorIdx]) / 2
+		// anchorIdx 是逻辑下标；前缀和按物理下标存，要加上 head。
+		if p := s.ix.head + anchorIdx; anchorIdx >= 0 && p+1 < len(s.prefix) {
+			out.AnchorY = float64(s.prefix[p]-s.trimmedH2) / 2
 		}
 	}
 	return out
@@ -499,6 +502,7 @@ func linesFor(units uint32, perLine int) int {
 }
 
 // linesOfLocked 是一帧占几行：文本模式按逻辑行分别折行后相加。
+// i 是物理下标（逻辑帧号 = absBase + i - head）。
 func (s *Store) linesOfLocked(i int) int {
 	ix := s.ix
 	if s.mode == "hex" {
@@ -515,11 +519,14 @@ func (s *Store) linesOfLocked(i int) int {
 
 // ensureSegLocked 保证格子缓存与当前样式一致。样式变了就整表重算：
 // 格子数只依赖字节流与样式，重扫一遍 arena 比重建索引便宜得多。
+//
+// 重扫只覆盖逻辑帧，所以先把逻辑起点搬回物理 0。
 func (s *Store) ensureSegLocked() {
 	ix := s.ix
 	if ix == nil || ix.n == 0 || ix.segKey == s.style {
 		return
 	}
+	s.compactLocked()
 	st := s.style
 	buf := ix.seg[:0]
 	segIdx := ix.segIdx[:0]
@@ -531,6 +538,7 @@ func (s *Store) ensureSegLocked() {
 	segIdx = append(segIdx, int32(len(buf)))
 	ix.seg = buf
 	ix.segIdx = segIdx
+	// arena/aoff 也被 compact 搬过了，aoff 已经相对新起点
 	ix.segKey = st
 }
 
@@ -538,11 +546,17 @@ func (s *Store) ensureSegLocked() {
 // 不重新 decode、不建字符串。
 func (s *Store) buildLayoutLocked() {
 	s.ensureSegLocked()
+	s.compactLocked()
 	ix := s.ix
 	if ix == nil || ix.n == 0 {
-		s.prefix = []int64{0}
+		// 一项也要留，而且第一项就是 trimmedH2：前缀和是绝对高度，
+		// 全裁光之后再追加的帧要从「已经裁掉那段」的顶上接着算。
+		s.prefix = []int64{s.trimmedH2}
 		s.totalH2 = 0
 		s.perLine = s.perLineLocked()
+		if ix != nil {
+			ix.head = 0
+		}
 		return
 	}
 	s.perLine = s.perLineLocked()
@@ -551,15 +565,17 @@ func (s *Store) buildLayoutLocked() {
 		s.prefix = make([]int64, n+1)
 	}
 	buf := s.prefix[:n+1]
-	var y int64
-	buf[0] = 0
+	// 前缀和是绝对高度：第一项是 trimmedH2（已经裁掉的那一段），
+	// 逻辑高度 = 末项 - 首项。
+	y := s.trimmedH2
+	buf[0] = y
 	for i := 0; i < n; i++ {
 		lines := s.linesOfLocked(i)
 		y += int64(s.tsLineH2 + lines*s.dataLineH2 + rowGap2)
 		buf[i+1] = y
 	}
 	s.prefix = buf
-	s.totalH2 = y
+	s.totalH2 = y - s.trimmedH2
 }
 
 func (s *Store) maxOffsetLocked() float64 {
@@ -604,21 +620,20 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 	out.ContentY = contentY
 	out.Total = s.absBase + ix.n
 
-	cy2 := int64(contentY) * 2
+	cy2 := int64(contentY)*2 + s.trimmedH2
 	vh2 := int64(viewportH) * 2
 	ov2 := int64(overscanPx) * 2
 
-	from := floorIndex(s.prefix, cy2-ov2)
-	if from > ix.n-1 {
-		from = ix.n - 1
-	}
-	to := lowerBound(s.prefix, cy2+vh2+ov2)
-	out.RenderFrom, out.RenderTo = s.absBase+from, s.absBase+to-1
-	out.Base = float64(s.prefix[from]) / 2
+	// 前缀和按物理下标存、是绝对高度；二分范围限定在逻辑帧 [head, head+n] 里。
+	lo, hi := ix.head, ix.head+ix.n
+	from := floorIndex(s.prefix, lo, hi, cy2-ov2)
+	to := lowerBound(s.prefix, lo, hi, cy2+vh2+ov2)
+	out.RenderFrom, out.RenderTo = s.absBase+from-ix.head, s.absBase+to-ix.head-1
+	out.Base = float64(s.prefix[from]-s.trimmedH2) / 2
 
 	// 可见带（不带 overscan）单独算一次给信息块用。
-	out.VisibleFrom = s.absBase + lowerBound(s.prefix, cy2)
-	out.VisibleTo = s.absBase + lowerBound(s.prefix, cy2+vh2) - 1
+	out.VisibleFrom = s.absBase + lowerBound(s.prefix, lo, hi, cy2) - ix.head
+	out.VisibleTo = s.absBase + lowerBound(s.prefix, lo, hi, cy2+vh2) - ix.head - 1
 
 	rows := make([]Row, 0, to-from)
 	for i := from; i < to; i++ {
@@ -629,52 +644,48 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 	return out
 }
 
-// floorIndex 找最后一个 prefix[i] <= y 的 i（y 落在行中间时取那一行本身）。
+// floorIndex 在 prefix[lo:hi] 里找最后一个 prefix[i] <= y 的 i（y 落在行中间时
+// 取那一行本身）。prefix 是按物理下标存的绝对高度，lo/hi 由调用方夹在逻辑帧范围里。
 //
 // 窗口起点必须用它：用上界（lowerBound）会把 offset 所在的那一行整行跳过，
 // Base 落到下一行，整层被往下推，顶部空出最多一整行高（帧很高时就是一整屏）。
-func floorIndex(prefix []int64, y int64) int {
-	if len(prefix) == 0 {
-		return 0
+func floorIndex(prefix []int64, lo, hi int, y int64) int {
+	if lo >= hi {
+		return lo
 	}
-	lo, hi := 0, len(prefix)-1
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
+	l, r := lo, hi-1
+	for l < r {
+		mid := (l + r + 1) / 2
 		if prefix[mid] <= y {
-			lo = mid
+			l = mid
 		} else {
-			hi = mid - 1
+			r = mid - 1
 		}
 	}
-	return lo
+	return l
 }
 
-// lowerBound 找第一个 prefix[i] >= y 的 i（prefix 单调不减）。
-func lowerBound(prefix []int64, y int64) int {
-	lo, hi := 0, len(prefix)
-	for lo < hi {
-		mid := (lo + hi) / 2
+// lowerBound 在 prefix[lo:hi] 里找第一个 prefix[i] >= y 的 i（prefix 单调不减）。
+func lowerBound(prefix []int64, lo, hi int, y int64) int {
+	l, r := lo, hi
+	for l < r {
+		mid := (l + r) / 2
 		if prefix[mid] < y {
-			lo = mid + 1
+			l = mid + 1
 		} else {
-			hi = mid
+			r = mid
 		}
 	}
-	if lo >= len(prefix) {
-		lo = len(prefix) - 1
-	}
-	if lo < 0 {
-		lo = 0
-	}
-	return lo
+	return l
 }
 
+// makeRowLocked 造一行。i 是**物理下标**（逻辑帧号 = absBase + i - head）。
 func (s *Store) makeRowLocked(i int) Row {
 	ix := s.ix
 	p := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
 	r := Row{
-		Idx:  s.absBase + i,
-		Y:    float64(s.prefix[i]) / 2,
+		Idx:  s.absBase + i - ix.head,
+		Y:    float64(s.prefix[i]-s.trimmedH2) / 2,
 		H:    float64(s.prefix[i+1]-s.prefix[i]) / 2,
 		Ts:   ix.ts[i],
 		Dir:  dirName(ix.dir[i]),
@@ -800,7 +811,7 @@ func (s *Store) Ruler(nb int) RulerResult {
 			var orgN [8]int
 			var mask uint8
 			for i := lo; i < hi; i++ {
-				if o := ix.org[i]; o > 0 {
+				if o := ix.org[ix.head+i]; o > 0 {
 					orgN[o]++
 					mask |= 1 << (o - 1)
 				}
@@ -843,6 +854,7 @@ func (s *Store) FrameDebug(idx int) string {
 	if ix == nil || i < 0 || i >= ix.n {
 		return ""
 	}
+	i += ix.head // 逻辑下标 → 物理下标
 	p := ix.arena[ix.aoff[i] : ix.aoff[i]+int32(ix.ln[i])]
 	segs := ix.seg[ix.segIdx[i]:ix.segIdx[i+1]]
 	fresh := cellsOf(p, s.style, nil)

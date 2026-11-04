@@ -60,11 +60,12 @@ const maxCopyFrames = 50000
 // posToByte 把（绝对帧号，第几个视觉行，行内第几格）换算成 payload 里的字节偏移。
 // 落在半个字符/半个 /XX 里时向左贴齐 —— 选区不会把字节切开。
 func (s *Store) posToByteLocked(idx, vline, cell int) int {
-	idx -= s.absBase // 绝对帧号 → 下标（实时文档裁过头部）
+	idx -= s.absBase // 绝对帧号 → 逻辑下标（实时文档裁过头部）
 	ix := s.ix
 	if ix == nil || idx < 0 || idx >= ix.n {
 		return 0
 	}
+	idx += ix.head // 逻辑下标 → 物理下标
 	p := ix.arena[ix.aoff[idx] : ix.aoff[idx]+int32(ix.ln[idx])]
 	if cell < 0 {
 		cell = 0
@@ -172,7 +173,7 @@ func (s *Store) CopySelection(req CopyReq) CopyResult {
 	var b strings.Builder
 	frames, nbytes, nuls := 0, 0, 0
 	for i := fromIdx; i <= toIdx; i++ {
-		li := i - s.absBase // 绝对帧号 → 下标
+		li := i - s.absBase + ix.head // 绝对帧号 → 物理下标
 		p := ix.arena[ix.aoff[li] : ix.aoff[li]+int32(ix.ln[li])]
 		lo, hi := 0, len(p)
 		if i == fromIdx {
