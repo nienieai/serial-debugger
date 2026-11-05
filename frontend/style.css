@@ -1551,8 +1551,10 @@ body.is-max .win-frame {
 }
 
 .tab-ico.is-idle::after {
-  background: var(--placeholder);
-  opacity: .75;
+  /* 未点亮的点一律**透明**：灰点看着像「有个状态被关着」，透明点只留位置。
+     守护进程那颗点相反 —— 它表示进程在不在，未运行时用灰点（见 .status-dot）。 */
+  background: transparent;
+  opacity: 1;
 }
 
 .tab-ico.is-ro::after {
@@ -5316,13 +5318,13 @@ body.is-qp-dragging .qp-add-row {
   font-size: 12px;
 }
 
-/* 未点亮的状态点一律**透明**（不是灰点）：灰点看着像「有个状态被关着」，
-   透明点只是留个位置，亮起来才代表这个状态成立。 */
+/* 守护进程的点是「进程在不在」：未运行时用灰点（不是透明），才能看出这颗点在、
+   只是没亮。标签 / 保存那些「成立才亮」的点才用透明。 */
 .status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: transparent;
+  background: var(--status-offline);
   display: inline-block;
 }
 
@@ -5332,7 +5334,7 @@ body.is-qp-dragging .qp-add-row {
 }
 
 .status-dot.is-offline {
-  background: transparent;
+  background: var(--status-offline);
 }
 
 .client-badge {

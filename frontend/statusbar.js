@@ -255,9 +255,18 @@ function createStatusParse(container) {
 function createStatusSave(container) {
 	var span = document.createElement('span');
 	span.className = 'stat-item dsp-item is-save';
-	// 图标外面裹一层定位参照：绿点绝对定位在图标**右下角**（透明的未点亮态
-	// 靠绝对定位留位，不加 mark 就不会把文字顶开）。
-	span.innerHTML = '<span class="c-save-glyph">' + icon('save', 13, 13) + '<i class="stat-save-dot"></i></span>';
+	// 图标外面裹一层定位参照：绿点绝对定位在图标**右下角**。
+	//
+	// 必须能在图标到货后重画：icons.js 的图标是 wails-ready 之后异步拉的，而
+	// initStatusBar 跑在那之前 —— 直接 icon('save') 拿到的是「缺图标」的方框叉，
+	// 而且之后不会自己重画（表现就是状态栏里一颗 ⊠，看着像图标包缺 key）。
+	function paintGlyph() {
+		span.innerHTML = '<span class="c-save-glyph">' + icon('save', 13, 13) + '<i class="stat-save-dot"></i></span>';
+	}
+	paintGlyph();
+	if (window._iconsReady && typeof window._iconsReady.then === 'function') {
+		window._iconsReady.then(paintGlyph).catch(function () {});
+	}
 	span.title = t('status.save', '保存历史');
 	container.appendChild(span);
 
