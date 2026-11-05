@@ -2059,14 +2059,27 @@ function _csPosition(dropdown, trigger) {
   var rect = trigger.getBoundingClientRect();
   var sb = document.querySelector('.statusbar');
   var limitBottom = Math.min(window.innerHeight, sb ? sb.getBoundingClientRect().top : window.innerHeight) - 6;
-  var spaceBelow = limitBottom - (rect.bottom + 2);
-  var spaceAbove = rect.top - 8;
-  // 下方连两行都放不下、且上方更宽裕 → 向上弹
-  var dropUp = spaceBelow < 88 && spaceAbove > spaceBelow;
+  var spaceBelow = Math.max(0, limitBottom - (rect.bottom + 2));
+  var spaceAbove = Math.max(0, rect.top - 8);
+  // 先量「内容想要多高」：把 maxHeight 放开再读 scrollHeight，方向才判得准。
+  // 原来的判据是「下方能不能塞下 88px」，而 maxHeight 又有 80px 的硬下限 ——
+  // 靠近窗口底部时这两个数一起把下拉顶穿状态栏、被窗口边缘裁掉（「尾部追加」
+  // 那个下拉实际就只剩半截 CRLF，还带一条滚动条）。
+  dropdown.style.maxHeight = 'none';
+  var need = dropdown.scrollHeight || 0;
+  var want = Math.min(need, 240);
+  var dropUp = spaceBelow < want && spaceAbove > spaceBelow;
+  var avail = dropUp ? spaceAbove : spaceBelow;
+  if (avail < 48) {
+    // 两边都窄：挑宽的那边，并允许它压缩到实际高度（宁可滚动，也不裁字）
+    avail = Math.max(spaceAbove, spaceBelow);
+    dropUp = spaceAbove > spaceBelow;
+  }
   dropdown.style.left = rect.left + 'px';
   dropdown.style.minWidth = rect.width + 'px';
-  dropdown.style.maxWidth = Math.min(rect.width * 2, window.innerWidth - rect.left - 12) + 'px';
-  dropdown.style.maxHeight = Math.max(80, Math.floor(dropUp ? spaceAbove : spaceBelow)) + 'px';
+  dropdown.style.maxWidth = Math.min(Math.max(rect.width * 2, rect.width), window.innerWidth - rect.left - 12) + 'px';
+  // 不再留 80 的下限：空间多少给多少，超出就滚动，绝不顶穿状态栏
+  dropdown.style.maxHeight = Math.max(1, Math.floor(avail)) + 'px';
   if (dropUp) {
     dropdown.style.top = 'auto';
     dropdown.style.bottom = (window.innerHeight - rect.top + 2) + 'px';

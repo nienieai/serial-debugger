@@ -4253,9 +4253,12 @@ body.is-tab-dragging .tab-new {
 
 /* ---- 16. Components: Quick Panel ---- */
 .o-divider--quick {
+  /* 和横向分隔条同一套：视觉 1px、命中区 5px、悬停整盒 5px，净占 0 不推挤左右两栏。
+     竖向只在「快捷面板开着」时出现，margin-left 也补一档抵消原来只收右边的 2px。 */
   width: 5px;
   flex-shrink: 0;
   cursor: ew-resize;
+  margin-left: -2px;
   margin-bottom: -12px;
   margin-right: -3px;
   background: linear-gradient(to right, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
@@ -4267,12 +4270,10 @@ body.is-tab-dragging .tab-new {
 /* 命中区就是分隔条本身那 5px：不往内容区伸（左边是滚动条），也不往面板侧
    扩 —— 3~5px 的拖动范围够用，再宽就开始跟旁边的控件抢点击了。 */
 .o-divider--quick::before {
+  /* 命中区就是这 5px 盒子（原来只剩 5px 宽、但盒子本身还带负 margin） */
   content: "";
   position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 5px;
+  inset: 0;
 }
 
 .o-divider--quick:hover,
