@@ -3648,7 +3648,9 @@ body.is-tab-dragging .tab-new {
   cursor: ns-resize;
   margin-top: -2px;
   margin-bottom: -3px;
-  margin-right: -3px;
+  /* 右端不再多探 3px：多探的部分正好越过竖向分隔条，横竖两条交界处就会看见
+     横条比竖条长出几个像素。现在横条右端停在竖条那条线上。 */
+  margin-right: 0;
   background: linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
   /* z-index 要高于状态栏（4）：拖到最底时它会有 3px 压在状态栏上沿，
      低于状态栏就抓不到，用户就「拖回不来了」。 */
@@ -4060,6 +4062,9 @@ body.is-tab-dragging .tab-new {
 .hist-scrollbar.is-send {
   border-left: 1px solid var(--border);
   border-top: 1px solid var(--border);
+  /* 默认的 bottom:6px 是历史区那条留的余量；发送框这条要贴底，
+     否则轨道在状态栏上面悬着 6px，看着就是「滚动条没落到底」。 */
+  bottom: 0;
 }
 
 .send-input-mirror {
