@@ -64,6 +64,9 @@
     --panel-bg: #0d0d0d;
     --lv-bg: var(--panel-bg);
     --rail-bg: var(--panel-bg);
+    /* 活动标签底色：深色下跟数据区同色，标签和内容连成一片（原来是 --input-bg
+       #1a1a1a，压在 #0d0d0d 的页面上下沿会有一道台阶）。 */
+    --tab-active-bg: var(--panel-bg);
     --green: #16c60c;
     --red: #ff5c5c;
     --yellow: #ffd740;
@@ -149,6 +152,8 @@
   --panel-bg: #0d0d0d;
   --lv-bg: var(--panel-bg);
   --rail-bg: var(--panel-bg);
+  /* 活动标签底色 = 数据区底色：标签与内容连成一片（见媒体查询那份的注释）。 */
+  --tab-active-bg: var(--panel-bg);
   --green: #16c60c;
   --red: #ff5c5c;
   --yellow: #ffd740;
@@ -187,6 +192,8 @@
   --panel-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
   --lv-bg: var(--panel-bg);
   --rail-bg: transparent;
+  /* 浅色不改观感：活动标签仍是输入区白（= --input-bg）。 */
+  --tab-active-bg: var(--input-bg);
   --fwd-p1: #2563eb;
   --fwd-p2: #d97706;
   --fwd-p1-hover: #1d4ed8;
@@ -1434,8 +1441,10 @@ body.is-max .win-frame {
 }
 
 .tab-btn.is-active {
-  background-color: var(--input-bg);
-  border-color: var(--border) var(--border) var(--input-bg);
+  /* 底色跟内容区走（深色 = 数据区那档黑），标签下沿才不会有台阶；
+     主题没定义 --tab-active-bg 时回落到原来的 --input-bg。 */
+  background-color: var(--tab-active-bg, var(--input-bg));
+  border-color: var(--border) var(--border) var(--tab-active-bg, var(--input-bg));
   border-radius: 12px 12px 0 0;
   color: var(--fg);
   font-weight: 600;
@@ -1453,7 +1462,7 @@ body.is-max .win-frame {
 }
 
 .tab-btn.is-active:active {
-  background-color: var(--input-bg);
+  background-color: var(--tab-active-bg, var(--input-bg));
 }
 
 /* ---- 7b. 各条栏的主题背景图 + 遮罩 ----
