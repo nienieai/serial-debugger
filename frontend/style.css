@@ -3640,9 +3640,13 @@ body.is-tab-dragging .tab-new {
 
 /* Divider */
 .o-divider {
+  /* 视觉只有 1px（渐变画在盒子中线上），盒子仍是 5px：命中区 5px、拖动算法读的
+     offsetHeight 也还是 5px。margin 上下合计 -5px → **净占 0**，不再把上下两个区
+     各挤 2px（原来 margin-bottom:-3px 净占 2px，那条线因此比缝合线低 2px）。 */
   height: 5px;
   flex-shrink: 0;
   cursor: ns-resize;
+  margin-top: -2px;
   margin-bottom: -3px;
   margin-right: -3px;
   background: linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
@@ -3654,16 +3658,15 @@ body.is-tab-dragging .tab-new {
 }
 
 .o-divider::before {
+  /* 命中区就是这个 5px 盒子（原来上下各外扩 5px = 15px，很容易误抓手） */
   content: "";
   position: absolute;
-  top: -5px;
-  left: 0;
-  right: 0;
-  bottom: -5px;
+  inset: 0;
 }
 
 .o-divider:hover,
 .o-divider.is-active {
+  /* 悬停 / 拖动时整盒变 5px 的实线（这 5px 以缝合线为中心，不推挤任何控件） */
   background: var(--accent);
 }
 

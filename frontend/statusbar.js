@@ -84,7 +84,7 @@ function createStatusCursor(container) {
 			else { col++; }
 		}
 		span.textContent = t('status.cursor_fmt','行{0},列{1}').replace('{0}', line).replace('{1}', col);
-		span.style.display = 'inline';
+		span.style.display = 'inline-flex';   // inline 会丢掉 .stat-item 的 align-items:center，字就跟旁边几项不齐
 	}
 
 	return {
