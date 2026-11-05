@@ -857,6 +857,36 @@ function buildSettingsPage() {
 		{ key: 'about',    i18n: 'settings.nav_about',    fb: '关于',     panel: panelAbout }
 	];
 
+	// activate 是「切到某一页」的唯一实现：点导航条和首屏打开共用它。
+	// 所有面板建出来都带 is-hidden，以前只有「界面」那一张不带，旧代码靠这个蒙对了
+	// 首屏；页面重排后「外观」排在第一位，不主动打开就只剩左边导航、右边全空 ——
+	// 点一下别的页再回来才有内容（0.9.1 实测踩到）。
+	function activate(sec) {
+		nav.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
+		var navItem = nav.querySelector('.settings-nav-item[data-nav="' + sec.key + '"]');
+		if (navItem) navItem.classList.add('is-active');
+		body.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
+		sec.panel.classList.remove('is-hidden');
+		// 主题 / 图标 / 语言这三页是懒加载的（列表要等外部资源到手）
+		if (sec.key === 'look') {
+			setTimeout(function() { renderSettingsLookGrid(); renderSettingsThemeGrid(); renderSettingsIconGrid(); }, 50);
+		}
+		if (sec.key === 'language') {
+			setTimeout(function() { refreshSettingsLangList(); }, 50);
+		}
+		// 面板显示出来后：补渲染颜色预览，并重新量标题高度（隐藏时量到 0）
+		setTimeout(function() {
+			_measureBubbleHeads(sec.panel);
+			if (sec.key === 'colors') {
+				sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
+					if (!el._colorItems) return;
+					if (el._colorKind === 'send') _renderSendPreview(el);
+					else _renderColorPreview(el._colorItems, el, el._colorKind);
+				});
+			}
+		}, 50);
+	}
+
 	sections.forEach(function(sec, idx) {
 		var item = document.createElement('div');
 		item.className = 'settings-nav-item' + (idx === 0 ? ' is-active' : '');
@@ -870,29 +900,7 @@ function buildSettingsPage() {
 		navLab.setAttribute('data-i18n', sec.i18n);
 		navLab.textContent = t(sec.i18n, sec.fb);
 		item.appendChild(navLab);
-		item.addEventListener('click', function() {
-			nav.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
-			item.classList.add('is-active');
-			body.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
-			sec.panel.classList.remove('is-hidden');
-			if (sec.key === 'appearance') {
-				setTimeout(function() { renderSettingsThemeGrid(); renderSettingsIconGrid(); }, 50);
-			}
-			if (sec.key === 'language') {
-				setTimeout(function() { refreshSettingsLangList(); }, 50);
-			}
-			// 面板显示出来后：补渲染颜色预览，并重新量标题高度（隐藏时量到 0）
-			setTimeout(function() {
-				_measureBubbleHeads(sec.panel);
-				if (sec.key === 'colors') {
-					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
-						if (!el._colorItems) return;
-						if (el._colorKind === 'send') _renderSendPreview(el);
-						else _renderColorPreview(el._colorItems, el, el._colorKind);
-					});
-				}
-			}, 50);
-		});
+		item.addEventListener('click', function() { activate(sec); });
 		nav.appendChild(item);
 		body.appendChild(sec.panel);
 	});
@@ -900,6 +908,8 @@ function buildSettingsPage() {
 	layout.appendChild(nav);
 	layout.appendChild(body);
 	wrapper.appendChild(layout);
+	// 首屏把第一页打开（样式与懒加载都走 activate，和点导航完全同一条路）
+	if (sections.length) activate(sections[0]);
 	// Nav backdrop & toggle (narrow: overlay; wide: always visible via CSS)
 	var navBackdrop = document.createElement('div');
 	navBackdrop.className = 'settings-nav-backdrop';
