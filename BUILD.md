@@ -38,7 +38,7 @@ Linux 下去掉 `.exe` 后缀；GUI 必须是 **cgo 构建**（不能从 Windows
 go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
-go build -tags production -trimpath -buildvcs=false \
+go build -tags production -trimpath \
   -ldflags "-s -w -X github.com/nienieai/serial-debugger/version.Version=0.9.1" \
   -o build/bin/serial-gui .
 ```

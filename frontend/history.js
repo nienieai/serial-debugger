@@ -59,8 +59,10 @@ function makeDataRow(container, dir, timestamp, hex, segments, opts, origin) {
     originHtml = '<span class="t-origin" title="' + escHtml(origin) + '">' +
       escHtml(_originLabel(origin)) + '</span>';
   }
+  // 系统行不数字节（与 logview.js 的 buildRow 一致）
+  var sizeHtml = isSys ? '' : '<span class="' + statClass + '">~' + byteLen + 'B</span>';
   tsLine.innerHTML = '<span class="ts-text">[' + (timestamp || '') + '] ' + label + arrow + ' </span>' +
-    originHtml + '<span class="' + statClass + '">~' + byteLen + 'B</span>';
+    originHtml + sizeHtml;
   row.appendChild(tsLine);
 
   const dataLine = document.createElement('div');
@@ -182,8 +184,16 @@ function _initOverlayScrollbar(box, opts) {
 
   function sync() {
     var m = metrics();
-    if (m.sh <= m.ch + 1) { track.style.display = 'none'; return; }
-    track.style.display = '';
+    // 没得滚时**只藏滑块**，轨道留着：左边竖线和顶部横线要一直在。
+    // 以前整条 track display:none，输入框一变高那两条边界线就跟着消失，
+    // 视觉上像边框在跳。
+    if (m.sh <= m.ch + 1) {
+      thumb.style.display = 'none';
+      track.classList.add('is-idle');
+      return;
+    }
+    thumb.style.display = '';
+    track.classList.remove('is-idle');
     thumb.style.height = m.th + 'px';
     var maxTop = m.trackH - m.th;
     var top = (box.scrollTop / Math.max(1, m.sh - m.ch)) * maxTop;

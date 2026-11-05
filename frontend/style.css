@@ -3177,6 +3177,17 @@ body.is-tab-dragging .tab-new {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
+/* 没得滚时轨道只留两条边界线：不要悬停高亮、不要手型光标，
+   否则一条空轨道亮起来像「有东西可以拖」。 */
+.hist-scrollbar.is-idle,
+.hist-scrollbar.is-idle:hover {
+  background: transparent;
+  cursor: default;
+  /* 没有滑块时这条轨道只剩两条边界线，别去抢输入框右边缘的点击
+     （输入框右边留了 20px 内边距，文字不会压到这儿）。 */
+  pointer-events: none;
+}
+
 .hist-scrollbar-thumb {
   position: absolute;
   left: 0;
@@ -3871,6 +3882,15 @@ body.is-tab-dragging .tab-new {
 #sendInput::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* 发送框那条自绘滚动条也要画「左侧竖线 + 顶部横线」，和显示区那条轨道同款：
+   显示区是 .lv-rail 的 border-left 加 .lv-track-rule 的 border-top，这里用
+   同一个 --border、同一个 1px，两处看起来才是同一条通道。上沿由 JS 设成
+   工具栏底边（top:40px），border-top 就落在那里。 */
+.hist-scrollbar.is-send {
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .send-input-mirror {
@@ -6072,6 +6092,42 @@ input.settings-select::-webkit-outer-spin-button {
 .settings-about-v {
   color: var(--fg);
   font-family: ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+/* 关于页页脚：两个外链 + 一行小字（许可证 / 第三方 / 版权）。
+   单独一块、只用一条上边界线分隔，不再分栏 —— 关于页已经两栏了。 */
+.settings-about-foot {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.settings-about-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.settings-about-link:hover {
+  text-decoration: underline;
+}
+
+.settings-about-meta {
+  color: var(--placeholder);
+  font-size: 12px;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
 

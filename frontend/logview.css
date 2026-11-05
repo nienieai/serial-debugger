@@ -65,6 +65,14 @@
 .lv-gut.is-mcp { background: var(--gut-mcp, #a855f7); }
 .lv-row .ts-line { line-height: 1.4; }
 .lv-row .data-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+/* 系统消息只占一行：时间、标签、正文并列，超长省略。
+   行高在 JS / Go 两侧都按 1 行算（lineCount），这里必须压住不换行。 */
+.lv-row .ts-line.is-sys-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sys-msg--inline { margin: 0; }
 /* 量字体宽度与行高的探针：不进布局，量完立刻删 */
 .lv-probe {
   position: absolute;
@@ -103,7 +111,8 @@
      但滑块本身 16px 宽，让开之后只在右边多出一条缝，看着像滚动条没落到底。
      右边那条竖线也去掉 —— 右边就是窗口边缘，一条线会把滚动条和窗口框割成两层。 */
   margin-right: 0;
-  border-left: 1px solid var(--border);
+  /* 左边那 1px 竖线挪到 .lv-track 上（见下）：轨道上边界就是顶部横线，
+     两条线落在同一个盒子里，竖线才不会从内容区顶端一路画下来「冒头」。 */
   background: var(--rail-bg, transparent);
   overflow: hidden;
   cursor: pointer;
@@ -117,6 +126,9 @@
   left: 0;
   right: 0;
   box-sizing: border-box;
+  /* 左侧竖线：跟顶部横线同属轨道，起点就是轨道上边界，不会伸到上边去。
+     文件页没有顶部横线（trackTop=0），竖线照旧从内容顶端开始。 */
+  border-left: 1px solid var(--border);
 }
 .lv-track-rule { border-top: 1px solid var(--border); }
 .lv-lane {

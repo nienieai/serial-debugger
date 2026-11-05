@@ -550,6 +550,11 @@ func linesFor(units uint32, perLine int) int {
 // i 是物理下标（逻辑帧号 = absBase + i - head）。
 func (s *Store) linesOfLocked(i int) int {
 	ix := s.ix
+	// 系统消息在前端固定画成一行（logview.js 的 buildRow 把时间、标签、正文并排放，
+	// 且 lineCount 返回 1）。这里也按 1 行算，否则长消息会多留几行空白，滚动手感也跟着飘。
+	if ix.dir[i] == sessionfile.DirSystem {
+		return 1
+	}
 	per := s.perLineFor(ix.dir[i])
 	if s.modeOf(ix.dir[i]) == "hex" {
 		return linesFor(ix.ln[i], per)

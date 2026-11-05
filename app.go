@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -2712,6 +2713,74 @@ func (a *App) GetRenderEngine() string {
 		return "WKWebView"
 	}
 	return runtime.GOOS
+}
+
+// 关于页的两个外链。写成常量、由后端自己打开 —— 前端一旦能把任意字符串
+// 塞进 openURL，就等于把 shell 交出去了。
+const (
+	aboutRepoURL   = "https://github.com/nienieai/serial-debugger"
+	aboutIssuesURL = "https://github.com/nienieai/serial-debugger/issues"
+)
+
+// GetBuildInfo 返回构建信息（构建时间 / Git 提交 / Go 版本），关于页「构建」一行用。
+//
+// 取自 runtime/debug 的 VCS 信息（Go 1.18+ 在 git 仓库里 go build 会自动打进去），
+// 不靠构建脚本传 ldflags —— 那种做法一旦脚本漏改，关于页显示的就是假的。
+// 拿不到 VCS 信息时（不在仓库里构建）只回 Go 版本，前端按空值处理。
+func (a *App) GetBuildInfo() map[string]string {
+	out := map[string]string{"go": runtime.Version()}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return out
+	}
+	if bi.GoVersion != "" {
+		out["go"] = bi.GoVersion
+	}
+	for _, d := range bi.Deps {
+		switch d.Path {
+		case "github.com/wailsapp/wails/v3":
+			out["wails"] = d.Version
+		case "go.bug.st/serial":
+			out["serial"] = d.Version
+		}
+	}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev := s.Value
+			if len(rev) > 7 {
+				rev = rev[:7]
+			}
+			out["commit"] = rev
+		case "vcs.time":
+			if t, err := time.Parse(time.RFC3339, s.Value); err == nil {
+				out["time"] = t.Local().Format("2006-01-02 15:04")
+			} else {
+				out["time"] = s.Value
+			}
+		case "vcs.modified":
+			if s.Value == "true" {
+				out["dirty"] = "1"
+			}
+		}
+	}
+	return out
+}
+
+// OpenProjectPage 打开项目主页。
+func (a *App) OpenProjectPage() map[string]any {
+	if err := openURL(aboutRepoURL); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true}
+}
+
+// OpenIssuesPage 打开问题反馈页。
+func (a *App) OpenIssuesPage() map[string]any {
+	if err := openURL(aboutIssuesURL); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true}
 }
 
 // GetProtocolVersion 返回本客户端使用的 IPC 协议版本（MAJOR.MINOR.PATCH）。

@@ -31,11 +31,11 @@ LDFLAGS="-w -s -X github.com/nienieai/serial-debugger/version.Version=$VERSION"
 echo "==> 版本: $VERSION"
 echo "==> 构建二进制"
 mkdir -p build/bin
-go build -tags production -trimpath -buildvcs=false -p 2 \
+go build -tags production -trimpath -p 2 \
     -ldflags "$LDFLAGS" -o build/bin/serial-gui .
-go build -trimpath -buildvcs=false -p 2 -ldflags "$LDFLAGS" -o build/bin/serial-cli    ./cmd/serial-cli
-go build -trimpath -buildvcs=false -p 2 -ldflags "$LDFLAGS" -o build/bin/serial-daemon ./daemon/
-go build -trimpath -buildvcs=false -p 2 -ldflags "$LDFLAGS" -o build/bin/serial-mcp    ./cmd/serial-mcp
+go build -trimpath -p 2 -ldflags "$LDFLAGS" -o build/bin/serial-cli    ./cmd/serial-cli
+go build -trimpath -p 2 -ldflags "$LDFLAGS" -o build/bin/serial-daemon ./daemon/
+go build -trimpath -p 2 -ldflags "$LDFLAGS" -o build/bin/serial-mcp    ./cmd/serial-mcp
 
 echo "==> 组装 $STAGE"
 rm -rf "$STAGE"

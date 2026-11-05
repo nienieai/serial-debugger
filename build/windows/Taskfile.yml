@@ -24,7 +24,11 @@ tasks:
       - cmd: powershell -NoProfile -Command "Remove-Item -Force -ErrorAction SilentlyContinue *.syso"
         platforms: [windows]
     vars:
-      BUILD_FLAGS: '-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X github.com/nienieai/serial-debugger/version.Version={{.APP_VERSION}}"'
+      # -buildvcs=true 不能省：wails3 的 go 包装（native.go）在命令里**没看到**这个
+      # 字面量时，会自己补一个 -buildvcs=false —— 于是二进制里没有 vcs.time /
+      # vcs.revision / vcs.modified，关于页的「构建」一行就只剩 Go 版本。
+      # 代价：必须从 git 工作区构建（源码 zip 里编会报错）。
+      BUILD_FLAGS: '-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=true -ldflags="-w -s -H windowsgui -X github.com/nienieai/serial-debugger/version.Version={{.APP_VERSION}}"'
     env:
       GOOS: windows
       CGO_ENABLED: '0'

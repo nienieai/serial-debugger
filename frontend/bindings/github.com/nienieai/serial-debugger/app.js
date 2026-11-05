@@ -308,6 +308,20 @@ export function GetAutoSendStatus(processID) {
 }
 
 /**
+ * GetBuildInfo 返回构建信息（构建时间 / Git 提交 / Go 版本），关于页「构建」一行用。
+ * 
+ * 取自 runtime/debug 的 VCS 信息（Go 1.18+ 在 git 仓库里 go build 会自动打进去），
+ * 不靠构建脚本传 ldflags —— 那种做法一旦脚本漏改，关于页显示的就是假的。
+ * 拿不到 VCS 信息时（不在仓库里构建）只回 Go 版本，前端按空值处理。
+ * @returns {$CancellablePromise<{ [_ in string]?: string }>}
+ */
+export function GetBuildInfo() {
+    return $Call.ByName("main.App.GetBuildInfo").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<{ [_ in string]?: string }>}
  */
 export function GetBuiltinIcons() {
@@ -703,11 +717,31 @@ export function OpenDialog(spec) {
 }
 
 /**
+ * OpenIssuesPage 打开问题反馈页。
+ * @returns {$CancellablePromise<{ [_ in string]?: any }>}
+ */
+export function OpenIssuesPage() {
+    return $Call.ByName("main.App.OpenIssuesPage").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
  * OpenProbeWindow 打开（或聚焦）多窗口验证窗口。
  * @returns {$CancellablePromise<string>}
  */
 export function OpenProbeWindow() {
     return $Call.ByName("main.App.OpenProbeWindow");
+}
+
+/**
+ * OpenProjectPage 打开项目主页。
+ * @returns {$CancellablePromise<{ [_ in string]?: any }>}
+ */
+export function OpenProjectPage() {
+    return $Call.ByName("main.App.OpenProjectPage").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
 }
 
 /**

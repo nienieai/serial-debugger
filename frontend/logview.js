@@ -299,8 +299,10 @@ function createLogView(host, opts) {
         escHtml(lbl) + '</span>';
     }
     var ts = (typeof opts.tsText === 'function') ? opts.tsText(r.ts) : String(r.ts);
+    // 系统消息不数字节：端口连上/断开这种事件没有「收发了多少字节」的含义
+    var sizeHtml = isSys ? '' : '<span class="' + statClass + '">~' + r.size + 'B</span>';
     return '<span class="ts-text">[' + escHtml(ts) + '] ' + label + arrow + ' </span>' +
-      origin + '<span class="' + statClass + '">~' + r.size + 'B</span>';
+      origin + sizeHtml;
   }
 
   // 一帧该画 Hex 还是文本，由 **Go 按这一帧自己的方向**决定（转发页的 P1 / P2
@@ -358,17 +360,23 @@ function createLogView(host, opts) {
     el.appendChild(g2);
     var ts = document.createElement('div');
     ts.className = 'ts-line ' + lvTsClass(r.dir);
-    ts.innerHTML = tsHTML(r);
-    var dl = document.createElement('div');
-    dl.className = 'data-line';
+    // 系统消息：时间、标签、正文画在**同一行**（行高本来就只算 1 行，见 lineCount）。
+    // 以前是 ts-line + data-line 两段 —— 1 行的高度里塞 2 行，会和下一行叠住。
     if (r.dir === 'system' || r.dir === 'sys') {
       // 系统消息是文本（sys.port_connected|COM4|115200），要先过 i18n 再显示，
       // 否则界面上是一串 key。老渲染把它包成「── 文本 ──」，这里照抄。
       var sysTxt = lvHexToText(r.hex);
       if (typeof formatSysMsg === 'function') sysTxt = formatSysMsg(sysTxt);
-      dl.className = 'data-line sys-msg';
-      dl.textContent = '── ' + sysTxt + ' ──';
-    } else if (r.hex) {
+      ts.className += ' is-sys-line';
+      ts.innerHTML = tsHTML(r) + '<span class="sys-msg sys-msg--inline">── ' +
+        escHtml(sysTxt) + ' ──</span>';
+      el.appendChild(ts);
+      return el;
+    }
+    ts.innerHTML = tsHTML(r);
+    var dl = document.createElement('div');
+    dl.className = 'data-line';
+    if (r.hex) {
       var sp = document.createElement('span');
       sp.className = 'hex-data ' + lvHexClass(r.dir);
       sp.style.whiteSpace = 'pre';

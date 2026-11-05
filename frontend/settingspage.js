@@ -703,8 +703,11 @@ function buildSettingsPage() {
 	var protoValEl = null;
 	var dirValEl = null;
 	var renderValEl = null;
+	var buildValEl = null;
+	var metaEl = null;
 	[['settings.about_kv_proto', '协议号', ''],
 	 ['settings.about_kv_dir', '程序目录', ''],
+	 ['settings.about_build', '构建', ''],
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
 	 ['settings.about_kv_back', '后端', 'Go / Wails v3'],
 	 ['settings.about_kv_render', '渲染', 'WebView'],
@@ -718,6 +721,7 @@ function buildSettingsPage() {
 		v.textContent = row[2];
 		if (row[0] === 'settings.about_kv_proto') protoValEl = v;
 		if (row[0] === 'settings.about_kv_dir') dirValEl = v;
+		if (row[0] === 'settings.about_build') buildValEl = v;
 		if (row[0] === 'settings.about_kv_render') renderValEl = v;
 		kv.appendChild(k);
 		kv.appendChild(v);
@@ -741,6 +745,34 @@ function buildSettingsPage() {
 			if (eng && renderValEl) renderValEl.textContent = eng;
 		}).catch(function() {});
 	} catch (e) { /* 同上 */ }
+	// 构建信息（构建时间 · 提交 · Go 版本）。取自 Go 侧 runtime/debug 的 VCS 信息，
+	// 不在 git 仓库里构建时只有 Go 版本 —— 那时就别摆一串空分隔符。
+	try {
+		window.go.main.App.GetBuildInfo().then(function(bi) {
+			if (!bi || !buildValEl) return;
+			var parts = [];
+			if (bi.time) parts.push(bi.time);
+			if (bi.commit) parts.push(bi.commit + (bi.dirty ? '*' : ''));
+			if (bi.go) parts.push(bi.go);
+			if (parts.length) buildValEl.textContent = parts.join(' · ');
+			// 第三方库版本（wails / 串口库）——写死会跟 go.mod 漂移，这里现取
+			if (metaEl) {
+				// 串口库只在守护进程里链接，GUI 二进制的 build info 里没有它 ——
+				// 名字照写（署名要全），版本有就带上，没有不编。
+				var meta = ['Apache-2.0'];
+				if (bi.wails) meta.push('Wails ' + bi.wails);
+				meta.push('go.bug.st/serial' + (bi.serial ? ' ' + bi.serial : ''));
+				meta.push('© 2026 nienieai');
+				metaEl.textContent = meta.join(' · ');
+			}
+		}).catch(function(e) {
+			// 以前这里静默吞掉，结果是「构建」一行空着却没人知道为什么。
+			// 打一行日志到主程序 stderr（GUI 没控制台，只能靠这个）。
+			try {
+				window.go.main.App.Log('[about] GetBuildInfo 失败: ' + (e && e.message ? e.message : e));
+			} catch (_) { /* 非 Wails 环境 */ }
+		});
+	} catch (e) { /* 同 */ }
 	colA.appendChild(kv);
 	// 设置已经拆成 settings/ 目录（gui.ini / cli.ini / daemon.ini），
 	// 这里给一个直达入口，省得用户自己去程序目录里翻。
@@ -770,6 +802,37 @@ function buildSettingsPage() {
 	aboutWrap.appendChild(colB);
 
 	bAbout.appendChild(aboutWrap);
+
+	// 页脚：两个外链 + 一行小字（许可证 / 第三方 / 版权）。
+	// 放在两列下面而不是塞进「说明」，是不想让版面再分一栏。
+	var foot = document.createElement('div');
+	foot.className = 'settings-about-foot';
+	var links = document.createElement('div');
+	links.className = 'settings-about-links';
+	[['settings.about_repo', '项目地址', 'OpenProjectPage'],
+	 ['settings.about_issues', '问题反馈', 'OpenIssuesPage']].forEach(function(it) {
+		var btn = document.createElement('button');
+		btn.className = 'settings-about-link';
+		btn.setAttribute('data-i18n', it[0]);
+		btn.textContent = t(it[0], it[1]);
+		btn.addEventListener('click', function() {
+			// 旧 exe 上没有这两个方法：调用会返回 rejected promise，不是抛异常 ——
+			// 不接一下就会在控制台留一条未处理拒绝。
+			try {
+				var call = window.go.main.App[it[2]]();
+				if (call && call.catch) call.catch(function() {});
+			} catch (e) { /* 非 Wails 环境忽略 */ }
+		});
+		links.appendChild(btn);
+	});
+	foot.appendChild(links);
+	// 第三方库版本由 GetBuildInfo 现取（见上面的回调），这里只放不依赖构建的固定项
+	var meta = document.createElement('div');
+	meta.className = 'settings-about-meta';
+	meta.textContent = 'Apache-2.0 · go.bug.st/serial · © 2026 nienieai';
+	metaEl = meta;
+	foot.appendChild(meta);
+	bAbout.appendChild(foot);
 	panelAbout.appendChild(bAbout);
 
 	// Nav items + panels
