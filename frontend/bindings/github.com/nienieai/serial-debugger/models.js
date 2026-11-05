@@ -177,21 +177,20 @@ export class AppSettings {
         }
         if (!("shutdownDaemonMode" in $$source)) {
             /**
-             * ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」：
-             * never 不动 / last 最后一个 GUI 关闭时关 / always 总是关。
+             * ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」，四档：
+             *   never   只关自己，守护进程不动
+             *   last    自己是守护进程上最后一个客户端时才关，不询问
+             *   always  每次关窗口都关，不询问
+             *   ask     每次关窗口都问一句「要不要顺便关闭守护进程」（默认）
+             * 
+             * 0.9.1 之前这里是 never/last/always 三档 + 一个独立的「关闭 GUI 前确认」
+             * 布尔开关（shutdown_daemon_warn）。两者表达的是同一件事的两半，混在一起只会
+             * 出现「last + 不提醒」这种既静默又会断串口的组合 —— 现在合并成四档，「要不要问」
+             * 由 ask 这一档本身表达（迁移见 LoadAppSettings）。
              * @member
              * @type {string}
              */
             this["shutdownDaemonMode"] = "";
-        }
-        if (!("shutdownDaemonWarn" in $$source)) {
-            /**
-             * ShutdownDaemonWarn 控制关闭 GUI 前要不要先弹确认（会断开所有串口）。
-             * 只在 last / always 下有作用，never 下设置页置灰。
-             * @member
-             * @type {boolean}
-             */
-            this["shutdownDaemonWarn"] = false;
         }
         if (!("tabCloseWarn" in $$source)) {
             /**
@@ -344,18 +343,18 @@ export class AppSettings {
      * @returns {AppSettings}
      */
     static createFrom($$source = {}) {
-        const $$createField36_0 = $$createType0;
-        const $$createField37_0 = $$createType1;
-        const $$createField38_0 = $$createType2;
+        const $$createField35_0 = $$createType0;
+        const $$createField36_0 = $$createType1;
+        const $$createField37_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("serial" in $$parsedSource) {
-            $$parsedSource["serial"] = $$createField36_0($$parsedSource["serial"]);
+            $$parsedSource["serial"] = $$createField35_0($$parsedSource["serial"]);
         }
         if ("autoSend" in $$parsedSource) {
-            $$parsedSource["autoSend"] = $$createField37_0($$parsedSource["autoSend"]);
+            $$parsedSource["autoSend"] = $$createField36_0($$parsedSource["autoSend"]);
         }
         if ("append" in $$parsedSource) {
-            $$parsedSource["append"] = $$createField38_0($$parsedSource["append"]);
+            $$parsedSource["append"] = $$createField37_0($$parsedSource["append"]);
         }
         return new AppSettings(/** @type {Partial<AppSettings>} */($$parsedSource));
     }

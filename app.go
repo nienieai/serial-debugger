@@ -251,17 +251,114 @@ func (a *App) registerWindow(name string, w *application.WebviewWindow) {
 
 func (a *App) unregisterWindow(name string) {
 	a.winMu.Lock()
+	_, existed := a.windows[name]
 	delete(a.windows, name)
 	// 主窗口没了就把指针清掉：OpenDialog / CloseMainWindow 会回退到它，
 	// 拿一个已经销毁的窗口去 Position()/Close() 会出问题。
 	if name == "main" {
 		a.window = nil
 	}
+	left := a.countAppWindowsLocked()
+	names := a.appWindowNamesLocked()
 	a.winMu.Unlock()
 
 	a.restMu.Lock()
 	delete(a.winRest, name)
 	a.restMu.Unlock()
+
+	if existed {
+		log.Printf("[window] 注销 %q，剩余应用窗口 %d 个: %v", name, left, names)
+	}
+	// 最后一个窗口没了就退进程。不能只指望 allowWindowClose / ConfirmWindowClose
+	// 里那两处 quit：它们靠「关之前数一下还有几个窗口」，只要窗口表里多留了一个
+	// 已销毁的条目，lastWindow 就是 false，进程于是变成「一个窗口都没有、还连着
+	// 守护进程」的幽灵（2026-11-05 实测：PID 15708 挂了一晚上，任务管理器里只能
+	// 手动结束，守护进程那边还显示有个 GUI 客户端在线）。
+	if existed && left == 0 {
+		a.scheduleQuit("最后一个应用窗口已关闭", false)
+	}
+}
+
+// scheduleQuit 安排退出进程，所有「该退了」的入口都走这里。
+//
+// lastWindow=true 表示「这次关掉的确实是最后一个应用窗口」，此时允许窗口表里只剩
+// 看不见的残留：v3 关掉最后一个窗口后 HWND 可能还挂着（2026-11-05 实测：
+// 进程还在、owns 一个 visible=False 的 WailsWebviewWindow、守护进程那边显示
+// 一个 GUI 客户端仍在线，任务管理器里只能手动结束）。lastWindow=false 是
+// unregisterWindow 的兜底，要求窗口表真的空了才退。
+//
+// 500ms 后复查是为了「刚关掉又马上建一个」的场合（拖出标签、再启动一次 GUI）；
+// 1.5 秒后的 os.Exit 是最后兜底 —— v3 的 Quit 是 InvokeSync(destroy)，
+// 主线程正在销毁窗口时可能等不到回调，那样进程会一直挂着，而它已经没窗口可显示。
+func (a *App) scheduleQuit(reason string, lastWindow bool) {
+	if a.wailsApp == nil {
+		return
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if lastWindow {
+			if a.anyVisibleAppWindow() {
+				log.Printf("[close] %s，但还有可见窗口 %v，不退", reason, a.appWindowNames())
+				return
+			}
+		} else if n := a.countAppWindows(); n > 0 {
+			log.Printf("[close] %s，但窗口表里还有 %d 个窗口 %v，不退", reason, n, a.appWindowNames())
+			return
+		}
+		log.Printf("[close] %s，退出进程（剩余窗口 %v）", reason, a.appWindowNames())
+		go func() {
+			time.Sleep(1500 * time.Millisecond)
+			if !a.anyVisibleAppWindow() {
+				log.Printf("[close] Quit 没生效（已无可见窗口），强制结束进程")
+				os.Exit(0)
+			}
+		}()
+		a.quit()
+	}()
+}
+
+// anyVisibleAppWindow 报告是否还有**看得见**的应用窗口。
+//
+// 只数可见的：判断「进程还该不该活着」看的是「屏幕上还有没有这个程序的窗口」，
+// 而不是「窗口表里还有没有条目」—— 后者可能留着关到一半的残留。
+func (a *App) anyVisibleAppWindow() bool {
+	a.winMu.Lock()
+	list := make([]*application.WebviewWindow, 0, len(a.windows))
+	for name, w := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			list = append(list, w)
+		}
+	}
+	a.winMu.Unlock()
+	for _, w := range list {
+		if w != nil && w.IsVisible() {
+			return true
+		}
+	}
+	return false
+}
+
+// countAppWindowsLocked 同 countAppWindows，调用方已持有 winMu。
+func (a *App) countAppWindowsLocked() int {
+	n := 0
+	for name := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			n++
+		}
+	}
+	return n
+}
+
+// appWindowNamesLocked 列出应用窗口名（日志/诊断用），调用方已持有 winMu。
+func (a *App) appWindowNamesLocked() []string {
+	out := make([]string, 0, len(a.windows))
+	for name := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (a *App) windowByName(name string) *application.WebviewWindow {
@@ -1448,25 +1545,21 @@ func (a *App) allowWindowClose(name string) bool {
 
 	sids := a.sessOfWindow(name)
 	cfg := a.LoadAppSettings()
-	// 「要不要停守护进程」只对**最后一个窗口**有意义。
-	//
-	// decideClose 数的是守护进程上的客户端数，而所有窗口共用同一个 GUI 客户端 ——
-	// 多窗口之后 clients 永远是 1，照它判定的话关掉任意一个窗口都会把守护进程停掉，
-	// 别的窗口里的串口跟着全断（实测踩到：关 win-4，main 的会话也死了）。
 	lastWindow := a.countAppWindows() <= 1
+	// 守护进程那半：四档见 decideClose。0.9.1 之前它只对**最后一个窗口**有意义
+	// （多窗口共用一个 GUI 客户端，按客户端数判会误停别人的串口），现在 always /
+	// last / ask 三档都是用户在设置里显式选的，所以每个窗口关闭时都要判一遍。
+	// last 档本身仍然只在「自己是守护进程上最后一个客户端」时才动，关中间那个
+	// 窗口不会影响守护进程。
 	action := closeProceed
-	if lastWindow {
+	if cfg.ShutdownDaemonMode != "" && cfg.ShutdownDaemonMode != "never" {
 		clients := a.GetClients()
-		action = decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients))
+		action = decideClose(cfg.ShutdownDaemonMode, clients != nil, len(clients))
 	}
 	// 这里的判定结果只在一处出现，不打日志的话「为什么没弹确认框」完全无从查起
 	// （实测踩过：clients 多一个就会静默放行）。
-	log.Printf("[close] window=%q sessions=%d lastWindow=%v mode=%s warn=%v -> action=%d",
-		name, len(sids), lastWindow, cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, action)
-
-	// 要停守护进程但用户没让「不再提醒」：停下来即可，但会话也要跟着没了，
-	// 这时若窗口里还有会话，下面照样要确认。
-	stopDaemon := action == closeStopDaemon || action == closeConfirm
+	log.Printf("[close] window=%q sessions=%d lastWindow=%v mode=%s action=%d windows=%v",
+		name, len(sids), lastWindow, cfg.ShutdownDaemonMode, action, a.appWindowNames())
 
 	// 关窗口时会话怎么处理：和关标签页**共用** TabCloseAction（设置 → 标签页）。
 	//   ask     弹框三选一
@@ -1477,12 +1570,19 @@ func (a *App) allowWindowClose(name string) bool {
 		configured = "ask"
 	}
 	closeMode := configured
+	if lastWindow && closeMode == "ask" {
+		closeMode = lastWindowCloseMode(action)
+	}
 
-	// tab / process 是用户在设置里明确选过的，不再追问；只有 ask 才弹会话确认框。
-	// 对话框里勾了「记住选择」写的就是这个设置（和关标签页共用）。
-	needConfirm := action == closeConfirm || windowCloseNeedsConfirm(configured, len(sids))
+	// ask 档是「停下来之前先问一句」，tab / process 是用户在设置里明确选过的，
+	// 只有 ask 才弹会话确认框。「记住选择」写的就是这个设置（和关标签页共用）。
+	needConfirm := action == closeConfirm
+	if !lastWindow {
+		needConfirm = needConfirm || windowCloseNeedsConfirm(configured, len(sids))
+	}
 
 	if !needConfirm {
+		stopDaemon := action == closeStopDaemon
 		if len(sids) > 0 {
 			switch closeMode {
 			case "tab":
@@ -1503,10 +1603,7 @@ func (a *App) allowWindowClose(name string) bool {
 		// 这里是「放行这次关闭」，不要再调 Close()（会二次触发关闭）；
 		// 但最后一个窗口还是要显式退程序，否则窗口没了进程还在。
 		if lastWindow {
-			go func() {
-				time.Sleep(300 * time.Millisecond)
-				a.quit()
-			}()
+			a.scheduleQuit("最后一个窗口关闭（无需确认）", true)
 		}
 		return true
 	}
@@ -1526,19 +1623,23 @@ func (a *App) allowWindowClose(name string) bool {
 	a.pendingCloseWin[name] = time.Now()
 	a.closeWinMu.Unlock()
 
+	// 帧里把「会话怎么问」「守护进程怎么问」拆成两个独立字段：前端可以只问其中一件，
+	// 也可以两件连着问（两个档位都是 ask 的场合）。
 	a.sendFrame(name, map[string]any{"e": "window-close-confirm", "d": map[string]any{
 		"sessions":    len(sids),
-		"stopDaemon":  stopDaemon,
+		"closeAction": closeMode,                 // ask / tab / process
+		"lastWindow":  lastWindow,                // 最后一个窗口：只问守护进程，不问线程
+		"askDaemon":   action == closeConfirm,    // 先问一句「要不要顺便停守护进程」
+		"daemonStop":  action == closeStopDaemon, // 不问也一定要停（last / always 档）
 		"mode":        cfg.ShutdownDaemonMode,
-		"closeAction": closeMode, // ask / keep / destroy
 	}})
 	return false
 }
 
 // ConfirmWindowClose 由前端在用户确认关闭窗口后调用。
 //
-// mode: destroy 销毁本窗口的会话 / transfer 把它们转到别的窗口 —— 后者不销毁
-// 任何会话，串口连接不断，只是换了个窗口显示。
+// mode 用 TabCloseAction 的取值：tab 只关窗口（会话放回无主）/ process 连线程一起关；
+// stopDaemon 是用户在「每次询问」那一档里回答的「要 / 不要停守护进程」。
 func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bool) error {
 	name := winNameFromCtx(ctx)
 	if name == "" {
@@ -1586,9 +1687,8 @@ func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bo
 			a.window.Close()
 		}
 		if lastWindow {
-			// 留一点时间让窗口真正销毁（Quit 会强制关掉剩余窗口）
-			time.Sleep(300 * time.Millisecond)
-			a.quit()
+			// 关窗是异步的，scheduleQuit 内部会留时间复查（见那里的注释）
+			a.scheduleQuit("最后一个窗口确认关闭", true)
 		}
 	}()
 	return nil
@@ -1612,13 +1712,14 @@ func (a *App) CancelWindowClose(ctx context.Context) {
 func (a *App) countAppWindows() int {
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
-	n := 0
-	for name := range a.windows {
-		if name == "main" || strings.HasPrefix(name, "win-") {
-			n++
-		}
-	}
-	return n
+	return a.countAppWindowsLocked()
+}
+
+// appWindowNames 列出当前的应用窗口名（diagnostics 用）。
+func (a *App) appWindowNames() []string {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	return a.appWindowNamesLocked()
 }
 
 // windowClosingCleanup 在窗口真的关掉时收尾：把它的会话归属清掉（会话本身
@@ -1685,7 +1786,13 @@ const (
 
 // decideClose 是关窗时守护进程部分的判定核心，单独拆出来是为了能直接测各种组合。
 //
-// mode: never 从不 / last 最后一个客户端才关 / always 总是关。
+// mode 四档（见 AppSettings.ShutdownDaemonMode）：
+//
+//	never   只关自己，守护进程不动
+//	last    自己是守护进程上最后一个客户端时才关，不询问
+//	always  每次关窗口都关，不询问
+//	ask     每次都问（关掉守护进程会断掉所有串口，所以默认是这个）
+//
 // connected: 本次是否真的连着守护进程（没连上就没什么可关的）。
 // clientCount: 守护进程上的客户端总数（含自己）。
 //
@@ -1693,20 +1800,34 @@ const (
 // 旁边还有个 CLI/MCP 连着」时关窗口会把它们一起断掉。当前 source 只有
 // gui / cli / mcp 三种（protocol.go:91），这里不按 source 过滤，将来加 web
 // 客户端也自动算进来。
-func decideClose(mode string, warn, connected bool, clientCount int) closeAction {
-	if mode != "last" && mode != "always" {
-		return closeProceed // never（含旧配置缺这个键）
-	}
+func decideClose(mode string, connected bool, clientCount int) closeAction {
 	if !connected {
 		return closeProceed
 	}
-	if mode == "last" && clientCount > 1 {
-		return closeProceed // 还有别的客户端，它/它们还要用
-	}
-	if !warn {
+	switch mode {
+	case "ask":
+		return closeConfirm
+	case "always":
+		return closeStopDaemon
+	case "last":
+		if clientCount > 1 {
+			return closeProceed // 还有别的客户端，它/它们还要用
+		}
 		return closeStopDaemon
 	}
-	return closeConfirm
+	return closeProceed // never（含旧配置缺这个键）
+}
+
+// lastWindowCloseMode 决定「最后一个窗口」关掉时会话怎么处理。
+//
+// 最后一个窗口一关程序就退了，这时不再单独问线程（见「关闭窗口流程」文档）：
+// 守护进程要停，会话跟着一起没（process）；守护进程不停，会话放回无主（tab），
+// 下次启动 GUI 能从「从已打开线程进入」接回来。
+func lastWindowCloseMode(action closeAction) string {
+	if action == closeStopDaemon || action == closeConfirm {
+		return "process"
+	}
+	return "tab"
 }
 
 // windowCloseNeedsConfirm 决定「有会话时关这个窗口要不要弹确认框」。

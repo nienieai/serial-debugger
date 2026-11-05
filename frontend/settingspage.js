@@ -583,27 +583,25 @@ function buildSettingsPage() {
 			state.autoStartDaemon = !state.autoStartDaemon;
 			saveSettings();
 		}, state.autoStartDaemon === true)));
-	// 「关闭 GUI 时」怎么处理守护进程。真正判定在 Go 侧（app.go 的 BeforeClose），
-	// 这里只负责存值：last = 自己是最后一个客户端时才关，always = 每次都关。
+	// 「关闭 GUI 时」怎么处理守护进程。判定在 Go 侧（app.go 的 allowWindowClose），
+	// 这里只负责存值：
+	//   never  只关自己
+	//   last   自己是守护进程上最后一个客户端时才关（不询问）
+	//   always 每次都关（不询问）
+	//   ask    每次都问一句
+	// 0.9.1 之前这里是三档 + 一条独立的「关闭 GUI 前确认」开关，两者表达的是同一件
+	// 事的两半（会出现 last + 不提醒 = 静默断串口），现在合并成四档，那条开关删掉了。
 	bStorage.appendChild(_row(t('settings.shutdown_daemon','关闭 GUI 时'),
-		_buildSelect(['never', 'last', 'always'],
+		_buildSelect(['never', 'last', 'always', 'ask'],
 			[ t('settings.shutdown_never', '不处理守护进程'),
 			  t('settings.shutdown_last', '最后一个客户端关闭时关闭'),
-			  t('settings.shutdown_always', '总是关闭守护进程') ],
-			state.shutdownDaemonMode || 'last',
+			  t('settings.shutdown_always', '总是关闭守护进程'),
+			  t('settings.shutdown_ask', '每次询问') ],
+			state.shutdownDaemonMode || 'ask',
 			function(v) {
 				state.shutdownDaemonMode = v;
 				saveSettings();
-				// 「关闭 GUI 前确认」只在真要关守护进程时才有意义
-				setShutdownWarnAvailable(v !== 'never');
 			})));
-	var warnToggle = _buildToggle(function() {
-		state.shutdownDaemonWarn = !state.shutdownDaemonWarn;
-		saveSettings();
-	}, state.shutdownDaemonWarn !== false, (state.shutdownDaemonMode || 'last') === 'never');
-	var warnInput = warnToggle.querySelector('input');
-	if (warnInput) warnInput.setAttribute('data-toggle', 'shutdownWarn');
-	bStorage.appendChild(_row(t('settings.shutdown_daemon_warn','关闭 GUI 前确认'), warnToggle));
 	// 「串口权限提示」只在 Linux 生效：分体版只能临时授权，拔插/重启后失效，
 	// 横幅就是那条提醒。关掉后不再自动弹，打开串口失败时仍会写明修法。
 	// 做成开关而不是「永不提示」，是因为这个误报与否全看发行版的设备权限，
@@ -1983,14 +1981,6 @@ function setAutoSaveToggleAvailable(online) {
 	if (label) label.classList.toggle('is-disabled', !online);
 }
 
-// 「关闭 GUI 前确认」只在关闭模式真的会停守护进程时才有意义（never 下置灰）。
-function setShutdownWarnAvailable(available) {
-	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="shutdownWarn"]');
-	if (!input) return;
-	input.disabled = !available;
-	var label = input.closest('.settings-toggle');
-	if (label) label.classList.toggle('is-disabled', !available);
-}
 
 // ---- check if settings tab is active ----
 function isSettingsTab() {

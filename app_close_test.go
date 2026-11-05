@@ -6,35 +6,78 @@ func TestDecideClose(t *testing.T) {
 	cases := []struct {
 		name      string
 		mode      string
-		warn      bool
 		connected bool
 		clients   int
 		want      closeAction
 	}{
-		{"never：从不处理", "never", true, true, 1, closeProceed},
-		{"never：有多个客户端也不动", "never", true, true, 5, closeProceed},
-		{"缺键（旧 gui.ini）：回落 never", "", true, true, 1, closeProceed},
+		{"never：从不处理", "never", true, 1, closeProceed},
+		{"never：有多个客户端也不动", "never", true, 5, closeProceed},
+		{"缺键（旧 gui.ini）：回落 never", "", true, 1, closeProceed},
 
-		{"last：自己是最后一个 + 无警告 → 直接关", "last", false, true, 1, closeStopDaemon},
-		{"last：自己是最后一个 + 有警告 → 弹确认", "last", true, true, 1, closeConfirm},
-		{"last：还有别的客户端 → 不动（无警告）", "last", false, true, 2, closeProceed},
-		{"last：还有别的客户端 → 不动（有警告，也不该弹）", "last", true, true, 2, closeProceed},
-		{"last：还有 9 个客户端 → 不动", "last", true, true, 9, closeProceed},
+		{"last：自己是最后一个客户端 → 直接关（不询问）", "last", true, 1, closeStopDaemon},
+		{"last：还有别的客户端 → 不动", "last", true, 2, closeProceed},
+		{"last：还有 9 个客户端 → 不动", "last", true, 9, closeProceed},
 
-		{"always：无警告 → 直接关", "always", false, true, 1, closeStopDaemon},
-		{"always：有警告 → 弹确认", "always", true, true, 1, closeConfirm},
-		{"always：还有别的客户端也照关（无警告）", "always", false, true, 5, closeStopDaemon},
-		{"always：还有别的客户端也照关（有警告）", "always", true, true, 5, closeConfirm},
+		{"always：每次关窗口都关（不询问）", "always", true, 1, closeStopDaemon},
+		{"always：还有别的客户端也照关", "always", true, 5, closeStopDaemon},
 
-		{"未连接守护进程 → 直接放行", "always", true, false, 0, closeProceed},
-		{"未连接守护进程（last）→ 直接放行", "last", true, false, 0, closeProceed},
+		// 0.9.1 的第 4 档：不管自己是第几个客户端，先问一句再决定。
+		{"ask：自己是最后一个客户端也要问", "ask", true, 1, closeConfirm},
+		{"ask：还有别的客户端也问", "ask", true, 5, closeConfirm},
+
+		{"未连接守护进程 → 直接放行（always）", "always", false, 0, closeProceed},
+		{"未连接守护进程 → 直接放行（ask）", "ask", false, 0, closeProceed},
+		{"未连接守护进程 → 直接放行（last）", "last", false, 0, closeProceed},
+
+		{"认不出来的档位 → 不动守护进程", "bogus", true, 1, closeProceed},
 	}
 
 	for _, c := range cases {
-		got := decideClose(c.mode, c.warn, c.connected, c.clients)
+		got := decideClose(c.mode, c.connected, c.clients)
 		if got != c.want {
-			t.Errorf("%s: decideClose(%q, warn=%v, conn=%v, n=%d) = %v, want %v",
-				c.name, c.mode, c.warn, c.connected, c.clients, got, c.want)
+			t.Errorf("%s: decideClose(%q, conn=%v, n=%d) = %v, want %v",
+				c.name, c.mode, c.connected, c.clients, got, c.want)
+		}
+	}
+}
+
+// 最后一个窗口关掉时会话怎么处理：守护进程要停就一起销毁，不停就放回无主。
+// 这一档不再问线程（见「关闭窗口流程」文档）。
+func TestLastWindowCloseMode(t *testing.T) {
+	cases := []struct {
+		action closeAction
+		want   string
+	}{
+		{closeStopDaemon, "process"},
+		{closeConfirm, "process"},
+		{closeProceed, "tab"},
+	}
+	for _, c := range cases {
+		if got := lastWindowCloseMode(c.action); got != c.want {
+			t.Errorf("lastWindowCloseMode(%v) = %q, want %q", c.action, got, c.want)
+		}
+	}
+}
+
+// 0.9.1 之前的「关闭 GUI 前确认」布尔键要能读出来，才能迁成 ask 这一档。
+func TestLegacyDaemonWarn(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   string
+		want   bool
+		wantOK bool
+	}{
+		{"没有这个键", "[display]\nshutdown_daemon_mode = last\n", false, false},
+		{"旧配置开着提醒", "[display]\nshutdown_daemon_warn = true\n", true, true},
+		{"旧配置关着提醒", "[display]\nshutdown_daemon_warn = false\n", false, true},
+		{"带 BOM 的首行", "\ufeffshutdown_daemon_warn = true\n", true, true},
+		{"被注释掉的键不算", "#shutdown_daemon_warn = true\n", false, false},
+		{"值写坏了当没有", "shutdown_daemon_warn = yes please\n", false, false},
+	}
+	for _, c := range cases {
+		got, ok := legacyDaemonWarn([]byte(c.data))
+		if got != c.want || ok != c.wantOK {
+			t.Errorf("%s: legacyDaemonWarn = (%v, %v), want (%v, %v)", c.name, got, ok, c.want, c.wantOK)
 		}
 	}
 }

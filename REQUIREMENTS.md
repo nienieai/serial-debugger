@@ -234,7 +234,7 @@
 | 126 | 自动建会话不清掉自己的会话 | ✓ | v0.7.5.9：自动建之后重新取权威列表（此前 `daemonSessions = []` 会让第 3 步把刚建的会话判为已消失）；`addTab` 补写 `connectedAt` |
 | 127 | 多窗口对等模型 | ✓ | 0.9.0：再启动一次 GUI 在当前进程里新开窗口（`application.SingleInstance`，唯一 ID 按 exe 路径分组）；每个窗口有独立会话集合，关掉最后一个窗口才退出进程 |
 | 128 | 标签拖拽：拖出成窗与并入 | ✓ | 0.9.0：标签拖离标签栏起单会话窗口；压到别的标签栏停 300 ms 即并入、离开 48 px 当场退回（可反悔）；两条拖动共用 `driveTabDrop` 两态循环 |
-| 129 | 关窗口时的会话归属 | ✓ | 0.9.0：三选一 +「记住选择」写回 `window_close_action`；`destroy` 不再追问且真的销毁会话（此前会留孤儿进程）。**0.9.1 改口径**：删掉「窗口里的会话」这一档，关窗口与关标签页**共用** `tab_close_action`（ask / tab / process）；关窗弹窗由它和「关闭守护进程」共同决定，两个「记住」分别写这两个设置（`tab_close_action` / `shutdown_daemon_warn`）—— `tab` 档把整个窗口的会话放回无主（可从「从已打开线程进入」接回），`transfer` 档整条删除 |
+| 129 | 关窗口时的会话归属 | ✓ | 0.9.0：三选一 +「记住选择」写回 `window_close_action`；`destroy` 不再追问且真的销毁会话（此前会留孤儿进程）。**0.9.1 改口径**：删掉「窗口里的会话」这一档，关窗口与关标签页**共用** `tab_close_action`（ask / tab / process）；「记住选择」写 `tab_close_action`；守护进程那半改成四档 `shutdown_daemon_mode`（`never`/`last`/`always`/`ask`，0.9.1 删掉 `shutdown_daemon_warn`）。**最后一个窗口只问守护进程、不问线程**：要停守护进程就一起销毁会话，不停就放回无主—— `tab` 档把整个窗口的会话放回无主（可从「从已打开线程进入」接回），`transfer` 档整条删除 |
 | 130 | Linux 串口权限临时授权 | ✓ | 0.9.0：分体版不写系统文件，GUI 横幅 + `serial-cli fix-permissions`（pkexec 给当前用户加设备 ACL），拔插/重启后失效；SSH 启动的进程返回 `no_agent` |
 | 131 | 关于页渲染引擎与平台文案 | ✓ | 0.9.0：`GetRenderEngine()` 按平台返回 WebView2 / WebKitGTK / WKWebView，项目目录显示真实路径；平台文案改为「Windows 与 Linux」 |
 

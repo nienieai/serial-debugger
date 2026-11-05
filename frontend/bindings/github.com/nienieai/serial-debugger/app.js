@@ -136,8 +136,8 @@ export function CloseSession(processID) {
 /**
  * ConfirmWindowClose 由前端在用户确认关闭窗口后调用。
  * 
- * mode: destroy 销毁本窗口的会话 / transfer 把它们转到别的窗口 —— 后者不销毁
- * 任何会话，串口连接不断，只是换了个窗口显示。
+ * mode 用 TabCloseAction 的取值：tab 只关窗口（会话放回无主）/ process 连线程一起关；
+ * stopDaemon 是用户在「每次询问」那一档里回答的「要 / 不要停守护进程」。
  * @param {string} mode
  * @param {boolean} stopDaemon
  * @returns {$CancellablePromise<void>}

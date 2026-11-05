@@ -54,16 +54,100 @@
   `tab` = 只关掉界面、线程留着（会话放回无主）；`process` = 连线程一起关；
   `ask` = 弹框三选一 +「记住选择」（两边写的是同一个设置）。
 - 关窗弹窗因此由**两件设置共同决定**，而且是两件**互不相干**的事：会话那半按这一档，
-  守护进程那半按「关闭守护进程」（`shutdownDaemonMode` / `ShutdownDaemonWarn`）。
-  两段提示拼在同一个弹窗里，但**两个「记住」各写各的设置**：
-  「记住选择」→ `TabCloseAction`，「不再提醒」→ `ShutdownDaemonWarn`。
-  为此 `DialogSpec` 加了第二个勾选框（`dontAsk2` / `dontAsk2Label`），
-  `ResolveDialog` 多带一个 `dontAsk2`；页内降级弹窗仍只有按钮、没有勾选框。
+  守护进程那半按「关闭 GUI 时」（`shutdownDaemonMode`，见下一节）。两段提示拼在同一
+  个弹窗里；勾选框只剩「记住选择」→ `TabCloseAction`。
 - 删掉 `WindowCloseAction` 字段、`settings.window_close_*` 四个语言键、设置页那一行
   （旧 ini 里的 `window_close_action` 没人读了 —— ini 解析遇到不认识的键会跳过）。
   `ConfirmWindowClose` 的 mode 改成 `tab` / `process`，`windowCloseNeedsConfirm` 同口径。
 - `releaseWindowSessions`（窗口级放手）保留：`tab` 档关窗时整个窗口的会话一起放回
   无主，之后从「从已打开线程进入」接回来。
+
+### 关掉最后一个窗口后进程不退出（幽灵进程）
+
+- 现象：窗口关掉了、屏幕上什么都没有，任务管理器里 `serial-gui-dev.exe` 还在跑，
+  守护进程日志里那个 GUI 客户端一直显示在线，再启动一次就是两个进程（2026-11-05
+  实测：PID 15708 挂了一晚上）。
+- 现场：`Get-Process` 里 `MainWindowHandle = 0`（没有可见窗口），但枚举该进程的
+  顶层窗口能看到一个 `visible=False` 的 `WailsWebviewWindow`（标题还是
+  `串口调试工具 v0.9.1`）—— **窗口只是被隐藏了，没销毁**。v3 的 `WindowClosing`
+  内部监听挂了 `closeStarted` 一次性标记，配上我们的 Hook/Cancel，关到一半的窗口
+  很容易留在「表里有条目、屏幕上看不见」的中间态。
+- 根因（两层）：① 退出进程只有两处 `quit()`，都靠**关闭之前**数一下窗口数
+  （`lastWindow`）来决定，窗口表里一留残留就永远不退了；② `Quit()` 本身是
+  `InvokeSync(destroy)`，主线程正在销毁最后一个窗口时可能等不到回调，进程就挂着。
+- 改法：新增 `scheduleQuit(reason, lastWindow)` 作为**唯一**退出入口，
+  `allowWindowClose` / `ConfirmWindowClose` / `unregisterWindow` 三处都走它：
+  500ms 后复查「还有没有**看得见**的应用窗口」（`anyVisibleAppWindow()` 用
+  `w.IsVisible()`，不看窗口表里有没有条目），确认没有才 `quit()`；1.5 秒后再查
+  一次，还在就直接 `os.Exit(0)` —— 已经没有窗口可显示了，留着只会占着 GUI 客户端。
+  `unregisterWindow` 里再加一条兜底：注销后窗口表空了就退（这条与走哪条关闭路径
+  无关：点 X、菜单关、拖出/并入收掉的空窗口都覆盖）。
+- 顺手加诊断日志：注销窗口打剩余窗口数与窗口名，`[close]` 那行打 `windows=[...]`，
+  下次再出现「该退没退」能直接看出窗口表到底剩了什么。
+
+### 「关闭 GUI 时」合并成四档，删掉「关闭 GUI 前确认」
+
+- 原来是三档（不处理守护进程 / 最后一个客户端关闭时关闭 / 总是关闭守护进程）+ 一条
+  独立的布尔开关「关闭 GUI 前确认」。两者说的是同一件事的两半，能配出
+  `last + 不提醒` 这种「静默把所有串口断掉」的组合，设置页里也说不清该调哪个。
+- 现在一档到底：`never` 只关自己 / `last` 自己是最后一个客户端才关 / `always` 每次都关 /
+  `ask` 每次都问，默认 `ask`。设置页那行「关闭 GUI 前确认」删掉，`ShutdownDaemonWarn`
+  字段一并删除；旧 gui.ini 里的 `shutdown_daemon_warn = true` 读一次迁成 `ask`
+  （`legacyDaemonWarn` 直接扫原文，因为解析器会跳过不认识的键），写完不再回写这个键。
+- 判定重写：`decideClose(mode, connected, clientCount)`。`ask` 与客户端数无关，每次都问 ——
+  关掉守护进程会连带断掉其它窗口 / CLI / MCP 的串口，所以那个框是**三选一**
+  （关闭守护进程 / 只关窗口 / 取消），不能只给「确定」。
+- 每个窗口关闭时都判一次（以前只有最后一个窗口才判）：`always` / `ask` 是用户显式选的，
+  关中间那个窗口也生效；`last` 仍然只在「自己是最后一个客户端」时才动。
+- **最后一个窗口只问守护进程，不问线程**：这时关掉就是退出程序，守护进程要停会话跟着
+  一起没（`process`），不停就放回无主（`tab`）—— 不再出现「仅关闭窗口 / 同时关闭线程」
+  三选一。这段判定抽成 `lastWindowCloseMode(action)` 并加了用例。
+- 弹窗里不再有「不再提醒」勾选框（要不要问由档位本身表达），`state.shutdownDaemonWarn`
+  前后端一并删掉。9 个语言包加 5 键、删 1 键（626 → 630）。
+- 前端收到 `window-close-confirm` 帧后按 `closeAction` / `askDaemon` / `daemonStop` /
+  `lastWindow` 四个字段拼对话框；两个档位都是「每次询问」时会连着问两次（先会话、
+  后守护进程），第二次点取消则不执行第一次选好的处置。
+- 自检：`gofmt -l .` 空、`go build ./...`、`go vet .`、`go test .`（根包，14s）、
+  两个 JS 的 `node --check`、9 个语言包键集一致（630×9）。
+
+### 接管过来的会话：标签名 / 工具栏下拉不跟着更新
+
+- 从「已打开线程进入」接一个已经在跑的会话，标签一直叫「#3」、工具栏停在
+  「-- 选择端口 --」和 115200，而串口明明开着、数据也在刷。
+- 原因：`_convertChooserToSession` 只填了 `_sessionTabDefaults` 的默认值，
+  名字与 `syncedParams` 要靠下一次 `syncDaemonSessions` 才补上；而「接管」
+  本身不产生任何守护进程事件，那次同步可能很久以后才来。同一个坑对「新建会话」
+  也成立（自动名「会话 #N」要等事件）。
+- 现在接管路径直接用列表里的那一行 `_applyDaemonSessionToTab`（名字 / 标签 /
+  参数 / 查看者一次到位），再 `renderTabs` + `updateModeUI` 把工具栏下拉一起刷；
+  `_convertChooserToSession` 末尾也补一次同步，覆盖「新建」那条。
+
+### 关掉确认框后主窗口跑到别的窗口后面
+
+- 关标签页 / 关窗口的确认框一关，主窗口有时落到守护进程控制台等窗口后面，
+  得再点一次任务栏才回来。
+- Windows 销毁一个 owned window 时把激活交给「上一个活动窗口」，不一定是 owner。
+  `ResolveDialog` 关掉对话框后显式 `Focus()` 回发起弹窗的那个窗口。
+
+### 允许同时开多个「新建会话」页
+
+- 以前 `openNewSessionTab()` 见到已经有一个选择页就直接切过去，等于永远只能开
+  一个。现在不再限制：每次点「+」或「文件 → 新建会话」都是一个独立的选择页，各自
+  在原地转换成会话页。
+- 顺带修 `_pickPath`（从文件打开）：它按 `findIndex` 关「第一个」选择页，
+  多开之后会关错页面 —— 改成关当前活动的那个。
+
+### 工具栏下拉不跟着会话更新
+
+- 现象：标签已经是 COM27 @ 230400、数据也在刷，工具栏两个下拉却停在
+  「-- 选择端口 --」和 115200。
+- 根因在 `_syncPortSelectsFromTab` 用的老助手 `_setSelectVal`：它只写
+  `<select>.value`，既不刷新自定义下拉的触发器文字（TODO #79 那个坑），目标里没有
+  这个选项时（会话从 CLI / 别的窗口接过来，这个口不在本窗口的端口列表里）还会
+  静默停在占位符上。
+- 现在 `_setSelectVal` 统一走 `_applySelectValue`（缺选项补一个 + 无条件
+  `_csRefresh`）；`updatePortList` 重建完选项后立刻调一次
+  `_syncPortSelectsFromTab`，端口列表一到就把当前会话的端口 / 波特率补回下拉里。
 
 ### 弹窗改成无边框窗口
 
