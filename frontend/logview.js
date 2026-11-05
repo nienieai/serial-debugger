@@ -396,6 +396,15 @@ function createLogView(host, opts) {
   // ---- 滚动条 ----
   // trackH 只在 layout() 里定（上边界毛玻璃底边、下边界窗口底），这里不能覆盖它。
   function updateThumb() {
+    // 内容装得下一屏就没有滑块：以前按 min(1, vh/contentH) 算，装得下时 thumbH
+    // 正好等于整条轨道 —— 看上去「有一条满高滚动条，却怎么拖都不动」。
+    // 判据用内容高 - 视口高（>1px 余量），窗口拉大装下时自然收起、拉小到装不下
+    // 时自然出现；尺寸变化走 ResizeObserver → refresh/refreshLive → 这里。
+    if (!(st.contentH > 0) || st.contentH - st.vh <= 1) {
+      thumb.style.display = 'none';
+      return;
+    }
+    thumb.style.display = '';
     var thumbH = st.thumbH;
     if (st.contentH > 0) {
       thumbH = st.trackH * Math.min(1, st.vh / st.contentH);
