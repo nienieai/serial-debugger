@@ -661,6 +661,24 @@ function createLogView(host, opts) {
     st.hexPrefix = !!w.hexPrefix;
     st.base = w.base || 0;
     st.rows = w.rows || [];
+    // 环形缓冲裁掉最早那批之后（>5MB 或超出帧数上限），前端的 offset 可能还停在
+    // 「已经被裁掉的那一段」上，Window 就回一个空窗口 —— 表现正是**中间一片白**，
+    // 跳到底部 / 切一次标签又正常（那两个入口会重算 offset）。这里夹一次并把
+    // needFetch 立起来，让下一拍重新要这一段，用户不用手动抖。
+    if (!st.rows.length && st.total > 0) {
+      var clamped = Math.max(0, Math.min(st.maxOffset, Math.round(st.offset)));
+      if (Math.abs(clamped - st.offset) >= 1) {
+        st.offset = clamped;
+        layerTransform();
+        updateThumb();
+        st.needFetch = true;
+      } else if (st.maxOffset <= 0 && st.contentH > 0) {
+        // 内容高度有、maxOffset 却是 0：Go 那边的裁剪刚刚发生，先贴着底部等下一拍
+        st.offset = 0;
+        st.needFetch = true;
+      }
+    }
+    _blankDiag();
     // 增量更新：数据密集时每 120 ms 整窗重建（innerHTML='' + 重新 buildRow）
     // 是 CPU 的大头。按帧号复用 DOM，只新建进入窗口的行、删掉离开窗口的。
     var keep = {};
