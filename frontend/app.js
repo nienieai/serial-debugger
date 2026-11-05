@@ -7481,7 +7481,14 @@ async function sendData() {
   } else {
     const ab2 = getAppendBytes('text');
     if (ab2.text) data += ab2.text;
-    data = await encodeTextForSend(data);
+    // 编码失败要当场说清楚：以前这个 await 在 try 之外，出错就是一条未处理的
+    // rejection（只剩顶部红条），用户看到的就是「点了发送什么都没发生」。
+    try {
+      data = await encodeTextForSend(data);
+    } catch (e) {
+      showSendHint(String(e && e.message ? e.message : e));
+      return;
+    }
     fmt = 'hex';
   }
 

@@ -13,6 +13,20 @@
 
 ## 未发布（0.9.1）
 
+### 文本发送一个字节都发不出去（d is not defined）
+
+- 现象：串口已打开、输入框里也有内容（右下角字节数/耗时都正常显示），点「发送」
+  没有任何反应，Tx 计数始终 0；顶部红条只有一句 `promise: d is not defined`。
+- 根因：`encodeTextForSend`（decoder.js）里直接读 `d.encoding`，但这一版把显示
+  上下文改成 `_d()` 之后**漏了这一处**没调（同文件其它函数都有 `var d = _d()`）。
+  抛 ReferenceError 的是个 async 函数，而 `sendData` 里那句
+  `data = await encodeTextForSend(data)` 又写在 `try` 之外 —— 于是整次发送变成
+  一条未处理的 rejection：数据没发出去，界面上只留一句红条。
+- 改法：`encodeTextForSend` 开头补 `const d = _d();`；`sendData` 里那次编码包进
+  try/catch，失败就走 `showSendHint` 说明原因，不再只留一条红条。
+- 影响范围：文本模式下所有发送入口（手动发送、自动发送、多字符串面板）—— 它们
+  都过 `encodeTextForSend`；Hex 模式不经过它，所以只有文本发送全哑。
+
 ### 深色下活动标签与内容区同色 / 不足一屏不显示滑块
 
 - 活动标签原来是 `--input-bg`（深色 #1A1A1A），而会话页数据区是 `--panel-bg`
