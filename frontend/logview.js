@@ -659,8 +659,17 @@ function createLogView(host, opts) {
     st.mode = w.mode || st.mode;
     st.perLine = w.perLine || st.perLine;
     st.hexPrefix = !!w.hexPrefix;
+    var prevBase = st.base;
     st.base = w.base || 0;
     st.rows = w.rows || [];
+    // base 变了 = Go 侧裁掉了开头那一批（>5MB 之后一直在裁）：行 DOM 是按**帧号**
+    // 缓存的（rowEls[idx] + rowSig），base 一挪，同一个 idx 已经指向另一帧。签名
+    // 恰好相同就会复用一块位置错误的 DOM —— 表现是「滚的时候有、一停就没了」：
+    // 滚动中不断重建，停下后复用的旧节点被摆到视口外面。base 一变就把缓存全部作废。
+    if (prevBase !== st.base) {
+      st.rowGen++;
+      resetRowEls();
+    }
     // 环形缓冲裁掉最早那批之后（>5MB 或超出帧数上限），前端的 offset 可能还停在
     // 「已经被裁掉的那一段」上，Window 就回一个空窗口 —— 表现正是**中间一片白**，
     // 跳到底部 / 切一次标签又正常（那两个入口会重算 offset）。这里夹一次并把
