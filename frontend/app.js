@@ -2987,6 +2987,33 @@ window.addEventListener('DOMContentLoaded', () => {
   // 输入框（发送框 / 重命名 / 设置里的数字框）右键也用同一套浮层菜单，
   // 不然那里弹的是 WebView2 的英文原生菜单，和自绘菜单两套观感。
   if (typeof cMenuBindInputs === 'function') cMenuBindInputs();
+  // 未捕获异常先别只进控制台：开发版从资源管理器启动时 stderr 是黑洞，界面白屏后
+  // 完全无从查起。这里把**第一条**错误打进 Go 日志，并在界面顶部挂一条可点掉的
+  // 横幅（只挂一条，避免报错刷屏把布局顶烂）。
+  (function () {
+    var shown = false;
+    function report(kind, msg, where) {
+      var text = kind + ': ' + msg + (where ? ' @ ' + where : '');
+      try { window.go.main.App.Log('[js-error] ' + text); } catch (_) {}
+      if (shown) return;
+      shown = true;
+      var el = document.createElement('div');
+      el.id = 'jsErrorBanner';
+      el.textContent = text + '（点这里关闭）';
+      el.title = text;
+      el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:20000;padding:6px 10px;' +
+        'background:#b3261e;color:#fff;font:12px/1.5 Consolas,monospace;cursor:pointer;white-space:pre-wrap;';
+      el.addEventListener('click', function () { el.remove(); });
+      document.body.appendChild(el);
+    }
+    window.addEventListener('error', function (e) {
+      report('error', e.message || 'unknown', (e.filename || '') + ':' + (e.lineno || 0));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e.reason;
+      report('promise', (r && r.message) ? r.message : String(r));
+    });
+  })();
   // 悬浮提示：原生 title 换成自绘小卡（见 tip.js）
   if (typeof _tipBind === 'function') _tipBind();
   initAllCustomSelects();
