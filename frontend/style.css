@@ -2349,12 +2349,22 @@ body.is-tab-dragging .tab-new {
   font-size: 13px;
   cursor: pointer;
   padding: 0 8px;
-  height: 24px;
+  height: 100%;
 }
 
+/* 悬停 / 按下跟右边那些可点项用同一套灰阶底：以前这里是 --hover 加一圈 accent
+   描边，一条状态栏里两种悬停观感。 */
 .c-status-btn:hover {
-  background: var(--hover);
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+.c-status-btn:active {
+  background: color-mix(in srgb, var(--fg) 18%, transparent);
+}
+
+.c-status-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* 抵消状态栏自身的左内边距，让「运行中」贴住最左边 */
@@ -5030,12 +5040,14 @@ body.is-qp-dragging .qp-add-row {
 .statusbar {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  /* stretch：状态栏里的按键要「顶天立地」——悬停底色铺满整条高度，
+     中间留白的那种小胶囊在 26px 的条里显不出边界（见 .stat-item.is-click）。 */
+  align-items: stretch;
   padding: 0 8px;
   background: var(--bg2);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  height: 24px;
+  height: 26px;
   user-select: none;
   position: relative;
   z-index: 4;
@@ -5195,22 +5207,23 @@ body.is-qp-dragging .qp-add-row {
 
 .statusbar-left {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 2px;
   font-size: 13px;
 }
 
 .statusbar-right {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: stretch;
+  gap: 2px;
   font-size: 12px;
 }
 
 #statusbar-stats {
   display: inline-flex;
+  align-items: center;
   gap: 14px;
-  margin-left: 10px;
+  margin-left: 8px;
 }
 
 .stat-item {
@@ -5223,8 +5236,9 @@ body.is-qp-dragging .qp-add-row {
    一块底色（灰阶，跟默认主题的菜单悬停一致），点开一个贴在这一项上方的浮层菜单。
    menu.js 的 cMenuOpen 按 anchor 定位，所以这里只负责「看起来能点」。 */
 .stat-item.is-click {
-  padding: 1px 6px;
-  border-radius: 5px;
+  height: 100%;
+  padding: 0 5px;
+  border-radius: 0;
   cursor: pointer;
   user-select: none;
 }
@@ -5242,21 +5256,30 @@ body.is-qp-dragging .qp-add-row {
   outline-offset: -1px;
 }
 
-/* 保存项：图标 + 5px 小圆点。暗点 = 没在存，绿点 = 在存（和标签的「已连接」
-   用同一档绿，避免又造一个绿色）。 */
+/* 保存项：图标 + 右下角 5px 小圆点。没在存时点是**透明**的（不是灰点）——
+   灰点看着像「有个状态被关着」，透明点只是留个位置，亮起来才代表在落盘。
+   点绝对定位在图标右下角，所以外面裹一层 .c-save-glyph 当定位参照。 */
 .stat-item.is-save {
-  gap: 4px;
+  gap: 0;
 }
 
-.stat-item.is-save svg {
+.c-save-glyph {
+  position: relative;
+  display: inline-flex;
+}
+
+.c-save-glyph svg {
   display: block;
 }
 
 .stat-save-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--fg) 28%, transparent);
+  background: transparent;
 }
 
 .stat-item.is-save.is-on .stat-save-dot {
@@ -5293,11 +5316,13 @@ body.is-qp-dragging .qp-add-row {
   font-size: 12px;
 }
 
+/* 未点亮的状态点一律**透明**（不是灰点）：灰点看着像「有个状态被关着」，
+   透明点只是留个位置，亮起来才代表这个状态成立。 */
 .status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--status-offline);
+  background: transparent;
   display: inline-block;
 }
 
@@ -5307,7 +5332,7 @@ body.is-qp-dragging .qp-add-row {
 }
 
 .status-dot.is-offline {
-  background: var(--status-offline);
+  background: transparent;
 }
 
 .client-badge {

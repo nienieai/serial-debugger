@@ -255,7 +255,9 @@ function createStatusParse(container) {
 function createStatusSave(container) {
 	var span = document.createElement('span');
 	span.className = 'stat-item dsp-item is-save';
-	span.innerHTML = icon('save', 13, 13) + '<i class="stat-save-dot"></i>';
+	// 图标外面裹一层定位参照：绿点绝对定位在图标**右下角**（透明的未点亮态
+	// 靠绝对定位留位，不加 mark 就不会把文字顶开）。
+	span.innerHTML = '<span class="c-save-glyph">' + icon('save', 13, 13) + '<i class="stat-save-dot"></i></span>';
 	span.title = t('status.save', '保存历史');
 	container.appendChild(span);
 
