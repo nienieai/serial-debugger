@@ -852,6 +852,37 @@ function createLogView(host, opts) {
     });
   }
 
+  // _blankDiag 是「明明有帧、一行都没画出来」时的现场快照。
+  //
+  // 2026-11-06 实测：收了几 MB 之后数据区会整片空白（引擎还挂着、滚动轨也在），
+  // 控制台里没有任何异常 —— 光看截图分不清是 total=0（Go 侧文档被清/裁光）、
+  // offset 越界（窗口请求落在裁掉的那一段）还是 perLine=0（宽度算成 0）。
+  // 所以把关键几何直接写到画面上：用户截一张图就能定位，不用复现日志。
+  var blankEl = null;
+  function _blankDiag() {
+    var empty = !(st.rows && st.rows.length) && st.total > 0;
+    if (!empty) {
+      if (blankEl && blankEl.parentNode) blankEl.parentNode.removeChild(blankEl);
+      blankEl = null;
+      return;
+    }
+    var txt = 'total=' + st.total
+      + ' offset=' + Math.round(st.offset)
+      + ' maxOffset=' + Math.round(st.maxOffset)
+      + ' vh=' + Math.round(st.vh)
+      + ' perLine=' + st.perLine
+      + ' contentH=' + Math.round(st.contentH)
+      + ' mode=' + st.mode;
+    if (!blankEl) {
+      blankEl = document.createElement('div');
+      blankEl.style.cssText = 'position:absolute;left:8px;top:8px;z-index:9;padding:4px 8px;' +
+        'background:rgba(0,0,0,.55);color:#fff;font:11px/1.5 Consolas,monospace;border-radius:6px;pointer-events:none;';
+      host.appendChild(blankEl);
+      try { window.go.main.App.Log('[logview] blank: ' + txt); } catch (_) {}
+    }
+    blankEl.textContent = txt;
+  }
+
   function refresh() {
     if (!st.id || st.dead) return Promise.resolve();
     var top = st.offset;
@@ -1336,6 +1367,7 @@ function createLogView(host, opts) {
     updateThumb();
     updateTrimTip();
     if (needsFetch()) fetchWindow();
+    _blankDiag();
   }
 
   function refreshLive() {
