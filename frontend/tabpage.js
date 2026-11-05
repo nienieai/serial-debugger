@@ -42,7 +42,8 @@ function TabPage(tabIndex, tabData) {
 	btnSettings.setAttribute('data-icon','more');
 	btnSettings.setAttribute('data-icon-w','16');
 	btnSettings.setAttribute('data-icon-h','16');
-	btnSettings.title = t('btn.settings','详细设置');
+	btnSettings.setAttribute('data-tip', t('btn.settings','详细设置'));
+	btnSettings.setAttribute('data-tip-open', 'serialsets');
 	btnSettings.addEventListener('click', toggleSettings);
 	configBar.appendChild(btnSettings);
 

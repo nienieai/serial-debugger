@@ -2974,6 +2974,8 @@ window.addEventListener('DOMContentLoaded', () => {
   // 输入框（发送框 / 重命名 / 设置里的数字框）右键也用同一套浮层菜单，
   // 不然那里弹的是 WebView2 的英文原生菜单，和自绘菜单两套观感。
   if (typeof cMenuBindInputs === 'function') cMenuBindInputs();
+  // 悬浮提示：原生 title 换成自绘小卡（见 tip.js）
+  if (typeof _tipBind === 'function') _tipBind();
   initAllCustomSelects();
   bindTabsScroll();
   initTabPopup();

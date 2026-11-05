@@ -24,13 +24,13 @@ function createStatusDaemon(container) {
 				text.textContent = data.tabsCount === 0
 					? t('status.no_session', '无活动会话')
 					: t('status.online', '运行中');
-				btn.title = t('btn.stop_daemon', '停止守护进程');
+				btn.setAttribute('data-tip', t('btn.stop_daemon', '停止守护进程'));
 			} else {
 				dot.className = 'status-dot is-offline';
 				// 「未运行」而不是「检测中」：离线态没有任何轮询在跑，写「检测中」
 				// 会让人以为程序卡在探测里。
 				text.textContent = t('status.offline', '未运行');
-				btn.title = t('btn.start_daemon', '启动守护进程');
+				btn.setAttribute('data-tip', t('btn.start_daemon', '启动守护进程'));
 			}
 		},
 		setBusy: function(busy) { btn.disabled = busy; },
@@ -141,6 +141,7 @@ function createStatusTabSize(container) {
 	// dsp-item：这几项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
 	span.className = 'stat-item dsp-item';
 	span.textContent = 'Tab:4';
+	span.setAttribute('data-tip', t('status.tip_tab', '制表符宽度（每行显示几个格）'));
 	container.appendChild(span);
 	_sbClickable(span, function (anchor) {
 		_sbPick(anchor, 'tabSize', [
@@ -162,6 +163,7 @@ function createStatusEol(container) {
 	var span = document.createElement('span');
 	span.className = 'stat-item dsp-item';
 	span.textContent = 'LF';
+	span.setAttribute('data-tip', t('status.tip_eol', '行尾序列'));
 	container.appendChild(span);
 	_sbClickable(span, function (anchor) {
 		_sbPick(anchor, 'eolSequence', [
@@ -185,6 +187,7 @@ function createStatusEncoding(container) {
 	var span = document.createElement('span');
 	span.className = 'stat-item dsp-item';
 	span.textContent = 'UTF-8';
+	span.setAttribute('data-tip', t('status.tip_encoding', '文本编码'));
 	container.appendChild(span);
 	_sbClickable(span, function (anchor) {
 		_sbPick(anchor, 'encoding', [
@@ -214,6 +217,7 @@ function createStatusParse(container) {
 	var span = document.createElement('span');
 	span.className = 'stat-item dsp-item';
 	span.textContent = t('status.parse_none', '无解析');
+	span.setAttribute('data-tip', t('status.tip_parse', '格式解析方式'));
 	container.appendChild(span);
 
 	function labelOf(v) {
@@ -267,7 +271,7 @@ function createStatusSave(container) {
 	if (window._iconsReady && typeof window._iconsReady.then === 'function') {
 		window._iconsReady.then(paintGlyph).catch(function () {});
 	}
-	span.title = t('status.save', '保存历史');
+	span.setAttribute('data-tip', t('status.save', '保存历史'));
 	container.appendChild(span);
 
 	function activeTab() {
@@ -277,7 +281,7 @@ function createStatusSave(container) {
 		var tab = activeTab();
 		var on = !!(tab && tab.histOn === true);
 		span.classList.toggle('is-on', on);
-		span.title = on ? t('status.save_on', '保存已开启') : t('status.save_off', '保存已关闭');
+		span.setAttribute('data-tip', on ? t('status.save_on', '保存已开启') : t('status.save_off', '保存已关闭'));
 	}
 	function setSave(tab, on) {
 		if (!tab || !tab.sessionId) return;

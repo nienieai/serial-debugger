@@ -6991,3 +6991,24 @@ input.settings-select::-webkit-outer-spin-button {
   backdrop-filter: blur(10px) saturate(1.25);
   -webkit-backdrop-filter: blur(10px) saturate(1.25);
 }
+/* ---- 自绘悬浮提示（tip.js）----
+   和菜单同一套毛玻璃：半透明底 + 背景模糊 + 反色文字光晕，方角改圆角、不能点穿。
+   宽度上限 260px（长文案换行，原生 tooltip 那种一条长线看着很累）。 */
+.c-tip {
+  position: fixed;
+  z-index: 10070;
+  max-width: 260px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--menu-glass-border);
+  background: var(--menu-glass-bg);
+  -webkit-backdrop-filter: var(--menu-glass-blur);
+  backdrop-filter: var(--menu-glass-blur);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.45;
+  text-shadow: var(--glass-text-glow);
+  pointer-events: none;
+  white-space: pre-line;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
