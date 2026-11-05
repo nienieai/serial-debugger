@@ -26,9 +26,6 @@
 - 修法：`shiftBy` 新增 `shiftRows(dh)`，裁头时把 `rows[i].y` 一起减 `dh`；
   `WindowResult` 增补 `trimmedPx`，`applyWindow` 用它刷新 `st.trimmedPx`，
   让「取窗口」和「LiveInfo」两条路径共用同一个裁头锚点（否则 dh 会被重复扣一次）。
-- 自诊断加两种情形：`B-offscreen`（有行但整批在视口外）/ `C-nocells`（行里
-  没有格子），命中时把 `base/offset/maxOffset/rowTop/rowBot/elY/cells` 写到
-  左上角 —— 下次再有空白，一张截图就能分清是偏移还是空内容。
 
 ### 新建会话：从已打开线程进入
 

@@ -719,7 +719,6 @@ function createLogView(host, opts) {
     updateThumb();
     updateBottomBtn();
     drawRuler(false);
-    _blankDiag();
     if (typeof opts.onStatus === 'function') {
       opts.onStatus({ total: st.total, contentH: st.contentH, offset: st.offset, mode: st.mode });
     }
@@ -890,60 +889,6 @@ function createLogView(host, opts) {
       st.needConfigure = false;
       return cfg;
     });
-  }
-
-  // _blankDiag 是「明明有帧、一行都没画出来」时的现场快照。
-  //
-  // 2026-11-06 实测：收了几 MB 之后数据区会整片空白（引擎还挂着、滚动轨也在），
-  // 控制台里没有任何异常 —— 光看截图分不清是 total=0（Go 侧文档被清/裁光）、
-  // offset 越界（窗口请求落在裁掉的那一段）还是 perLine=0（宽度算成 0）。
-  // 所以把关键几何直接写到画面上：用户截一张图就能定位，不用复现日志。
-  var blankEl = null;
-  function _blankDiag() {
-    // 两种空白：A 窗口里一帧都没有；B 有行、但整批被摆到视口外面（base 与 offset
-    // 不同步，行留在原地而层被推走）。B 之前没有任何提示，全靠人眼看，这次一起抓。
-    var n = st.rows ? st.rows.length : 0;
-    var why = '';
-    if (!n) {
-      if (!(st.total > 0)) {
-        if (blankEl && blankEl.parentNode) blankEl.parentNode.removeChild(blankEl);
-        blankEl = null;
-        return;
-      }
-      why = 'A-empty';
-    } else {
-      var r0 = st.rows[0], rl = st.rows[n - 1];
-      var top = r0.y - st.offset;
-      var bot = rl.y + rl.h - st.offset;
-      var cells0 = (r0.cells || []).length;
-      if (bot > 0 && top < st.vh && cells0 > 0) {
-        if (blankEl && blankEl.parentNode) blankEl.parentNode.removeChild(blankEl);
-        blankEl = null;
-        return;
-      }
-      if (cells0 === 0) why = 'C-nocells';
-      else why = 'B-offscreen';
-    }
-    var txt = why
-      + ' total=' + st.total
-      + ' base=' + Math.round(st.base)
-      + ' offset=' + Math.round(st.offset)
-      + ' maxOffset=' + Math.round(st.maxOffset)
-      + ' vh=' + Math.round(st.vh)
-      + ' contentH=' + Math.round(st.contentH)
-      + ' rows=' + n
-      + ' rowTop=' + (n ? Math.round(top) : '-')
-      + ' rowBot=' + (n ? Math.round(bot) : '-')
-      + ' elY=' + Math.round(st.base - st.offset + st.reserveTop)
-      + ' cells=' + (n ? (st.rows[0].cells || []).length : '-');
-    if (!blankEl) {
-      blankEl = document.createElement('div');
-      blankEl.style.cssText = 'position:absolute;left:8px;top:8px;z-index:9;padding:4px 8px;' +
-        'background:rgba(0,0,0,.55);color:#fff;font:11px/1.5 Consolas,monospace;border-radius:6px;pointer-events:none;';
-      host.appendChild(blankEl);
-      try { window.go.main.App.Log('[logview] blank: ' + txt); } catch (_) {}
-    }
-    blankEl.textContent = txt;
   }
 
   function refresh() {
@@ -1430,7 +1375,6 @@ function createLogView(host, opts) {
     updateThumb();
     updateTrimTip();
     if (needsFetch()) fetchWindow();
-    _blankDiag();
   }
 
   function refreshLive() {
