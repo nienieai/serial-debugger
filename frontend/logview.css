@@ -136,7 +136,10 @@
   top: 0;
   bottom: 0;
   width: 5px;
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  /* 底色跟历史框一致：原来铺了一层 fg 6%，深色下整条通道比数据区亮一档
+     （#191919 vs #0D0D0D），看着像嵌了另一块面板。留透明就是露出 rail 的
+     --panel-bg，和左边历史框同一个底色；泳道上的标记照旧按需画。 */
+  background: transparent;
 }
 .lv-lane-read { left: 0; }
 .lv-lane-check { left: 5px; }
