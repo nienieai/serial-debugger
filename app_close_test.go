@@ -51,7 +51,7 @@ func TestSessClearAll(t *testing.T) {
 	if n := len(a.sessOfWindow("main")) + len(a.sessOfWindow("win-1")); n != 0 {
 		t.Fatalf("sessClearAll 后归属应清空，实际还剩 %d", n)
 	}
-	if windowCloseNeedsConfirm("ask", len(a.sessOfWindow("main")), false) {
+	if windowCloseNeedsConfirm("ask", len(a.sessOfWindow("main"))) {
 		t.Error("清空后按会话数判定不应再弹确认框")
 	}
 }
@@ -60,22 +60,25 @@ func TestWindowCloseNeedsConfirm(t *testing.T) {
 		name       string
 		configured string
 		sessions   int
-		degraded   bool
 		want       bool
 	}{
-		{"每次询问：有会话 → 问", "ask", 2, false, true},
-		{"每次询问：没会话 → 不问", "ask", 0, false, false},
-		{"直接销毁：有会话也不再问", "destroy", 2, false, false},
-		{"直接销毁：没会话 → 不问", "destroy", 0, false, false},
-		{"转到其他窗口：有会话直接转", "transfer", 2, false, false},
-		{"想转交但没有别的窗口（退化成销毁）→ 必须问", "transfer", 1, true, true},
-		{"退化 + 没会话 → 不问", "transfer", 0, true, false},
-		{"缺键/旧配置按每次询问算", "", 1, false, true},
+		{"每次询问：有会话 → 问", "ask", 2, true},
+		{"每次询问：没会话 → 不问", "ask", 0, false},
+		{"仅关闭标签/窗口：有会话也不再问", "tab", 2, false},
+		{"仅关闭标签/窗口：没会话 → 不问", "tab", 0, false},
+		{"连线程一起关：有会话也不再问", "process", 2, false},
+		{"连线程一起关：没会话 → 不问", "process", 0, false},
+		{"缺键/旧配置按每次询问算", "", 1, true},
+		// 0.9.1 删掉了 windowCloseAction（keep / destroy / transfer 都不再存在）。
+		// LoadAppSettings 会把非法值归一成 ask，这里再兜一层：认不出来的值一律
+		// 按「问一次」，绝不当成 tab/process 直接执行。
+		{"旧窗口档位的值 → 问", "keep", 2, true},
+		{"旧的 transfer 值 → 问", "transfer", 2, true},
 	}
 	for _, c := range cases {
-		if got := windowCloseNeedsConfirm(c.configured, c.sessions, c.degraded); got != c.want {
-			t.Errorf("%s: windowCloseNeedsConfirm(%q, %d, degraded=%v) = %v, want %v",
-				c.name, c.configured, c.sessions, c.degraded, got, c.want)
+		if got := windowCloseNeedsConfirm(c.configured, c.sessions); got != c.want {
+			t.Errorf("%s: windowCloseNeedsConfirm(%q, %d) = %v, want %v",
+				c.name, c.configured, c.sessions, got, c.want)
 		}
 	}
 }

@@ -195,11 +195,30 @@ export class AppSettings {
         }
         if (!("tabCloseWarn" in $$source)) {
             /**
-             * TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
+             * TabCloseWarn 是 0.9.1 之前的「关闭标签页前确认」布尔开关。
+             * 
+             * 已被 TabCloseAction 取代，只为读旧设置文件保留（迁移见 app.js 的 applySettings）。
+             * 不要再往界面里加它。
              * @member
              * @type {boolean}
              */
             this["tabCloseWarn"] = false;
+        }
+        if (!("tabCloseAction" in $$source)) {
+            /**
+             * TabCloseAction 是「关标签页 / 关窗口时，背后的线程怎么办」：
+             *   ask      三选一：仅关闭标签 / 同时关闭线程 / 取消（默认）
+             *   tab      只关标签，线程留在守护进程里（串口不断），之后能从
+             *            「新建会话 → 从已打开线程进入」再挂回来
+             *   process  连线程一起关（断串口，0.9.1 之前的固定行为）
+             * 
+             * 关窗口和关标签页走**同一条**策略：界面上不再有「窗口里的会话」那一项
+             * （0.9.1 之前是 windowCloseAction），关窗弹窗由「关闭守护进程」这条设置和
+             * 这里共同决定 —— 会话那半按本档执行，守护进程那半按 ShutdownDaemonMode。
+             * @member
+             * @type {string}
+             */
+            this["tabCloseAction"] = "";
         }
         if (!("serialPermissionHint" in $$source)) {
             /**
@@ -210,18 +229,6 @@ export class AppSettings {
              * @type {boolean}
              */
             this["serialPermissionHint"] = false;
-        }
-        if (!("windowCloseAction" in $$source)) {
-            /**
-             * WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
-             *   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
-             *   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
-             *   transfer 转到别的窗口去（不问；没有别的窗口时退化成销毁确认）
-             * 注意这和 ShutdownDaemonMode 是两件事：那个管守护进程，这个管会话本身。
-             * @member
-             * @type {string}
-             */
-            this["windowCloseAction"] = "";
         }
         if (!("autoSaveHistory" in $$source)) {
             /**
@@ -506,7 +513,7 @@ export class DialogSpec {
         }
         if (!("dontAsk" in $$source)) {
             /**
-             * 是否显示「不再提醒」勾选框
+             * 第一勾选框（「记住选择」/「不再提醒」都走它）
              * @member
              * @type {boolean}
              */
@@ -518,6 +525,25 @@ export class DialogSpec {
              * @type {string}
              */
             this["dontAskLabel"] = "";
+        }
+        if (!("dontAsk2" in $$source)) {
+            /**
+             * DontAsk2 / DontAsk2Label 是第二个勾选框。
+             * 
+             * 关窗口时同时要记住两件互不相干的事：窗口里的会话怎么办（TabCloseAction），
+             * 以及下次还要不要提醒停守护进程（ShutdownDaemonWarn）。它们写的是两个不同的
+             * 设置，一个勾选框表达不了，所以对话框要能摆两个。
+             * @member
+             * @type {boolean}
+             */
+            this["dontAsk2"] = false;
+        }
+        if (!("dontAsk2Label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dontAsk2Label"] = "";
         }
         if (!("vars" in $$source)) {
             /**
@@ -538,13 +564,13 @@ export class DialogSpec {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType4;
-        const $$createField7_0 = $$createType5;
+        const $$createField9_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("buttons" in $$parsedSource) {
             $$parsedSource["buttons"] = $$createField4_0($$parsedSource["buttons"]);
         }
         if ("vars" in $$parsedSource) {
-            $$parsedSource["vars"] = $$createField7_0($$parsedSource["vars"]);
+            $$parsedSource["vars"] = $$createField9_0($$parsedSource["vars"]);
         }
         return new DialogSpec(/** @type {Partial<DialogSpec>} */($$parsedSource));
     }

@@ -21,6 +21,18 @@ import * as sysperm$0 from "./sysperm/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AdoptSession 把一个「没人开着」的会话认领到当前窗口。
+ * 
+ * 只做归属登记：串口、缓冲、历史都在守护进程里，本来就没动过。认领成功后
+ * 前端会在原地把选择页换成会话页（chooseOpenThread → _convertChooserToSession）。
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<void>}
+ */
+export function AdoptSession(sessionID) {
+    return $Call.ByName("main.App.AdoptSession", sessionID);
+}
+
+/**
  * AttachHistoryFile opens a history file for a process and loads its content.
  * @param {string} processID
  * @param {string} filename
@@ -601,6 +613,19 @@ export function ListHistoryFiles() {
 }
 
 /**
+ * ListOpenSessions 列出守护进程上所有「可以从这里接手」的会话。
+ * 
+ * online=false 表示守护进程没响应（和 fetchSessions 的 nil 语义一致）：
+ * 前端据此显示「守护进程未运行」，而不是「一个会话都没有」。
+ * @returns {$CancellablePromise<{ [_ in string]?: any }>}
+ */
+export function ListOpenSessions() {
+    return $Call.ByName("main.App.ListOpenSessions").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<config$0.ThemeInfo[]>}
  */
 export function ListThemes() {
@@ -897,6 +922,18 @@ export function RefreshPorts() {
 }
 
 /**
+ * ReleaseSession 把会话放回「无主」但**不销毁它**：串口继续开着、历史继续记。
+ * 
+ * 这是「关闭标签 → 仅关闭标签」的落地：现在能从「从已打开线程进入」把它挂回来，
+ * 所以关标签不再等于断串口。放手的窗口自己不会立刻再领回来（见 sessReleased）。
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<void>}
+ */
+export function ReleaseSession(sessionID) {
+    return $Call.ByName("main.App.ReleaseSession", sessionID);
+}
+
+/**
  * RenameSession 改线程名（空串 = 退回自动名：端口名 / 会话号）。
  * 
  * 名字归守护进程所有：GUI 不本地存一份，改完等 process-changed 回来重画标签，
@@ -937,10 +974,11 @@ export function ResizeDialog(id, height) {
  * @param {string} id
  * @param {string} action
  * @param {boolean} dontAsk
+ * @param {boolean} dontAsk2
  * @returns {$CancellablePromise<void>}
  */
-export function ResolveDialog(id, action, dontAsk) {
-    return $Call.ByName("main.App.ResolveDialog", id, action, dontAsk);
+export function ResolveDialog(id, action, dontAsk, dontAsk2) {
+    return $Call.ByName("main.App.ResolveDialog", id, action, dontAsk, dontAsk2);
 }
 
 /**
@@ -1213,6 +1251,22 @@ export function SwitchPort(sessionId, port, cfg) {
  */
 export function TakeOpenPath() {
     return $Call.ByName("main.App.TakeOpenPath");
+}
+
+/**
+ * TakeSessionToWindow 把别的窗口正开着的会话转到当前窗口。
+ * 
+ * 和拖标签走同一条路：**只转归属，不销毁会话**。源窗口收到 session-taken 帧后
+ * 把标签摘掉（app.js 里 _detachTab），串口照旧开着、历史照旧在；它要是因此
+ * 一个标签都不剩，会自己回到「空窗口」的正常流程（补一个空闲会话）。
+ * 
+ * 这里不发 sessions-changed：目标窗口是**本地原地接管**（不等广播），源窗口由
+ * 这帧直接处理。多发一次广播只会让目标窗口在标签还没挂上时先建一个出来。
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<void>}
+ */
+export function TakeSessionToWindow(sessionID) {
+    return $Call.ByName("main.App.TakeSessionToWindow", sessionID);
 }
 
 /**

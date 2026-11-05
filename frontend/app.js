@@ -213,14 +213,13 @@ const state = {
   shutdownDaemonMode: 'last',
   // 关 GUI 前要不要弹确认（会断开所有串口）。只在 last / always 下有作用。
   shutdownDaemonWarn: true,
-  // 关闭标签页前确认：只在那个标签的串口开着时才拦。
-  tabCloseWarn: false,
+  // 关标签页时那个线程怎么办：ask 三选一 / tab 只关标签（线程留着）/ process 一起关。
+  // 只在那个标签的串口开着时才拦（空闲标签直接关进程）。
+  tabCloseAction: 'ask',
   // 「串口权限不足」横幅（只有 Linux 会真正显示）：默认开。关掉后不再自动弹，
   // 打开串口失败时仍会在错误文案里写明怎么手动修。
   serialPermissionHint: true,
-  // 「关窗口时，这个窗口里的会话怎么处理」：ask 每次问 / destroy 直接销毁 /
-  // transfer 转到别的窗口。判定在 Go 侧（allowWindowClose），这里只管存取。
-  windowCloseAction: 'ask',
+
   // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
   autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
@@ -417,9 +416,8 @@ function _collectSettings() {
       autoStartDaemon: state.autoStartDaemon === true,
       shutdownDaemonMode: state.shutdownDaemonMode || 'last',
       shutdownDaemonWarn: state.shutdownDaemonWarn !== false,
-      tabCloseWarn: state.tabCloseWarn === true,
+      tabCloseAction: state.tabCloseAction || 'ask',
       serialPermissionHint: state.serialPermissionHint !== false,
-      windowCloseAction: state.windowCloseAction || 'ask',
       autoSaveHistory: state.autoSaveHistory === true,
       tabTwoLines: state.tabTwoLines === true,
       tabSubLine: state.tabSubLine || 'a',
@@ -503,11 +501,14 @@ async function loadSettings() {
         state.shutdownDaemonMode = s.shutdownDaemonMode;
       }
       if (typeof s.shutdownDaemonWarn === 'boolean') state.shutdownDaemonWarn = s.shutdownDaemonWarn;
-      if (typeof s.tabCloseWarn === 'boolean') state.tabCloseWarn = s.tabCloseWarn;
-      if (typeof s.serialPermissionHint === 'boolean') state.serialPermissionHint = s.serialPermissionHint;
-      if (s.windowCloseAction === 'destroy' || s.windowCloseAction === 'transfer' || s.windowCloseAction === 'ask') {
-        state.windowCloseAction = s.windowCloseAction;
+      // 0.9.1 之前是布尔 tabCloseWarn（关闭前确认）：true → 每次询问，
+      // false → 直接关线程。旧设置读进来时迁移一次，之后只认 tabCloseAction。
+      if (s.tabCloseAction === 'ask' || s.tabCloseAction === 'tab' || s.tabCloseAction === 'process') {
+        state.tabCloseAction = s.tabCloseAction;
+      } else if (typeof s.tabCloseWarn === 'boolean') {
+        state.tabCloseAction = s.tabCloseWarn ? 'ask' : 'process';
       }
+      if (typeof s.serialPermissionHint === 'boolean') state.serialPermissionHint = s.serialPermissionHint;
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
@@ -822,9 +823,9 @@ function _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk) {
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
-// showChoice 用同一个弹窗摆两个并列选项（不是「确定/取消」）。
-//
-// 只有「打开工程目录 / 打开 .stlog 文件」用它：拿确认框做二选一的话，取消键
+// showChoice 在同一个弹窗里摆 N 个并列选项（不是「确定/取消」）：
+// 关窗口的「销毁 / 转交 / 取消」、关标签页的「仅关闭标签 / 同时关闭线程 / 取消」、
+// 以及「打开工程目录 / 打开 .stlog 文件」都走它。拿确认框做二选一的话，取消键
 // 就变成了第二个选项，语义是歪的。
 function _choiceInPage(title, message, options) {
   _resetAlertButtons();
@@ -908,7 +909,7 @@ function _openDialog(spec) {
       setTimeout(function () {
         if (_dlgPending[id]) {
           delete _dlgPending[id];
-          resolve({ action: 'cancel', dontAsk: false });
+          resolve({ action: 'cancel', dontAsk: false, dontAsk2: false });
         }
       }, 180000);
     });
@@ -920,7 +921,7 @@ function _onDialogFrame(d) {
   if (!d || !d.id) return;
   var fn = _dlgPending[d.id];
   delete _dlgPending[d.id];
-  if (fn) fn({ action: d.action || 'cancel', dontAsk: !!d.dontAsk });
+  if (fn) fn({ action: d.action || 'cancel', dontAsk: !!d.dontAsk, dontAsk2: !!d.dontAsk2 });
 }
 
 function showAlert(title, message, okKey, mono) {
@@ -938,7 +939,9 @@ function showAlert(title, message, okKey, mono) {
 
 // onCancel 可选：用户点了「取消」/按 Esc/关掉对话框时调用。关窗口确认必须用它 ——
 // 不回调的话 Go 侧的「待确认」标记不会清，下次再点 X 会被当成重复请求直接吞掉。
-function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel) {
+// onDontAsk2 / dontAsk2Label 可选：第二个勾选框。关窗口时「记住会话怎么处理」和
+// 「不再提醒停守护进程」写的是两个不同设置，一个勾选框装不下（见 DialogSpec）。
+function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel, onDontAsk2, dontAsk2Label) {
   var text = String(message === null || message === undefined ? '' : message);
   _openDialog({
     kind: 'confirm',
@@ -949,12 +952,15 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel
       { key: 'cancel', label: t(cancelKey || 'confirm.cancel', '取消'), kind: 'default' }
     ],
     dontAsk: !!onDontAsk,
-    dontAskLabel: t('confirm.dont_ask', '不再提醒')
+    dontAskLabel: t('confirm.dont_ask', '不再提醒'),
+    dontAsk2: !!onDontAsk2,
+    dontAsk2Label: dontAsk2Label || t('confirm.remember_choice', '记住选择')
   }).then(function (r) {
     if (r.action !== 'ok') { if (onCancel) onCancel(r.action); return; }
-    // 顺序要紧：「不再提醒」先把设置落盘，再执行 onOk —— 退出确认那条
+    // 顺序要紧：两个「记住」都先把设置落盘，再执行 onOk —— 退出确认那条
     // onOk 是 QuitApp，反过来就来不及写盘（页内版本同样的约束，见 closeAlert）
     if (r.dontAsk && onDontAsk) onDontAsk();
+    if (r.dontAsk2 && onDontAsk2) onDontAsk2();
     if (onOk) onOk();
   }).catch(function () {
     _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel);
@@ -963,7 +969,9 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel
 
 // dontAskLabel：可选。传了就在对话框里多一个勾选框（Go 侧 DialogSpec.dontAsk，
 // 见 dialog.js:68）；勾没勾作为第一个参数交给被选中的 onPick。
-function showChoice(title, message, options, dontAskLabel) {
+// dontAsk2Label 可选：第二个勾选框（两个「记住」写的是两个不同设置时用）。
+// onPick 收到 (勾选1, 勾选2)。
+function showChoice(title, message, options, dontAskLabel, dontAsk2Label) {
   var opts = options || [];
   var buttons = opts.map(function (o, i) {
     return { key: 'c' + i, label: o.label, kind: i === 0 ? 'primary' : 'default' };
@@ -974,12 +982,14 @@ function showChoice(title, message, options, dontAskLabel) {
     message: String(message === null || message === undefined ? '' : message),
     buttons: buttons,
     dontAsk: !!dontAskLabel,
-    dontAskLabel: dontAskLabel || ''
+    dontAskLabel: dontAskLabel || '',
+    dontAsk2: !!dontAsk2Label,
+    dontAsk2Label: dontAsk2Label || ''
   }).then(function (r) {
     var m = /^c(\d+)$/.exec(r.action || '');
     if (!m) return;
     var opt = opts[parseInt(m[1], 10)];
-    if (opt && opt.onPick) opt.onPick(!!r.dontAsk);
+    if (opt && opt.onPick) opt.onPick(!!r.dontAsk, !!r.dontAsk2);
   }).catch(function () {
     // 页内降级弹窗没有勾选框：少一个「记住」总比功能整个挂掉强
     _choiceInPage(title, message, options);
@@ -1127,24 +1137,37 @@ function _onOpenError(e) {
 // 这次 Go 侧看到 forcedWindows 就放行。
 // 此刻窗口**还没关掉**（event.Cancel 拦住了）。
 //
-// d.closeAction（设置 → 标签页 →「关闭窗口时会话」）：
-//   destroy → 不再追问，直接销毁（会断串口；设置页那条文案就是「直接销毁」）
-//   ask     → 三选一：销毁并关闭 / 转到其他窗口 / 取消
-//   transfer 不会走到这里（Go 直接转交；没有别的窗口可转时退化成 destroy，
-//            那种情形 Go 会再问一次，走下面单按钮的确认框）
+// 会话那半按「关闭标签页时」那一档（TabCloseAction，关窗口和关标签页共用）：
+//   ask     → 三选一：仅关闭窗口 / 同时关闭线程 / 取消
+//   tab     → 不再追问，会话放回无主（线程继续跑、串口不断）
+//   process → 不再追问，连线程一起关（断串口）
+// 守护进程那半按「关闭守护进程」那一档：需要停的时候把提示拼进同一个弹窗，
+// 避免连点两次确认。
 //
-// 三选一里带「记住选择」：勾上就把这次的选择写回设置（windowCloseAction），
-// 下次按同一档办（destroy 直接销毁、transfer 直接转交，都不再问）。
+// 三选一里带「记住选择」：勾上就写回 TabCloseAction（和关标签页共用同一档），
+// 下次两边都按这个办。
 function _onWindowCloseConfirm(d) {
   var n = (d && d.sessions) || 0;
   var stopDaemon = !!(d && d.stopDaemon);
   var mode = (d && d.mode) || 'last';
-  var canTransfer = !!(d && d.canTransfer);
   var closeAction = (d && d.closeAction) || 'ask';
   var msg = '';
   if (n > 0) {
-    msg += t('confirm.win_close_sessions', '关闭窗口会停止这个窗口里的会话（共 {n} 个），对应串口连接将断开。')
-      .replace('{n}', String(n));
+    // 三档各有各的说法：ask 要把两条路都讲清楚，keep / destroy 是设置里已经定过的，
+    // 这里只确认「真的按这个办」，别再给一遍选项。
+    if (closeAction === 'tab') {
+      msg += t('confirm.win_close_keep_msg',
+        '这个窗口里的 {n} 个会话会放回无主：线程继续跑、串口不断，之后可以从「新建会话 → 从已打开线程进入」接回来。')
+        .replace('{n}', String(n));
+    } else if (closeAction === 'process') {
+      msg += t('confirm.win_close_destroy_msg',
+        '这个窗口里的 {n} 个会话会一起销毁，对应串口连接将断开。')
+        .replace('{n}', String(n));
+    } else {
+      msg += t('confirm.win_close_sessions',
+        '这个窗口里还有 {n} 个会话。仅关闭窗口的话线程继续跑、串口不断；同时关闭线程会断开串口。')
+        .replace('{n}', String(n));
+    }
   }
   if (stopDaemon) {
     if (msg) msg += ' ';
@@ -1169,37 +1192,50 @@ function _onWindowCloseConfirm(d) {
     state.shutdownDaemonWarn = false;
     saveSettingsNow();
   } : null;
-  // 「记住选择」：把这次选的会话处理方式写回设置（设置 → 标签页 → 窗口里的会话）。
-  // 同样必须在关窗之前落盘 —— 关窗之后进程可能就没了。
-  function rememberChoice(action) {
-    state.windowCloseAction = action;
-    saveSettingsNow();
-  }
+  // 「记住选择」：和关标签页共用同一档设置（TabCloseAction），所以直接复用
+  // _rememberTabClose。必须在关窗之前落盘 —— 关窗之后进程可能就没了。
 
-  if (n > 0 && canTransfer && closeAction === 'ask') {
-    // 两个选项都是「真的关窗」，所以用三选一：销毁 / 转交 / 取消
+  if (n > 0 && closeAction === 'ask') {
+    // 三档和「关闭标签页时」完全对齐：仅关闭窗口（线程保留）/ 同时关闭线程 / 取消。
+    // 两个选项都是「真的关窗」，所以用三选一，而不是「确定 / 取消」。
+    //
+    // 两个勾选框写的是**两个不同设置**：
+    //   记住选择   → TabCloseAction（窗口里的会话以后怎么处理）
+    //   不再提醒   → ShutdownDaemonWarn（以后还要不要提示会停守护进程）
+    // 只有真要停守护进程时才出现第二个。
     showChoice(
       t('confirm.win_close_title', '关闭窗口'),
       msg,
       [
         {
-          label: t('confirm.win_close_transfer_btn', '转到其他窗口'),
-          onPick: function(remember) { if (remember) rememberChoice('transfer'); doClose('transfer'); }
+          label: t('confirm.win_close_keep_btn', '仅关闭窗口'),
+          onPick: function(remember, rememberDaemon) {
+            if (remember) _rememberTabClose('tab');
+            if (rememberDaemon && onDontAsk) onDontAsk();
+            doClose('tab');
+          }
         },
         {
-          label: t('confirm.win_close_destroy_btn', '销毁并关闭'),
-          onPick: function(remember) { if (remember) rememberChoice('destroy'); doClose('destroy'); }
+          label: t('confirm.win_close_destroy_btn', '同时关闭线程'),
+          onPick: function(remember, rememberDaemon) {
+            if (remember) _rememberTabClose('process');
+            if (rememberDaemon && onDontAsk) onDontAsk();
+            doClose('process');
+          }
         },
         { label: t('confirm.cancel', '取消'), onPick: cancel }
       ],
-      t('confirm.remember_choice', '记住选择')
+      t('confirm.remember_choice', '记住选择'),
+      stopDaemon ? t('confirm.dont_ask', '不再提醒') : ''
     );
     return;
   }
   showConfirm(
     t('confirm.win_close_title', '关闭窗口'),
     msg,
-    function() { doClose('destroy'); },
+    // 设置里已经定过 tab / process，这里只确认一次；认不出来的值按 process 走，
+    // 和 Go 侧 ConfirmWindowClose 的兜底一致。
+    function() { doClose(closeAction === 'tab' ? 'tab' : 'process'); },
     // 按钮文案用「关闭」而不是「退出」：这里关的是一个窗口，不是整个程序
     'confirm.tab_close_ok', 'confirm.cancel',
     onDontAsk,
@@ -2980,7 +3016,11 @@ window.addEventListener('DOMContentLoaded', () => {
       _tlog('事件 daemon-ready', undefined, 'online=' + state.daemonOnline);
       if (!state.daemonOnline) tryConnect();
     });
-    window.runtime.EventsOn('process-changed', (data) => syncDaemonSessions(data));
+    window.runtime.EventsOn('process-changed', (data) => {
+      syncDaemonSessions(data);
+      // 正停在「已打开的线程」列表上：跟着刷一下，别让人对着过期列表点。
+      if (typeof _refreshThreadListIfOpen === 'function') _refreshThreadListIfOpen();
+    });
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));
     window.runtime.EventsOn('clients-changed', (data) => onClientsChanged(data));
@@ -3056,6 +3096,18 @@ window.addEventListener('DOMContentLoaded', () => {
       // 送得出去（实测：标签转过来却没出现）。同步完 _tryActivatePending 会切过去。
       _activateSessionSoon(d && d.sid);
       if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+    } else if (name === 'session-taken') {
+      // 别的窗口从「已打开线程进入」把这个会话接走了：摘掉本窗口的标签，但
+      // **不销毁会话**（串口还开着，它现在归那个窗口）。和拖出标签后的收尾同一条路。
+      // 这不是拖动途中，所以要把 _parked 清掉 —— 否则窗口空了也不补新会话，一直
+      // 停在空窗口里等人拖回来。
+      var takenSid = d && d.sid;
+      if (takenSid) {
+        var takenTab = state.tabs.filter(function (t) { return String(t.sessionId) === String(takenSid); })[0];
+        if (takenTab) _detachTab(takenTab);
+        state._parked = false;
+        if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+      }
     } else if (name === 'tab-drop-begin') {
       // 单标签窗口并进来了，鼠标还没松：接过来继续左右拖（见 _ghostDrag）
       _beginDropSort(d && d.sid, d && d.x);
@@ -3434,6 +3486,9 @@ async function syncDaemonSessions(procData) {
 
   // 1. Create tabs for new daemon sessions not tracked in any GUI tab
   daemonSessions.forEach(ds => {
+    // 正在接管这一条（「从已打开线程进入」刚点完）：标签马上就在原地建出来了，
+    // 这里再建一个就是两个 —— 等 _convertChooserToSession 挂完再走正常同步。
+    if (_adoptingSid && String(ds.id) === _adoptingSid) return;
     if (ds.sessionPath) {
       // 文件会话进程（session.open 建出来的）默认不建标签页 —— 有人正在等它的
       // 会话页（_pendingProjectPaths 里有这条路径）才往下建，建完把待办划掉。
@@ -4196,6 +4251,9 @@ function _setPortOptions(sel, optionsHtml, placeholder) {
 
 // ---- tabs ----
 let _creatingTab = false;
+// 正在「从已打开线程进入」接管某一个会话：认领成功到会话页挂上之间，同步不许
+// 给它建标签（见 syncDaemonSessions 第 1 步的跳过与 chooseOpenThread）。
+let _adoptingSid = null;
 
 // 新建会话：先开一个「选择页」标签（两张调色盘卡片），选定模式之后才在守护
 // 进程里建空闲进程，并把这个标签页**原地**换成会话页 —— 所以直接关掉选择页
@@ -4285,6 +4343,8 @@ async function chooseNewSessionMode(mode) {
   if (mode === 'file') { chooseOpenFile(); return; }
   var tab = getActiveTab();
   if (!tab || tab.type !== 'new') return;
+  // 「从已打开线程进入」：不建进程，先把服务里的会话列出来（同一个标签里换屏）
+  if (mode === 'threads') { openThreadList(tab); return; }
   if (!state.daemonOnline) {
     showAlert(t('confirm.title', '提示'),
       t('newtab.need_daemon', '这个模式需要守护进程，请先启动它（菜单 守护进程 → 启停），或改用「从文件打开」'));
@@ -4301,6 +4361,87 @@ async function chooseNewSessionMode(mode) {
     return;
   }
   _convertChooserToSession(tab, sid, mode);
+}
+
+// ---- 从已打开线程进入 ----
+//
+// 守护进程里的会话是全局的，窗口只是登记「谁开着它」（Go 侧的 sessOwner）。
+// 这张卡把已经在跑、但本窗口没挂着的会话接过来：串口不重开，历史和统计都在。
+// 归属判据全在 Go 侧（app_threads.go 的 annotateOpenSessions），前端只按
+// mine / free 决定走哪条路。
+
+// 打开列表屏（同一个标签页里换屏，不新增标签）。
+async function openThreadList(tab) {
+  if (!tab || !tab._page || !tab._page.openThreads) return;
+  if (!state.daemonOnline) {
+    showAlert(t('confirm.title', '提示'),
+      t('newtab.need_daemon', '这个模式需要守护进程，请先启动它（菜单 守护进程 → 启停），或改用「从文件打开」'));
+    return;
+  }
+  tab._page.openThreads(tab);
+  await refreshOpenThreads(tab);
+}
+
+// 向 Go 要一份列表并重画。离线 / 空列表由 renderThreads 分情况显示。
+async function refreshOpenThreads(tab) {
+  if (!tab || !tab._page || !tab._page.renderThreads) return;
+  var data = null;
+  try { data = await window.go.main.App.ListOpenSessions(); } catch (e) { data = null; }
+  // 等数据这段时间页面可能已经被换成会话页了
+  if (!tab._page || !tab._page.renderThreads) return;
+  tab._page.renderThreads(data || { online: false, sessions: [] });
+}
+
+// 守护进程有变化时，如果正停在列表屏就跟着刷（不然用户对着过期列表点，
+// 点下去才发现会话已经被别的窗口拿走）。
+function _refreshThreadListIfOpen() {
+  var tab = getActiveTab();
+  if (!tab || !tab._page || !tab._page.isChooser) return;
+  var root = tab._page.root;
+  if (!root || root.getAttribute('data-screen') !== 'threads') return;
+  refreshOpenThreads(tab);
+}
+
+// 列表里点了一行：三条路 ——
+//   本窗口已经有这个标签 → 直接切过去（不允许同一个会话在本窗口开两份）
+//   无主                 → 认领（AdoptSession）
+//   别的窗口开着         → 转过来（TakeSessionToWindow，源窗口摘标签、不销毁会话）
+async function chooseOpenThread(tab, sid) {
+  if (!tab || tab.type !== 'new' || !sid) return;
+  var existingTab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
+  if (existingTab) { switchTab(state.tabs.indexOf(existingTab)); return; }
+  if (tab._choosing) return;
+  tab._choosing = true;
+  _setChooserBusy(tab, true);
+  // 认领到「原地换成会话页」之间不要让同步先给这个会话建一个标签（会多出一个）
+  _adoptingSid = String(sid);
+
+  try {
+    // 列表可能是几十秒前画的：重新确认一次归属，别照着一份过期判断改归属表
+    var data = await window.go.main.App.ListOpenSessions();
+    var list = (data && data.sessions) || [];
+    var item = null;
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].id) === String(sid)) { item = list[i]; break; }
+    }
+    if (!item) throw new Error(t('thread.gone', '这个会话已经不在了'));
+
+    if (item.mine || item.free) {
+      await window.go.main.App.AdoptSession(sid);
+    } else {
+      await window.go.main.App.TakeSessionToWindow(sid);
+    }
+    _convertChooserToSession(tab, sid, item.mode === 'forward' ? 'forward' : 'single');
+  } catch (e) {
+    tab._choosing = false;
+    _adoptingSid = null;
+    _setChooserBusy(tab, false);
+    var msg = (e && e.message) ? e.message : String(e);
+    showAlert(t('confirm.title', '提示'), t('thread.fail', '接管失败：') + msg);
+    await refreshOpenThreads(tab);
+  } finally {
+    _adoptingSid = null;
+  }
 }
 
 function _setChooserBusy(tab, busy) {
@@ -4537,27 +4678,75 @@ var TEAR_OFF_DY = 42;   // 垂直拖出阈值（像素）
 
 // 拖出来的窗口是整窗尺寸，光标停在它的标签上（偏移由 Go 侧给，见 tearOffGrabX/Y）。
 
+// 关标签页：线程怎么处理（设置 → 标签页 →「关闭标签页时」）
+//
+//   ask      三选一：仅关闭标签 / 同时关闭线程 / 取消（带「记住选择」）
+//   tab      只关标签，线程留在守护进程里（串口不断），之后能从
+//            「新建会话 → 从已打开线程进入」再挂回来
+//   process  连线程一起关（断串口，旧行为）
+//
+// 拦不拦只看**这个标签背后有没有进程**（sessionId），不看串口开没开：
+// 空闲标签背后也是一个真进程，直接关掉等于悄悄销毁它 —— 那是「同时关闭线程」，
+// 不该替用户默认选。设置 / 选择页 / .stlog 文件页没有会话，照旧直接关。
 function closeTab(idx) {
   const tab = state.tabs[idx];
   if (!tab) return;
-  // 「关闭标签页前确认」：只在该标签的串口开着时拦一道。空标签没什么可失去的，
-  // 每次都弹只会变成噪音。
-  if (state.tabCloseWarn && tab.portOpen && tab.sessionId) {
-    showConfirm(
+  const action = state.tabCloseAction || 'ask';
+  const guarded = !!tab.sessionId;
+  const msgKey = tab.portOpen ? 'confirm.tab_close_msg' : 'confirm.tab_close_msg_idle';
+  const msgDef = tab.portOpen
+    ? '这个标签的串口还开着。只关标签的话线程继续跑，串口不会断。'
+    : '这个标签背后是个还没开串口的空闲线程。只关标签的话线程继续留着（之后可从「从已打开线程进入」接回来），同时关闭线程会把它销毁。';
+
+  if (guarded && action === 'ask') {
+    showChoice(
       t('confirm.tab_close_title', '关闭标签页'),
-      t('confirm.tab_close_msg', '这个标签的串口还开着，关闭会断开连接。确定关闭吗？'),
-      function() { _closeTabNow(tab); },
-      'confirm.tab_close_ok', 'confirm.cancel',
-      function() {
-        // 「不再提醒」= 把这个开关关掉，并立即落盘（不走 500ms 防抖）
-        state.tabCloseWarn = false;
-        saveSettingsNow();
-        if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
-      }
+      t(msgKey, msgDef),
+      [
+        {
+          label: t('confirm.tab_close_only', '仅关闭标签'),
+          onPick: function(remember) { if (remember) _rememberTabClose('tab'); _closeTabOnly(tab); }
+        },
+        {
+          label: t('confirm.tab_close_process', '同时关闭线程'),
+          onPick: function(remember) { if (remember) _rememberTabClose('process'); _closeTabNow(tab); }
+        },
+        // 取消排最后：对话框只对第一个按钮标 primary，取消不该是默认动作
+        { label: t('confirm.cancel', '取消'), onPick: function() {} }
+      ],
+      t('confirm.remember_choice', '记住选择')
     );
     return;
   }
+  if (guarded && action === 'tab') { _closeTabOnly(tab); return; }
   _closeTabNow(tab);
+}
+
+// 「记住选择」：把这次的处理方式写回设置，下次同样情况直接照办。
+function _rememberTabClose(action) {
+  state.tabCloseAction = action;
+  saveSettingsNow();
+  if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
+}
+
+// 只关标签、**不关线程**：会话放回「无主」，串口继续开着（没开的也还开着）、
+// 历史继续记，之后能从「新建会话 → 从已打开线程进入」再挂回来（哪个窗口都行）。
+//
+// 注意不能只调 _detachTab：Go 侧的归属表还记着这个窗口，下一次同步会把它
+// 当成「本窗口的会话」再建一个标签出来。必须先让 Go 把归属放掉（ReleaseSession），
+// 并记下「是本窗口放的」，否则「无主就认领」会立刻把它领回来。
+function _closeTabOnly(tab) {
+  if (!tab) return;
+  const sid = tab.sessionId;
+  // 和 _closeTabNow 一样挡住「空窗口自动补会话」：关掉最后一个标签时不该顺手
+  // 又建一个新进程 —— 用户要的是把这个线程留着，不是换一个新的。
+  state._suppressAutoCreate = (Date.now() + 2000);
+  if (sid && state.daemonOnline) {
+    window.go.main.App.ReleaseSession(sid).catch(function(e) {
+      console.error('ReleaseSession failed:', e);
+    });
+  }
+  _detachTab(tab);
 }
 
 // 真正执行关闭。按标签**对象**定位而不是下标：确认框弹出的这段时间里，标签数组

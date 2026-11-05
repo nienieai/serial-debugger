@@ -50,18 +50,25 @@ type AppSettings struct {
 	// ShutdownDaemonWarn 控制关闭 GUI 前要不要先弹确认（会断开所有串口）。
 	// 只在 last / always 下有作用，never 下设置页置灰。
 	ShutdownDaemonWarn bool `json:"shutdownDaemonWarn" ini:"shutdown_daemon_warn"`
-	// TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
+	// TabCloseWarn 是 0.9.1 之前的「关闭标签页前确认」布尔开关。
+	//
+	// 已被 TabCloseAction 取代，只为读旧设置文件保留（迁移见 app.js 的 applySettings）。
+	// 不要再往界面里加它。
 	TabCloseWarn bool `json:"tabCloseWarn" ini:"tab_close_warn"`
+	// TabCloseAction 是「关标签页 / 关窗口时，背后的线程怎么办」：
+	//   ask      三选一：仅关闭标签 / 同时关闭线程 / 取消（默认）
+	//   tab      只关标签，线程留在守护进程里（串口不断），之后能从
+	//            「新建会话 → 从已打开线程进入」再挂回来
+	//   process  连线程一起关（断串口，0.9.1 之前的固定行为）
+	//
+	// 关窗口和关标签页走**同一条**策略：界面上不再有「窗口里的会话」那一项
+	// （0.9.1 之前是 windowCloseAction），关窗弹窗由「关闭守护进程」这条设置和
+	// 这里共同决定 —— 会话那半按本档执行，守护进程那半按 ShutdownDaemonMode。
+	TabCloseAction string `json:"tabCloseAction" ini:"tab_close_action"`
 	// SerialPermissionHint 控制「串口权限不足」横幅要不要自动弹。只在 Linux 有意义：
 	// 分体版对设备节点只能临时授权，拔插或重启后又要重新授权，横幅就是那条提醒。
 	// 关掉后不再自动出现，设置页里的手动入口保留（错误弹窗里也会说明怎么手动修）。
 	SerialPermissionHint bool `json:"serialPermissionHint" ini:"serial_permission_hint"`
-	// WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
-	//   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
-	//   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
-	//   transfer 转到别的窗口去（不问；没有别的窗口时退化成销毁确认）
-	// 注意这和 ShutdownDaemonMode 是两件事：那个管守护进程，这个管会话本身。
-	WindowCloseAction string `json:"windowCloseAction" ini:"window_close_action"`
 	// AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
 	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
 	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
@@ -137,7 +144,7 @@ func defaultSettings() *AppSettings {
 		AutoCreateMode:     "single",
 		ShutdownDaemonMode: "last",
 		ShutdownDaemonWarn: true,
-		WindowCloseAction:  "ask",
+		TabCloseAction:     "ask",
 		StlogShowYear:      true,
 		// 权限横幅默认开：Linux 上装完就能用，别让用户卡在「打开失败」里没人解释。
 		SerialPermissionHint: true,
@@ -201,6 +208,12 @@ func (a *App) LoadAppSettings() *AppSettings {
 	}
 	if err := unmarshalINI(data, cfg); err != nil {
 		return defaultSettings()
+	}
+	// 关窗口不再有自己的一套档位：它和关标签页共用 TabCloseAction
+	// （0.9.1 之前是 windowCloseAction）。旧配置里的 window_close_action 键
+	// 没人读了，ini 解析遇到不认识的键会跳过，不用清文件。
+	if cfg.TabCloseAction != "tab" && cfg.TabCloseAction != "process" {
+		cfg.TabCloseAction = "ask"
 	}
 	return cfg
 }

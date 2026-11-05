@@ -77,6 +77,12 @@ type App struct {
 	// 认领，否则那些会话在 GUI 里永远不会显示。
 	sessMu    sync.Mutex
 	sessOwner map[string]string
+	// 主动放手过的会话：会话 ID → 放手的窗口名。
+	//
+	// 「关闭标签 → 仅关闭标签」会把会话放回无主（线程还在跑），但放手方自己
+	// **不能**按「无主就认领」立刻再领回来 —— 那样标签一关就自己弹回来。别的
+	// 窗口照常可以领（见 GetSessionsForWindow 与 AdoptSession）。
+	sessReleased map[string]string
 
 	// 关窗确认：窗口名 → 上次发确认帧的时间（防连点 X 叠出多个确认窗口）。
 	// forcedWindows 里的窗口表示用户已经确认过，下次 WindowClosing 直接放行。
@@ -304,11 +310,45 @@ func (a *App) sessSet(sid, win string) {
 	if a.sessOwner == nil {
 		a.sessOwner = make(map[string]string)
 	}
+	delete(a.sessReleased, sid)
 	if win == "" {
 		delete(a.sessOwner, sid)
 		return
 	}
 	a.sessOwner[sid] = win
+}
+
+// sessRelease 把会话放回「无主」并记下是谁放的（只关标签、线程保留）。
+// 返回 false 表示这个会话本来就不归这个窗口。
+func (a *App) sessRelease(sid, win string) bool {
+	if sid == "" || win == "" {
+		return false
+	}
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sessOwner[sid] != win {
+		return false
+	}
+	delete(a.sessOwner, sid)
+	if a.sessReleased == nil {
+		a.sessReleased = make(map[string]string)
+	}
+	a.sessReleased[sid] = win
+	return true
+}
+
+// sessReleasedFor 返回这个会话是被哪个窗口放手的（"" = 没被放手过）。
+func (a *App) sessReleasedFor(sid string) string {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	return a.sessReleased[sid]
+}
+
+// sessForgetReleased 清掉放手标记：用户显式把它领回来、或者它换了个主人。
+func (a *App) sessForgetReleased(sid string) {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	delete(a.sessReleased, sid)
 }
 
 // sessOfWindow 列出某个窗口名下的全部会话。
@@ -348,6 +388,11 @@ func (a *App) sessPrune(alive map[string]bool) {
 			delete(a.sessOwner, sid)
 		}
 	}
+	for sid := range a.sessReleased {
+		if !alive[sid] {
+			delete(a.sessReleased, sid)
+		}
+	}
 }
 
 // sessClearAll 清空全部窗口的会话归属。
@@ -359,6 +404,7 @@ func (a *App) sessPrune(alive map[string]bool) {
 func (a *App) sessClearAll() {
 	a.sessMu.Lock()
 	a.sessOwner = make(map[string]string)
+	a.sessReleased = make(map[string]string)
 	a.sessMu.Unlock()
 }
 
@@ -1422,38 +1468,32 @@ func (a *App) allowWindowClose(name string) bool {
 	// 这时若窗口里还有会话，下面照样要确认。
 	stopDaemon := action == closeStopDaemon || action == closeConfirm
 
-	// 「关窗口时会话怎么处理」的默认动作（设置 → 标签页）。
-	// transfer 只有在确实还有别的窗口时才成立，否则退化成 destroy。
-	configured := cfg.WindowCloseAction
-	if configured != "destroy" && configured != "transfer" {
+	// 关窗口时会话怎么处理：和关标签页**共用** TabCloseAction（设置 → 标签页）。
+	//   ask     弹框三选一
+	//   tab     只关窗口，会话放回无主（线程继续跑、串口不断）
+	//   process 连线程一起关（断串口）
+	configured := cfg.TabCloseAction
+	if configured != "tab" && configured != "process" {
 		configured = "ask"
 	}
 	closeMode := configured
-	canTransfer := a.pickTransferTarget(name) != ""
-	degraded := false
-	if closeMode == "transfer" && !canTransfer {
-		closeMode = "destroy"
-		degraded = true
-	}
 
-	// destroy / transfer 是用户在设置里明确选过的，不再追问（设置页那条文案本来
-	// 就叫「直接销毁（会断串口）」）；只有 ask、以及「想转交却没地方转」这种
-	// 退化情形才弹会话确认框。对话框里勾了「记住选择」写的就是这个设置。
-	needConfirm := action == closeConfirm || windowCloseNeedsConfirm(configured, len(sids), degraded)
+	// tab / process 是用户在设置里明确选过的，不再追问；只有 ask 才弹会话确认框。
+	// 对话框里勾了「记住选择」写的就是这个设置（和关标签页共用）。
+	needConfirm := action == closeConfirm || windowCloseNeedsConfirm(configured, len(sids))
 
 	if !needConfirm {
 		if len(sids) > 0 {
 			switch closeMode {
-			case "transfer":
-				a.transferWindowSessions(name)
-			case "destroy":
-				// 用户在设置里明确选了「直接销毁」，或者在确认框里勾了「记住选择」
-				// 选过销毁：这里就是最终决定，真把会话销毁掉。
-				// 以前这条分支只处理 transfer，destroy 全靠确认框走
-				// ConfirmWindowClose；现在 destroy 不再弹框，漏掉这一步的话会话
-				// 会变成守护进程上的孤儿 —— 标签没了、串口却一直开着（实测踩到）。
+			case "tab":
+				n := a.releaseWindowSessions(name)
+				log.Printf("[close] 窗口 %q 按设置仅关闭窗口，%d 个会话放回无主", name, n)
+			case "process":
+				// 用户在设置里明确选了「同时关闭线程」，或者在确认框里勾了「记住选择」：
+				// 这里就是最终决定，真把会话销毁掉。漏掉这一步的话会话会变成守护进程
+				// 上的孤儿 —— 标签没了、串口却一直开着（实测踩到）。
 				n := a.destroyWindowSessions(name)
-				log.Printf("[close] 窗口 %q 按设置直接销毁 %d 个会话", name, n)
+				log.Printf("[close] 窗口 %q 按设置销毁 %d 个会话", name, n)
 			}
 		}
 		if stopDaemon {
@@ -1490,8 +1530,7 @@ func (a *App) allowWindowClose(name string) bool {
 		"sessions":    len(sids),
 		"stopDaemon":  stopDaemon,
 		"mode":        cfg.ShutdownDaemonMode,
-		"closeAction": closeMode, // ask / destroy
-		"canTransfer": canTransfer,
+		"closeAction": closeMode, // ask / keep / destroy
 	}})
 	return false
 }
@@ -1505,13 +1544,18 @@ func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bo
 	if name == "" {
 		return fmt.Errorf("无法确定发起调用的窗口")
 	}
+	// mode 用的就是 TabCloseAction 的取值（关窗口和关标签页共用一套策略）：
+	//   tab     = 只关窗口，会话放回无主
+	//   process = 连线程一起关（断串口）
+	// 认不出来的值按 process：宁可多关一次，也别在界面上显示「已关闭」而串口
+	// 还开着、线程却没有主人。
 	n := 0
-	transferredTo := ""
-	if mode == "transfer" {
-		transferredTo = a.transferWindowSessions(name)
-	}
-	if transferredTo == "" {
-		// 没别的地方可去（或者用户选的就是销毁）：照旧销毁
+	if mode == "tab" {
+		n = a.releaseWindowSessions(name)
+	} else {
+		if mode != "process" {
+			log.Printf("[close] 窗口 %q 收到未知的关闭方式 %q，按 process 处理", name, mode)
+		}
 		n = a.destroyWindowSessions(name)
 	}
 	if stopDaemon {
@@ -1530,8 +1574,8 @@ func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bo
 	a.forcedWindows[name] = true
 	delete(a.pendingCloseWin, name)
 	a.closeWinMu.Unlock()
-	log.Printf("[close] 窗口 %q 确认关闭：mode=%s 销毁会话 %d 个，转到窗口 %q，停守护进程=%v，最后一个窗口=%v",
-		name, mode, n, transferredTo, stopDaemon, lastWindow)
+	log.Printf("[close] 窗口 %q 确认关闭：mode=%s 处理会话 %d 个，停守护进程=%v，最后一个窗口=%v",
+		name, mode, n, stopDaemon, lastWindow)
 
 	// 异步关：这个调用是从该窗口的 JS 里发出来的，同步 Close 会把正在回包的
 	// IPC 连接一起带走，前端可能连回执都收不到。
@@ -1604,50 +1648,30 @@ func (a *App) destroyWindowSessions(name string) int {
 	return n
 }
 
-// pickTransferTarget 选一个「接盘」窗口：优先 main，否则编号最小的 win-N。
+// releaseWindowSessions 把某个窗口名下的会话全部放回「无主」，但**不销毁**。
 //
-// 为什么优先 main：它是启动就在的那个，用户对它的位置最熟；转过去的标签
-// 出现在最稳的窗口里，不会跟着某个临时窗口一起被关掉。
-func (a *App) pickTransferTarget(from string) string {
-	a.winMu.Lock()
-	defer a.winMu.Unlock()
-	if from != "main" {
-		if _, ok := a.windows["main"]; ok {
-			return "main"
-		}
-	}
-	best := ""
-	for name := range a.windows {
-		if name == from || !strings.HasPrefix(name, "win-") {
+// 「关闭窗口 → 仅关闭窗口（线程保留）」用：串口继续开、历史继续记，之后可以从
+// 任意窗口的「新建会话 → 从已打开线程进入」接回来。
+//
+// 为什么用 sessRelease 而不是 sessDropWindow：关闭是异步的（前端确认 → Close），
+// 这中间这个窗口还会同步一次列表；直接摘掉归属的话，它会按「无主就认领」把刚
+// 放手的会话又领回来（未读标签闪一下）。sessRelease 顺手记下「是本窗口放的」，
+// 本窗口就不会自己领回去。
+func (a *App) releaseWindowSessions(name string) int {
+	sids := a.sessOfWindow(name)
+	n := 0
+	for _, sid := range sids {
+		if !a.sessRelease(sid, name) {
 			continue
 		}
-		if best == "" || name < best {
-			best = name
-		}
-	}
-	return best
-}
-
-// transferWindowSessions 把某个窗口名下的会话整体转给另一个窗口，返回目标窗口名。
-//
-// 和 destroyWindowSessions 的区别：**不销毁任何会话**，串口连接不断，只是换了个
-// 窗口显示。转完之后两边都要重同步：目标窗口会为新会话建标签，源窗口（如果还活着）
-// 会把自己的标签摘掉。
-func (a *App) transferWindowSessions(from string) string {
-	target := a.pickTransferTarget(from)
-	if target == "" {
-		log.Printf("[close] 窗口 %q 没有可转交的目标窗口", from)
-		return ""
-	}
-	sids := a.sessDropWindow(from)
-	for _, sid := range sids {
-		a.sessSet(sid, target)
+		// 这个窗口不再看这个会话了：解码协程跟着停，免得它一直在、没人消费。
+		a.StopTabDecoder(sid)
+		n++
 	}
 	if len(sids) > 0 {
-		log.Printf("[close] 窗口 %q 的 %d 个会话转到窗口 %q: %v", from, len(sids), target, sids)
+		log.Printf("[close] 窗口 %q 放手会话 %d/%d: %v", name, n, len(sids), sids)
 	}
-	a.emit("sessions-changed", map[string]any{"reason": "transfer", "from": from, "to": target})
-	return target
+	return n
 }
 
 // closeAction 是「关窗口时怎么处理守护进程」的判定结果。
@@ -1687,21 +1711,17 @@ func decideClose(mode string, warn, connected bool, clientCount int) closeAction
 
 // windowCloseNeedsConfirm 决定「有会话时关这个窗口要不要弹确认框」。
 //
-// 和设置页的三档文案对齐（设置 → 标签页 → 窗口里的会话）：
-//   - ask      每次都问
-//   - destroy  用户明确选了「直接销毁（会断串口）」，不再追问
-//   - transfer 不破坏任何东西，直接转交
+// 判据就是「关闭标签页时」那一档（关窗口和关标签页共用 TabCloseAction）：
+//   - ask     每次都问
+//   - tab     只关窗口、会话放回无主，不破坏任何东西，不再追问
+//   - process 用户明确选了「连线程一起关（断串口）」，不再追问
 //
-// degraded = 设置是 transfer、但这会儿没有别的窗口可转（退化成销毁）。这种情形
-// 必须问：用户期望的是「转走」，不是「悄悄把串口断掉」。
-func windowCloseNeedsConfirm(configured string, sessions int, degraded bool) bool {
+// 认不出来的值按 ask 算（LoadAppSettings 也会把非法值归一成 ask）。
+func windowCloseNeedsConfirm(configured string, sessions int) bool {
 	if sessions <= 0 {
 		return false
 	}
-	if degraded {
-		return true
-	}
-	return configured != "destroy" && configured != "transfer"
+	return configured != "tab" && configured != "process"
 }
 
 // QuitApp 退出整个程序（所有窗口一起关），保留给「彻底退出」这类入口。
@@ -2175,6 +2195,10 @@ func (a *App) GetSessionsForWindow(ctx context.Context) []map[string]any {
 		case owner == win:
 			out = append(out, s)
 		case owner == "" && claimUnowned:
+			// 本窗口刚「仅关闭标签」放手的会话：别自己领回来，否则标签关不掉。
+			if a.sessReleasedFor(sid) == win {
+				continue
+			}
 			if a.sessClaim(sid, win) {
 				log.Printf("[window] 会话 %s 无主，认领给窗口 %q", sid, win)
 				out = append(out, s)

@@ -555,27 +555,22 @@ function buildSettingsPage() {
 			function(v) { _tabSet('tabCollapse', v); })));
 	panelTabs.appendChild(bTabInfo);
 
-	// 「关窗口时，窗口里的会话怎么办」：每次问 / 直接销毁 / 转到其他窗口。
-	// 判定在 Go 侧（app.go allowWindowClose + ConfirmWindowClose），这里只存取。
-	// 注意和下面「存储与行为」里的 shutdown_daemon 区分：那个管守护进程，
-	// 这个管窗口里的会话本身。
-	var bTabClose = _bubble(t('settings.bubble_tab_close', '关闭窗口'));
-	bTabClose.appendChild(_row(t('settings.window_close_action', '窗口里的会话'),
-		_buildSelect(['ask', 'destroy', 'transfer'],
-			[ t('settings.window_close_ask', '每次询问'),
-			  t('settings.window_close_destroy', '直接销毁（会断串口）'),
-			  t('settings.window_close_transfer', '转到其他窗口') ],
-			state.windowCloseAction || 'ask',
+	// 「关标签页 / 关窗口时，背后的线程怎么办」：每次问 / 只关掉界面（线程留着）/
+	// 连线程一起关。**关窗口和关标签页共用这一档**：关窗弹窗由它和「关闭守护进程」
+	// （存储与行为里的 shutdown_daemon）共同决定，会话那半按本档执行。
+	// 判定在 app.js 的 closeTab（标签）与 Go 侧的 allowWindowClose / ConfirmWindowClose
+	// （窗口）；这里只存取。
+	var bTabClose = _bubble(t('settings.bubble_tab_close', '关闭窗口与标签页'));
+	bTabClose.appendChild(_row(t('settings.tab_close_action', '关闭标签页 / 窗口时'),
+		_buildSelect(['ask', 'tab', 'process'],
+			[ t('settings.tab_close_ask', '每次询问'),
+			  t('settings.tab_close_tab', '只关掉界面（线程保留）'),
+			  t('settings.tab_close_process', '连线程一起关（断串口）') ],
+			state.tabCloseAction || 'ask',
 			function(v) {
-				state.windowCloseAction = v;
+				state.tabCloseAction = v;
 				saveSettings();
 			})));
-	// 「关闭标签页前确认」按内容挪到这里（原来在「存储与行为」面板）
-	bTabClose.appendChild(_row(t('settings.tab_close_warn', '关闭标签页前确认'),
-		_buildToggle(function() {
-			state.tabCloseWarn = !state.tabCloseWarn;
-			saveSettings();
-		}, state.tabCloseWarn === true)));
 	panelTabs.appendChild(bTabClose);
 	// ── Panel: 存储与行为 ──
 	var panelStorage = document.createElement('div');

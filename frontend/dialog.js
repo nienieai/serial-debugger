@@ -38,28 +38,61 @@
   }
 
   function send(actionKey) {
-    if (sent || !actionKey) return;
+    if (sent || !actionKey || !App) return;
     sent = true;
 
     var dontAskBox = byId('dlgDontAsk');
     var dontAskInput = byId('dlgDontAskInput');
     var dontAsk = !!(dontAskBox && !dontAskBox.classList.contains('is-hidden') &&
                      dontAskInput && dontAskInput.checked);
+    // 第二个勾选框是两个**不同设置**的另一个（见 DialogSpec 的注释）
+    var dontAsk2Box = byId('dlgDontAsk2');
+    var dontAsk2Input = byId('dlgDontAsk2Input');
+    var dontAsk2 = !!(dontAsk2Box && !dontAsk2Box.classList.contains('is-hidden') &&
+                      dontAsk2Input && dontAsk2Input.checked);
 
     // 先禁按钮，避免连点造成两次结算（Go 侧也幂等，这里是省一次往返）
     var btns = document.querySelectorAll('.c-dialog__btn');
     for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
 
-    App.ResolveDialog(dlgId, actionKey, dontAsk).catch(function (e) {
+    App.ResolveDialog(dlgId, actionKey, dontAsk, dontAsk2).catch(function (e) {
       if (window.console) console.error('[dialog] ResolveDialog 失败', e);
       sent = false;
       for (var j = 0; j < btns.length; j++) btns[j].disabled = false;
     });
   }
 
+  // fitWindow 按内容把窗口高度贴合。
+  //
+  // 无边框之后高度里多了自绘标题栏，而正文是在 .o-dialog-col 里滚动的 ——
+  // col.scrollHeight 永远等于窗口高度，量它等于量空气（旧实现就是这么写的）。
+  // 只能一项项加起来：标题栏 + 正文内容 + 按钮行 + 内边距与行间距 + 边框。
+  function fitWindow() {
+    if (!App) return;
+    var bar = document.querySelector('.o-dialog-bar');
+    var col = document.querySelector('.o-dialog-col');
+    var msg = byId('dlgMsg');
+    if (!col || !msg) return;
+    var cs = getComputedStyle(col);
+    var pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    var gap = parseFloat(cs.rowGap || cs.gap) || 0;
+    var rows = [msg];
+    ['dlgDontAsk', 'dlgDontAsk2'].forEach(function (id) {
+      var opt = byId(id);
+      if (opt && !opt.classList.contains('is-hidden')) rows.push(opt);
+    });
+    var acts = byId('dlgActions');
+    if (acts) rows.push(acts);
+    var content = rows.reduce(function (s, el) { return s + el.scrollHeight; }, 0);
+    var need = (bar ? bar.offsetHeight : 0) + content + pad + gap * (rows.length - 1) + 2;
+    App.ResizeDialog(dlgId, Math.ceil(need)).catch(function () { /* 忽略 */ });
+  }
+
   function render(spec) {
     applyVars(spec.vars);
     document.title = spec.title || '串口调试工具';
+    var titleEl = byId('dlgTitle');
+    if (titleEl) titleEl.textContent = spec.title || '';
 
     var msg = byId('dlgMsg');
     msg.textContent = spec.message || '';
@@ -68,6 +101,10 @@
     if (spec.dontAsk) {
       byId('dlgDontAsk').classList.remove('is-hidden');
       byId('dlgDontAskText').textContent = spec.dontAskLabel || '不再提醒';
+    }
+    if (spec.dontAsk2) {
+      byId('dlgDontAsk2').classList.remove('is-hidden');
+      byId('dlgDontAsk2Text').textContent = spec.dontAsk2Label || '不再提醒';
     }
 
     var box = byId('dlgActions');
@@ -93,12 +130,7 @@
     });
 
     // 渲染完按实际内容高度调一次窗口大小（Go 侧只做了粗估）
-    requestAnimationFrame(function () {
-      var col = document.querySelector('.o-dialog-col');
-      if (!col || !App) return;
-      var need = col.scrollHeight + 2;
-      App.ResizeDialog(dlgId, need).catch(function () { /* 忽略 */ });
-    });
+    requestAnimationFrame(fitWindow);
 
     if (primaryBtn) primaryBtn.focus();
   }
@@ -111,6 +143,13 @@
 
   dlgId = new URLSearchParams(location.search).get('id') || '';
   if (!dlgId) { fail('缺少 id 参数'); return; }
+
+  // 无边框窗口没有系统标题栏的 X：右上角那个自己画的 × 等同于「取消」，
+  // 和点系统 X 走同一条结算路径（Go 侧 WindowClosing 里也会兜一次）。
+  var closeBtn = byId('dlgClose');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function () { send(cancelKey || 'cancel'); });
+  }
 
   waitForBindings()
     .then(function (app) {

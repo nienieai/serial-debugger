@@ -44,9 +44,6 @@ const uiFrontendEnv = "SERIAL_GUI_FRONTEND"
 // 配合“静默一拍才重载”的去抖，连续保存多个文件只会触发一次刷新。
 const uiPollInterval = 400 * time.Millisecond
 
-// uiDevMode 告诉 main.go 打开 DevTools（仍需构建时带 -devtools）。
-const uiDevMode = true
-
 // uiAssets 把静态资源换成磁盘目录：assetserver 每个请求都会重新 Open，
 // 因此重载窗口即可拿到最新文件。找不到目录时直接失败退出，绝不静默回退到
 // 内嵌版本——否则会出现“改了没反应、又没有任何提示”的排查黑洞。

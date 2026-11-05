@@ -132,9 +132,14 @@ func main() {
 
 	uiStartHotReload(win)
 
-	// v2 的 -devtools 构建会自动开检查器，v3 没有等价选项，
-	// 等页面加载完再手动开（太早开会在空白页上开一个空面板）。
-	if uiDevMode {
+	// DevTools 不再自动弹：v2 的 -devtools 构建会自动开检查器，v3 没有等价
+	// 选项，以前是启动 1.2 s 后自己调一次 —— 结果每次打开 GUI 都有一块检查器
+	// 挡在前面，正常用界面时还得先关掉它。
+	//
+	// 现在「开发者模式」只是**可用**：build.ps1 的 dev 构建带 devtools 标签，
+	// 「帮助 → 开发人员工具」和 Ctrl+Shift+F12 随时能开。确实要它自己开时，
+	// 启动前设 SERIAL_DEVTOOLS=1（排查「启动早期就报错」那类问题才需要）。
+	if os.Getenv("SERIAL_DEVTOOLS") == "1" {
 		go func() {
 			time.Sleep(1200 * time.Millisecond)
 			win.OpenDevTools()

@@ -11,7 +11,88 @@
 
 ---
 
-## 未发布（`feat/logview-engine` 分支）
+## 未发布（0.9.1）
+
+### 新建会话：从已打开线程进入
+
+- 选择页第四张卡。点开**在原地换一屏**（不新开标签页），列出守护进程上所有串口
+  会话；工程会话不进列表（它们有自己的文件页，再挂一个会话页就是两份视图）。
+- 每行标归属，判据由 Go 侧带出（`owner` / `mine` / `free`）：
+  无主 → `AdoptSession` 认领；本窗口已有标签 → 直接切过去（不允许同一个会话在本
+  窗口开两份）；别的窗口开着 → `TakeSessionToWindow` 转过来。
+- 接管**只转归属**：串口不重开、历史与统计不动。源窗口收到定向帧
+  `session-taken` 后摘标签（复用拖出标签那套 `_detachTab`），它要是因此空了
+  就退回「空窗口」的正常流程补一个空闲会话（`_parked` 重置）。
+- `_adoptingSid` 挡住「认领成功 → 会话页挂上」之间那一瞬的同步：否则
+  `syncDaemonSessions` 会先给这个会话建一个标签，紧接着原地转换又建一个。
+- 9 个语言包各加 19 键。
+
+### 关闭标签页：仅关闭标签 / 同时关闭线程 / 取消
+
+- 设置 → 标签页新增「关闭标签页时」：每次询问 / 仅关闭标签（线程保留）/
+  同时关闭线程（断串口），默认每次询问；三选一带「记住选择」，勾了就把这次的选择
+  写回设置。旧的布尔「关闭标签页前确认」`tabCloseWarn` 已从界面上撤掉，旧设置读
+  进来时迁移一次（true → 每次询问 / false → 同时关闭线程），字段本身只为读旧文件保留。
+- 「仅关闭标签」= `ReleaseSession`（把会话放回无主）+ `_detachTab`：串口继续开、
+  历史继续记，之后能从「从已打开线程进入」再挂回来 —— 这就是上面那张卡的另一半。
+- Go 侧新增 `sessReleased`（会话 → 放手方）：`GetSessionsForWindow` 的「无主就
+  认领」要跳过放手方自己，否则标签一关就被自己领回来，等于关不掉；别的窗口照常
+  能领，用户显式认领也会清掉这个标记。
+- 拦不拦只看**背后有没有进程**（`sessionId`），不看串口开没开：空闲标签背后
+  也是一个真进程，直接关掉等于替用户默认选了「同时关闭线程」。所以每关一个会话
+  标签都走同一套询问 / 记住选择；只有设置页、选择页、`.stlog` 文件页（背后没有
+  会话）照旧直接关。空闲标签的弹框文案单独一条（`confirm.tab_close_msg_idle`）。
+- `_closeTabOnly` 也压了 `_suppressAutoCreate`：关掉最后一个标签时不该顺手
+  再建一个新进程 —— 用户要的是把这个线程留着，不是换一个新的。
+
+### 关窗口并进「关闭标签页」那一档，删掉「窗口里的会话」
+
+- 设置 → 标签页里原来有两档：`窗口里的会话`（每次询问 / 仅关闭窗口 / 同时关闭线程）
+  和 `关闭标签页时`（每次询问 / 仅关闭标签 / 同时关闭线程）。两层口径一样、只是粒度
+  不同，用户看不出该调哪个，关窗口时也说不清按哪档走。
+- 现在只剩一档 `关闭标签页 / 窗口时`（`TabCloseAction`），**关窗口和关标签页共用**：
+  `tab` = 只关掉界面、线程留着（会话放回无主）；`process` = 连线程一起关；
+  `ask` = 弹框三选一 +「记住选择」（两边写的是同一个设置）。
+- 关窗弹窗因此由**两件设置共同决定**，而且是两件**互不相干**的事：会话那半按这一档，
+  守护进程那半按「关闭守护进程」（`shutdownDaemonMode` / `ShutdownDaemonWarn`）。
+  两段提示拼在同一个弹窗里，但**两个「记住」各写各的设置**：
+  「记住选择」→ `TabCloseAction`，「不再提醒」→ `ShutdownDaemonWarn`。
+  为此 `DialogSpec` 加了第二个勾选框（`dontAsk2` / `dontAsk2Label`），
+  `ResolveDialog` 多带一个 `dontAsk2`；页内降级弹窗仍只有按钮、没有勾选框。
+- 删掉 `WindowCloseAction` 字段、`settings.window_close_*` 四个语言键、设置页那一行
+  （旧 ini 里的 `window_close_action` 没人读了 —— ini 解析遇到不认识的键会跳过）。
+  `ConfirmWindowClose` 的 mode 改成 `tab` / `process`，`windowCloseNeedsConfirm` 同口径。
+- `releaseWindowSessions`（窗口级放手）保留：`tab` 档关窗时整个窗口的会话一起放回
+  无主，之后从「从已打开线程进入」接回来。
+
+### 弹窗改成无边框窗口
+
+- 对话框（提示 / 确认 / 选择）原来带系统标题栏，和主窗口（无边框 + 自绘标题栏）
+  观感断开一截。`dialog.go` 的窗口加 `Frameless` + `framelessChrome`，
+  `dialog.html` 补自绘标题栏：整条 `.o-dialog-bar` 是拖动把手，右上角 × 等同于
+  「取消」；`dialog.css` 用 1px 边框划出边界（和主窗口 `.win-frame` 同一档）。
+- 高度估算跟上：`dialogHeight` 基线加 34px 标题栏；`fitWindow()` 从「量
+  `.o-dialog-col`」改成逐项相加 —— 正文是在 col 里滚动的，col.scrollHeight 永远
+  等于窗口高度，旧写法其实一直是空操作。
+
+### DevTools 不再自动打开
+
+- dev 构建（`-tags hotreload,devtools`）以前在启动 1.2 s 后自己调一次
+  `win.OpenDevTools()`，每次打开 GUI 都有一块检查器挡在最前面，正常用界面之前
+  还得先关掉它。
+- 现在**默认不弹**，检查器仍然可用（菜单「帮助 → 开发人员工具」/ Ctrl+Shift+F12，
+  `devtools` 标签照旧带着）。确实要它自己开时，启动前设 `SERIAL_DEVTOOLS=1`
+  —— 只在排查「启动早期就报错」那类问题时需要。
+- `uiDevMode` 这个构建期常量随之删掉（hotreload 构建只负责「前端从磁盘读 +
+  检查器可用」）；`devui_hotreload_test.go` 的断言与 REQUIREMENTS #54 同步改口径。
+
+**验收**：`go test . -run 'TestAnnotateOpenSessions|TestAdoptAndTakeRequireWindow|TestSessRelease'`
+通过（归属分类 3 条 + 放手语义 1 条）；`node --check` 四个前端文件通过；
+i18n 9 份各 627 键、键集合一致；选择页用 Playwright 桩
+（`_audit/thread_chooser_check.py`）跑 18 条断言全绿（四张卡、原地换屏、
+三种徽标、点行回传 sid、返回清空、离线与空列表两套文案），另出两张渲染图核对
+（列表屏 / 无边框对话框）。**没在真机 GUI 上验**跨窗口接管与「仅关闭标签」的
+实际收发 —— 那条要两个窗口 + 一个真实串口。
 
 ### 关于页补缺
 

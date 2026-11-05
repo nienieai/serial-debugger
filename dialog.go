@@ -33,14 +33,21 @@ type DialogButton struct {
 
 // DialogSpec 描述一次提示 / 确认 / 选择。
 type DialogSpec struct {
-	Kind         string            `json:"kind"` // alert / confirm / choice
-	Title        string            `json:"title"`
-	Message      string            `json:"message"`
-	Mono         bool              `json:"mono"` // 等宽 + 保留换行（多行摘要用）
-	Buttons      []DialogButton    `json:"buttons"`
-	DontAsk      bool              `json:"dontAsk"` // 是否显示「不再提醒」勾选框
-	DontAskLabel string            `json:"dontAskLabel"`
-	Vars         map[string]string `json:"vars"` // 主窗口的 CSS 变量快照，用来对齐主题
+	Kind         string         `json:"kind"` // alert / confirm / choice
+	Title        string         `json:"title"`
+	Message      string         `json:"message"`
+	Mono         bool           `json:"mono"` // 等宽 + 保留换行（多行摘要用）
+	Buttons      []DialogButton `json:"buttons"`
+	DontAsk      bool           `json:"dontAsk"` // 第一勾选框（「记住选择」/「不再提醒」都走它）
+	DontAskLabel string         `json:"dontAskLabel"`
+	// DontAsk2 / DontAsk2Label 是第二个勾选框。
+	//
+	// 关窗口时同时要记住两件互不相干的事：窗口里的会话怎么办（TabCloseAction），
+	// 以及下次还要不要提醒停守护进程（ShutdownDaemonWarn）。它们写的是两个不同的
+	// 设置，一个勾选框表达不了，所以对话框要能摆两个。
+	DontAsk2      bool              `json:"dontAsk2"`
+	DontAsk2Label string            `json:"dontAsk2Label"`
+	Vars          map[string]string `json:"vars"` // 主窗口的 CSS 变量快照，用来对齐主题
 }
 
 type dialogEntry struct {
@@ -54,7 +61,7 @@ type dialogEntry struct {
 
 const (
 	dialogWidth = 520
-	dialogMinH  = 200
+	dialogMinH  = 210
 	dialogMaxH  = 620
 )
 
@@ -88,7 +95,11 @@ func (a *App) OpenDialog(ctx context.Context, spec DialogSpec) (string, error) {
 		Width:         dialogWidth,
 		Height:        h,
 		DisableResize: true,
-		URL:           "/dialog.html?id=" + id,
+		// 和主窗口一致：无边框、标题栏由页面自己画（dialog.html 的 .o-dialog-bar），
+		// 边界靠那 1px 的边框。系统标题栏会跟主窗口的观感断开一截。
+		Frameless: true,
+		Windows:   framelessChrome,
+		URL:       "/dialog.html?id=" + id,
 	})
 	if w == nil {
 		return "", fmt.Errorf("创建对话框窗口失败")
@@ -105,7 +116,7 @@ func (a *App) OpenDialog(ctx context.Context, spec DialogSpec) (string, error) {
 	// 用户点右上角 X 等同于「取消」：关闭事件里自己结算一次，
 	// 避免前端那个 Promise 永远挂着。
 	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
-		a.finishDialog(id, "cancel", false)
+		a.finishDialog(id, "cancel", false, false)
 		a.unregisterWindow("dialog-" + id)
 	})
 
@@ -142,8 +153,8 @@ func (a *App) GetDialog(id string) (DialogSpec, error) {
 }
 
 // ResolveDialog 由对话框页面调用：把结果送回主窗口并关掉自己。
-func (a *App) ResolveDialog(id, action string, dontAsk bool) error {
-	e := a.finishDialog(id, action, dontAsk)
+func (a *App) ResolveDialog(id, action string, dontAsk, dontAsk2 bool) error {
+	e := a.finishDialog(id, action, dontAsk, dontAsk2)
 	if e == nil || e.win == nil {
 		return nil // 已经结算过（例如同时点了按钮又点了 X）
 	}
@@ -161,7 +172,7 @@ func (a *App) ResolveDialog(id, action string, dontAsk bool) error {
 //
 // 返回被结算的条目（已被移出注册表），调用方如果还要关窗口就得靠它——
 // 早先版本这里只返回 bool，调用方回头再查 map 已经是 nil，窗口就关不掉了。
-func (a *App) finishDialog(id, action string, dontAsk bool) *dialogEntry {
+func (a *App) finishDialog(id, action string, dontAsk, dontAsk2 bool) *dialogEntry {
 	a.dialogMu.Lock()
 	e := a.dialogs[id]
 	if e == nil || e.resolved {
@@ -180,9 +191,9 @@ func (a *App) finishDialog(id, action string, dontAsk bool) *dialogEntry {
 	}
 	a.sendFrame(target, map[string]any{
 		"e": "dialog-result",
-		"d": map[string]any{"id": id, "action": action, "dontAsk": dontAsk},
+		"d": map[string]any{"id": id, "action": action, "dontAsk": dontAsk, "dontAsk2": dontAsk2},
 	})
-	log.Printf("[dialog] 结算 %s -> %s（不再提醒=%v，发往 %q）", id, action, dontAsk, target)
+	log.Printf("[dialog] 结算 %s -> %s（勾选1=%v 勾选2=%v，发往 %q）", id, action, dontAsk, dontAsk2, target)
 	return e
 }
 
@@ -205,7 +216,9 @@ func (a *App) dialogCenter(owner *application.WebviewWindow, w, h int) (int, int
 // ResizeDialog，所以这里只要别差得太离谱。
 func dialogHeight(msg string) int {
 	rows := len([]rune(msg)) / 40
-	h := 150 + rows*20
+	// 184 = 自绘标题栏 34 + 正文一行 20 + 按钮行 30 + 内边距 32 + 行间距 24 + 边框 2，
+	// 基线取整到「一行消息正好不滚动」。前端渲染完还会按实际内容再调一次。
+	h := 184 + rows*20
 	if h < dialogMinH {
 		h = dialogMinH
 	}

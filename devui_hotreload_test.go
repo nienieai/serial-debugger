@@ -114,10 +114,10 @@ func TestUINoStoreSetsHeaders(t *testing.T) {
 
 // 发布构建里这些函数必须存在且是空实现，保证 main.go 的接线代码只有一份。
 // 本用例只在 hotreload 构建下有意义（验证符号存在），实际行为由 release 构建保证。
-func TestUIDeviceSymbolsExist(t *testing.T) {
-	if uiDevMode != true {
-		t.Fatal("hotreload 构建下 uiDevMode 应为 true")
-	}
+//
+// DevTools 不再由构建标签决定要不要自动打开（见 main.go 的 SERIAL_DEVTOOLS）：
+// hotreload 构建只负责「前端从磁盘读」和「检查器可用」这两件事。
+func TestUISymbolsExist(t *testing.T) {
 	if uiAssetMiddleware() == nil {
 		t.Fatal("hotreload 构建下应返回 no-store 中间件")
 	}
