@@ -159,11 +159,24 @@ func (a *App) ResolveDialog(id, action string, dontAsk, dontAsk2 bool) error {
 		return nil // 已经结算过（例如同时点了按钮又点了 X）
 	}
 	win := e.win
+	// 关掉之后把焦点还给**发起弹窗的那个窗口**。
+	//
+	// Windows 销毁一个 owned window 时把激活交给「上一个活动窗口」，那不一定
+	// 是我们：实测关掉「关闭标签页」的确认框之后，主窗口跑到了守护进程控制台
+	// 后面 —— 得再点一下任务栏才回来。owned window 的常规行为本该是回到 owner，
+	// 这里显式做一次，别指望 DWM 的默认顺序。
+	ownerName := e.owner
+	if ownerName == "" {
+		ownerName = "main"
+	}
 	// 延后一点再关：这是从对话框自己的 IPC 调用里触发的，
 	// 立刻销毁有可能让本次调用的回包无处可去。
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		win.Close()
+		if ow := a.windowByName(ownerName); ow != nil {
+			ow.Focus()
+		}
 	}()
 	return nil
 }
