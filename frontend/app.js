@@ -184,7 +184,11 @@ const state = {
     encoding: 'utf-8', hexCase: 'upper', hexPrefix: true, hexSep: 'space',
     crVisible: true, hexEscapeMode: 'show', hexEscapeFormat: 'slash', copyHexEscapes: true,
     // 制表符长度与行尾序列同样按标签页走（状态栏那行 Tab:4 UTF-8 LF 三样都跟标签页）
-    tabSize: 4, eolSequence: 'lf'
+    tabSize: 4, eolSequence: 'lf',
+    // 格式解析：none 无解析 / delim 按分隔符切帧 / modbus Modbus RTU。
+    // 0.9.1 先只做「选项 + 状态栏显示」（见 statusbar.js 的 createStatusParse），
+    // 解析真正参与渲染是下一步的事 —— 所以它只跟着标签页存，不动任何历史行。
+    parseMode: 'none'
   },
   displayFontFamily: 'Consolas',
   displayFontSize: 14,
@@ -756,6 +760,7 @@ function setEncoding(enc) {
 // 当前标签页的显示设置变了之后，把状态栏/菜单勾选/标签页设置弹窗都刷一遍。
 function _syncDispUi() {
   updateEncodingDisplay();
+  if (_statusBar && typeof _statusBar.updateParse === 'function') _statusBar.updateParse();
   updateHexMenu();
   updateTextMenu();
   _updateHexEscFmtRow();
@@ -2966,6 +2971,9 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   initStatusBar();
+  // 输入框（发送框 / 重命名 / 设置里的数字框）右键也用同一套浮层菜单，
+  // 不然那里弹的是 WebView2 的英文原生菜单，和自绘菜单两套观感。
+  if (typeof cMenuBindInputs === 'function') cMenuBindInputs();
   initAllCustomSelects();
   bindTabsScroll();
   initTabPopup();
@@ -4575,7 +4583,11 @@ function _syncStatusDispItems() {
 function _syncTabDisplayChrome() {
   _syncStatusDispItems();
   if (typeof _applyDisplayStyle === 'function') _applyDisplayStyle();
-  if (_statusBar) _statusBar.updateEol();
+  if (_statusBar) {
+    _statusBar.updateEol();
+    if (typeof _statusBar.updateParse === 'function') _statusBar.updateParse();
+    if (typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
+  }
 }
 
 function switchTab(idx) {
@@ -5370,7 +5382,7 @@ function _tabPopSchedule(tabEl, idx) {
   if (document.body.classList.contains('is-tab-dragging')) return;
   // 右键菜单开着的时候不许再冒出来：鼠标在菜单和标签之间挪一下就会触发
   // pointerenter，浮窗弹出来正好压在菜单旁边，看着就是「菜单上面又闪了一下」。
-  if (_tabMenuEl) return;
+  if (cMenuIsOpen()) return;
   // 刚点过标签：切换会重绘按钮，指针下的新按钮会再收到一次 pointerenter，
   // 不挡一下的话浮窗会在点击后 140ms 又自己弹出来。
   if (Date.now() - (window._tabPopClickedAt || 0) < 400) return;
@@ -5414,55 +5426,15 @@ function initTabPopup() {
 // 为什么不用原生菜单：Wails 的菜单是应用级菜单栏，不能按标签弹出；原生
 // contextmenu 又会盖住自绘菜单并且样式不可控。这里直接在 body 下挂一个
 // fixed 浮层，跟随鼠标、贴边翻转，点空白 / Esc / 滚轮 / 失焦都会关。
-var _tabMenuEl = null;
-
-function _tabMenuOnDown(e) {
-  if (_tabMenuEl && !_tabMenuEl.contains(e.target)) _tabMenuClose();
-}
-
-function _tabMenuOnKey(e) {
-  if (e.key === 'Escape') _tabMenuClose();
-}
-
+// 开合、定位、贴边翻转、自动关闭全部交给 menu.js 的 cMenuOpen —— 这里以前
+// 和「数据区右键菜单」各写了一份一模一样的代码，改一边忘一边就会不一致。
 function _tabMenuClose() {
-  if (!_tabMenuEl) return;
-  var el = _tabMenuEl;
-  _tabMenuEl = null;
-  if (el.parentNode) el.parentNode.removeChild(el);
-  document.removeEventListener('pointerdown', _tabMenuOnDown, true);
-  document.removeEventListener('keydown', _tabMenuOnKey, true);
-  document.removeEventListener('scroll', _tabMenuClose, true);
-  window.removeEventListener('blur', _tabMenuClose);
-  window.removeEventListener('resize', _tabMenuClose);
+  cMenuClose();
 }
 
-// 菜单项沿用顶部菜单的四栏网格：勾选位 | 文本 | 快捷键 | 箭头。
+// 菜单项统一走 menu.js 的 cMenuItem：四栏网格 + 勾选 + 禁用 + 快捷键。
 function _tabMenuItem(label, opts) {
-  opts = opts || {};
-  var btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'tab-menu-item';
-  btn.setAttribute('role', 'menuitem');
-  var chk = document.createElement('span');
-  chk.className = 'menu-chk chk' + (opts.checked ? ' on' : '');
-  btn.appendChild(chk);
-  var txt = document.createElement('span');
-  txt.className = 'menu-text';
-  txt.textContent = label;
-  btn.appendChild(txt);
-  var shortcut = document.createElement('span');
-  shortcut.className = 'menu-shortcut';
-  shortcut.textContent = opts.shortcut || '';
-  btn.appendChild(shortcut);
-  var arrow = document.createElement('span');
-  arrow.className = 'menu-arrow';
-  btn.appendChild(arrow);
-  btn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    _tabMenuClose();
-    if (opts.onClick) opts.onClick();
-  });
-  return btn;
+  return cMenuItem(label, opts);
 }
 
 // ---- 标签就地改名 ----
@@ -5554,9 +5526,7 @@ function _tabRenameStart(btn, idx) {
 }
 
 function _tabMenuSep() {
-  var sep = document.createElement('div');
-  sep.className = 'menu-sep';
-  return sep;
+  return cMenuSep();
 }
 
 function _tabMenuCopy(text) {
@@ -5666,24 +5636,7 @@ function _tabMenuOpen(clientX, clientY, idx) {
     onClick: function () { _closeOtherTabs(tab); }
   }));
 
-  document.body.appendChild(menu);
-  // 贴边翻转：右侧/底部放不下就翻到鼠标另一侧，并至少留 4px 边距。
-  var mw = menu.offsetWidth || 176;
-  var mh = menu.offsetHeight || 40;
-  var x = clientX, y = clientY;
-  if (x + mw + 4 > window.innerWidth) x = Math.max(4, x - mw);
-  if (y + mh + 4 > window.innerHeight) y = Math.max(4, y - mh);
-  menu.style.left = Math.round(x) + 'px';
-  menu.style.top = Math.round(y) + 'px';
-
-  _tabMenuEl = menu;
-  document.addEventListener('pointerdown', _tabMenuOnDown, true);
-  document.addEventListener('keydown', _tabMenuOnKey, true);
-  // 这里**不能**监听 scroll 去关菜单：菜单是 position:fixed，页面怎么滚都不会错位，
-  // 而数据区刷屏时每一帧都在滚 —— 于是右键一次菜单刚出来就被自己的 scroll 监听关掉，
-  // 表现就是「刷屏时右键打不开」。这个坑只在有流量的时候才显形。
-  window.addEventListener('blur', _tabMenuClose);
-  window.addEventListener('resize', _tabMenuClose);
+  cMenuOpen({ el: menu, x: clientX, y: clientY });
 }
 
 // ---- 数据区右键菜单（单端 / 转发页）----
@@ -5694,25 +5647,8 @@ function _tabMenuOpen(clientX, clientY, idx) {
 //
 // 为什么菜单项不写进引擎（logview.js）：清空、自动滚动、标签页设置改的都是
 // 标签页级状态，引擎只该认识自己那篇文档；它把右键坐标报上来，菜单在这里画。
-var _dispMenuEl = null;
-
-function _dispMenuOnDown(e) {
-  if (_dispMenuEl && !_dispMenuEl.contains(e.target)) _dispMenuClose();
-}
-
-function _dispMenuOnKey(e) {
-  if (e.key === 'Escape') _dispMenuClose();
-}
-
 function _dispMenuClose() {
-  if (!_dispMenuEl) return;
-  var el = _dispMenuEl;
-  _dispMenuEl = null;
-  if (el.parentNode) el.parentNode.removeChild(el);
-  document.removeEventListener('pointerdown', _dispMenuOnDown, true);
-  document.removeEventListener('keydown', _dispMenuOnKey, true);
-  window.removeEventListener('blur', _dispMenuClose);
-  window.removeEventListener('resize', _dispMenuClose);
+  cMenuClose();
 }
 
 // 条目复用标签菜单的四栏按钮，另外补三件事：禁用态、点完就收菜单、
@@ -5726,6 +5662,39 @@ function _dispMenuItem(label, opts) {
   });
   if (opts.disabled) btn.disabled = true;
   return btn;
+}
+
+// ---- 只读页（.stlog / 工程目录）右键 ----
+//
+// 只读页没有会话，菜单也就只有「复制」这一类：和数据区共用同一个浮层组件，
+// 条目少一些。以前这里右键直接复制，用户看不到「复制了多少」也找不到别的动作。
+function openReadonlyMenu(tab, clientX, clientY) {
+  var view = tab && tab._stlog && tab._stlog.view;
+  if (!view) return;
+  var hasSel = typeof view.hasSelection === 'function' ? view.hasSelection() : false;
+  var total = typeof view.total === 'function' ? view.total() : 0;
+  cMenuOpen({
+    x: clientX,
+    y: clientY,
+    items: [
+      {
+        label: _tabMenuItemT('ctxmenu.copy', '复制'),
+        disabled: !hasSel,
+        onClick: function () { view.copy().then(_dispCopyErr); }
+      },
+      {
+        label: _tabMenuItemT('ctxmenu.copy_all', '复制全部'),
+        disabled: !total,
+        onClick: function () { view.copyAll().then(_dispCopyErr); }
+      },
+      { sep: true },
+      {
+        label: _tabMenuItemT('ctxmenu.clear_sel', '取消选择'),
+        disabled: !hasSel,
+        onClick: function () { if (view.clearSelection) view.clearSelection(); }
+      }
+    ]
+  });
 }
 
 // 复制失败要说话。数据区没有「一行提示」的通道（文件页那个 onFlash 是挂在顶栏
@@ -5771,22 +5740,7 @@ function openDisplayMenu(tab, clientX, clientY) {
     onClick: function () { openTabSettings(tab); }
   }));
 
-  document.body.appendChild(menu);
-  // 贴边翻转：右侧 / 底部放不下就翻到鼠标另一侧，并至少留 4px 边距。
-  var mw = menu.offsetWidth || 168;
-  var mh = menu.offsetHeight || 40;
-  var x = clientX, y = clientY;
-  if (x + mw + 4 > window.innerWidth) x = Math.max(4, x - mw);
-  if (y + mh + 4 > window.innerHeight) y = Math.max(4, y - mh);
-  menu.style.left = Math.round(x) + 'px';
-  menu.style.top = Math.round(y) + 'px';
-
-  _dispMenuEl = menu;
-  document.addEventListener('pointerdown', _dispMenuOnDown, true);
-  document.addEventListener('keydown', _dispMenuOnKey, true);
-  // 同样**不能**监听 scroll：数据区刷屏时每帧都在滚，菜单会刚出来就被自己关掉。
-  window.addEventListener('blur', _dispMenuClose);
-  window.addEventListener('resize', _dispMenuClose);
+  cMenuOpen({ el: menu, x: clientX, y: clientY });
 }
 
 // ---- 标签栏内容：类型图标 + 状态点 + 信息槽 ----
@@ -8495,7 +8449,9 @@ function openStlogTab(path, kind) {
     tsText: function (ms) { return stlogTsText(ms, state.stlogShowYear !== false); },
     onMeta: function (m) { tab._stlog.info = m; stlogUpdateChrome(tab); },
     onStatus: function () { stlogUpdateChrome(tab); },
-    onFlash: function (msg) { stlogFlash(tab, msg); }
+    onFlash: function (msg) { stlogFlash(tab, msg); },
+    // 只读页也用同一套浮层菜单（原来右键是「有选中就直接复制」，和别处不一致）
+    onContextMenu: function (x, y) { openReadonlyMenu(tab, x, y); }
   });
   tab._stlog.view = view;
   view.open(path).catch(function (err) {

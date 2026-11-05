@@ -53,7 +53,7 @@
     --sel-bg: color-mix(in srgb, var(--accent) 42%, transparent);
     /* 菜单项悬停。原来的 --hover(#444) 压在毛玻璃菜单（~#3b3b3b）上只有 1.1:1，
        鼠标划过去几乎没有反馈；换成 accent 兑深灰的实色，约 2.1:1。 */
-    --menu-hover-bg: color-mix(in srgb, var(--accent) 30%, #4f4f4f);
+    --menu-hover-bg: color-mix(in srgb, #ffffff 16%, #4f4f4f);   /* 菜单悬停一律黑白（默认主题） */
     /* 标签悬浮卡（c-tabpop）里的次要文字。--placeholder(#666) 压在那张毛玻璃卡
        （~#3b3b3b）上只有 ~1.9:1，而卡上的字又小（11~12.5px）、还带一圈黑晕，
        看着就是糊的。单独给一档：约 4.8:1，明显弱于 --fg 但读得清。 */
@@ -102,7 +102,7 @@
     /* 浅色：26% 的 accent 叠在白底上只有 1.46:1（几乎看不出选中），提到 60%
        约 2.5:1；菜单悬停同理，原 --hover(#d0d0d0) 压在近白菜单上只有 1.5:1。 */
     --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
-    --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
+    --menu-hover-bg: color-mix(in srgb, #000000 12%, #c9c9c9);   /* 菜单悬停一律黑白（默认主题） */
     --tabpop-dim: #6b6b6b;
     --panel-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
     --lv-bg: var(--panel-bg);
@@ -144,7 +144,7 @@
   --scrollbar-thumb: #555;
   --accent: #4cc2ff;
   --sel-bg: color-mix(in srgb, var(--accent) 42%, transparent);
-  --menu-hover-bg: color-mix(in srgb, var(--accent) 30%, #4f4f4f);
+  --menu-hover-bg: color-mix(in srgb, #ffffff 16%, #4f4f4f);   /* 菜单悬停一律黑白（默认主题） */
   --tabpop-dim: #a9a9a9;
   --panel-bg: #0d0d0d;
   --lv-bg: var(--panel-bg);
@@ -182,7 +182,7 @@
   --scrollbar-thumb: #c0c0c0;
   --accent: #2563eb;
   --sel-bg: color-mix(in srgb, var(--accent) 60%, transparent);
-  --menu-hover-bg: color-mix(in srgb, var(--accent) 26%, #c9c9c9);
+  --menu-hover-bg: color-mix(in srgb, #000000 12%, #c9c9c9);   /* 菜单悬停一律黑白（默认主题） */
   --tabpop-dim: #6b6b6b;
   --panel-bg: color-mix(in srgb, var(--input-bg) 88%, transparent);
   --lv-bg: var(--panel-bg);
@@ -5217,6 +5217,50 @@ body.is-qp-dragging .qp-add-row {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+
+/* 状态栏里能点的项（Tab / 编码 / 换行 / 格式解析 / 保存）：平时只是文字，悬停给
+   一块底色（灰阶，跟默认主题的菜单悬停一致），点开一个贴在这一项上方的浮层菜单。
+   menu.js 的 cMenuOpen 按 anchor 定位，所以这里只负责「看起来能点」。 */
+.stat-item.is-click {
+  padding: 1px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.stat-item.is-click:hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+.stat-item.is-click:active {
+  background: color-mix(in srgb, var(--fg) 18%, transparent);
+}
+
+.stat-item.is-click:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 保存项：图标 + 5px 小圆点。暗点 = 没在存，绿点 = 在存（和标签的「已连接」
+   用同一档绿，避免又造一个绿色）。 */
+.stat-item.is-save {
+  gap: 4px;
+}
+
+.stat-item.is-save svg {
+  display: block;
+}
+
+.stat-save-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--fg) 28%, transparent);
+}
+
+.stat-item.is-save.is-on .stat-save-dot {
+  background: var(--green, #4ade80);
 }
 
 .stat-cursor {

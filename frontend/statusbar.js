@@ -94,13 +94,63 @@ function createStatusCursor(container) {
 	};
 }
 
+// ---- 状态栏上的「可点项」----
+//
+// Tab / 编码 / 换行 / 格式解析 / 保存 五项都能点：点击在**这一项正上方**弹一个浮层
+// （menu.js 的 cMenuOpen，和右键菜单同一套皮肤），列表里打勾选当前值 —— 和 VS Code
+// 底部状态栏的手感一致。原来这五项是纯文字，想改只能翻「标签页设置」对话框。
+function _sbClickable(span, open) {
+	span.classList.add('is-click');
+	span.setAttribute('role', 'button');
+	span.tabIndex = 0;
+	span.addEventListener('click', function (e) {
+		e.stopPropagation();
+		if (cMenuIsOpen()) { cMenuClose(); return; }
+		open(span);
+	});
+	span.addEventListener('keydown', function (e) {
+		if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); span.click(); }
+	});
+}
+
+// _sbPick 是这五项共用的「勾选列表」菜单。
+//   key    disp 里的字段名（Tab / 编码 / 换行 / 格式解析）
+//   opts   [{ value, label }]
+function _sbPick(anchor, key, opts, after) {
+	var cur = _dispOf()[key];
+	cMenuOpen({
+		anchor: anchor,
+		placement: 'up',
+		items: opts.map(function (o) {
+			return {
+				label: o.label,
+				checked: cur === o.value,
+				onClick: function () {
+					_setDisp(key, o.value);
+					if (typeof after === 'function') after();
+					if (typeof _syncDispUi === 'function') _syncDispUi();
+				}
+			};
+		})
+	});
+}
+
 // ---- StatusTabSize: tab size display ----
 function createStatusTabSize(container) {
 	var span = document.createElement('span');
-	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
+	// dsp-item：这几项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
 	span.className = 'stat-item dsp-item';
 	span.textContent = 'Tab:4';
 	container.appendChild(span);
+	_sbClickable(span, function (anchor) {
+		_sbPick(anchor, 'tabSize', [
+			{ value: 2, label: t('status.tab_pick', '{n} 个空格').replace('{n}', 2) },
+			{ value: 4, label: t('status.tab_pick', '{n} 个空格').replace('{n}', 4) },
+			{ value: 8, label: t('status.tab_pick', '{n} 个空格').replace('{n}', 8) }
+		], function () {
+			if (typeof _applyDisplayStyle === 'function') _applyDisplayStyle();
+		});
+	});
 
 	return {
 		update(data) { span.textContent = 'Tab:' + (data.tabSize || 4); },
@@ -110,10 +160,16 @@ function createStatusTabSize(container) {
 // ---- StatusEol: line ending display ----
 function createStatusEol(container) {
 	var span = document.createElement('span');
-	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
 	span.className = 'stat-item dsp-item';
 	span.textContent = 'LF';
 	container.appendChild(span);
+	_sbClickable(span, function (anchor) {
+		_sbPick(anchor, 'eolSequence', [
+			{ value: 'lf', label: 'LF' },
+			{ value: 'cr', label: 'CR' },
+			{ value: 'crlf', label: 'CRLF' }
+		]);
+	});
 
 	return {
 		update: function() {
@@ -127,17 +183,132 @@ function createStatusEol(container) {
 // ---- StatusEncoding: current encoding label ----
 function createStatusEncoding(container) {
 	var span = document.createElement('span');
-	// dsp-item：这三项属于「某一条会话」，没有会话的页面（设置 / 选择页）要藏起来
 	span.className = 'stat-item dsp-item';
 	span.textContent = 'UTF-8';
 	container.appendChild(span);
+	_sbClickable(span, function (anchor) {
+		_sbPick(anchor, 'encoding', [
+			{ value: 'utf-8', label: 'UTF-8' },
+			{ value: 'gb2312', label: 'GB2312' },
+			{ value: 'ascii', label: 'ASCII' }
+		], function () {
+			if (typeof updateEncodingDisplay === 'function') updateEncodingDisplay();
+		});
+	});
 
 	return {
 		update(data) {
 			var labels = { 'utf-8': 'UTF-8', 'ascii': 'ASCII', 'gb2312': 'GB2312' };
-			span.textContent = labels[data.encoding] || data.encoding.toUpperCase();
+			var enc = data.encoding || 'utf-8';
+			span.textContent = labels[enc] || String(enc).toUpperCase();
 		},
 	};
+}
+
+// ---- StatusParse: 格式解析（无解析 / 按分隔符切帧 / Modbus RTU）----
+//
+// 0.9.1 只做到「选项 + 状态栏显示」：这一项只影响标签页自己的 disp.parseMode，
+// 不改任何历史行（解析接进渲染是下一步）。所以菜单底下挂一条禁用提示，
+// 免得选完发现显示没变、以为坏了。
+function createStatusParse(container) {
+	var span = document.createElement('span');
+	span.className = 'stat-item dsp-item';
+	span.textContent = t('status.parse_none', '无解析');
+	container.appendChild(span);
+
+	function labelOf(v) {
+		if (v === 'delim') return t('status.parse_delim', '按分隔符切帧');
+		if (v === 'modbus') return t('status.parse_modbus', 'Modbus RTU');
+		return t('status.parse_none', '无解析');
+	}
+
+	_sbClickable(span, function (anchor) {
+		var cur = (typeof _dispOf === 'function' ? _dispOf().parseMode : 'none') || 'none';
+		cMenuOpen({
+			anchor: anchor,
+			placement: 'up',
+			items: [
+				{ label: t('status.parse_none', '无解析'), checked: cur === 'none',
+					onClick: function () { _setDisp('parseMode', 'none'); span.textContent = labelOf('none'); } },
+				{ label: t('status.parse_delim', '按分隔符切帧'), checked: cur === 'delim',
+					onClick: function () { _setDisp('parseMode', 'delim'); span.textContent = labelOf('delim'); } },
+				{ label: t('status.parse_modbus', 'Modbus RTU'), checked: cur === 'modbus',
+					onClick: function () { _setDisp('parseMode', 'modbus'); span.textContent = labelOf('modbus'); } },
+				{ sep: true },
+				{ label: t('status.parse_soon', '解析显示还没接上（只记选择）'), disabled: true }
+			]
+		});
+	});
+
+	return {
+		update: function() {
+			var v = (typeof _dispOf === 'function' ? _dispOf().parseMode : 'none') || 'none';
+			span.textContent = labelOf(v);
+		},
+	};
+}
+
+// ---- StatusSave: 保存状态（图标 + 绿点）----
+//
+// 绿点 = 这个标签页正在把历史落盘。点击弹「保存历史」开关 + 打开保存目录。
+// 状态来源是 tab.histOn（守护进程的真实开关），未知时先把点藏起来，点菜单时再问。
+function createStatusSave(container) {
+	var span = document.createElement('span');
+	span.className = 'stat-item dsp-item is-save';
+	span.innerHTML = icon('save', 13, 13) + '<i class="stat-save-dot"></i>';
+	span.title = t('status.save', '保存历史');
+	container.appendChild(span);
+
+	function activeTab() {
+		return (typeof getActiveTab === 'function') ? getActiveTab() : null;
+	}
+	function paint() {
+		var tab = activeTab();
+		var on = !!(tab && tab.histOn === true);
+		span.classList.toggle('is-on', on);
+		span.title = on ? t('status.save_on', '保存已开启') : t('status.save_off', '保存已关闭');
+	}
+	function setSave(tab, on) {
+		if (!tab || !tab.sessionId) return;
+		tab.histOn = !!on;
+		if (typeof _liveRecording === 'function') _liveRecording(tab, !!on);
+		try {
+			window.go.main.App.SetHistoryEnabledFor(tab.sessionId, !!on).catch(function () {});
+		} catch (_) {}
+		paint();
+	}
+
+	_sbClickable(span, function (anchor) {
+		var tab = activeTab();
+		var canSave = !!(tab && tab.sessionId);
+		var menu = cMenuOpen({
+			anchor: anchor,
+			placement: 'up',
+			items: [
+				{
+					label: t('status.save', '保存历史'),
+					checked: !!(tab && tab.histOn === true),
+					disabled: !canSave,
+					onClick: function () { setSave(tab, !(tab && tab.histOn === true)); }
+				},
+			]
+		});
+		// 本地还不知道开关时，问一次守护进程：拿到就点亮绿点并更新菜单的勾选。
+		if (canSave && tab.histOn === undefined) {
+			try {
+				window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
+					tab.histOn = !!on;
+					if (typeof _liveRecording === 'function') _liveRecording(tab, !!on);
+					paint();
+					var chk = menu && menu.querySelector('.menu-chk');
+					if (chk) chk.classList.toggle('on', !!on);
+				}).catch(function () {});
+			} catch (_) {}
+		}
+	});
+
+	paint();
+	return { update: paint };
 }
 
 // ---- StatusStats: Tx / Rx bytes + speed ----
@@ -269,6 +440,9 @@ function initStatusBar() {
 	var encoding = createStatusEncoding(right);
 	var eol = createStatusEol(right);
 	eol.update();
+	var parse = createStatusParse(right);
+	parse.update();
+	var save = createStatusSave(right);
 	var statsWrap = document.createElement('span');
 	statsWrap.id = 'statusbar-stats';
 	right.appendChild(statsWrap);
@@ -291,6 +465,8 @@ function initStatusBar() {
 		tabSize: tabSize,
 		encoding: encoding,
 		eol: eol,
+		parse: parse,
+		save: save,
 		stats: stats,
 
 		updateDaemon: function(data)       { daemon.update(data); },
@@ -299,6 +475,8 @@ function initStatusBar() {
 		updateTabSize: function(data)      { tabSize.update(data); },
 		updateEncoding: function(data)     { encoding.update(data); },
 		updateEol: function()              { eol.update(); },
+		updateParse: function()            { parse.update(); },
+		updateSave: function()             { save.update(); },
 		updateStatsBytes: function(data)   { stats.updateBytes(data); },
 		updateStatsRates: function(data)   { stats.updateRates(data); },
 		resetStats: function()             { stats.reset(); },
