@@ -8620,6 +8620,13 @@ function _mountLive(tab) {
   else if (typeof createLogView !== 'function') why = 'no-engine';
   if (why) {
     try { window.go.main.App.Log('[live] mount skip: ' + why); } catch (e) {}
+    // 引擎没接上时不能只留一句「等待数据…」：那个占位看起来像「还没数据」，
+    // 实际是「视图根本没挂上」，用户会一直等下去（0.9.1 踩过：index.html 里少一个
+    // </script>，logview.js 被当成上一个 script 的正文吞掉，界面就停在这句占位上）。
+    if (why === 'no-engine' && tab._page && tab._page.displayContent) {
+      tab._page.displayContent.innerHTML =
+        '<div class="placeholder">显示引擎没加载（logview.js）。重启一次；仍然这样请反馈这个提示。</div>';
+    }
     return;
   }
   try { window.go.main.App.Log('[live] mount sid=' + tab.sessionId); } catch (e) {}
