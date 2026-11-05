@@ -1268,7 +1268,7 @@ function toggleThemePopup() {
   openSettingsPage();
   // Switch to appearance nav after render
   setTimeout(function() {
-    var navItem = document.querySelector('.settings-nav-item[data-nav="appearance"]');
+    var navItem = document.querySelector('.settings-nav-item[data-nav="look"]');
     if (navItem) navItem.click();
   }, 100);
 }
