@@ -1168,6 +1168,16 @@ export class WindowResult {
              */
             this["total"] = 0;
         }
+        if (!("trimmedPx" in $$source)) {
+            /**
+             * TrimmedPx 是「已经被裁掉的内容高度」。行坐标 y 是相对当前内容的，裁头
+             * 会让整个坐标系上移；前端拿它和 LiveInfo.TrimmedPx 对账，算出两次同步
+             * 之间又裁了多少，好把还没重取的行一起平移。
+             * @member
+             * @type {number}
+             */
+            this["trimmedPx"] = 0;
+        }
         if (!("contentY" in $$source)) {
             /**
              * @member

@@ -661,6 +661,9 @@ function createLogView(host, opts) {
     st.hexPrefix = !!w.hexPrefix;
     var prevBase = st.base;
     st.base = w.base || 0;
+    // 裁头对账锚点：这一窗的行是按「裁到这里」的坐标系算的，之后 tickLive 用
+    // LiveInfo.trimmedPx 减它，得到的才是「这些行之后又裁了多少」。
+    st.trimmedPx = w.trimmedPx || 0;
     st.rows = w.rows || [];
     // base 变了 = Go 侧裁掉了开头那一批（>5MB 之后一直在裁）：行 DOM 是按**帧号**
     // 缓存的（rowEls[idx] + rowSig），base 一挪，同一个 idx 已经指向另一帧。签名
@@ -687,7 +690,6 @@ function createLogView(host, opts) {
         st.needFetch = true;
       }
     }
-    _blankDiag();
     // 增量更新：数据密集时每 120 ms 整窗重建（innerHTML='' + 重新 buildRow）
     // 是 CPU 的大头。按帧号复用 DOM，只新建进入窗口的行、删掉离开窗口的。
     var keep = {};
@@ -717,6 +719,7 @@ function createLogView(host, opts) {
     updateThumb();
     updateBottomBtn();
     drawRuler(false);
+    _blankDiag();
     if (typeof opts.onStatus === 'function') {
       opts.onStatus({ total: st.total, contentH: st.contentH, offset: st.offset, mode: st.mode });
     }
@@ -786,10 +789,20 @@ function createLogView(host, opts) {
   //
   // base 也要一起减：layer 的位移是 base - offset，两个同时减 dh 才互相抵消。
   // 只减 offset 的话，层会被多推 dh 像素，画面看起来是「往更早的方向猛跳」。
+  // 裁头是「内容坐标整体上移 dh」：还没重新取窗口的那些行，y 仍停在旧坐标系里。
+  // 只把 offset / base 减掉、不挪行的话，行会被摆到 offset 之上 dh 处（视觉上整体
+  // 往下漂），每裁一次漂一点，漂满一屏就整片空白 —— 而滚一下会重新取窗口，
+  // 画面又正常，表现正是「滚的时候有数据、一停就没了」。
+  function shiftRows(dh) {
+    var rows = st.rows || [];
+    for (var i = 0; i < rows.length; i++) rows[i].y -= dh;
+  }
+
   function shiftBy(dh) {
     if (!(dh > 0)) return;
     var next = st.offset - dh;
     st.base -= dh;
+    shiftRows(dh);
     if (next < 0) {
       // 视口被推到内容顶部：坐标全变了，得重新取一屏
       st.offset = 0;
@@ -887,19 +900,42 @@ function createLogView(host, opts) {
   // 所以把关键几何直接写到画面上：用户截一张图就能定位，不用复现日志。
   var blankEl = null;
   function _blankDiag() {
-    var empty = !(st.rows && st.rows.length) && st.total > 0;
-    if (!empty) {
-      if (blankEl && blankEl.parentNode) blankEl.parentNode.removeChild(blankEl);
-      blankEl = null;
-      return;
+    // 两种空白：A 窗口里一帧都没有；B 有行、但整批被摆到视口外面（base 与 offset
+    // 不同步，行留在原地而层被推走）。B 之前没有任何提示，全靠人眼看，这次一起抓。
+    var n = st.rows ? st.rows.length : 0;
+    var why = '';
+    if (!n) {
+      if (!(st.total > 0)) {
+        if (blankEl && blankEl.parentNode) blankEl.parentNode.removeChild(blankEl);
+        blankEl = null;
+        return;
+      }
+      why = 'A-empty';
+    } else {
+      var r0 = st.rows[0], rl = st.rows[n - 1];
+      var top = r0.y - st.offset;
+      var bot = rl.y + rl.h - st.offset;
+      var cells0 = (r0.cells || []).length;
+      if (bot > 0 && top < st.vh && cells0 > 0) {
+        if (blankEl && blankEl.parentNode) blankEl.parentNode.removeChild(blankEl);
+        blankEl = null;
+        return;
+      }
+      if (cells0 === 0) why = 'C-nocells';
+      else why = 'B-offscreen';
     }
-    var txt = 'total=' + st.total
+    var txt = why
+      + ' total=' + st.total
+      + ' base=' + Math.round(st.base)
       + ' offset=' + Math.round(st.offset)
       + ' maxOffset=' + Math.round(st.maxOffset)
       + ' vh=' + Math.round(st.vh)
-      + ' perLine=' + st.perLine
       + ' contentH=' + Math.round(st.contentH)
-      + ' mode=' + st.mode;
+      + ' rows=' + n
+      + ' rowTop=' + (n ? Math.round(top) : '-')
+      + ' rowBot=' + (n ? Math.round(bot) : '-')
+      + ' elY=' + Math.round(st.base - st.offset + st.reserveTop)
+      + ' cells=' + (n ? (st.rows[0].cells || []).length : '-');
     if (!blankEl) {
       blankEl = document.createElement('div');
       blankEl.style.cssText = 'position:absolute;left:8px;top:8px;z-index:9;padding:4px 8px;' +

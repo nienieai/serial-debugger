@@ -213,13 +213,17 @@ type WindowResult struct {
 	RenderFrom    int     `json:"renderFrom"`
 	RenderTo      int     `json:"renderTo"`
 	Total         int     `json:"total"`
-	ContentY      int     `json:"contentY"`
-	ViewportH     int     `json:"viewportH"`
-	OverscanPx    int     `json:"overscanPx"`
-	FetchUs       int     `json:"fetchUs"`
-	Mode          string  `json:"mode"`
-	PerLine       int     `json:"perLine"`
-	HexPrefix     bool    `json:"hexPrefix"`
+	// TrimmedPx 是「已经被裁掉的内容高度」。行坐标 y 是相对当前内容的，裁头
+	// 会让整个坐标系上移；前端拿它和 LiveInfo.TrimmedPx 对账，算出两次同步
+	// 之间又裁了多少，好把还没重取的行一起平移。
+	TrimmedPx  float64 `json:"trimmedPx"`
+	ContentY   int     `json:"contentY"`
+	ViewportH  int     `json:"viewportH"`
+	OverscanPx int     `json:"overscanPx"`
+	FetchUs    int     `json:"fetchUs"`
+	Mode       string  `json:"mode"`
+	PerLine    int     `json:"perLine"`
+	HexPrefix  bool    `json:"hexPrefix"`
 }
 
 // Bucket 是滚动条上的一格，纵向按帧号均分。
@@ -653,6 +657,7 @@ func (s *Store) Window(contentY, viewportH, overscanPx int) WindowResult {
 		ViewportH:     viewportH,
 		OverscanPx:    overscanPx,
 		MaxOffset:     s.maxOffsetLocked(),
+		TrimmedPx:     float64(s.trimmedH2) / 2,
 	}
 	ix := s.ix
 	if ix == nil || ix.n == 0 {
