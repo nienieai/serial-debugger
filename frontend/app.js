@@ -3551,8 +3551,10 @@ function _applyDaemonSessionToTab(tab, ds) {
   // 回放文件的规模（帧数 / rx / tx）：文件里的字节已经在守护进程那边算进
   // 会话累计了，这里只把它当作**初始值**灌进统计基线，之后续写的新数据接着加。
   if (ds.fileStats) tab.fileStats = ds.fileStats;
-  if (ds.fileStats && tab.sessionId && !state.statsBase[tab.sessionId]) {
-    state.statsBase[tab.sessionId] = {
+  // 按**会话 id** 而不是 tab.sessionId 播种：这一步早于标签页拿到 sessionId，
+  // 用 tab.sessionId 会永远跳过，状态栏也就一直显示 0。
+  if (ds.fileStats && ds.id && !state.statsBase[ds.id]) {
+    state.statsBase[ds.id] = {
       tx: Number(ds.fileStats.tx) || 0,
       rx: Number(ds.fileStats.rx) || 0,
       p1: 0, p2: 0
@@ -7135,6 +7137,9 @@ function onStatsRate(data) {
 function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
+  // 保存开关的绿点也跟着会话状态走：histOn 是在会话同步之后才有值的，
+  // 状态栏建的时候还读不到，不重画就一直停在「关」。
+  if (_statusBar && typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
   if (tab && tab.sessionId) {
     // 端口没连上：累计字节保留（关闭后还看得到这次收了多少），速率清零。
     // 速率来自 stats-rate 事件，端口关了不会再推，留着会停在上一次的读数上。
