@@ -1512,6 +1512,14 @@ func (p *Process) restoreLatestSession() {
 		return
 	}
 	p.SetFileStats(n, rxTotal, txTotal)
+	// 文件里的字节算进会话累计：之后续写的新数据接着往上加，状态栏和浮窗
+	// 显示的是「这个工程一共收到/发出多少」，而不是从零开始。
+	if rxTotal > 0 {
+		p.bytesRead.Add(rxTotal)
+	}
+	if txTotal > 0 {
+		p.bytesWritten.Add(txTotal)
+	}
 	if n > 0 {
 		logOp("历史", "进程 #%s 已从 %s 恢复 %d 条", p.id, filepath.Base(dir), n)
 	}
@@ -2290,6 +2298,12 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		return nil, 0, err
 	}
 	proc.SetFileStats(n, rxTotal, txTotal)
+	if rxTotal > 0 {
+		proc.bytesRead.Add(rxTotal)
+	}
+	if txTotal > 0 {
+		proc.bytesWritten.Add(txTotal)
+	}
 	logOp("历史", "进程 #%s 已打开文件会话 %s (%d 条)", proc.id, filepath.Base(path), n)
 	return proc, n, nil
 }
