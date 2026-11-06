@@ -4127,7 +4127,9 @@ function _syncPortSelectsFromTab() {
 // 实测症状：标签已经是 COM27 @ 230400、数据也在刷，工具栏却显示
 // 「-- 选择端口 --」和 115200。
 function _setSelectVal(id, val) {
-  if (val === undefined || val === null || val === '') return;
+  // 0 也要跳过：老工程的 settings.json 里没有 dataBits/baud，读回来是 0，
+  // 交给 _applySelectValue 会往「数据位」下拉里插一个值为 "0" 的选项。
+  if (val === undefined || val === null || val === '' || val === 0) return;
   const el = pageEl(id);
   if (!el) return;
   if (el.tagName === 'INPUT') { el.value = String(val); return; }
