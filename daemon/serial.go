@@ -2036,6 +2036,8 @@ func persistSessionLabel(dir, name string) error {
 		doc = &sessionfile.SettingsDoc{V: sessionfile.SettingsDocVer, Mode: sessionfile.ModeSingle}
 	}
 	doc.Label = name
+	// 标记「这是用户起的名字」：打开工程时只有这种 label 才覆盖目录名。
+	doc.LabelCustom = true
 	return sessionfile.SaveSettingsDoc(dir, doc)
 }
 
@@ -2219,16 +2221,18 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		return nil, 0, err
 	}
 
-	// 工程里记过名字（settings.json 的 label）就沿用它 —— 线程名只有工程会话
-	// 会持久化，普通串口会话的名字跟着进程走。旧工程里 label 存的是端口名，
-	// 拿来当名字正好，不会显示成「会话 #3」。
-	if s := info.Settings; s != nil && s.Label != "" {
-		proc.SetCustomName(strings.TrimSpace(s.Label))
-	}
+	// 线程名默认用**目录名**：录下来的 label 是「开始录制那一刻的线程名」，
+	// 多半是自动名「会话 #1」，照搬过来打开十个工程都叫「会话 #1」。
+	// 下面读 settings.json 时，只有用户改过名的（labelCustom）才覆盖它。
+	proc.SetCustomName(filepath.Base(path))
 	// 工程里存过显示设置就带进进程：GUI 建标签页时直接用这一份，而不是
 	// daemon.ini 的默认值 —— 打开一个旧工程，看到的就是它当初的样子。
 	// 注意读的是 settings.json（SettingsDoc），不是包头槽那份录制快照。
 	if doc, derr := sessionfile.LoadSettingsDoc(path); derr == nil {
+		// 改过名就用改过的名字（见 persistSessionLabel 里的 labelCustom）
+		if doc.LabelCustom && strings.TrimSpace(doc.Label) != "" {
+			proc.SetCustomName(strings.TrimSpace(doc.Label))
+		}
 		if len(doc.Display) > 0 {
 			proc.displayMu.Lock()
 			proc.display = doc.Display

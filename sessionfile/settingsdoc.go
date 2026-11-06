@@ -15,11 +15,15 @@ import (
 //   - 槽里那份是**冗余自描述**，保证单个 pkg 拎出来也能读（v2 §3）
 //   - settings.json 是**权威**，改设置不影响已封包的字节
 type SettingsDoc struct {
-	V     int          `json:"v"`
-	Label string       `json:"label,omitempty"`
-	Notes string       `json:"notes,omitempty"`
-	Mode  string       `json:"mode,omitempty"` // 空串等价 ModeSingle
-	Ports SessionPorts `json:"ports"`
+	V     int    `json:"v"`
+	Label string `json:"label,omitempty"`
+	// LabelCustom 表示 label 是**用户改过的名字**，而不是「开始录制那一刻的线程名」。
+	// 打开工程时只有它为 true 才沿用 label：录制时的 label 往往是自动名
+	// （「会话 #1」），照搬会把工程显示成「会话 #1」，认不出是哪个目录。
+	LabelCustom bool         `json:"labelCustom,omitempty"`
+	Notes       string       `json:"notes,omitempty"`
+	Mode        string       `json:"mode,omitempty"` // 空串等价 ModeSingle
+	Ports       SessionPorts `json:"ports"`
 	// Log 记与之同时录制的那份 .log（history 里的文件名），便于成对查找。
 	Log string `json:"log,omitempty"`
 	// Plot 预留给绘图：选中通道、量程、坐标轴、区域、标注等。
