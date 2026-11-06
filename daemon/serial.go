@@ -231,6 +231,15 @@ type Process struct {
 	displayMu sync.RWMutex
 	display   map[string]any
 
+	// send 是这条会话的发送框状态：文本草稿 / Hex 草稿 / 当前格式 / 多字符串预设。
+	//
+	// 与 display 同一套取舍：工程会话从 settings.json 读出来、改动时写回去；
+	// 普通串口会话只留内存（进程还在就一直有，进程关了就没了）。
+	// 放在守护进程而不是 GUI 里，是为了「同一个会话换窗口/换标签再挂回来」
+	// 时发送框还是原来那份 —— 也顺手避免文本草稿和 Hex 草稿互相串。
+	sendMu sync.RWMutex
+	send   map[string]any
+
 	// customName 是用户起的线程名（nameMu 保护）。空串表示「用自动名」：
 	// 自动名按当前模式与端口现算（见 autoName），所以「先建空闲会话、之后才连上
 	// 端口」这种常见流程不需要在 connect/switch 各处挂钩子，名字自己就会变过来。
@@ -2044,6 +2053,55 @@ func (p *Process) Display() map[string]any {
 	return out
 }
 
+// Send 返回这条会话的发送框状态（没有就是 nil）。
+func (p *Process) Send() map[string]any {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.send == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p.send))
+	for k, v := range p.send {
+		out[k] = v
+	}
+	return out
+}
+
+// SetSend 记下一条会话的发送框状态，工程会话顺手写回 settings.json。
+//
+// 与 SetDisplay 完全同构：内存里先生效，落盘失败只记日志 —— 存草稿这种事
+// 不该因为工程目录只读就整体失败。
+func (pm *ProcessManager) SetSend(id string, send map[string]any) error {
+	pm.mu.RLock()
+	proc, ok := pm.processes[id]
+	pm.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("process not found: %s", id)
+	}
+
+	proc.sendMu.Lock()
+	proc.send = send
+	proc.sendMu.Unlock()
+	path := proc.sessionDir()
+	if path == "" {
+		return nil
+	}
+	if err := persistSessionSend(path, send); err != nil {
+		logOp("错误", "进程 #%s 的发送框状态写回工程失败: %v", id, err)
+	}
+	return nil
+}
+
+// persistSessionSend 把发送框状态写进工程目录 settings.json 的 send 段。
+func persistSessionSend(dir string, send map[string]any) error {
+	doc, err := sessionfile.LoadSettingsDoc(dir)
+	if err != nil {
+		doc = &sessionfile.SettingsDoc{V: sessionfile.SettingsDocVer, Mode: sessionfile.ModeSingle}
+	}
+	doc.Send = send
+	return sessionfile.SaveSettingsDoc(dir, doc)
+}
+
 // SetDisplay 记下一条会话的显示设置，工程会话顺手写回工程目录的 settings.json。
 //
 // 普通串口会话（sessionPath 为空）只更新内存、不落盘：这些设置按标签页走，
@@ -2153,6 +2211,12 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 			proc.displayMu.Lock()
 			proc.display = doc.Display
 			proc.displayMu.Unlock()
+		}
+		// 发送框草稿也一样：打开旧工程，输入框里还是当初没发出去的那段。
+		if len(doc.Send) > 0 {
+			proc.sendMu.Lock()
+			proc.send = doc.Send
+			proc.sendMu.Unlock()
 		}
 		// 关掉时这个工程还在录：推送回来就接着录（续写同一个目录，不另起会话）
 		if doc.Save {
@@ -2627,6 +2691,10 @@ func (pm *ProcessManager) List() []map[string]any {
 		// GUI 就按 daemon.ini 的默认值建标签页。
 		if d := p.Display(); len(d) > 0 {
 			entry["display"] = d
+		}
+		// 发送框状态（草稿 / 当前格式 / 多字符串预设）：GUI 建标签页时拿它恢复。
+		if sd := p.Send(); len(sd) > 0 {
+			entry["send"] = sd
 		}
 		// Include config for connected processes and idle processes that have stored config
 		hasConfig := p.status == "connected" || p.config.Port != ""

@@ -1380,6 +1380,24 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
 
+	case contract.SessionSetSend:
+		// 发送框状态（文本/Hex 草稿、当前格式、多字符串预设）：存在会话上，
+		// 换窗口、换标签再挂回来都还是同一份。
+		var p struct {
+			ProcessID string         `json:"processId"`
+			Send      map[string]any `json:"send"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.ProcessID == "" {
+			return protocol.Response{ID: req.ID, Error: "processId required"}
+		}
+		if err := s.pm.SetSend(p.ProcessID, p.Send); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
+
 	case contract.SessionOpen:
 		// 把一个 .stlog 会话推给守护进程：建进程、灌数据，之后按正常会话接口读
 		var p struct {

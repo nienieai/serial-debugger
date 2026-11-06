@@ -2246,6 +2246,22 @@ func (a *App) SetSessionDisplay(processID string, display map[string]any) error 
 	return err
 }
 
+// SetSessionSend 把一条会话的发送框状态（文本草稿 / Hex 草稿 / 当前格式 /
+// 多字符串预设）记到守护进程的会话上；工程会话由守护进程再写进 settings.json。
+//
+// 存草稿是「尽力而为」：守护进程没在跑、会话刚被别的窗口拿走，都不该打断输入，
+// 所以这里把错误吞掉（前端也不显示提示）。
+func (a *App) SetSessionSend(processID string, send map[string]any) error {
+	if processID == "" {
+		return nil
+	}
+	_, err := a.call(contract.SessionSetSend, map[string]any{
+		"processId": processID,
+		"send":      send,
+	})
+	return err
+}
+
 // SaveDisplayDefaults 把新的默认值写进 daemon.ini 的 [display] 段。
 //
 // 只有守护进程能写 daemon.ini（单写者），所以走 IPC。IPC 只认字符串值
@@ -2362,6 +2378,9 @@ func (a *App) fetchSessions() []map[string]any {
 		}
 		if v, ok := pmap["display"]; ok {
 			entry["display"] = v
+		}
+		if v, ok := pmap["send"]; ok {
+			entry["send"] = v
 		}
 		if viewers, ok := pmap["viewers"]; ok {
 			entry["viewers"] = viewers

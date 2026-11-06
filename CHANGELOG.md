@@ -13,6 +13,20 @@
 
 ## 未发布（0.9.1）
 
+### 发送框状态按会话存在守护进程 / 文本与 Hex 串味 / .stlog 顶栏 undefined
+
+- 串味：`saveSendUI()` 无条件把输入框内容写进 `sendTextBuf`，只在 hex 模式下
+  再写一份 `sendHexBuf` —— 在 Hex 模式里存的草稿把文本草稿覆盖了，切回文本就看见
+  一串十六进制。改成按当前格式各存各的。
+- 按会话持久化：草稿（文本 / Hex 各一份）、当前格式、多字符串预设都挂到会话上。
+  守护进程侧新增 `session.setsend`（`Process.send` + `SetSend`，与 `display`
+  完全同构）；工程会话写进 `settings.json` 的 `send` 段，普通串口会话只留内存。
+  `process.list` 带上 `send`，前端第一次把会话挂到标签页时搬进来；之后方向只有
+  本地 → 守护进程（输入 debounce 400ms、切标签、切格式、预设变动各推一次），
+  避免回读把正在敲的字覆盖掉。
+- `.stlog`：打开失败时不再用空对象拼顶栏（原来显示
+  `undefined B · undefined 页 · undefined 记录`），字段缺失也一律兜底成 0。
+
 ### 文本发送一个字节都发不出去（d is not defined）
 
 - 现象：串口已打开、输入框里也有内容（右下角字节数/耗时都正常显示），点「发送」

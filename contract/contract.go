@@ -67,8 +67,12 @@ const (
 	// 写进它的工程文件：{processId, display:{...}}。
 	// 没有工程目录的会话（普通串口 / 空闲）不落盘 —— 这些设置只活在标签页里。
 	SessionSetDisplay Method = "session.setdisplay"
-	SendTrigger       Method = "send.trigger"
-	SendRingName      Method = "send.ringname"
+	// SessionSetSend 把一条会话的发送框状态（文本草稿 / Hex 草稿 / 当前格式 /
+	// 多字符串预设）记到这条会话上：{processId, send:{...}}。
+	// 有工程目录的会话顺手写进 settings.json；普通串口会话只留守护进程内存。
+	SessionSetSend Method = "session.setsend"
+	SendTrigger    Method = "send.trigger"
+	SendRingName   Method = "send.ringname"
 )
 
 // ── 显示设置默认值 ──
@@ -127,7 +131,7 @@ var All = []Method{
 	ForwardCreate, ProcessRename,
 	// 数据收发与历史
 	SessionSend, SessionHistory, SessionStats, SessionClearHistory,
-	SessionSetDisplay, DisplayDefaults, DisplaySetDefaults,
+	SessionSetDisplay, SessionSetSend, DisplayDefaults, DisplaySetDefaults,
 	SendTrigger, SendRingName,
 	// 自动发送与多字符串
 	AutosendStart, AutosendStop, AutosendStatus, AutosendInterval,

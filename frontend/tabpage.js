@@ -182,7 +182,7 @@ function TabPage(tabIndex, tabData) {
 	const sendInput = document.createElement('textarea');
 	sendInput.id = 'sendInput';
 	sendInput.spellcheck = false;
-	sendInput.addEventListener('input', function() { updateSendInfo(); _syncSendMirror(this); if(_statusBar)_statusBar.updateCursor(); });
+	sendInput.addEventListener('input', function() { updateSendInfo(); _syncSendMirror(this); if(_statusBar)_statusBar.updateCursor(); if (typeof _schedulePushSendState === 'function') _schedulePushSendState(); });
 	sendInput.addEventListener('scroll', function() {
 		sendMirror.scrollTop = sendInput.scrollTop;
 		sendMirror.scrollLeft = sendInput.scrollLeft;

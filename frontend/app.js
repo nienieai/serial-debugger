@@ -1974,9 +1974,14 @@ function updateModeUI() {
 
 function saveSendUI() {
   const ss = getSendState();
-  ss.sendTextBuf = pageEl('sendInput').value;
-  // hex buf is only saved when in hex mode
-  if (ss.sendFormat === 'hex') ss.sendHexBuf = pageEl('sendInput').value;
+  // 两个草稿**各存各的**：以前无条件把输入框内容写进 sendTextBuf，只在 hex 模式下
+  // 再写一份 sendHexBuf —— 于是在 Hex 模式里存的草稿把文本草稿覆盖了，切回文本
+  // 就看见一串十六进制。现在按当前格式只动自己那一格。
+  const inputNow = pageEl('sendInput');
+  if (inputNow) {
+    if (ss.sendFormat === 'hex') ss.sendHexBuf = inputNow.value;
+    else ss.sendTextBuf = inputNow.value;
+  }
   const appendSel = pageEl('appendSelect');
   ss.appendSuffix = appendSel ? appendSel.value : 'crlf';
   ss.autoSend = !!(getActiveTab() && getActiveTab()._autoSendActive);
@@ -1994,6 +1999,66 @@ function restoreSendUI() {
   pageEl('sendInterval').value = ss.sendInterval;
   updateSendQuickBtn();
   updateSendInfo();
+}
+
+// ---- 发送框状态同步到守护进程 ----
+//
+// 草稿（文本 / Hex 各一份）、当前格式、多字符串预设都挂在**会话**上，所以换窗口、
+// 关标签再挂回来、甚至重启 GUI 之后输入框里还是原来那段。工程会话由守护进程
+// 再写进 settings.json；普通串口会话只留在守护进程内存里。
+//
+// 方向只有一个：本地 → 守护进程。挂载时从会话取一次（_applyDaemonSessionToTab），
+// 之后以本地为准 —— 否则每 400ms 一次回读会把用户正在敲的字覆盖掉。
+
+var _sendPushTimer = null;
+
+function _sendStatePayload(tab) {
+  var s = (tab && tab._s) || newTabSendState();
+  return {
+    text: s.sendTextBuf || '',
+    hex: s.sendHexBuf || '',
+    format: s.sendFormat === 'hex' ? 'hex' : 'text',
+    presets: (tab && tab.quickPresets) ? tab.quickPresets : []
+  };
+}
+
+// 立即把当前标签页的发送框状态推给守护进程。tab 传 null = 当前标签页
+// （会先把输入框读回 _s；传了别的标签页就只发已有那份，不去碰 DOM）。
+function _flushSendState(tab) {
+  var active = getActiveTab();
+  if (tab === undefined || tab === null) tab = active;
+  if (!tab || !tab.sessionId) return;
+  if (tab === active) {
+    saveSendUI();
+    tab.quickPresets = state.quickPresets.slice();
+  }
+  try {
+    window.go.main.App.SetSessionSend(tab.sessionId, _sendStatePayload(tab));
+  } catch (e) { /* 守护进程没在跑：草稿只留内存，不打断输入 */ }
+}
+
+function _schedulePushSendState() {
+  if (_sendPushTimer) clearTimeout(_sendPushTimer);
+  _sendPushTimer = setTimeout(function () {
+    _sendPushTimer = null;
+    _flushSendState(null);
+  }, 400);
+}
+
+// 会话第一次挂到标签页上：把守护进程里存的那份草稿搬进来。
+function _restoreSendStateFromSession(tab, sd, sid) {
+  if (!tab || !sd || tab._sendFrom === sid) return;
+  tab._sendFrom = sid;
+  if (!tab._s) tab._s = newTabSendState();
+  if (typeof sd.text === 'string') tab._s.sendTextBuf = sd.text;
+  if (typeof sd.hex === 'string') tab._s.sendHexBuf = sd.hex;
+  if (sd.format === 'hex' || sd.format === 'text') tab._s.sendFormat = sd.format;
+  if (Array.isArray(sd.presets)) tab.quickPresets = sd.presets.slice();
+  if (tab === getActiveTab()) {
+    restoreSendUI();
+    state.quickPresets = (tab.quickPresets || []).slice();
+    if (typeof quickPanelRender === 'function') quickPanelRender();
+  }
 }
 
 // ---- Custom Select ----
@@ -3480,6 +3545,9 @@ function _applyDaemonSessionToTab(tab, ds) {
   } else {
     tab.syncedParams = null;
   }
+  // 发送框草稿：会话第一次挂上来时把守护进程存的那份搬进标签页
+  // （换窗口、关标签再挂回来、重启 GUI 之后都还在）。
+  if (ds.send && ds.id) _restoreSendStateFromSession(tab, ds.send, ds.id);
 }
 
 async function syncDaemonSessions(procData) {
@@ -4675,6 +4743,8 @@ function switchTab(idx) {
     oldTab.sendRatio = state.sendRatio;
     oldTab.quickPanelRatio = state.quickPanelRatio;
     oldTab.quickPresets = state.quickPresets.slice();
+    // 切走之前把这份草稿推给守护进程（切标签是最容易丢输入的时刻）
+    _flushSendState(oldTab);
     oldTab._qpCycleActive = state._qpCycleActive;
     // Save port selections
     var ps = pageEl('portSelect');
@@ -6936,6 +7006,8 @@ function toggleSendFormat() {
   _syncSendMirror(pageEl('sendInput'));
   updateSendQuickBtn();
   updateSendInfo();
+  // 格式本身也存：下次开这个会话，输入框回来的是同一个模式
+  _flushSendState(null);
 }
 
 function toggleTxDisplay() {
@@ -7752,6 +7824,8 @@ function quickPanelUpdate(idx, field, value) {
 function quickPanelRender() {
   var page = getActivePage();
   if (!page || !page.quickPanel) return;
+  // 预设是「这条会话的」：渲染完顺手把发送框状态（含预设）推给守护进程
+  if (typeof _schedulePushSendState === 'function') _schedulePushSendState();
   var rows = page.quickPanel.querySelector('.qp-rows');
   if (!rows) return;
   var presets = state.quickPresets;
@@ -8238,9 +8312,9 @@ function stlogBarText(m) {
   var parts = [];
   var range = stlogRangeText(m.firstTs, m.lastTs);
   if (range) parts.push(range);
-  parts.push(m.size + ' B');
-  parts.push(m.pages + ' 页');
-  parts.push(m.records + ' 记录');
+  parts.push((m.size || 0) + ' B');
+  parts.push((m.pages || 0) + ' 页');
+  parts.push((m.records || 0) + ' 记录');
   // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
   if (m.mode === 'forward') {
     parts.push('A→B ' + (m.p1Bytes || 0) + ' / B→A ' + (m.p2Bytes || 0) + ' B');
@@ -8316,7 +8390,16 @@ function stlogRangeText(first, last) {
 // stlogUpdateChrome 刷新顶栏：元信息那行、完整来源串（title）、帧数。
 function stlogUpdateChrome(tab) {
   var st = tab._stlog;
-  var info = st.info || {};
+  var info = st.info || null;
+  // 打开失败的文件没有 Meta：顶栏留空，只让正文那行错误说话。
+  // 以前这里拿 {} 去拼，界面上就是「undefined B · undefined 页 · undefined 记录」。
+  if (!info) {
+    st.meta.textContent = '';
+    st.meta.title = '';
+    var t0 = st.view ? st.view.total() : 0;
+    st.count.textContent = '帧 ' + t0;
+    return;
+  }
   st.meta.textContent = stlogBarText(info);
   st.meta.title = (info.origins && info.origins.length)
     ? info.origins.join(', ')

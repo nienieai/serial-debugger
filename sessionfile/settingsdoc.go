@@ -30,6 +30,10 @@ type SettingsDoc struct {
 	//
 	// 同样是 map：这些键以后还会加，读写时不该因为旧版本不认识就把它们丢掉。
 	Display map[string]any `json:"display,omitempty"`
+	// Send 是这条会话的发送框状态：文本草稿、Hex 草稿、当前格式、
+	// 多字符串预设列表。和 Display 一样用 map 存，旧版本读写不会丢未知键。
+	// 普通串口会话（没有工程目录）只在守护进程内存里留一份，不写这里。
+	Send map[string]any `json:"send,omitempty"`
 	// Save 记的是「关掉的那一刻这个工程还在录」。推送回守护进程时据此决定要不要
 	// 接着录 —— 续写的是同一个目录（见 daemon 的 OpenSession），不是另起一个会话。
 	Save bool `json:"save,omitempty"`

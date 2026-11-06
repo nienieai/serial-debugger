@@ -1094,6 +1094,20 @@ export function SetSessionDisplay(processID, display) {
 }
 
 /**
+ * SetSessionSend 把一条会话的发送框状态（文本草稿 / Hex 草稿 / 当前格式 /
+ * 多字符串预设）记到守护进程的会话上；工程会话由守护进程再写进 settings.json。
+ * 
+ * 存草稿是「尽力而为」：守护进程没在跑、会话刚被别的窗口拿走，都不该打断输入，
+ * 所以这里把错误吞掉（前端也不显示提示）。
+ * @param {string} processID
+ * @param {{ [_ in string]?: any }} send
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetSessionSend(processID, send) {
+    return $Call.ByName("main.App.SetSessionSend", processID, send);
+}
+
+/**
  * SetTabEncoding updates the encoding for a tab's decode worker.
  * @param {string} processID
  * @param {string} encoding
