@@ -1,4 +1,4 @@
-# 串口调试工具 v0.9.1 框架文档
+# 串口调试工具 v0.10.0 框架文档
 
 ## 一、整体框架
 
@@ -239,6 +239,9 @@ sequenceDiagram
 | `session.send` | `processId data format` | `{"success"}`（异步入队） |
 | `session.history` | `processId limit? beforeTsMs? sameTsSkip?` | `{"history":[...],"sharedName","hasMore","older","oldestTsMs","oldestTs","historyFile"?,"ringDrops"?}` — `limit<=0` 整取（老行为）；`limit>0` 只回最后一页，`beforeTsMs`+`sameTsSkip` 是往更早翻的游标（v0.7.5.5） |
 | `session.stats` | `processId` | `{"stats":{...}}` |
+| `session.open` | `path` | `{"processId","mode","port","portB","frames"}` — 把**工程目录**挂成文件会话进程并灌历史；单个 `.stlog` 被拒（只读页本地读） |
+| `session.setdisplay` | `processId display` | `{"success"}` — 显示设置写进会话内存；工程会话再写 `settings.json` 的 `display` |
+| `session.setsend` | `processId send` | `{"success"}` — 发送草稿 / 格式 / 多字符串预设写进会话内存；工程会话再写 `settings.json` 的 `send` |
 | `threads` | — | `{"goroutines":N,"sessions":[...]}` |
 | `goroutines` | — | `{"goroutines":N,"stack":"..."}` |
 | `client.list` | — | `{"clients":[{clientId,source,pid,connectTime,reqCount,subs}]}` |
@@ -1493,7 +1496,7 @@ go build -ldflags="-s -w" -o build/bin/serial-mcp.exe ./cmd/serial-mcp/
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`var Version = "0.9.1"`，构建时由 `-ldflags -X` 覆盖），改一处全部同步。
+版本号统一在 `version/version.go`（`var Version = "0.10.0"`，构建时由 `-ldflags -X` 覆盖），改一处全部同步。
 
 Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK4 + WebKitGTK 6.0 开发包，走 cgo，不能从 Windows 交叉编译），只是不带 `.exe` 后缀：
 

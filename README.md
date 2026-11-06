@@ -7,7 +7,7 @@
 **GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
 [![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
-[![Version](https://img.shields.io/badge/version-0.9.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
@@ -262,7 +262,7 @@ go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 | [需求文档](REQUIREMENTS.md) | 需求列表与实现状态 |
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
-| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.9.0 各版本的变更、根因与验收方法 |
+| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.10.0 各版本的变更、根因与验收方法 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
@@ -273,14 +273,14 @@ go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 
 ## 📜 版本历史 / Changelog
 
-当前版本 **v0.9.0**。最近三版：
+当前版本 **v0.10.0**。最近四版：
 
 | 版本 | 要点 |
 |------|------|
+| **0.10.0** | 会话状态收敛成「守护进程一份权威 + 工程文件落盘」：串口参数（含数据位/停止位/校验/流控）、显示设置、发送草稿、多字符串预设、统计、线程名六类同步打通，工程文件开始记录帧格式；修掉切页跳过恢复导致的草稿被清与空窗口 |
 | **0.9.0** | 多窗口对等模型成型：再启动一次 GUI 就在当前进程里新开窗口（单实例）、标签可拖进另一个窗口且**可反悔**（拖出去当场退回）、拖出成窗后拖回标签栏也有实时预览；关窗确认加「记住选择」，destroy 模式不再追问且真的销毁会话；Linux 分体版串口权限改为**只做临时授权**（GUI 横幅 + `serial-cli fix-permissions`，不写系统文件）；关于页修正渲染引擎与平台文案 |
 | **0.8.3** | 会话文件升级成**工程目录**（`manifest.json` + `settings.json` + `index.bin` + 分包的 `pkg-*.stlog`）：录制只写 `.stlog`、拖入工程或文件即可浏览、工程可按键交给守护进程恢复成会话页（单端口 / 转发）；标签悬停浮窗与文件页浮窗定稿（去掉尖角）；历史/实时渲染再降一档内存与 CPU；许可证改为 **Apache 2.0** |
 | **0.8.2** | 资源统一到 `resources/` 并分「内置 / 外置」两层；主题支持图片（全页背景、四条栏、缩略图）；设置页外观卡与新建会话页重画；标签栏与多字符串面板拖动换成 pointer 实现（实时补位、FLIP 动画、边缘自动滚动、推挤「+」） |
-| **0.8.1** | GUI 一轮集中修复：新建页先选模式、前端热重载、端口下拉同步与占用高亮、历史视图空白、自绘滚动条、状态栏统计残留、标签栏滚动提示、主题按钮图标 |
 
 完整历史（0.1.0 起，含每个版本的根因分析、实测数据与验收方法）见 [`CHANGELOG.md`](CHANGELOG.md)。
 

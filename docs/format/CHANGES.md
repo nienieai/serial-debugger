@@ -28,12 +28,12 @@
 | `PageVer` | 页头 | 1 | 页布局变 |
 | `stats.ver` | 统计块 | 1 | 统计块布局变 |
 
-## 实现进度（0.9.1-dev）
+## 实现进度（0.10.0）
 
 已实现：
 
 - `sessionfile` 包：槽读写/选槽/校验、页读写与整页 CRC、统计块、跨页分片与拼接（含断链）、双影恢复、扫描索引、文本导出
-- 槽 payload 的 TLV 编码（v1.4.1）：身份 8 项 + 显示设置 10 项，未知 key 跳过，老 JSON 文件仍可读
+- 槽 payload 的 TLV 编码（v1.4.1）：身份 8 项 + 帧格式 4 项（0x0017–0x001A）+ 显示设置 10 项，未知 key 跳过，老 JSON 文件仍可读
 - 守护进程录制（跟随 `history.enable`，与 `history/*.log` 同源双写）
 - CLI：`stlog-read` / `stlog-verify` / `stlog-dump` / `stlog-export`
 - GUI：拖入或选择 `.stlog` 打开只读标签页，分页加载、来源列、导出

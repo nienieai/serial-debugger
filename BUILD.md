@@ -39,7 +39,7 @@ go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
 go build -tags production -trimpath \
-  -ldflags "-s -w -X github.com/nienieai/serial-debugger/version.Version=0.9.1" \
+  -ldflags "-s -w -X github.com/nienieai/serial-debugger/version.Version=0.10.0" \
   -o build/bin/serial-gui .
 ```
 
