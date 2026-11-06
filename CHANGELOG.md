@@ -13,6 +13,19 @@
 
 ## 未发布（0.9.1）
 
+### 拖工程目录打不开（报「文件只有 4096 B」）/ 录制中的会话不落草稿
+
+- 拖文件夹进来时，只读页把**目录**当文件交给 `scanStlog`：Windows 上
+  `os.Open` 一个目录能成功，`Stat` 出来的大小正好是 4096 —— 于是报
+  「文件只有 4096 B，不够一个 .stlog 文件头」，完全看不出真实原因。
+  现在 `scanStlog` 先判断是不是目录：是就从里面取 `pkg-*.stlog`（取文件名
+  最小的那个）；没有包文件就明确说「这是一个会话目录，但里面没有 pkg-*.stlog」。
+- 草稿/显示设置只写 `sessionPath`（`session.open` 打开的工程目录），而
+  **正在录制的普通会话** `sessionPath` 是空的 —— 它们的草稿全留在守护进程内存，
+  重启就没了，尽管它自己的 `history/<时间戳>_<id>` 目录里早就有一份 settings.json。
+  新增 `Process.persistDir()`：工程会话用 sessionPath，正在录制用 `p.stlog.Dir()`，
+  两者都没有才只留内存；`SetDisplay` / `SetSend` 都改走它。
+
 ### 发送框状态按会话存在守护进程 / 文本与 Hex 串味 / .stlog 顶栏 undefined
 
 - 串味：`saveSendUI()` 无条件把输入框内容写进 `sendTextBuf`，只在 hex 模式下

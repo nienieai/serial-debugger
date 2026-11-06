@@ -2053,6 +2053,28 @@ func (p *Process) Display() map[string]any {
 	return out
 }
 
+// persistDir 返回这条会话该把设置写到哪个目录。
+//
+//   - 工程会话（session.open 打开的目录）→ sessionPath
+//   - 正在录制的普通会话 → 它当前的录制目录（history/<时间戳>_<id>）
+//   - 都没有 → 空串，调用方只更新内存
+//
+// 之前只看 sessionPath，于是「一边录一边改」的普通会话什么都不落盘：
+// 草稿、显示设置全在守护进程内存里，重启就没了，而它的录制目录其实早就
+// 有一份 settings.json 可以写。
+func (p *Process) persistDir() string {
+	if d := p.sessionDir(); d != "" {
+		return d
+	}
+	p.stlogMu.Lock()
+	s := p.stlog
+	p.stlogMu.Unlock()
+	if s != nil {
+		return s.Dir()
+	}
+	return ""
+}
+
 // Send 返回这条会话的发送框状态（没有就是 nil）。
 func (p *Process) Send() map[string]any {
 	p.sendMu.RLock()
@@ -2082,7 +2104,7 @@ func (pm *ProcessManager) SetSend(id string, send map[string]any) error {
 	proc.sendMu.Lock()
 	proc.send = send
 	proc.sendMu.Unlock()
-	path := proc.sessionDir()
+	path := proc.persistDir()
 	if path == "" {
 		return nil
 	}
@@ -2118,7 +2140,7 @@ func (pm *ProcessManager) SetDisplay(id string, display map[string]any) error {
 	proc.displayMu.Lock()
 	proc.display = display
 	proc.displayMu.Unlock()
-	path := proc.sessionDir()
+	path := proc.persistDir()
 	if path == "" {
 		return nil
 	}

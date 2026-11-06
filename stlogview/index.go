@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/nienieai/serial-debugger/sessionfile"
 )
@@ -81,6 +82,16 @@ type scanner struct {
 }
 
 func scanStlog(path string, progress func(frames int, done int64)) (*index, error) {
+	// 拖进来的是**工程目录**：取目录里的包文件（pkg-*.stlog，按名字取第一个）。
+	// 直接 os.Open 目录在 Windows 上会得到一个 4096 B 的「文件」，报
+	// 「文件只有 4096 B，不够一个 .stlog 文件头」—— 完全看不出真实原因。
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		matches, _ := filepath.Glob(filepath.Join(path, "pkg-*.stlog"))
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("这是一个会话目录，但里面没有 pkg-*.stlog")
+		}
+		path = matches[0]
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
