@@ -1,6 +1,7 @@
 package stlogview
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -46,6 +47,33 @@ func writeTestFileSet(t *testing.T, frames []tf, set sessionfile.Settings) strin
 		t.Fatalf("Close: %v", err)
 	}
 	return p
+}
+
+// TestOpenSessionDir 打开工程目录：多个 pkg 按序号接成一条时间线。
+//
+// 帧绝不跨包（Session.Append 的准入判断），所以「把两个合法的包放进同一个目录」
+// 与「录到 64 MiB 切包」在扫描这一侧是等价的。
+func TestOpenSessionDir(t *testing.T) {
+	frames := defaultFrames()
+	dir := t.TempDir()
+	for i := 1; i <= 2; i++ {
+		tmp := writeTestFile(t, frames)
+		if err := os.Rename(tmp, filepath.Join(dir, sessionfile.PkgFileName(i))); err != nil {
+			t.Fatalf("rename pkg-%04d: %v", i, err)
+		}
+	}
+
+	s := NewStore()
+	s.Open(dir)
+	waitReady(t, s)
+
+	w := s.Window(0, 4000, 0)
+	if want := len(frames) * 2; w.Total != want {
+		t.Fatalf("两个包接起来应有 %d 帧，实际 %d", want, w.Total)
+	}
+	if m := s.Meta(); m.Name == "" {
+		t.Fatalf("Meta 应当带上目录名")
+	}
 }
 
 // defaultFrames 是一份覆盖各方向、各长度（含跨页续片）的夹具。

@@ -81,45 +81,112 @@ type scanner struct {
 	openO  uint8
 }
 
-func scanStlog(path string, progress func(frames int, done int64)) (*index, error) {
-	// 拖进来的是**工程目录**：取目录里的包文件（pkg-*.stlog，按名字取第一个）。
-	// 直接 os.Open 目录在 Windows 上会得到一个 4096 B 的「文件」，报
-	// 「文件只有 4096 B，不够一个 .stlog 文件头」—— 完全看不出真实原因。
-	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
-		matches, _ := filepath.Glob(filepath.Join(path, "pkg-*.stlog"))
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("这是一个会话目录，但里面没有 pkg-*.stlog")
-		}
-		path = matches[0]
-	}
-	f, err := os.Open(path)
+// stlogFiles 把「打开目标」变成按顺序要扫的文件列表。
+//
+// 单个 .stlog 就是它自己；工程目录则是 manifest 登记的包（manifest 缺失时按
+// 文件名里的序号认领，见 sessionfile.PackageRefs）。多个包按序号接成一条时间线
+// —— 帧绝不跨包，拼接是无损的。
+func stlogFiles(path string) ([]string, error) {
+	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
+	}
+	if !fi.IsDir() {
+		return []string{path}, nil
+	}
+	refs := sessionfile.PackageRefs(path)
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("这是一个会话目录，但里面没有 pkg-*.stlog")
+	}
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, filepath.Join(path, r.File))
+	}
+	return out, nil
+}
+
+func scanStlog(path string, progress func(frames int, done int64)) (*index, error) {
+	files, err := stlogFiles(path)
+	if err != nil {
+		return nil, err
+	}
+	// 先把所有包的大小加起来：进度按「整条会话」走，不是每个包各走一遍。
+	total := int64(0)
+	sizes := make([]int64, len(files))
+	for i, one := range files {
+		fi, err := os.Stat(one)
+		if err != nil {
+			return nil, err
+		}
+		sizes[i] = fi.Size()
+		total += fi.Size()
+	}
+
+	ix := &index{path: path, arena: make([]byte, 0, total)}
+	sc := &scanner{ix: ix}
+	done := int64(0)
+	for i, one := range files {
+		stop, err := scanStlogFile(ix, sc, one, i == 0, done, progress)
+		if err != nil {
+			return nil, err
+		}
+		done += sizes[i]
+		if stop {
+			break
+		}
+	}
+	if sc.open {
+		ix.truncated = true
+		sc.close()
+	}
+	if len(ix.segIdx) < ix.n+1 {
+		ix.segIdx = append(ix.segIdx, int32(len(ix.seg)))
+	}
+	ix.segKey = ix.scanStyle()
+	if progress != nil {
+		progress(ix.n, total)
+	}
+	return ix, nil
+}
+
+// scanStlogFile 扫一个包，帧继续追加进同一个 index。
+//
+// first 时才读设置槽（各包槽里是同一份快照，以第一个为准）。
+// stop=true 表示这个包在中途断了：后面的包排在它之后，硬接上去时间线会跳，
+// 所以整条会话就停在这里（上面会显示 StopErr）。
+func scanStlogFile(ix *index, sc *scanner, path string, first bool,
+	done int64, progress func(frames int, done int64)) (bool, error) {
+
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	if st.Size() < sessionfile.HeaderSize {
-		return nil, fmt.Errorf("文件只有 %d B，不够一个 .stlog 文件头", st.Size())
+		return false, fmt.Errorf("%s：文件只有 %d B，不够一个 .stlog 文件头", filepath.Base(path), st.Size())
+	}
+	ix.size += st.Size()
+	if first {
+		if err := readSettingsInto(f, ix); err != nil {
+			return false, err
+		}
+	} else if sc.open {
+		// 跨包的未完帧不该存在（规范：帧绝不跨包）。真遇到就按「末帧未结束」切断，
+		// 否则两个包的数据会被粘成一帧。
+		ix.truncated = true
+		sc.close()
 	}
 
-	ix := &index{
-		path:  path,
-		size:  st.Size(),
-		arena: make([]byte, 0, st.Size()),
-	}
-	if err := readSettingsInto(f, ix); err != nil {
-		return nil, err
-	}
-
-	sc := &scanner{ix: ix}
 	buf := make([]byte, sessionfile.PageSize)
 	off := int64(sessionfile.RecordsOffset)
 	prevOpen := false
 	pageNo := 0
 
+	stop := false
 	for off < st.Size() {
 		torn := off+sessionfile.PageSize > st.Size()
 		var p *sessionfile.Page
@@ -130,13 +197,14 @@ func scanStlog(path string, progress func(frames int, done int64)) (*index, erro
 			if !ok {
 				ix.stoppedAt = off
 				ix.stopErr = sessionfile.ErrPartialTail
+				stop = true
 				break
 			}
 			p = rp
 			ix.recovered = append(ix.recovered, off)
 		} else {
 			if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
-				return nil, err
+				return false, err
 			}
 			pp, derr := sessionfile.DecodePage(buf, uint64(off))
 			if derr != nil {
@@ -144,6 +212,7 @@ func scanStlog(path string, progress func(frames int, done int64)) (*index, erro
 				if !ok {
 					ix.stoppedAt = off
 					ix.stopErr = derr
+					stop = true
 					break
 				}
 				pp = rp
@@ -171,27 +240,18 @@ func scanStlog(path string, progress func(frames int, done int64)) (*index, erro
 			prevOpen = p.Records[n-1].Dir&sessionfile.DirMore != 0
 		}
 		if torn {
+			// 末页不完整：可能是这个包被硬断过（崩溃 / 拔盘）。后面的包排在它
+			// 之后，接上去时间线会跳，所以整条会话停在这里。
+			stop = true
 			break
 		}
 		off += sessionfile.PageSize
 		pageNo++
 		if pageNo%512 == 0 && progress != nil {
-			progress(ix.n, off)
+			progress(ix.n, done+off)
 		}
 	}
-
-	if sc.open {
-		ix.truncated = true
-		sc.close()
-	}
-	if len(ix.segIdx) < ix.n+1 {
-		ix.segIdx = append(ix.segIdx, int32(len(ix.seg)))
-	}
-	ix.segKey = ix.scanStyle()
-	if progress != nil {
-		progress(ix.n, st.Size())
-	}
-	return ix, nil
+	return stop, nil
 }
 
 // scanStyle 是扫描时预填格子用的样式：只按文件头的编码，其余取主工程默认。
