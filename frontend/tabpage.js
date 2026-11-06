@@ -42,7 +42,8 @@ function TabPage(tabIndex, tabData) {
 	btnSettings.setAttribute('data-icon','more');
 	btnSettings.setAttribute('data-icon-w','16');
 	btnSettings.setAttribute('data-icon-h','16');
-	btnSettings.title = t('btn.settings','详细设置');
+	btnSettings.setAttribute('data-tip', t('btn.settings','详细设置'));
+	btnSettings.setAttribute('data-tip-open', 'serialsets');
 	btnSettings.addEventListener('click', toggleSettings);
 	configBar.appendChild(btnSettings);
 
@@ -181,7 +182,7 @@ function TabPage(tabIndex, tabData) {
 	const sendInput = document.createElement('textarea');
 	sendInput.id = 'sendInput';
 	sendInput.spellcheck = false;
-	sendInput.addEventListener('input', function() { updateSendInfo(); _syncSendMirror(this); if(_statusBar)_statusBar.updateCursor(); });
+	sendInput.addEventListener('input', function() { updateSendInfo(); _syncSendMirror(this); if(_statusBar)_statusBar.updateCursor(); if (typeof _schedulePushSendState === 'function') _schedulePushSendState(); });
 	sendInput.addEventListener('scroll', function() {
 		sendMirror.scrollTop = sendInput.scrollTop;
 		sendMirror.scrollLeft = sendInput.scrollLeft;
@@ -294,6 +295,11 @@ function TabPage(tabIndex, tabData) {
 	self.displayContent = displayContent;
 	self.displayArea = displayArea;
 	self.fwdFloatBtns = fwdFloatBtns;
+	// 名字必须和 pageEl('btnP1Display') 对得上：对不上就会退到
+	// document.getElementById，拿到的永远是**第一个**标签页上那个按钮
+	// —— 多开一个标签之后，点 P1 的 字/H 改的是别人的按钮。
+	self.btnP1Display = btnP1;
+	self.btnP2Display = btnP2;
 	self.btnP1 = btnP1;
 	self.btnP2 = btnP2;
 self.divider = divider;
@@ -507,6 +513,8 @@ function createModeChooserPage() {
 	var page = document.createElement('div');
 	page.className = 'tab-page o-chooser t-chooser-bg';
 	page.style.display = 'none';
+	// 'cards' = 四张卡片；'threads' = 「从已打开线程进入」的列表屏
+	page.setAttribute('data-screen', 'cards');
 
 	var inner = document.createElement('div');
 	inner.className = 'o-chooser__inner';
@@ -560,10 +568,10 @@ function createModeChooserPage() {
 		card.appendChild(tips);
 
 		// 底部整宽「开始 →」：视觉上是按钮，点击由整张卡片接管
+		var ctaKey = mode === 'file' ? 'newtab.open' : (mode === 'threads' ? 'newtab.open_thread' : 'newtab.start');
+		var ctaDef = mode === 'file' ? '打开' : (mode === 'threads' ? '进入' : '开始');
 		var foot = span('c-mode-card__cta');
-		foot.appendChild(span('c-mode-card__cta-text',
-			t(mode === 'file' ? 'newtab.open' : 'newtab.start', mode === 'file' ? '打开' : '开始'),
-			mode === 'file' ? 'newtab.open' : 'newtab.start'));
+		foot.appendChild(span('c-mode-card__cta-text', t(ctaKey, ctaDef), ctaKey));
 		foot.appendChild(span('c-mode-card__cta-arrow', '→'));
 		card.appendChild(foot);
 
@@ -593,12 +601,173 @@ function createModeChooserPage() {
 			['newtab.file_f2', 'Hex / 文本 两套视图'],
 			['newtab.file_f3', '一键导出成纯文本']
 		]);
+	// 第四张卡：接管守护进程里**已经开着**的会话。串口不重开、历史不丢，
+	// 只是把这一页挂到当前窗口（归属表在 Go 侧，见 app_threads.go）。
+	makeCard('threads', icon('tabs', 20, 20), 'newtab.thread', '从已打开线程进入',
+		'newtab.thread_desc', '接管已经开着的串口会话，不重开串口', [
+			['newtab.thread_f1', '列出守护进程上所有串口会话'],
+			['newtab.thread_f2', '选中即接管，历史和统计都还在'],
+			['newtab.thread_f3', '已在本窗口的会话直接切过去']
+		]);
+
+	// ---- 「从已打开线程进入」的列表屏 ----
+	//
+	// 和卡片屏在**同一个页面里**换屏（不新开标签页）：点第四张卡进来，点「返回」
+	// 退回卡片屏。列表本身由 app.js 取数据（ListOpenSessions）后交给 renderThreads，
+	// 这里只管画，不碰守护进程 —— 选择页本来就该是纯展示层。
+	var listWrap = document.createElement('div');
+	listWrap.className = 'o-threadlist is-hidden';
+
+	var rowsEl = document.createElement('div');
+	rowsEl.className = 'o-threadlist__rows';
+
+	var emptyEl = document.createElement('div');
+	emptyEl.className = 'o-empty o-threadlist__empty is-hidden';
+	emptyEl.appendChild(span('o-empty__msg', t('thread.empty', '没有可接管的会话'), 'thread.empty'));
+	emptyEl.appendChild(span('o-empty__hint', t('thread.empty_hint', '先在别的窗口或 CLI 里打开一个串口'), 'thread.empty_hint'));
+
+	listWrap.appendChild(rowsEl);
+	listWrap.appendChild(emptyEl);
+
+	var footEl = document.createElement('div');
+	footEl.className = 'o-chooser__foot is-hidden';
+
+	var backBtn = document.createElement('button');
+	backBtn.type = 'button';
+	backBtn.className = 'c-chooser-btn';
+	backBtn.setAttribute('data-i18n', 'thread.back');
+	backBtn.textContent = t('thread.back', '返回');
+	backBtn.addEventListener('click', function() { showCards(); });
+
+	var refreshBtn = document.createElement('button');
+	refreshBtn.type = 'button';
+	refreshBtn.className = 'c-chooser-btn';
+	refreshBtn.setAttribute('data-i18n', 'thread.refresh');
+	refreshBtn.textContent = t('thread.refresh', '刷新');
+	refreshBtn.addEventListener('click', function() {
+		if (curTab && typeof refreshOpenThreads === 'function') refreshOpenThreads(curTab);
+	});
+
+	footEl.appendChild(backBtn);
+	footEl.appendChild(refreshBtn);
 
 	head.appendChild(title);
 	head.appendChild(hint);
 	inner.appendChild(head);
 	inner.appendChild(grid);
+	inner.appendChild(listWrap);
+	inner.appendChild(footEl);
 	page.appendChild(inner);
+
+	// 当前列表屏属于哪个标签页：点行时交给 app.js 的 chooseOpenThread(tab, sid)。
+	var curTab = null;
+
+	function _setChooserHead(tKey, tDef, hKey, hDef) {
+		title.setAttribute('data-i18n', tKey);
+		title.textContent = t(tKey, tDef);
+		hint.setAttribute('data-i18n', hKey);
+		hint.textContent = t(hKey, hDef);
+	}
+
+	// showThreads 切到列表屏。数据不在这里取：app.js 拿到 ListOpenSessions
+	// 之后调 renderThreads，这个页面只负责画。
+	function showThreads(tab) {
+		curTab = tab || null;
+		page.setAttribute('data-screen', 'threads');
+		grid.classList.add('is-hidden');
+		listWrap.classList.remove('is-hidden');
+		footEl.classList.remove('is-hidden');
+		_setChooserHead('thread.title', '已打开的线程', 'thread.hint', '选一个会话接管到这个窗口');
+	}
+
+	// showCards 退回卡片屏（「返回」按钮的动作）。
+	function showCards() {
+		curTab = null;
+		page.setAttribute('data-screen', 'cards');
+		grid.classList.remove('is-hidden');
+		listWrap.classList.add('is-hidden');
+		footEl.classList.add('is-hidden');
+		rowsEl.innerHTML = '';
+		emptyEl.classList.add('is-hidden');
+		_setChooserHead('newtab.title', '新建会话', 'newtab.hint', '选择一种模式开始');
+	}
+
+	function _setEmpty(msgKey, msgDef, hintKey, hintDef) {
+		var m = emptyEl.querySelector('.o-empty__msg');
+		var h = emptyEl.querySelector('.o-empty__hint');
+		m.setAttribute('data-i18n', msgKey);
+		m.textContent = t(msgKey, msgDef);
+		h.setAttribute('data-i18n', hintKey);
+		h.textContent = t(hintKey, hintDef);
+	}
+
+	// renderThreads 画列表。data 是 ListOpenSessions 的返回值：
+	//   {online, self, sessions:[{id,name,status,mode,portName,baud,viewers,owner,mine,free}]}
+	// online=false 和「一个都没有」要给不同的话术 —— 守护进程没起来时说「没有可接管的
+	// 会话」，会让人以为串口真的都关了。
+	function renderThreads(data) {
+		rowsEl.innerHTML = '';
+		var online = !!(data && data.online);
+		var list = (data && data.sessions) || [];
+		if (!online) {
+			_setEmpty('thread.offline', '守护进程未运行', 'thread.offline_hint', '先启动守护进程再回来');
+			emptyEl.classList.remove('is-hidden');
+			return;
+		}
+		if (list.length === 0) {
+			_setEmpty('thread.empty', '没有可接管的会话', 'thread.empty_hint', '先在别的窗口或 CLI 里打开一个串口');
+			emptyEl.classList.remove('is-hidden');
+			return;
+		}
+		emptyEl.classList.add('is-hidden');
+		for (var i = 0; i < list.length; i++) rowsEl.appendChild(_threadRow(list[i]));
+	}
+
+	function _threadRow(s) {
+		var row = document.createElement('button');
+		row.type = 'button';
+		row.className = 'c-thread-row';
+		row.setAttribute('data-sid', String(s.id));
+
+		var ic = span('c-thread-row__icon');
+		ic.innerHTML = icon(s.mode === 'forward' ? 'swap' : 'terminal', 18, 18);
+		row.appendChild(ic);
+
+		var main = span('c-thread-row__main');
+		main.appendChild(span('c-thread-row__name',
+			s.name || (t('tab.idle_process', '空闲进程') + ' #' + s.id)));
+		main.appendChild(span('c-thread-row__meta', _threadMeta(s)));
+		row.appendChild(main);
+
+		var badgeKey, badgeDef, badgeCls;
+		if (s.mine) { badgeKey = 'thread.here'; badgeDef = '本窗口'; badgeCls = ' is-here'; }
+		else if (s.free) { badgeKey = 'thread.free'; badgeDef = '未占用'; badgeCls = ' is-free'; }
+		else { badgeKey = 'thread.other'; badgeDef = '其他窗口'; badgeCls = ' is-other'; }
+		row.appendChild(span('c-thread-row__badge' + badgeCls, t(badgeKey, badgeDef), badgeKey));
+
+		row.appendChild(span('c-thread-row__arrow', '→'));
+
+		row.addEventListener('click', function() {
+			if (curTab && typeof chooseOpenThread === 'function') {
+				chooseOpenThread(curTab, String(s.id));
+			}
+		});
+		return row;
+	}
+
+	// 副标题用 _daemonTabLabel：和标签栏上那句话完全一致（端口 @ 波特率 / 空闲 / 已声明），
+	// 免得同一个会话在列表里和在标签上叫两个名字。
+	// viewers 只显示 CLI / MCP：GUI 这一份是本进程自己，几乎每个会话都有，写出来是噪音。
+	function _threadMeta(s) {
+		var label = (typeof _daemonTabLabel === 'function') ? _daemonTabLabel(s) : (s.portName || '');
+		var parts = [label];
+		var v = s.viewers || {};
+		var who = [];
+		if (v.cli) who.push('CLI ' + v.cli);
+		if (v.mcp) who.push('MCP ' + v.mcp);
+		if (who.length) parts.push(who.join(' · '));
+		return parts.filter(Boolean).join(' · ');
+	}
 
 	// 建页时按当前守护进程状态刷一次（离线时串口卡置灰，只留「从文件打开」）。
 	// 必须放在 grid 进 DOM 之后：在这之前 querySelectorAll 一张卡都找不到。
@@ -609,7 +778,11 @@ function createModeChooserPage() {
 		isChooser: true,
 		show: function() { page.style.display = ''; },
 		hide: function() { page.style.display = 'none'; },
-		destroy: function() { page.remove(); }
+		destroy: function() { page.remove(); },
+		// 「从已打开线程进入」：换到列表屏 / 换回卡片屏 / 用数据重画列表
+		openThreads: showThreads,
+		showCards: showCards,
+		renderThreads: renderThreads
 	};
 }
 
@@ -626,8 +799,10 @@ function _syncChooserAvailability(root) {
 		var isFile = cards[i].getAttribute('data-mode') === 'file';
 		cards[i].disabled = isFile ? false : !online;
 	}
+	// 副标题只在卡片屏自己写：列表屏那句话是「选一个会话接管」，被这里覆盖掉
+	// 就会在每次守护进程状态变化时闪回「选择一种模式开始」。
 	var hint = root.querySelector('.o-chooser__hint');
-	if (hint) {
+	if (hint && root.getAttribute('data-screen') !== 'threads') {
 		hint.textContent = online
 			? t('newtab.hint', '选择一种模式开始')
 			: t('newtab.offline_hint', '守护进程未运行：现在只能从文件打开');

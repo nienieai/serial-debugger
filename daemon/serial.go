@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -230,11 +231,32 @@ type Process struct {
 	displayMu sync.RWMutex
 	display   map[string]any
 
+	// send 是这条会话的发送框状态：文本草稿 / Hex 草稿 / 当前格式 / 多字符串预设。
+	//
+	// 与 display 同一套取舍：工程会话从 settings.json 读出来、改动时写回去；
+	// 普通串口会话只留内存（进程还在就一直有，进程关了就没了）。
+	// 放在守护进程而不是 GUI 里，是为了「同一个会话换窗口/换标签再挂回来」
+	// 时发送框还是原来那份 —— 也顺手避免文本草稿和 Hex 草稿互相串。
+	sendMu sync.RWMutex
+	send   map[string]any
+
+	// fileStats 是「这次回放的文件里有多少东西」：帧数、rx/tx 字节合计。
+	// 回放会话没有实时流量，浮窗里的收发数字只能来自文件本身。
+	fileStatsMu sync.RWMutex
+	fileStats   map[string]any
+
 	// customName 是用户起的线程名（nameMu 保护）。空串表示「用自动名」：
 	// 自动名按当前模式与端口现算（见 autoName），所以「先建空闲会话、之后才连上
 	// 端口」这种常见流程不需要在 connect/switch 各处挂钩子，名字自己就会变过来。
 	nameMu     sync.RWMutex
 	customName string
+	// sessionName 是文件会话（session.open 打开工程）的默认名：工程目录名。
+	//
+	// 单独放一个字段而不是塞进 customName，是因为两者语义不同：customName 是
+	// 「用户改过的名字」，为真时 HasCustomName 报 true、标签右键菜单才会给
+	// 「恢复自动名」；而工程目录名不是用户改的，把它当自定义名会让「恢复自动名」
+	// 去把目录改回「时间_uuid」那种原始形态。
+	sessionName string
 
 	// per-source viewer counts: {"gui": N, "cli": N, "mcp": N}
 	viewers map[string]int
@@ -282,15 +304,25 @@ func (p *Process) autoName() string {
 	return "会话 #" + p.id
 }
 
-// Name 返回生效的线程名（自定义优先）。
+// Name 返回生效的线程名（自定义优先，其次是文件会话的目录名）。
 func (p *Process) Name() string {
 	p.nameMu.RLock()
-	custom := p.customName
+	custom, sess := p.customName, p.sessionName
 	p.nameMu.RUnlock()
 	if custom != "" {
 		return custom
 	}
+	if sess != "" {
+		return sess
+	}
 	return p.autoName()
+}
+
+// setSessionName 记下文件会话的默认名（工程目录名）。
+func (p *Process) setSessionName(name string) {
+	p.nameMu.Lock()
+	p.sessionName = name
+	p.nameMu.Unlock()
 }
 
 // SetCustomName 设置用户起的名字；传空串表示退回自动名。
@@ -1305,6 +1337,19 @@ func (p *Process) statsLoop(broadcast func(RxTxMessage), pushEvent func(protocol
 
 // ---- serial port helper ----
 
+// mapPortOpenErr 把「端口被别的程序占着」翻成 sys.* 键，交给客户端按各自语言翻译。
+//
+// go.bug.st/serial 已把 Windows 的 ERROR_ACCESS_DENIED 与 Linux 的 EBUSY 归到
+// PortBusy（serial_windows.go:373 / serial_unix.go:219），这里只认这个码；
+// 权限不足（PermissionDenied）保持原样返回，仍走 GUI 的串口权限横幅那条路。
+func mapPortOpenErr(err error) error {
+	var pe *serial.PortError
+	if errors.As(err, &pe) && pe.Code() == serial.PortBusy {
+		return errors.New("sys.port_busy_other")
+	}
+	return err
+}
+
 func openSerialPort(config *SerialConfig) (serial.Port, error) {
 	if config.Baud <= 0 {
 		config.Baud = 115200
@@ -1344,7 +1389,7 @@ func openSerialPort(config *SerialConfig) (serial.Port, error) {
 	select {
 	case r := <-openCh:
 		if r.err != nil {
-			return nil, r.err
+			return nil, mapPortOpenErr(r.err)
 		}
 		// 清除硬件接收缓冲区中的残留数据
 		r.p.ResetInputBuffer()
@@ -1478,10 +1523,25 @@ func (p *Process) restoreLatestSession() {
 	if p.historyRing == nil || !p.historyRing.IsEmpty() {
 		return
 	}
-	n, err := loadSessionIntoRing(p.historyRing, dir)
+	n, rxTotal, txTotal, p1Total, p2Total, err := loadSessionIntoRing(p.historyRing, dir)
 	if err != nil {
 		logOp("错误", "恢复历史失败 (进程 #%s, %s): %v", p.id, filepath.Base(dir), err)
 		return
+	}
+	p.SetFileStats(n, rxTotal, txTotal, p1Total, p2Total)
+	// 文件里的字节算进会话累计：之后续写的新数据接着往上加，状态栏和浮窗
+	// 显示的是「这个工程一共收到/发出多少」，而不是从零开始。
+	if rxTotal > 0 {
+		p.bytesRead.Add(rxTotal)
+	}
+	if txTotal > 0 {
+		p.bytesWritten.Add(txTotal)
+	}
+	if p1Total > 0 {
+		p.bytesPort1.Add(p1Total)
+	}
+	if p2Total > 0 {
+		p.bytesPort2.Add(p2Total)
 	}
 	if n > 0 {
 		logOp("历史", "进程 #%s 已从 %s 恢复 %d 条", p.id, filepath.Base(dir), n)
@@ -1798,6 +1858,14 @@ func applyRequestedName(p *Process, name string) {
 // sessionPath 只有 OpenSession 会传（工程里没记端口时走这条），语义与
 // createDeclared 的同名参数一致：让第一条 process-changed 广播就带上是哪个工程。
 func (pm *ProcessManager) createIdle(mode, sessionPath, name string) (*Process, error) {
+	return pm.createIdleWithConfig(mode, sessionPath, name, nil)
+}
+
+// createIdleWithConfig 是 createIdle 的本体：多一个「声明配置」。
+//
+// 打开一个没记端口的工程时要用它：端口留空让用户自己选，但帧格式与流控得先
+// 记在进程上，否则用户点「打开串口」时按的是工具栏的默认 8N1。
+func (pm *ProcessManager) createIdleWithConfig(mode, sessionPath, name string, cfg *SerialConfig) (*Process, error) {
 	id := fmt.Sprintf("%d", pm.counter.Add(1))
 	sharedName, sendName := newRingNames(id)
 	ring, err := ringbuf.CreateSharedRing(sharedName, 5*1024*1024) // 5 MB
@@ -1821,6 +1889,9 @@ func (pm *ProcessManager) createIdle(mode, sessionPath, name string) (*Process, 
 		sendRingName: sendName,
 		startTime:    time.Now(),
 		sessionPath:  sessionPath,
+	}
+	if cfg != nil {
+		proc.config = *cfg
 	}
 	applyRequestedName(proc, name)
 
@@ -1985,6 +2056,9 @@ func (p *Process) renameProjectDir(name string) error {
 		err := st.RenameDir(target)
 		if err == nil {
 			p.stlogName = filepath.Base(target)
+			if p.sessionDir() != "" {
+				p.setSessionName(filepath.Base(target))
+			}
 		}
 		p.stlogMu.Unlock()
 		return err
@@ -1998,6 +2072,8 @@ func (p *Process) renameProjectDir(name string) error {
 	// 给它填上会让前端误以为是文件会话（不再给它建标签页）。
 	if p.sessionDir() != "" {
 		p.setSessionDir(target)
+		// 文件会话的默认名就是目录名，目录动了名字得跟着动（Name 不会现算路径）
+		p.setSessionName(filepath.Base(target))
 	}
 	return nil
 }
@@ -2013,6 +2089,8 @@ func persistSessionLabel(dir, name string) error {
 		doc = &sessionfile.SettingsDoc{V: sessionfile.SettingsDocVer, Mode: sessionfile.ModeSingle}
 	}
 	doc.Label = name
+	// 标记「这是用户起的名字」：打开工程时只有这种 label 才覆盖目录名。
+	doc.LabelCustom = true
 	return sessionfile.SaveSettingsDoc(dir, doc)
 }
 
@@ -2028,6 +2106,100 @@ func (p *Process) Display() map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// persistDir 返回这条会话该把设置写到哪个目录。
+//
+//   - 工程会话（session.open 打开的目录）→ sessionPath
+//   - 正在录制的普通会话 → 它当前的录制目录（history/<时间戳>_<id>）
+//   - 都没有 → 空串，调用方只更新内存
+//
+// 之前只看 sessionPath，于是「一边录一边改」的普通会话什么都不落盘：
+// 草稿、显示设置全在守护进程内存里，重启就没了，而它的录制目录其实早就
+// 有一份 settings.json 可以写。
+func (p *Process) persistDir() string {
+	if d := p.sessionDir(); d != "" {
+		return d
+	}
+	p.stlogMu.Lock()
+	s := p.stlog
+	p.stlogMu.Unlock()
+	if s != nil {
+		return s.Dir()
+	}
+	return ""
+}
+
+// SetFileStats 记下回放文件的规模（帧数 / rx / tx / p1 / p2 字节）。
+//
+// p1/p2 只对转发录像有意义（A→B、B→A）；单端口录像恒为 0。
+func (p *Process) SetFileStats(frames int, rx, tx, p1, p2 int64) {
+	p.fileStatsMu.Lock()
+	p.fileStats = map[string]any{"frames": frames, "rx": rx, "tx": tx, "p1": p1, "p2": p2}
+	p.fileStatsMu.Unlock()
+}
+
+// FileStats 返回回放文件的规模；不是文件会话就是 nil。
+func (p *Process) FileStats() map[string]any {
+	p.fileStatsMu.RLock()
+	defer p.fileStatsMu.RUnlock()
+	if p.fileStats == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p.fileStats))
+	for k, v := range p.fileStats {
+		out[k] = v
+	}
+	return out
+}
+
+// Send 返回这条会话的发送框状态（没有就是 nil）。
+func (p *Process) Send() map[string]any {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.send == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p.send))
+	for k, v := range p.send {
+		out[k] = v
+	}
+	return out
+}
+
+// SetSend 记下一条会话的发送框状态，工程会话顺手写回 settings.json。
+//
+// 与 SetDisplay 完全同构：内存里先生效，落盘失败只记日志 —— 存草稿这种事
+// 不该因为工程目录只读就整体失败。
+func (pm *ProcessManager) SetSend(id string, send map[string]any) error {
+	pm.mu.RLock()
+	proc, ok := pm.processes[id]
+	pm.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("process not found: %s", id)
+	}
+
+	proc.sendMu.Lock()
+	proc.send = send
+	proc.sendMu.Unlock()
+	path := proc.persistDir()
+	if path == "" {
+		return nil
+	}
+	if err := persistSessionSend(path, send); err != nil {
+		logOp("错误", "进程 #%s 的发送框状态写回工程失败: %v", id, err)
+	}
+	return nil
+}
+
+// persistSessionSend 把发送框状态写进工程目录 settings.json 的 send 段。
+func persistSessionSend(dir string, send map[string]any) error {
+	doc, err := sessionfile.LoadSettingsDoc(dir)
+	if err != nil {
+		doc = &sessionfile.SettingsDoc{V: sessionfile.SettingsDocVer, Mode: sessionfile.ModeSingle}
+	}
+	doc.Send = send
+	return sessionfile.SaveSettingsDoc(dir, doc)
 }
 
 // SetDisplay 记下一条会话的显示设置，工程会话顺手写回工程目录的 settings.json。
@@ -2046,7 +2218,7 @@ func (pm *ProcessManager) SetDisplay(id string, display map[string]any) error {
 	proc.displayMu.Lock()
 	proc.display = display
 	proc.displayMu.Unlock()
-	path := proc.sessionDir()
+	path := proc.persistDir()
 	if path == "" {
 		return nil
 	}
@@ -2097,21 +2269,44 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 		return nil, 0, err
 	}
 	mode, port, portB, baud := "single", "", "", 0
+	bits, stop, parity, flow := 0, "", "", ""
 	if s := info.Settings; s != nil {
 		if s.Mode == sessionfile.ModeForward {
 			mode = "forward"
 		}
 		port, portB, baud = s.Port, s.PortB, s.Baud
+		bits, stop, parity, flow = s.DataBits, s.StopBits, s.Parity, s.FlowControl
+	}
+	// settings.json 是**权威**（槽里那份是录制那一刻的快照，之后改设置不回写）：
+	// 打开工程要按最后一次保存的帧格式/流控建进程，否则 19200·7E2 的采集会被
+	// 按 115200·8N1 重开，一开就是乱码。读不出来（老文件、被删）才用槽里的。
+	doc, docErr := sessionfile.LoadSettingsDoc(path)
+	if docErr == nil && doc != nil {
+		if doc.Ports.Baud > 0 {
+			baud = doc.Ports.Baud
+		}
+		if doc.Ports.DataBits > 0 {
+			bits = doc.Ports.DataBits
+		}
+		if doc.Ports.StopBits != "" {
+			stop = doc.Ports.StopBits
+		}
+		if doc.Ports.Parity != "" {
+			parity = doc.Ports.Parity
+		}
+		if doc.Ports.FlowControl != "" {
+			flow = doc.Ports.FlowControl
+		}
 	}
 	// 工程里记了端口就按「已声明」建（会话页显示 COMx @ baud，用户点一下就能真连）；
 	// 没记就建空闲进程让用户自己选 —— 不要拿目录名冒充串口名。
-	cfg := SerialConfig{Port: port, Baud: baud}
+	cfg := SerialConfig{Port: port, Baud: baud, DataBits: bits, StopBits: stop, Parity: parity, FlowControl: flow}
 	var cfgB *SerialConfig
 	if mode == "forward" {
 		if portB == "" {
 			mode = "single" // 文件说转发却没有 B 口：按单口处理，别让 Create 报错
 		} else {
-			cfgB = &SerialConfig{Port: portB, Baud: baud}
+			cfgB = &SerialConfig{Port: portB, Baud: baud, DataBits: bits, StopBits: stop, Parity: parity, FlowControl: flow}
 		}
 	}
 
@@ -2119,26 +2314,37 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 	if port != "" {
 		proc, err = pm.createDeclared(mode, port, cfg, cfgB, path, "")
 	} else {
-		proc, err = pm.createIdle(mode, path, "")
+		proc, err = pm.createIdleWithConfig(mode, path, "", &cfg)
 	}
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// 工程里记过名字（settings.json 的 label）就沿用它 —— 线程名只有工程会话
-	// 会持久化，普通串口会话的名字跟着进程走。旧工程里 label 存的是端口名，
-	// 拿来当名字正好，不会显示成「会话 #3」。
-	if s := info.Settings; s != nil && s.Label != "" {
-		proc.SetCustomName(strings.TrimSpace(s.Label))
-	}
+	// 线程名默认用**目录名**：录下来的 label 是「开始录制那一刻的线程名」，
+	// 多半是自动名「会话 #1」，照搬过来打开十个工程都叫「会话 #1」。
+	// 下面读 settings.json 时，只有用户改过名的（labelCustom）才覆盖它。
+	//
+	// 用 sessionName 而不是 customName：目录名不是「用户改过的名字」，
+	// 否则右键「恢复自动名」会把目录改回「时间_uuid」那种原始形态。
+	proc.setSessionName(filepath.Base(path))
 	// 工程里存过显示设置就带进进程：GUI 建标签页时直接用这一份，而不是
 	// daemon.ini 的默认值 —— 打开一个旧工程，看到的就是它当初的样子。
 	// 注意读的是 settings.json（SettingsDoc），不是包头槽那份录制快照。
-	if doc, derr := sessionfile.LoadSettingsDoc(path); derr == nil {
+	if docErr == nil && doc != nil {
+		// 改过名就用改过的名字（见 persistSessionLabel 里的 labelCustom）
+		if doc.LabelCustom && strings.TrimSpace(doc.Label) != "" {
+			proc.SetCustomName(strings.TrimSpace(doc.Label))
+		}
 		if len(doc.Display) > 0 {
 			proc.displayMu.Lock()
 			proc.display = doc.Display
 			proc.displayMu.Unlock()
+		}
+		// 发送框草稿也一样：打开旧工程，输入框里还是当初没发出去的那段。
+		if len(doc.Send) > 0 {
+			proc.sendMu.Lock()
+			proc.send = doc.Send
+			proc.sendMu.Unlock()
 		}
 		// 关掉时这个工程还在录：推送回来就接着录（续写同一个目录，不另起会话）
 		if doc.Save {
@@ -2152,11 +2358,26 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 	if proc.historyRing != nil {
 		proc.historyRing.Reset()
 	}
-	n, err := loadSessionIntoRing(proc.historyRing, path)
+	n, rxTotal, txTotal, p1Total, p2Total, err := loadSessionIntoRing(proc.historyRing, path)
 	proc.ringBufMu.Unlock()
 	if err != nil {
 		pm.Destroy(proc.id)
 		return nil, 0, err
+	}
+	proc.SetFileStats(n, rxTotal, txTotal, p1Total, p2Total)
+	// 四个计数都按文件续上：单端口会话看 rx/tx，转发会话看 p1/p2。
+	// 只补 rx/tx 的话，推送一个转发工程回来，A→B / B→A 两行和分流比全是 0。
+	if rxTotal > 0 {
+		proc.bytesRead.Add(rxTotal)
+	}
+	if txTotal > 0 {
+		proc.bytesWritten.Add(txTotal)
+	}
+	if p1Total > 0 {
+		proc.bytesPort1.Add(p1Total)
+	}
+	if p2Total > 0 {
+		proc.bytesPort2.Add(p2Total)
 	}
 	logOp("历史", "进程 #%s 已打开文件会话 %s (%d 条)", proc.id, filepath.Base(path), n)
 	return proc, n, nil
@@ -2614,18 +2835,33 @@ func (pm *ProcessManager) List() []map[string]any {
 		if d := p.Display(); len(d) > 0 {
 			entry["display"] = d
 		}
+		// 发送框状态（草稿 / 当前格式 / 多字符串预设）：GUI 建标签页时拿它恢复。
+		if sd := p.Send(); len(sd) > 0 {
+			entry["send"] = sd
+		}
+		// 回放文件的规模（帧数 / rx / tx）：浮窗用它显示「文件里有什么」
+		if fs := p.FileStats(); len(fs) > 0 {
+			entry["fileStats"] = fs
+		}
 		// Include config for connected processes and idle processes that have stored config
-		hasConfig := p.status == "connected" || p.config.Port != ""
+		//
+		// 「有配置」不再只看端口：打开一个没记端口的工程时，端口留空让用户自己选，
+		// 但帧格式/流控已经在进程上了 —— 这些必须带给 GUI，否则工具栏停在默认
+		// 8N1、悬浮窗连「115200 · 8N1」这一行都画不出来。
+		hasConfig := p.status == "connected" || p.config.Port != "" ||
+			p.config.Baud > 0 || p.config.DataBits > 0
 		if hasConfig && p.mode == "forward" {
 			entry["portName"] = p.config.Port + " ↔ " + p.forwardConfigB.Port
 			entry["baud"] = p.config.Baud
 			entry["dataBits"] = p.config.DataBits
 			entry["stopBits"] = p.config.StopBits
 			entry["parity"] = p.config.Parity
+			entry["flowControl"] = p.config.FlowControl
 			// Nested P1/P2 detail objects
 			entry["p1"] = map[string]any{
 				"port": p.config.Port, "baud": p.config.Baud,
-				"dataBits": p.config.DataBits, "stopBits": p.config.StopBits, "parity": p.config.Parity,
+				"dataBits": p.config.DataBits, "stopBits": p.config.StopBits,
+				"parity": p.config.Parity, "flowControl": p.config.FlowControl,
 			}
 			if p.forwardConfigB.Port != "" {
 				entry["forwardPortB"] = p.forwardConfigB.Port
@@ -2633,9 +2869,11 @@ func (pm *ProcessManager) List() []map[string]any {
 				entry["forwardDataBitsB"] = p.forwardConfigB.DataBits
 				entry["forwardStopBitsB"] = p.forwardConfigB.StopBits
 				entry["forwardParityB"] = p.forwardConfigB.Parity
+				entry["forwardFlowControlB"] = p.forwardConfigB.FlowControl
 				entry["p2"] = map[string]any{
 					"port": p.forwardConfigB.Port, "baud": p.forwardConfigB.Baud,
-					"dataBits": p.forwardConfigB.DataBits, "stopBits": p.forwardConfigB.StopBits, "parity": p.forwardConfigB.Parity,
+					"dataBits": p.forwardConfigB.DataBits, "stopBits": p.forwardConfigB.StopBits,
+					"parity": p.forwardConfigB.Parity, "flowControl": p.forwardConfigB.FlowControl,
 				}
 			}
 		} else if hasConfig {
@@ -2644,9 +2882,11 @@ func (pm *ProcessManager) List() []map[string]any {
 			entry["dataBits"] = p.config.DataBits
 			entry["stopBits"] = p.config.StopBits
 			entry["parity"] = p.config.Parity
+			entry["flowControl"] = p.config.FlowControl
 			entry["config"] = map[string]any{
 				"port": p.config.Port, "baud": p.config.Baud,
-				"dataBits": p.config.DataBits, "stopBits": p.config.StopBits, "parity": p.config.Parity,
+				"dataBits": p.config.DataBits, "stopBits": p.config.StopBits,
+				"parity": p.config.Parity, "flowControl": p.config.FlowControl,
 			}
 		}
 		result = append(result, entry)

@@ -1,4 +1,4 @@
-# 串口调试工具 v0.7.4 框架文档
+# 串口调试工具 v0.10.0 框架文档
 
 ## 一、整体框架
 
@@ -21,8 +21,8 @@ serial-daemon (守护进程)
 Go + Wails 跨平台串口调试工具，3 管道 IPC 架构 + 共享内存环形缓冲区 + 心跳连接管理。
 
 - **守护进程**: 单实例（Windows 互斥体 `Global\serial-tool-daemon`），ProcessManager 管理 idle/connected 双状态 + mode(single/forward)，端口双向映射去重，日志跟随语言设置
-- **GUI**: Wails v2，3 管道持久连接 + 双重断连检测，纯事件驱动无轮询，转发模式双端口行+分栏设置，自定义下拉组件（圆角弹出窗+动态高度+箭头旋转），9 语言 UI（中/英/繁/法/西/俄/阿/日/韩）
-- **CLI**: 交互模式用 3 管道，命令行模式用 CallOnce 临时管道，34 条命令（含 declare、multistr、history-* 命令族）
+- **GUI**: Wails v3，3 管道持久连接 + 双重断连检测，纯事件驱动无轮询，转发模式双端口行+分栏设置，自定义下拉组件（圆角弹出窗+动态高度+箭头旋转），9 语言 UI（中/英/繁/法/西/俄/阿/日/韩）
+- **CLI**: 交互模式用 3 管道，命令行模式用 CallOnce 临时管道，49 条命令（含 declare、session-open、multistr、stlog-*、history-* 命令族）
 - **MCP**: Model Context Protocol over stdio，29 个工具覆盖全部功能（含 serial_declare、serial_rename、serial_multistr_save/load/status）
 
 ### 系统架构图
@@ -49,7 +49,7 @@ graph TB
     end
 
     subgraph "MCP (serial-mcp.exe)"
-        MCP_TOOLS[28 工具: JSON-RPC 2.0 over stdio]
+        MCP_TOOLS[29 工具: JSON-RPC 2.0 over stdio]
     end
 
     subgraph "守护进程 (serial-daemon.exe)"
@@ -221,8 +221,8 @@ sequenceDiagram
 | `ping` | — | `{"pong":"ok"}`（静默） |
 | `subscribe` | `events: ["rx","tx",...]`（空数组推送全部已订阅状态） | `{"subscribed": N}`（订阅后立即推送对应状态） |
 | `status` | — | `{"status":"ok","version","protocolVersion"}` |
-| `ports` | — | `{"ports":[...]}` |
-| `ports.refresh` | — | `{"ports":[...]}` + 变化时广播 |
+| `ports` | — | `{"ports":[{port,description,inUse,inUseBy,ownerProcessId,ownerName,ownerMode}]}` — `inUseBy` 为 `daemon`（本工具会话占用）/ `other`（别的程序占用，仅 Windows 判得出）。`owner*` 三个字段只在 `daemon` 时出现，说明是**哪个会话**占的（别的程序占着时系统不提供进程信息）。占用由 2 秒硬件探针持续重试开刷新，所以缓存结果最旧也就一个探针周期 |
+| `ports.refresh` | — | 同上，但会重查端口并立即重做占用试开，结果变化时广播 `ports-changed` |
 | `ports.probe` | `ports? baudRates? rules? configPath?` | `{"results":[{port,baud,rule,description}]}` |
 | `process.create` | `mode? port? baud? ... portB? baudB? ... connect? name?` | `{"processId","name","connected","success"}` — `connect: false` 声明配置不打开端口；`name` 是线程名（留空用自动名） |
 | `process.destroy` | `processId` | `{"success"}` |
@@ -239,6 +239,9 @@ sequenceDiagram
 | `session.send` | `processId data format` | `{"success"}`（异步入队） |
 | `session.history` | `processId limit? beforeTsMs? sameTsSkip?` | `{"history":[...],"sharedName","hasMore","older","oldestTsMs","oldestTs","historyFile"?,"ringDrops"?}` — `limit<=0` 整取（老行为）；`limit>0` 只回最后一页，`beforeTsMs`+`sameTsSkip` 是往更早翻的游标（v0.7.5.5） |
 | `session.stats` | `processId` | `{"stats":{...}}` |
+| `session.open` | `path` | `{"processId","mode","port","portB","frames"}` — 把**工程目录**挂成文件会话进程并灌历史；单个 `.stlog` 被拒（只读页本地读） |
+| `session.setdisplay` | `processId display` | `{"success"}` — 显示设置写进会话内存；工程会话再写 `settings.json` 的 `display` |
+| `session.setsend` | `processId send` | `{"success"}` — 发送草稿 / 格式 / 多字符串预设写进会话内存；工程会话再写 `settings.json` 的 `send` |
 | `threads` | — | `{"goroutines":N,"sessions":[...]}` |
 | `goroutines` | — | `{"goroutines":N,"stack":"..."}` |
 | `client.list` | — | `{"clients":[{clientId,source,pid,connectTime,reqCount,subs}]}` |
@@ -771,7 +774,9 @@ decoder.js     — 编解码 (hexToBytes、formatHex、renderSegments 分段渲�
 statusbar.js   — 状态栏 (StatusDaemon+Clients 靠左, Encoding+Stats 靠右)
 tabpage.js     — TabPage 组件 (每标签页独立 DOM 子树) + createWelcomePage()
 settingspage.js— 设置页组件 (buildSettingsPage + createSettingsOverlay)
-history.js     — 历史渲染缓存 (renderHistoryLines、mergeRingBuffer, pageEl 访问)
+logview.js     — 虚窗引擎前端 (createLogView: 按像素取窗口、泳道滚动条、选区复制)
+history.js     — 会话页的三个引擎入口 (数据帧/系统消息/清空) + 发送框滚动条
+daemonlog.js   — 守护进程日志窗口
 app.js         — 状态管理 + 事件驱动 + 标签页生命周期 + 弹窗构建 + 发送 + 主题
 ```
 
@@ -952,7 +957,7 @@ stateDiagram-v2
 
 ### 4.9 JS 前端状态
 
-**文件结构**：8 模块按 `i18n.js` → `icons.js` → `decoder.js` → `statusbar.js` → `tabpage.js` → `settingspage.js` → `history.js` → `app.js` 顺序加载。
+**文件结构**：模块按 `i18n.js` → `icons.js` → `wincontrols.js` → `decoder.js` → `logview.js` → `statusbar.js` → `tabpage.js` → `settingspage.js` → `history.js` → `daemonlog.js` → `app.js` 顺序加载。
 
 | 文件 | 职责 |
 |------|------|
@@ -962,7 +967,10 @@ stateDiagram-v2
 | `statusbar.js` | StatusDaemon/Clients（靠左）/ Encoding/Stats（靠右），`update(data)` 增量更新 |
 | `tabpage.js` | TabPage 构造函数（独立 DOM 子树 + per-tab UI 状态）+ `createWelcomePage()` + `pageEl()` |
 | `settingspage.js` | `buildSettingsPage()` + `createSettingsOverlay()` |
-| `history.js` | `renderHistoryLines()`、`mergeRingBuffer()`、`loadTabHistory()`，通过 `pageEl()` 访问活动标签页 |
+| `logview.js` | `createLogView()`：虚窗引擎前端，只做「按像素取窗口 / 把可见几十行定位 / 画滚动条与泳道」；行高与折行全在 Go 侧算 |
+| `wincontrols.js` | 无边框窗口的最小化 / 最大化 / 关闭按钮，转发给 `App.WindowControl` |
+| `history.js` | 只剩三个入口：`appendLine()`（数据帧 → `view.notify()`）、`appendSystemMsg()`、`clearDisplay()`；外加发送框的自绘滚动条和 `_originLabel()` |
+| `daemonlog.js` | 守护进程日志窗口 |
 | `app.js` | 状态管理、标签页生命周期、弹窗构建、事件驱动、发送、主题、拖拽 |
 
 **核心状态**：
@@ -1105,8 +1113,10 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `switch` | `<pid> <port> [baud]` | `process.switch`（切换串口保留进程） |
 | `setmode` | `<pid> <single|forward>` | `process.setmode`（切换进程模式，需 idle） |
 | `forward` | `<portA> <portB> [baudA] [baudB]` | `process.create mode=forward`（创建端口转发） |
+| `session-open` | `<工程目录>` | `session.open`（把工程交给守护进程，建文件会话进程；单个 `.stlog` 用 `stlog-*` 离线读） |
 | `send` | `<data> [pid] [--hex]` | `SendViaShm`（写共享内存 + `send.trigger`） |
 | `sendqueue` | `<file> [pid]` | 从 JSON 文件写多行到 sendq 共享内存 |
+| `sendone` | `[pid] [--raw]` | `send.trigger`（从发送队列取一条发出；默认剥掉条目头按内容发，`--raw` 原样发队列字节） |
 | `autosend` | `start <ms> <mode> [--loop] [pid]`<br/>`stop [pid]` / `status [pid]`<br/>`interval <ms> [pid]` | `autosend.start` / `autosend.stop` / `autosend.status` / `autosend.interval` |
 | `multistr` | `save [pid]` / `load [pid]`<br/>`reload [pid]` / `status [pid]` | `multistr.save` / `multistr.load` / `multistr.reload` / `autosend.status`（**`multistr.status` 这个 IPC 方法并不存在**，v0.7.0 前 CLI 与 MCP 都误用了该名字、实际发的都是 `autosend.status`；v0.7.0 起方法名是 `contract` 常量，写不出不存在的名字，但这个工具名/命令名的历史叫法保留） |
 | `history` | `[pid] [--limit n] [--before ms] [--skip n]` | `session.history`（读取共享内存环；`--limit` 只取最新 n 条，`--before`/`--skip` 用上一条响应里最旧一条的 `tsMs` 与同毫秒条数继续往前翻） |
@@ -1122,6 +1132,9 @@ serial-cli.exe <cmd> ...    # 命令行模式（CallOnce 临时管道）
 | `monitor` | `[timeout]` | 持久 DaemonClient 监听事件（3 管道） |
 | `threads` | — | `threads` |
 | `goroutines` | — | `goroutines` |
+| `logs` | `[n]` | 不经 IPC：直接读 `<exe>/logs/daemon.log` 末尾 n 行（默认 50，守护进程没运行也能看） |
+| `fix-permissions` | `[--yes] [--json]` | 不经 IPC：本机 `sysperm`（pkexec 给当前用户加设备 ACL，不写系统文件） |
+| `stlog-read` / `stlog-verify` / `stlog-dump` / `stlog-export` | `<path> [--limit N] [-o out.txt]` | 离线读文件，不经守护进程；包见 `sessionfile/` |
 | `help` | — | 显示帮助 |
 
 ### 5.3 示例
@@ -1312,10 +1325,10 @@ graph TD
 
 ### 创建示例与打开文件夹
 
-Go 后端 `CreateExampleFiles(kind)` 根据 kind 创建：
-- `"colors"` → `themes/colors/sunset-warm.json`
-- `"icons"` → `themes/icons/example-outline/icons.json` + `.svg` 文件
-- `"i18n"` → `i18n/example-pt.json`
+Go 后端 `CreateExampleFiles(kind)` 在**外置资源目录** `<exe>/resources/` 下创建（`config.UserResourcesDir()`）：
+- `"colors"` → `resources/themes/example-sunset/theme.json`（带 `_name` / `_modes` 的完整色值示例）
+- `"icons"` → `resources/icons/example-outline/icons.json` + `.svg` 文件
+- `"i18n"` → `resources/i18n/example-pt.json`（含 `_lang` / `_name` / `_dir` / `_font` 字段）
 
 `ShowFolderInExplorer(kind)` 在系统资源管理器中打开对应文件夹。
 
@@ -1323,7 +1336,7 @@ Go 后端 `CreateExampleFiles(kind)` 根据 kind 创建：
 
 ## 九、图标系统
 
-内置图标位于 `config/resources/icons/system/`（28 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
+内置图标位于 `config/resources/icons/system/`（32 个 24×24 SVG + `icons.json` 元数据），编译时 `//go:embed` 嵌入。外部图标主题放在 `resources/icons/<包名>/`（文件夹 = 主题，`icons.json` + 平铺 `.svg` 文件），文件名 = 内置图标键名，覆盖对应图标。
 
 `GetBuiltinIcons()` Wails 绑定返回全部内置图标，前端 `_initIcons()` 启动时加载。`applyIconTheme()` 支持 `_fallback` 回退机制。
 
@@ -1477,20 +1490,21 @@ go build -ldflags="-s -w" -o build/bin/serial-daemon.exe ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli.exe ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp.exe ./cmd/serial-mcp/
 
-# GUI（必须用 wails build，加 -devtools 启用 DevTools）
-wails build -devtools
+# GUI（Wails v3）：统一走 build.ps1，内部 wails3 build；发布版加 -Release
+.\build.ps1
 ```
 
 产物：`build/bin/serial-daemon.exe`、`serial-cli.exe`、`serial-mcp.exe`、`serial-gui.exe`
 
-版本号统一在 `version/version.go`（`var Version = "0.8.3"`，构建时由 `-ldflags -X` 覆盖），改一处全部同步。
+版本号统一在 `version/version.go`（`var Version = "0.10.0"`，构建时由 `-ldflags -X` 覆盖），改一处全部同步。
 
-Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK3 + WebKit2GTK），只是不带 `.exe` 后缀：
+Linux 下三个命令行可执行文件同样可构建（GUI 需 GTK4 + WebKitGTK 6.0 开发包，走 cgo，不能从 Windows 交叉编译），只是不带 `.exe` 后缀：
 
 ```bash
 go build -ldflags="-s -w" -o build/bin/serial-daemon ./daemon/
 go build -ldflags="-s -w" -o build/bin/serial-cli    ./cmd/serial-cli/
 go build -ldflags="-s -w" -o build/bin/serial-mcp    ./cmd/serial-mcp/
+go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 ```
 
 ## 十三、平台相关代码约定

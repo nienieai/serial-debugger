@@ -133,11 +133,11 @@ function createSettingsOverlay() {
 
 // 分类栏图标：用 icons.js 里已有的键，保证浅色/深色主题下都跟随 currentColor
 var SETTINGS_NAV_ICONS = {
-	display: 'terminal',
+	look: 'theme_palette',    // 外观：调色板（原来在「数据高亮」上，18px 下像水滴）
 	colors: 'highlighter',    // 数据高亮：给各类数据指定颜色，一支高亮笔
-	appearance: 'theme_palette', // 外观：调色板（原来在「数据高亮」上，18px 下像水滴）
+	session: 'terminal',      // 会话默认：终端 —— 新建出来的会话长什么样
 	tabs: 'tabs',             // 标签页：窗口顶上的标签栏（原来是 menu 的三条横线，纯占位）
-	storage: 'devices',
+	daemon: 'devices',        // 守护进程：后台那个真正跑串口的进程
 	language: 'globe',
 	about: 'info'
 };
@@ -223,9 +223,13 @@ function buildSettingsPage() {
 
 
 	// ── Panel: 界面（字体 / 行为 / 高级；编码与显示已按标签页走）──
-	var panelDisplay = document.createElement('div');
-	panelDisplay.className = 'settings-panel';
-	panelDisplay.setAttribute('data-panel', 'display');
+	// ── Panel: 会话默认（新标签页 / 新会话一开始是什么样）──
+	// 这一页原来在「界面」里，混着字体字号和两条行为开关：字体字号是外观，编码 / Hex /
+	// 转义是**新标签页的默认值**（写 daemon.ini），锁定滚动和回补历史是渲染行为 ——
+	// 三者一起叫「界面」谁也说不清该去哪一页调，所以拆开：这一页只放「新建时是什么样」。
+	var panelSession = document.createElement('div');
+	panelSession.className = 'settings-panel is-hidden';
+	panelSession.setAttribute('data-panel', 'session');
 
 	// ── Panel: 数据高亮（从「编码与显示」拆出来，单独一页）──
 	var panelColors = document.createElement('div');
@@ -234,33 +238,6 @@ function buildSettingsPage() {
 
 	// 制表符长度 / 行尾序列 / 编码 0.8.4 起都按标签页走，
 	// 在「标签页设置」弹窗里改；设置页这一气泡已经没有剩下的项了。
-
-	var bFont = _bubble(t('settings.bubble_font','显示字体'));
-	bFont.appendChild(_row(t('settings.font_family','字体'),
-		_buildSelect(
-			['Consolas','Cascadia Code','Fira Code','JetBrains Mono','Source Code Pro','Courier New','Microsoft YaHei','SimSun','KaiTi','Segoe UI'],
-			['Consolas','Cascadia Code','Fira Code','JetBrains Mono','Source Code Pro','Courier New','微软雅黑','宋体','楷体','Segoe UI'],
-			state.displayFontFamily,
-			function(v) { state.displayFontFamily = v; _applyDisplayStyle(); saveSettings(); }
-		)
-	));
-	var fontSizeInput = document.createElement('input');
-	fontSizeInput.type = 'number';
-	fontSizeInput.className = 'settings-select';
-	fontSizeInput.value = state.displayFontSize;
-	fontSizeInput.min = 4;
-	fontSizeInput.max = 64;
-	fontSizeInput.addEventListener('change', function() {
-		var n = parseInt(fontSizeInput.value);
-		if (isNaN(n) || n < 4) n = 4;
-		if (n > 64) n = 64;
-		state.displayFontSize = n;
-		fontSizeInput.value = String(n);
-		_applyDisplayStyle();
-		saveSettings();
-	});
-	bFont.appendChild(_row(t('settings.font_size','字号'), fontSizeInput));
-	panelDisplay.appendChild(bFont);
 
 	// ── 新标签页的默认值（存守护进程的 daemon.ini）──
 	// 这三块编辑的是「新标签页的默认值」，写的是守护进程的 daemon.ini。
@@ -276,7 +253,7 @@ function buildSettingsPage() {
 			function(v) { _setDispDefault('encoding', v); }, defOff)));
 
 	if (defHide) bDefEnc.classList.add('is-hidden');
-	panelDisplay.appendChild(bDefEnc);
+	panelSession.appendChild(bDefEnc);
 
 	var bDefHex = _bubble(t('settings.bubble_hex','Hex显示设置'));
 	bDefHex.appendChild(_row(t('settings.hex_prefix','Hex 前缀 (0x)'),
@@ -292,7 +269,7 @@ function buildSettingsPage() {
 			state._dispDefaults.hexSep,
 			function(v) { _setDispDefault('hexSep', v); }, defOff)));
 	if (defHide) bDefHex.classList.add('is-hidden');
-	panelDisplay.appendChild(bDefHex);
+	panelSession.appendChild(bDefHex);
 
 	var bDefText = _bubble(t('settings.bubble_text','文本显示设置'));
 	bDefText.appendChild(_row(t('settings.hex_escape','转义字节'),
@@ -312,43 +289,45 @@ function buildSettingsPage() {
 		_buildToggle(function() { _setDispDefault('copyHexEscapes', !state._dispDefaults.copyHexEscapes); },
 			state._dispDefaults.copyHexEscapes, defOff)));
 	if (defHide) bDefText.classList.add('is-hidden');
-	panelDisplay.appendChild(bDefText);
+	panelSession.appendChild(bDefText);
 
 	var bText = _bubble(t('settings.bubble_behavior','行为'));
 	bText.appendChild(_row(t('settings.lock_scroll','默认锁定滚动'), _buildToggle(function() { state.scrollLocked = !state.scrollLocked; saveSettings(); }, state.scrollLocked)));
-	panelDisplay.appendChild(bText);
-
-	// 高级：历史渲染窗口行数
-	// 窗口是性能手段（DOM 只保留这么多行）；行数越多，往回翻越少触发加载，
-	// 但每批布局与内存占用也随之上限上升。默认按视口推导。
-	var bAdv = _bubble(t('settings.bubble_advanced','高级'));
-	var winRow = _row(t('settings.history_window','历史窗口行数'),
-		_buildSelect(['auto','150','300','400','600'],
-			[t('settings.history_window_auto','自动（按视口）'),'150','300','400','600'],
-			state.historyWindowRows ? String(state.historyWindowRows) : 'auto',
+	// 新建出来的会话从哪儿开始：启动时建不建、历史要不要默认落盘 —— 和上面的
+	// 显示默认值是同一类「新会话默认」，所以放这一页。
+	bText.appendChild(_row(t('settings.auto_create','启动时新建会话'),
+		_buildSelect(['none', 'single', 'forward'],
+			[ t('settings.auto_create_none', '不创建'),
+			  t('settings.auto_create_single', '单端口'),
+			  t('settings.auto_create_forward', '端口转发') ],
+			state.autoCreateMode || 'single',
 			function(v) {
-				state.historyWindowRows = (v === 'auto') ? null : parseInt(v, 10);
+				state.autoCreateMode = v;
+				updateAutoCreateCheck(v !== 'none');
 				saveSettings();
-				var tab = getActiveTab();
-				if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-					renderHistoryLines(state.historyCache[tab.sessionId]);
-				}
-			})
-	);
-	winRow.title = t('settings.history_window_hint','窗口越大，往回翻越少需要加载；布局开销与内存上限也随之上升。默认按视口高度推导。');
-	bAdv.appendChild(winRow);
+			})));
+	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）；
+	// 守护进程没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由
+	// setAutoSaveToggleAvailable() 恢复。
+	var autoSaveToggle = _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true, !state.daemonOnline);
+	var autoSaveInput = autoSaveToggle.querySelector('input');
+	if (autoSaveInput) autoSaveInput.setAttribute('data-toggle', 'autoSave');
+	bText.appendChild(_row(t('settings.auto_save','默认自动保存'), autoSaveToggle));
+	panelSession.appendChild(bText);
 
-	// 自动回补：缓存里没有更早的了，要不要自动去守护进程/磁盘取。
-	// 关掉后翻到顶只摆一个可点的提示 —— 网络/超大历史场景下由人控制请求时机。
+	// 高级：往回翻的加载行为
+	// 「历史窗口行数」那项随老渲染器一起删了 —— 虚窗引擎按视口取窗口，DOM 里
+	// 始终只有看得见的那几十行，没有「窗口行数」这个概念可调。
+	var bAdv = _bubble(t('settings.bubble_advanced','高级'));
 	var refillRow = _row(t('settings.auto_refill','自动回补更早历史'),
 		_buildSelect(['on','off'],
 			[t('settings.auto_refill_on','开启（翻到顶自动加载）'), t('settings.auto_refill_off','关闭（点击提示才加载）')],
 			(state.autoRefillHistory === false) ? 'off' : 'on',
 			function(v) { state.autoRefillHistory = (v === 'on'); saveSettings(); })
 	);
-	refillRow.title = t('settings.auto_refill_hint','关闭后，往前翻到缓存头时只显示「↑ 向上滚动加载更多」，点它才会去取更早的记录。');
+	refillRow.title = t('settings.auto_refill_hint','关闭后，往前翻到缓存头时只显示「↑ 上面还有更早的记录」，要手动往下拖才会继续取。');
 	bAdv.appendChild(refillRow);
-	panelDisplay.appendChild(bAdv);
+	panelSession.appendChild(bAdv);
 
 	// Display color overrides — new layout: [name] [bg-color:dark|light] [fg-color:dark|light]
 	var colorGroups = [
@@ -461,9 +440,9 @@ function buildSettingsPage() {
 	panelColors.appendChild(bFwd);
 
 	// ── Panel: 外观 ──
-	var panelAppear = document.createElement('div');
-	panelAppear.className = 'settings-panel is-hidden';
-	panelAppear.setAttribute('data-panel', 'appearance');
+	var panelLook = document.createElement('div');
+	panelLook.className = 'settings-panel is-hidden';
+	panelLook.setAttribute('data-panel', 'look');
 
 	// 深浅模式：三张迷你窗口预览卡（跟随系统 / 浅色 / 深色）
 	var bLook = _bubble(t('settings.bubble_look','深浅模式'));
@@ -471,7 +450,7 @@ function buildSettingsPage() {
 	lookGrid.className = 'settings-look';
 	lookGrid.id = 'settingsLookGrid';
 	bLook.appendChild(lookGrid);
-	panelAppear.appendChild(bLook);
+	panelLook.appendChild(bLook);
 	renderSettingsLookGrid();
 
 	var themeRefresh = document.createElement('button');
@@ -487,7 +466,7 @@ function buildSettingsPage() {
 	themeGrid.id = 'settingsThemeGrid';
 	bTheme.appendChild(themeGrid);
 	bTheme.appendChild(_bubbleFooter('colors', t('settings.hint_colors','想使用其他主题？在软件目录中新建 resources\\themes\\ 下的主题文件夹导入，或单击此按键创建示例主题')));
-	panelAppear.appendChild(bTheme);
+	panelLook.appendChild(bTheme);
 
 	var iconRefresh = document.createElement('button');
 	iconRefresh.className = 'c-icon-btn';
@@ -502,7 +481,35 @@ function buildSettingsPage() {
 	iconGrid.id = 'settingsIconGrid';
 	bIcons.appendChild(iconGrid);
 	bIcons.appendChild(_bubbleFooter('icons', t('settings.hint_icons','想使用其他图标主题？在软件目录中新建 resources\\icons\\ 下的图标包导入，或单击此按键创建示例图标包')));
-	panelAppear.appendChild(bIcons);
+	panelLook.appendChild(bIcons);
+	// 字体与字号：只影响主显示区的排版，和主题/图标一样是「长得什么样」，
+	// 从「界面」搬到这一页。
+	var bFont = _bubble(t('settings.bubble_font','显示字体'));
+	bFont.appendChild(_row(t('settings.font_family','字体'),
+		_buildSelect(
+			['Consolas','Cascadia Code','Fira Code','JetBrains Mono','Source Code Pro','Courier New','Microsoft YaHei','SimSun','KaiTi','Segoe UI'],
+			['Consolas','Cascadia Code','Fira Code','JetBrains Mono','Source Code Pro','Courier New','微软雅黑','宋体','楷体','Segoe UI'],
+			state.displayFontFamily,
+			function(v) { state.displayFontFamily = v; _applyDisplayStyle(); saveSettings(); }
+		)
+	));
+	var fontSizeInput = document.createElement('input');
+	fontSizeInput.type = 'number';
+	fontSizeInput.className = 'settings-select';
+	fontSizeInput.value = state.displayFontSize;
+	fontSizeInput.min = 4;
+	fontSizeInput.max = 64;
+	fontSizeInput.addEventListener('change', function() {
+		var n = parseInt(fontSizeInput.value);
+		if (isNaN(n) || n < 4) n = 4;
+		if (n > 64) n = 64;
+		state.displayFontSize = n;
+		fontSizeInput.value = String(n);
+		_applyDisplayStyle();
+		saveSettings();
+	});
+	bFont.appendChild(_row(t('settings.font_size','字号'), fontSizeInput));
+	panelLook.appendChild(bFont);
 
 	// ── Panel: 标签页（0.8.4）──
 	// 只管标签栏怎么画：双行、第二行内容、客户端数字、状态点、名字宽度、拥挤顺序。
@@ -573,89 +580,65 @@ function buildSettingsPage() {
 			function(v) { _tabSet('tabCollapse', v); })));
 	panelTabs.appendChild(bTabInfo);
 
-	// 「关窗口时，窗口里的会话怎么办」：每次问 / 直接销毁 / 转到其他窗口。
-	// 判定在 Go 侧（app.go allowWindowClose + ConfirmWindowClose），这里只存取。
-	// 注意和下面「存储与行为」里的 shutdown_daemon 区分：那个管守护进程，
-	// 这个管窗口里的会话本身。
-	var bTabClose = _bubble(t('settings.bubble_tab_close', '关闭窗口'));
-	bTabClose.appendChild(_row(t('settings.window_close_action', '窗口里的会话'),
-		_buildSelect(['ask', 'destroy', 'transfer'],
-			[ t('settings.window_close_ask', '每次询问'),
-			  t('settings.window_close_destroy', '直接销毁（会断串口）'),
-			  t('settings.window_close_transfer', '转到其他窗口') ],
-			state.windowCloseAction || 'ask',
+	// 「关标签页 / 关窗口时，背后的线程怎么办」：每次问 / 只关掉界面（线程留着）/
+	// 连线程一起关。**关窗口和关标签页共用这一档**：关窗弹窗由它和「守护进程」页里的
+	// 「关闭 GUI 时」（shutdown_daemon_mode 四档）共同决定，会话那半按本档执行。
+	// 判定在 app.js 的 closeTab（标签）与 Go 侧的 allowWindowClose / ConfirmWindowClose
+	// （窗口）；这里只存取。
+	var bTabClose = _bubble(t('settings.bubble_tab_close', '关闭窗口与标签页'));
+	bTabClose.appendChild(_row(t('settings.tab_close_action', '关闭标签页 / 窗口时'),
+		_buildSelect(['ask', 'tab', 'process'],
+			[ t('settings.tab_close_ask', '每次询问'),
+			  t('settings.tab_close_tab', '只关掉界面（线程保留）'),
+			  t('settings.tab_close_process', '连线程一起关（断串口）') ],
+			state.tabCloseAction || 'ask',
 			function(v) {
-				state.windowCloseAction = v;
+				state.tabCloseAction = v;
 				saveSettings();
 			})));
-	// 「关闭标签页前确认」按内容挪到这里（原来在「存储与行为」面板）
-	bTabClose.appendChild(_row(t('settings.tab_close_warn', '关闭标签页前确认'),
-		_buildToggle(function() {
-			state.tabCloseWarn = !state.tabCloseWarn;
-			saveSettings();
-		}, state.tabCloseWarn === true)));
 	panelTabs.appendChild(bTabClose);
-	// ── Panel: 存储与行为 ──
-	var panelStorage = document.createElement('div');
-	panelStorage.className = 'settings-panel is-hidden';
-	panelStorage.setAttribute('data-panel', 'storage');
-	var bStorage = _bubble(t('settings.bubble_storage','存储与行为'));
+	// ── Panel: 守护进程（它什么时候起来、什么时候跟着 GUI 一起退）──
+	// 原来叫「存储与行为」，其实只有「默认自动保存」跟存储沾边，其余是守护进程生命周期
+	// 和串口权限。存储那两项（启动时新建会话 / 默认自动保存）已经搬到「会话默认」。
+	var panelDaemon = document.createElement('div');
+	panelDaemon.className = 'settings-panel is-hidden';
+	panelDaemon.setAttribute('data-panel', 'daemon');
+	var bDaemon = _bubble(t('settings.bubble_daemon','守护进程'));
 	// 纯 GUI 本地偏好：GUI 启动时若守护进程没在跑就自动拉起（不推给守护进程）。
-	bStorage.appendChild(_row(t('settings.auto_start_daemon','随 GUI 启动守护进程'),
+	bDaemon.appendChild(_row(t('settings.auto_start_daemon','随 GUI 启动守护进程'),
 		_buildToggle(function() {
 			state.autoStartDaemon = !state.autoStartDaemon;
 			saveSettings();
 		}, state.autoStartDaemon === true)));
-	// 「关闭 GUI 时」怎么处理守护进程。真正判定在 Go 侧（app.go 的 BeforeClose），
-	// 这里只负责存值：last = 自己是最后一个客户端时才关，always = 每次都关。
-	bStorage.appendChild(_row(t('settings.shutdown_daemon','关闭 GUI 时'),
-		_buildSelect(['never', 'last', 'always'],
+	// 「关闭 GUI 时」怎么处理守护进程。判定在 Go 侧（app.go 的 allowWindowClose），
+	// 这里只负责存值：
+	//   never  只关自己
+	//   last   自己是守护进程上最后一个客户端时才关（不询问）
+	//   always 每次都关（不询问）
+	//   ask    每次都问一句
+	// 0.9.1 之前这里是三档 + 一条独立的「关闭 GUI 前确认」开关，两者表达的是同一件
+	// 事的两半（会出现 last + 不提醒 = 静默断串口），现在合并成四档，那条开关删掉了。
+	bDaemon.appendChild(_row(t('settings.shutdown_daemon','关闭 GUI 时'),
+		_buildSelect(['never', 'last', 'always', 'ask'],
 			[ t('settings.shutdown_never', '不处理守护进程'),
 			  t('settings.shutdown_last', '最后一个客户端关闭时关闭'),
-			  t('settings.shutdown_always', '总是关闭守护进程') ],
-			state.shutdownDaemonMode || 'last',
+			  t('settings.shutdown_always', '总是关闭守护进程'),
+			  t('settings.shutdown_ask', '每次询问') ],
+			state.shutdownDaemonMode || 'ask',
 			function(v) {
 				state.shutdownDaemonMode = v;
 				saveSettings();
-				// 「关闭 GUI 前确认」只在真要关守护进程时才有意义
-				setShutdownWarnAvailable(v !== 'never');
 			})));
-	var warnToggle = _buildToggle(function() {
-		state.shutdownDaemonWarn = !state.shutdownDaemonWarn;
-		saveSettings();
-	}, state.shutdownDaemonWarn !== false, (state.shutdownDaemonMode || 'last') === 'never');
-	var warnInput = warnToggle.querySelector('input');
-	if (warnInput) warnInput.setAttribute('data-toggle', 'shutdownWarn');
-	bStorage.appendChild(_row(t('settings.shutdown_daemon_warn','关闭 GUI 前确认'), warnToggle));
 	// 「串口权限提示」只在 Linux 生效：分体版只能临时授权，拔插/重启后失效，
 	// 横幅就是那条提醒。关掉后不再自动弹，打开串口失败时仍会写明修法。
 	// 做成开关而不是「永不提示」，是因为这个误报与否全看发行版的设备权限，
 	// 有人确实不需要它。
-	bStorage.appendChild(_row(t('settings.serial_perm_hint','串口权限提示'),
+	bDaemon.appendChild(_row(t('settings.serial_perm_hint','串口权限提示'),
 		_buildToggle(function() {
 			state.serialPermissionHint = !(state.serialPermissionHint !== false);
 			saveSettings();
 		}, state.serialPermissionHint !== false)));
-	// （「关闭标签页前确认」已经挪到「标签页」面板的「关闭窗口」气泡里）
-	// 「默认自动保存」真正的开关在守护进程里（连上后由 tryConnect 推下去）。守护进程
-	// 没在跑时这一行没有作用对象 —— 置灰，否则点了没反应。上线后由
-	// setAutoSaveToggleAvailable() 恢复。
-	var autoSaveToggle = _buildToggle(function() { toggleAutoSaveHistory(); }, state.autoSaveHistory === true, !state.daemonOnline);
-	var autoSaveInput = autoSaveToggle.querySelector('input');
-	if (autoSaveInput) autoSaveInput.setAttribute('data-toggle', 'autoSave');
-	bStorage.appendChild(_row(t('settings.auto_save','默认自动保存'), autoSaveToggle));
-	bStorage.appendChild(_row(t('settings.auto_create','启动时新建会话'),
-		_buildSelect(['none', 'single', 'forward'],
-			[ t('settings.auto_create_none', '不创建'),
-			  t('settings.auto_create_single', '单端口'),
-			  t('settings.auto_create_forward', '端口转发') ],
-			state.autoCreateMode || 'single',
-			function(v) {
-				state.autoCreateMode = v;
-				updateAutoCreateCheck(v !== 'none');
-				saveSettings();
-			})));
-	panelStorage.appendChild(bStorage);
+	panelDaemon.appendChild(bDaemon);
 
 	// ── Panel: 语言 ──
 	var panelLang = document.createElement('div');
@@ -721,8 +704,11 @@ function buildSettingsPage() {
 	var protoValEl = null;
 	var dirValEl = null;
 	var renderValEl = null;
+	var buildValEl = null;
+	var metaEl = null;
 	[['settings.about_kv_proto', '协议号', ''],
 	 ['settings.about_kv_dir', '程序目录', ''],
+	 ['settings.about_build', '构建', ''],
 	 ['settings.about_kv_front', '前端', '经典脚本（无构建）'],
 	 ['settings.about_kv_back', '后端', 'Go / Wails v3'],
 	 ['settings.about_kv_render', '渲染', 'WebView'],
@@ -736,6 +722,7 @@ function buildSettingsPage() {
 		v.textContent = row[2];
 		if (row[0] === 'settings.about_kv_proto') protoValEl = v;
 		if (row[0] === 'settings.about_kv_dir') dirValEl = v;
+		if (row[0] === 'settings.about_build') buildValEl = v;
 		if (row[0] === 'settings.about_kv_render') renderValEl = v;
 		kv.appendChild(k);
 		kv.appendChild(v);
@@ -759,6 +746,34 @@ function buildSettingsPage() {
 			if (eng && renderValEl) renderValEl.textContent = eng;
 		}).catch(function() {});
 	} catch (e) { /* 同上 */ }
+	// 构建信息（构建时间 · 提交 · Go 版本）。取自 Go 侧 runtime/debug 的 VCS 信息，
+	// 不在 git 仓库里构建时只有 Go 版本 —— 那时就别摆一串空分隔符。
+	try {
+		window.go.main.App.GetBuildInfo().then(function(bi) {
+			if (!bi || !buildValEl) return;
+			var parts = [];
+			if (bi.time) parts.push(bi.time);
+			if (bi.commit) parts.push(bi.commit + (bi.dirty ? '*' : ''));
+			if (bi.go) parts.push(bi.go);
+			if (parts.length) buildValEl.textContent = parts.join(' · ');
+			// 第三方库版本（wails / 串口库）——写死会跟 go.mod 漂移，这里现取
+			if (metaEl) {
+				// 串口库只在守护进程里链接，GUI 二进制的 build info 里没有它 ——
+				// 名字照写（署名要全），版本有就带上，没有不编。
+				var meta = ['Apache-2.0'];
+				if (bi.wails) meta.push('Wails ' + bi.wails);
+				meta.push('go.bug.st/serial' + (bi.serial ? ' ' + bi.serial : ''));
+				meta.push('© 2026 nienieai');
+				metaEl.textContent = meta.join(' · ');
+			}
+		}).catch(function(e) {
+			// 以前这里静默吞掉，结果是「构建」一行空着却没人知道为什么。
+			// 打一行日志到主程序 stderr（GUI 没控制台，只能靠这个）。
+			try {
+				window.go.main.App.Log('[about] GetBuildInfo 失败: ' + (e && e.message ? e.message : e));
+			} catch (_) { /* 非 Wails 环境 */ }
+		});
+	} catch (e) { /* 同 */ }
 	colA.appendChild(kv);
 	// 设置已经拆成 settings/ 目录（gui.ini / cli.ini / daemon.ini），
 	// 这里给一个直达入口，省得用户自己去程序目录里翻。
@@ -788,20 +803,89 @@ function buildSettingsPage() {
 	aboutWrap.appendChild(colB);
 
 	bAbout.appendChild(aboutWrap);
+
+	// 页脚：两个外链 + 一行小字（许可证 / 第三方 / 版权）。
+	// 放在两列下面而不是塞进「说明」，是不想让版面再分一栏。
+	var foot = document.createElement('div');
+	foot.className = 'settings-about-foot';
+	var links = document.createElement('div');
+	links.className = 'settings-about-links';
+	[['settings.about_repo', '项目地址', 'OpenProjectPage'],
+	 ['settings.about_issues', '问题反馈', 'OpenIssuesPage']].forEach(function(it) {
+		var btn = document.createElement('button');
+		btn.className = 'settings-about-link';
+		btn.setAttribute('data-i18n', it[0]);
+		btn.textContent = t(it[0], it[1]);
+		btn.addEventListener('click', function() {
+			// 旧 exe 上没有这两个方法：调用会返回 rejected promise，不是抛异常 ——
+			// 不接一下就会在控制台留一条未处理拒绝。
+			try {
+				var call = window.go.main.App[it[2]]();
+				if (call && call.catch) call.catch(function() {});
+			} catch (e) { /* 非 Wails 环境忽略 */ }
+		});
+		links.appendChild(btn);
+	});
+	foot.appendChild(links);
+	// 第三方库版本由 GetBuildInfo 现取（见上面的回调），这里只放不依赖构建的固定项
+	var meta = document.createElement('div');
+	meta.className = 'settings-about-meta';
+	meta.textContent = 'Apache-2.0 · go.bug.st/serial · © 2026 nienieai';
+	metaEl = meta;
+	foot.appendChild(meta);
+	bAbout.appendChild(foot);
 	panelAbout.appendChild(bAbout);
 
 	// Nav items + panels
+	// 七页的边界（0.9.1 重排）：
+	//   外观      长得什么样：深浅 / 颜色主题 / 图标 / 字体字号
+	//   数据高亮  只负责颜色（历史流 / 发送框 / 端口转发）
+	//   会话默认  新建的标签页 / 会话一开始是什么样，以及启动行为
+	//   标签页    标签栏怎么画 + 关标签页/窗口时线程怎么办
+	//   守护进程  它什么时候起来、什么时候跟着 GUI 一起退、Linux 权限提示
+	//   语言 / 关于 不动
+	// 以前这里是「界面 + 外观 + 标签页 + 存储与行为」四页混在一起：字体在「界面」、
+	// 主题在「外观」、关闭线程在「标签页」、关闭守护进程在「存储与行为」，同一类设置
+	// 被拆到两页去调。
 	var sections = [
-		// 里面已经没有编码 / Hex / 文本那些了（它们按标签页走 / 放 daemon.ini），
-		// 剩下的是字体、行为、高级，叫「界面」。
-		{ key: 'display',    i18n: 'settings.nav_display',    fb: '界面', panel: panelDisplay },
-		{ key: 'colors',     i18n: 'settings.nav_colors',     fb: '数据高亮',   panel: panelColors },
-		{ key: 'appearance', i18n: 'settings.nav_appearance', fb: '外观',       panel: panelAppear },
-		{ key: 'tabs',       i18n: 'settings.nav_tabs',       fb: '标签页',     panel: panelTabs },
-		{ key: 'storage',    i18n: 'settings.nav_storage',    fb: '存储与行为', panel: panelStorage },
-		{ key: 'language',   i18n: 'settings.nav_language',   fb: '语言',       panel: panelLang },
-		{ key: 'about',      i18n: 'settings.nav_about',      fb: '关于',       panel: panelAbout }
+		{ key: 'look',     i18n: 'settings.nav_look',     fb: '外观',     panel: panelLook },
+		{ key: 'colors',   i18n: 'settings.nav_colors',   fb: '数据高亮', panel: panelColors },
+		{ key: 'session',  i18n: 'settings.nav_session',  fb: '会话默认', panel: panelSession },
+		{ key: 'tabs',     i18n: 'settings.nav_tabs',     fb: '标签页',   panel: panelTabs },
+		{ key: 'daemon',   i18n: 'settings.nav_daemon',   fb: '守护进程', panel: panelDaemon },
+		{ key: 'language', i18n: 'settings.nav_language', fb: '语言',     panel: panelLang },
+		{ key: 'about',    i18n: 'settings.nav_about',    fb: '关于',     panel: panelAbout }
 	];
+
+	// activate 是「切到某一页」的唯一实现：点导航条和首屏打开共用它。
+	// 所有面板建出来都带 is-hidden，以前只有「界面」那一张不带，旧代码靠这个蒙对了
+	// 首屏；页面重排后「外观」排在第一位，不主动打开就只剩左边导航、右边全空 ——
+	// 点一下别的页再回来才有内容（0.9.1 实测踩到）。
+	function activate(sec) {
+		nav.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
+		var navItem = nav.querySelector('.settings-nav-item[data-nav="' + sec.key + '"]');
+		if (navItem) navItem.classList.add('is-active');
+		body.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
+		sec.panel.classList.remove('is-hidden');
+		// 主题 / 图标 / 语言这三页是懒加载的（列表要等外部资源到手）
+		if (sec.key === 'look') {
+			setTimeout(function() { renderSettingsLookGrid(); renderSettingsThemeGrid(); renderSettingsIconGrid(); }, 50);
+		}
+		if (sec.key === 'language') {
+			setTimeout(function() { refreshSettingsLangList(); }, 50);
+		}
+		// 面板显示出来后：补渲染颜色预览，并重新量标题高度（隐藏时量到 0）
+		setTimeout(function() {
+			_measureBubbleHeads(sec.panel);
+			if (sec.key === 'colors') {
+				sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
+					if (!el._colorItems) return;
+					if (el._colorKind === 'send') _renderSendPreview(el);
+					else _renderColorPreview(el._colorItems, el, el._colorKind);
+				});
+			}
+		}, 50);
+	}
 
 	sections.forEach(function(sec, idx) {
 		var item = document.createElement('div');
@@ -816,29 +900,7 @@ function buildSettingsPage() {
 		navLab.setAttribute('data-i18n', sec.i18n);
 		navLab.textContent = t(sec.i18n, sec.fb);
 		item.appendChild(navLab);
-		item.addEventListener('click', function() {
-			nav.querySelectorAll('.settings-nav-item').forEach(function(el) { el.classList.remove('is-active'); });
-			item.classList.add('is-active');
-			body.querySelectorAll('.settings-panel').forEach(function(p) { p.classList.add('is-hidden'); });
-			sec.panel.classList.remove('is-hidden');
-			if (sec.key === 'appearance') {
-				setTimeout(function() { renderSettingsThemeGrid(); renderSettingsIconGrid(); }, 50);
-			}
-			if (sec.key === 'language') {
-				setTimeout(function() { refreshSettingsLangList(); }, 50);
-			}
-			// 面板显示出来后：补渲染颜色预览，并重新量标题高度（隐藏时量到 0）
-			setTimeout(function() {
-				_measureBubbleHeads(sec.panel);
-				if (sec.key === 'colors') {
-					sec.panel.querySelectorAll('.c-color-preview-wrap').forEach(function(el) {
-						if (!el._colorItems) return;
-						if (el._colorKind === 'send') _renderSendPreview(el);
-						else _renderColorPreview(el._colorItems, el, el._colorKind);
-					});
-				}
-			}, 50);
-		});
+		item.addEventListener('click', function() { activate(sec); });
 		nav.appendChild(item);
 		body.appendChild(sec.panel);
 	});
@@ -846,6 +908,8 @@ function buildSettingsPage() {
 	layout.appendChild(nav);
 	layout.appendChild(body);
 	wrapper.appendChild(layout);
+	// 首屏把第一页打开（样式与懒加载都走 activate，和点导航完全同一条路）
+	if (sections.length) activate(sections[0]);
 	// Nav backdrop & toggle (narrow: overlay; wide: always visible via CSS)
 	var navBackdrop = document.createElement('div');
 	navBackdrop.className = 'settings-nav-backdrop';
@@ -1006,20 +1070,6 @@ function _buildSelect(values, labels, current, onChange, disabled) {
 
 function _buildEncodingSelect() {
 	return _buildSelect(['utf-8','gb2312','ascii'], ['UTF-8','GB2312','ASCII'], state.encoding, function(v) { setEncoding(v); });
-}
-
-function _buildLangSelect() {
-	var langs = [
-		['zh', '简体中文'], ['zh-Hant', '繁體中文'], ['en', 'English'],
-		['fr', 'Français'], ['es', 'Español'], ['ru', 'Русский'],
-		['ar', 'العربية'], ['ja', '日本語'], ['ko', '한국어']
-	];
-	if (window._externalLangs) {
-		window._externalLangs.forEach(function(el) {
-			if (!langs.some(function(l) { return l[0] === el.code; })) langs.push([el.code, el.name]);
-		});
-	}
-	return _buildSelect(langs.map(function(p){return p[0];}), langs.map(function(p){return p[1];}), state.language, function(v) { setLanguage(v); });
 }
 
 // ---- theme color cache ----
@@ -1361,9 +1411,17 @@ async function refreshSettingsLangList() {
 	try {
 		window._externalLangs = await window.go.main.App.ListExternalI18n() || [];
 	} catch(e) { window._externalLangs = []; }
-	var lang = state.language || 'zh';
+	var lang = state.language || 'auto';
 	var builtinLangs = ['zh','zh-Hant','en','fr','es','ru','ar','ja','ko'];
 	var all = [];
+	// 「跟随系统」排在最前面：它不是语言包，选中后由 resolveAutoLang() 按系统语言
+	// 解析（没有对应语言包时回落英语）。副标题显示当前解析结果，省得用户猜。
+	all.push({
+		code: 'auto',
+		name: t('settings.lang_auto', '跟随系统'),
+		builtin: true,
+		sub: (lang === 'auto') ? ('auto → ' + resolveAutoLang()) : 'auto'
+	});
 	for (var i = 0; i < builtinLangs.length; i++) {
 		var lc = builtinLangs[i];
 		var name = lc;
@@ -1403,7 +1461,7 @@ async function refreshSettingsLangList() {
 		row.appendChild(langName);
 		var langCode = document.createElement('span');
 		langCode.className = 'settings-lang-code';
-		langCode.textContent = item.code;
+		langCode.textContent = item.sub || item.code;
 		row.appendChild(langCode);
 		(function(code, el) {
 			el.addEventListener('click', function() {
@@ -1920,7 +1978,7 @@ function refreshSettingsPage() {
 	if (!parent) return;
 	// Remember which panel is active before rebuilding
 	var activeNav = old.querySelector('.settings-nav-item.is-active');
-	var activeKey = activeNav ? activeNav.getAttribute('data-nav') : 'display';
+	var activeKey = activeNav ? activeNav.getAttribute('data-nav') : 'look';
 	var newPage = buildSettingsPage();
 	parent.replaceChild(newPage, old);
 	// Restore the active panel
@@ -1942,21 +2000,13 @@ function refreshSettingsPage() {
 // 守护进程上线/下线时同步「默认自动保存」的可用性。设置页没打开时
 // querySelector 找不到 input，天然 no-op。
 function setAutoSaveToggleAvailable(online) {
-	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="autoSave"]');
+	var input = document.querySelector('.settings-panel[data-panel="session"] input[data-toggle="autoSave"]');
 	if (!input) return;
 	input.disabled = !online;
 	var label = input.closest('.settings-toggle');
 	if (label) label.classList.toggle('is-disabled', !online);
 }
 
-// 「关闭 GUI 前确认」只在关闭模式真的会停守护进程时才有意义（never 下置灰）。
-function setShutdownWarnAvailable(available) {
-	var input = document.querySelector('.settings-panel[data-panel="storage"] input[data-toggle="shutdownWarn"]');
-	if (!input) return;
-	input.disabled = !available;
-	var label = input.closest('.settings-toggle');
-	if (label) label.classList.toggle('is-disabled', !available);
-}
 
 // ---- check if settings tab is active ----
 function isSettingsTab() {

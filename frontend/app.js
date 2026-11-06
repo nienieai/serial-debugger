@@ -83,14 +83,6 @@ function initProbeWindow() {
   }
 }
 
-function openProbeWindow() {
-  window.go.main.App.OpenProbeWindow().then(function (name) {
-    if (window.console) console.log('[probe] 已打开窗口: ' + name);
-  }).catch(function (e) {
-    showAlert(t('cli.error', '错误'), '打开测试窗口失败: ' + e);
-  });
-}
-
 // ---- 会话窗口原型 ----
 //
 // 独立窗口用 ?w=session&sid=X 打开（Go 侧见 OpenSessionWindow）。
@@ -161,20 +153,6 @@ function initSessionWindow(sid) {
   });
 }
 
-// 主窗口入口：把当前标签绑定的会话开成独立窗口。
-function openActiveSessionWindow() {
-  var tab = (typeof getActiveTab === 'function') ? getActiveTab() : null;
-  if (!tab || !tab.sessionId) {
-    showAlert(t('confirm.title', '提示'), '当前标签还没有绑定会话（先打开串口）');
-    return;
-  }
-  window.go.main.App.OpenSessionWindow(tab.sessionId).then(function (n) {
-    if (window.console) console.log('[session-window] ' + n);
-  }).catch(function (e) {
-    showAlert(t('cli.error', '错误'), '打开会话窗口失败: ' + e);
-  });
-}
-
 // ---- state ----
 const state = {
   daemonOnline: false,
@@ -206,7 +184,11 @@ const state = {
     encoding: 'utf-8', hexCase: 'upper', hexPrefix: true, hexSep: 'space',
     crVisible: true, hexEscapeMode: 'show', hexEscapeFormat: 'slash', copyHexEscapes: true,
     // 制表符长度与行尾序列同样按标签页走（状态栏那行 Tab:4 UTF-8 LF 三样都跟标签页）
-    tabSize: 4, eolSequence: 'lf'
+    tabSize: 4, eolSequence: 'lf',
+    // 格式解析：none 无解析 / delim 按分隔符切帧 / modbus Modbus RTU。
+    // 0.9.1 先只做「选项 + 状态栏显示」（见 statusbar.js 的 createStatusParse），
+    // 解析真正参与渲染是下一步的事 —— 所以它只跟着标签页存，不动任何历史行。
+    parseMode: 'none'
   },
   displayFontFamily: 'Consolas',
   displayFontSize: 14,
@@ -217,7 +199,7 @@ const state = {
   colorThemes: [],
   iconThemeId: '',
   iconThemes: [],
-  language: 'zh',
+  language: 'auto',
   scrollLocked: false,
   // 历史渲染窗口行数：null = 按视口推导（推荐）；数字 = 设置里手动指定
   historyWindowRows: null,
@@ -230,19 +212,19 @@ const state = {
   autoCreateMode: 'single',
   // 「随 GUI 启动守护进程」：GUI 启动时若守护进程没在跑就自动拉起。
   autoStartDaemon: false,
-  // 「关闭 GUI 时」怎么处理守护进程：never 不动 / last 最后一个 GUI 关闭时关 /
-  // always 总是关。守卫判断在 Go 侧（BeforeClose），这里只负责持久化和设置页。
-  shutdownDaemonMode: 'last',
-  // 关 GUI 前要不要弹确认（会断开所有串口）。只在 last / always 下有作用。
-  shutdownDaemonWarn: true,
-  // 关闭标签页前确认：只在那个标签的串口开着时才拦。
-  tabCloseWarn: false,
+  // 「关闭 GUI 时」怎么处理守护进程，四档：never 只关自己 / last 自己是最后一个
+  // 客户端才关 / always 每次都关 / ask 每次都问一句。判定在 Go 侧（allowWindowClose），
+  // 这里只负责持久化和设置页。
+  //
+  // 0.9.1 之前是「三档 + 关闭 GUI 前确认开关」，那个开关并进了 ask 这一档。
+  shutdownDaemonMode: 'ask',
+  // 关标签页时那个线程怎么办：ask 三选一 / tab 只关标签（线程留着）/ process 一起关。
+  // 只在那个标签的串口开着时才拦（空闲标签直接关进程）。
+  tabCloseAction: 'ask',
   // 「串口权限不足」横幅（只有 Linux 会真正显示）：默认开。关掉后不再自动弹，
   // 打开串口失败时仍会在错误文案里写明怎么手动修。
   serialPermissionHint: true,
-  // 「关窗口时，这个窗口里的会话怎么处理」：ask 每次问 / destroy 直接销毁 /
-  // transfer 转到别的窗口。判定在 Go 侧（allowWindowClose），这里只管存取。
-  windowCloseAction: 'ask',
+
   // 「默认自动保存历史」：默认关闭，只有用户显式打开才落盘。
   autoSaveHistory: false,
   // COM 口 → 设备描述（「USB-Enhanced-SERIAL CH343」这种）。端口下拉用完就丢，
@@ -311,6 +293,18 @@ function _setDisp(key, val) {
   }
 }
 
+// 把一个标签页的显示设置推给守护进程。
+//
+// 会话第一次挂上时推一次：守护进程那边如果一直是空的，这条会话开始录制时
+// settings.json 落的是 daemon.ini 的默认值 —— 用户在标签页里选的 GB2312 /
+// 制表符 / 行尾序列一个都留不下来。
+function _pushTabDisplay(tab) {
+  if (!tab || !tab.sessionId || !tab.disp || !state.daemonOnline) return;
+  try {
+    window.go.main.App.SetSessionDisplay(tab.sessionId, tab.disp).catch(function () {});
+  } catch (e) { /* 守护进程没在跑：显示设置只留在标签页里 */ }
+}
+
 // 改「新标签页的默认值」并写回守护进程的 daemon.ini。
 //
 // 只有守护进程能写那个文件（单写者），所以走 IPC。离线时调用方已经把控件置灰了，
@@ -363,7 +357,7 @@ async function _redecodeActiveTab(enc) {
   var tab = getActiveTab();
   if (!tab || !tab.sessionId) return;
   var entries = state.historyCache[tab.sessionId];
-  if (!entries || !entries.length) { _rerenderHistoryKeepingView(); return; }
+  if (!entries || !entries.length) { _liveReconfigure(); return; }
   var hexes = [];
   for (var i = 0; i < entries.length; i++) {
     if (entries[i].hex) hexes.push(entries[i].hex);
@@ -376,7 +370,7 @@ async function _redecodeActiveTab(enc) {
       }
     } catch (e) {}
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 // ---- settings persistence ----
@@ -437,11 +431,9 @@ function _collectSettings() {
       language: state.language,
       autoCreateMode: state.autoCreateMode || 'single',
       autoStartDaemon: state.autoStartDaemon === true,
-      shutdownDaemonMode: state.shutdownDaemonMode || 'last',
-      shutdownDaemonWarn: state.shutdownDaemonWarn !== false,
-      tabCloseWarn: state.tabCloseWarn === true,
+      shutdownDaemonMode: state.shutdownDaemonMode || 'ask',
+      tabCloseAction: state.tabCloseAction || 'ask',
       serialPermissionHint: state.serialPermissionHint !== false,
-      windowCloseAction: state.windowCloseAction || 'ask',
       autoSaveHistory: state.autoSaveHistory === true,
       tabTwoLines: state.tabTwoLines === true,
       tabSubLine: state.tabSubLine || 'a',
@@ -521,15 +513,18 @@ async function loadSettings() {
       // 旧默认正是「开 + 单端」，行为不变。
       updateAutoCreateCheck(state.autoCreateMode !== 'none');
       if (typeof s.autoStartDaemon === 'boolean') state.autoStartDaemon = s.autoStartDaemon;
-      if (s.shutdownDaemonMode === 'never' || s.shutdownDaemonMode === 'last' || s.shutdownDaemonMode === 'always') {
+      if (s.shutdownDaemonMode === 'never' || s.shutdownDaemonMode === 'last' ||
+          s.shutdownDaemonMode === 'always' || s.shutdownDaemonMode === 'ask') {
         state.shutdownDaemonMode = s.shutdownDaemonMode;
       }
-      if (typeof s.shutdownDaemonWarn === 'boolean') state.shutdownDaemonWarn = s.shutdownDaemonWarn;
-      if (typeof s.tabCloseWarn === 'boolean') state.tabCloseWarn = s.tabCloseWarn;
-      if (typeof s.serialPermissionHint === 'boolean') state.serialPermissionHint = s.serialPermissionHint;
-      if (s.windowCloseAction === 'destroy' || s.windowCloseAction === 'transfer' || s.windowCloseAction === 'ask') {
-        state.windowCloseAction = s.windowCloseAction;
+      // 0.9.1 之前是布尔 tabCloseWarn（关闭前确认）：true → 每次询问，
+      // false → 直接关线程。旧设置读进来时迁移一次，之后只认 tabCloseAction。
+      if (s.tabCloseAction === 'ask' || s.tabCloseAction === 'tab' || s.tabCloseAction === 'process') {
+        state.tabCloseAction = s.tabCloseAction;
+      } else if (typeof s.tabCloseWarn === 'boolean') {
+        state.tabCloseAction = s.tabCloseWarn ? 'ask' : 'process';
       }
+      if (typeof s.serialPermissionHint === 'boolean') state.serialPermissionHint = s.serialPermissionHint;
       // 「默认自动保存历史」：默认关。这里只读本地设置，连上守护进程后再推给它。
       state.autoSaveHistory = s.autoSaveHistory === true;
       updateAutoSaveCheck(state.autoSaveHistory);
@@ -569,7 +564,8 @@ async function loadSettings() {
     // Always initialize UI regardless of whether settings exist
     await initColorThemes();
     await initIconThemes();
-    await loadI18n(state.language);
+    // 保存的语言可能是 'auto'：加载前先解析成具体语言（见 i18n.js 的 effectiveLang）
+    await loadI18n(effectiveLang());
     document.documentElement.dir = i18nDir();
     applyFont();
     updateLangMenu();
@@ -584,7 +580,7 @@ async function loadSettings() {
     initIconThemes().catch(() => {});
     _applyDisplayStyle();
     if (_statusBar) _statusBar.updateEol();
-    await loadI18n(state.language).catch(() => {});
+    await loadI18n(effectiveLang()).catch(() => {});
     document.documentElement.dir = i18nDir();
     applyFont();
     updateLangMenu();
@@ -776,6 +772,7 @@ function setEncoding(enc) {
 // 当前标签页的显示设置变了之后，把状态栏/菜单勾选/标签页设置弹窗都刷一遍。
 function _syncDispUi() {
   updateEncodingDisplay();
+  if (_statusBar && typeof _statusBar.updateParse === 'function') _statusBar.updateParse();
   updateHexMenu();
   updateTextMenu();
   _updateHexEscFmtRow();
@@ -843,9 +840,9 @@ function _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk) {
   document.getElementById('alertOverlay').classList.remove('is-hidden');
 }
 
-// showChoice 用同一个弹窗摆两个并列选项（不是「确定/取消」）。
-//
-// 只有「打开工程目录 / 打开 .stlog 文件」用它：拿确认框做二选一的话，取消键
+// showChoice 在同一个弹窗里摆 N 个并列选项（不是「确定/取消」）：
+// 关窗口的「销毁 / 转交 / 取消」、关标签页的「仅关闭标签 / 同时关闭线程 / 取消」、
+// 以及「打开工程目录 / 打开 .stlog 文件」都走它。拿确认框做二选一的话，取消键
 // 就变成了第二个选项，语义是歪的。
 function _choiceInPage(title, message, options) {
   _resetAlertButtons();
@@ -929,7 +926,7 @@ function _openDialog(spec) {
       setTimeout(function () {
         if (_dlgPending[id]) {
           delete _dlgPending[id];
-          resolve({ action: 'cancel', dontAsk: false });
+          resolve({ action: 'cancel', dontAsk: false, dontAsk2: false });
         }
       }, 180000);
     });
@@ -941,7 +938,7 @@ function _onDialogFrame(d) {
   if (!d || !d.id) return;
   var fn = _dlgPending[d.id];
   delete _dlgPending[d.id];
-  if (fn) fn({ action: d.action || 'cancel', dontAsk: !!d.dontAsk });
+  if (fn) fn({ action: d.action || 'cancel', dontAsk: !!d.dontAsk, dontAsk2: !!d.dontAsk2 });
 }
 
 function showAlert(title, message, okKey, mono) {
@@ -959,7 +956,9 @@ function showAlert(title, message, okKey, mono) {
 
 // onCancel 可选：用户点了「取消」/按 Esc/关掉对话框时调用。关窗口确认必须用它 ——
 // 不回调的话 Go 侧的「待确认」标记不会清，下次再点 X 会被当成重复请求直接吞掉。
-function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel) {
+// onDontAsk2 / dontAsk2Label 可选：第二个勾选框。关窗口时「记住会话怎么处理」和
+// 「不再提醒停守护进程」写的是两个不同设置，一个勾选框装不下（见 DialogSpec）。
+function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel, onDontAsk2, dontAsk2Label) {
   var text = String(message === null || message === undefined ? '' : message);
   _openDialog({
     kind: 'confirm',
@@ -970,12 +969,15 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel
       { key: 'cancel', label: t(cancelKey || 'confirm.cancel', '取消'), kind: 'default' }
     ],
     dontAsk: !!onDontAsk,
-    dontAskLabel: t('confirm.dont_ask', '不再提醒')
+    dontAskLabel: t('confirm.dont_ask', '不再提醒'),
+    dontAsk2: !!onDontAsk2,
+    dontAsk2Label: dontAsk2Label || t('confirm.remember_choice', '记住选择')
   }).then(function (r) {
     if (r.action !== 'ok') { if (onCancel) onCancel(r.action); return; }
-    // 顺序要紧：「不再提醒」先把设置落盘，再执行 onOk —— 退出确认那条
+    // 顺序要紧：两个「记住」都先把设置落盘，再执行 onOk —— 退出确认那条
     // onOk 是 QuitApp，反过来就来不及写盘（页内版本同样的约束，见 closeAlert）
     if (r.dontAsk && onDontAsk) onDontAsk();
+    if (r.dontAsk2 && onDontAsk2) onDontAsk2();
     if (onOk) onOk();
   }).catch(function () {
     _confirmInPage(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel);
@@ -984,7 +986,9 @@ function showConfirm(title, message, onOk, okKey, cancelKey, onDontAsk, onCancel
 
 // dontAskLabel：可选。传了就在对话框里多一个勾选框（Go 侧 DialogSpec.dontAsk，
 // 见 dialog.js:68）；勾没勾作为第一个参数交给被选中的 onPick。
-function showChoice(title, message, options, dontAskLabel) {
+// dontAsk2Label 可选：第二个勾选框（两个「记住」写的是两个不同设置时用）。
+// onPick 收到 (勾选1, 勾选2)。
+function showChoice(title, message, options, dontAskLabel, dontAsk2Label) {
   var opts = options || [];
   var buttons = opts.map(function (o, i) {
     return { key: 'c' + i, label: o.label, kind: i === 0 ? 'primary' : 'default' };
@@ -995,12 +999,14 @@ function showChoice(title, message, options, dontAskLabel) {
     message: String(message === null || message === undefined ? '' : message),
     buttons: buttons,
     dontAsk: !!dontAskLabel,
-    dontAskLabel: dontAskLabel || ''
+    dontAskLabel: dontAskLabel || '',
+    dontAsk2: !!dontAsk2Label,
+    dontAsk2Label: dontAsk2Label || ''
   }).then(function (r) {
     var m = /^c(\d+)$/.exec(r.action || '');
     if (!m) return;
     var opt = opts[parseInt(m[1], 10)];
-    if (opt && opt.onPick) opt.onPick(!!r.dontAsk);
+    if (opt && opt.onPick) opt.onPick(!!r.dontAsk, !!r.dontAsk2);
   }).catch(function () {
     // 页内降级弹窗没有勾选框：少一个「记住」总比功能整个挂掉强
     _choiceInPage(title, message, options);
@@ -1108,8 +1114,24 @@ async function fixSerialPermission() {
 // 交给横幅处理（可点授权、界面照常能操作）；其它错误原样弹窗。
 // 用户把提示关掉时仍然要给一条能照着做的路，所以补一句手动修法。
 function _onOpenError(e) {
+  // 守护进程把「端口被别的程序占用」这类可预期失败编码成 sys.* 键，这里直接翻成
+  // 当前语言，别把 Access is denied 原样甩给用户。
+  //
+  // 注意不能只看开头：Wails 把 Go 的 error 包成 `RuntimeError: <原文>`，实测弹窗
+  // 里出现的就是「打开失败RuntimeError: sys.port_busy_other」，所以用正则抓键。
+  var raw = String(e || '');
+  var sysKey = (raw.match(/sys\.[A-Za-z0-9_.]+/) || [null])[0];
+  if (sysKey) {
+    showAlert(t('cli.error', '错误'), formatSysMsg(sysKey));
+    // 顺手刷新一次端口列表：此刻正是「被别的程序占了」的现场，让下拉立刻标红，
+    // 而不是等用户下次手动刷新才看到。
+    if (sysKey === 'sys.port_busy_other' && typeof refreshPortsForce === 'function') {
+      refreshPortsForce().catch(function() {});
+    }
+    return;
+  }
   var msg = t('serial.open_fail', '打开失败: ') + e;
-  var s = String(e || '');
+  var s = raw;
   if (!/permission denied|EACCES|PermissionDenied/i.test(s)) {
     showAlert(t('cli.error', '错误'), msg);
     return;
@@ -1129,38 +1151,26 @@ function _onOpenError(e) {
 //
 // 新模型下关窗口会处理掉这个窗口名下的会话，所以这里必须问清楚：用户可能只是
 // 想清掉界面，结果把几条串口连接一起断了。确认后调 ConfirmWindowClose 再关一次，
-// 这次 Go 侧看到 forcedWindows 就放行。
-// 此刻窗口**还没关掉**（event.Cancel 拦住了）。
+// 这次 Go 侧看到 forcedWindows 就放行。此刻窗口**还没关掉**（event.Cancel 拦住了）。
 //
-// d.closeAction（设置 → 标签页 →「关闭窗口时会话」）：
-//   destroy → 不再追问，直接销毁（会断串口；设置页那条文案就是「直接销毁」）
-//   ask     → 三选一：销毁并关闭 / 转到其他窗口 / 取消
-//   transfer 不会走到这里（Go 直接转交；没有别的窗口可转时退化成 destroy，
-//            那种情形 Go 会再问一次，走下面单按钮的确认框）
+// 帧里带四件事，按需组合：
+//   sessions / closeAction  会话那半（和关标签页共用 TabCloseAction）
+//   askDaemon               守护进程那半：用户选了「每次询问」，要先问一句
+//   daemonStop              守护进程那半：不问也一定会停（last / always 档）
+//   lastWindow              关掉就是退出程序：这时只问守护进程，不问线程
 //
-// 三选一里带「记住选择」：勾上就把这次的选择写回设置（windowCloseAction），
-// 下次按同一档办（destroy 直接销毁、transfer 直接转交，都不再问）。
+// 两个勾选框的时代结束了：「不再提醒」那条设置并进了「关闭 GUI 时」的第 4 档 ask，
+// 要不要问由档位本身表达，弹窗里只剩「记住选择」（写回 TabCloseAction）。
 function _onWindowCloseConfirm(d) {
   var n = (d && d.sessions) || 0;
-  var stopDaemon = !!(d && d.stopDaemon);
-  var mode = (d && d.mode) || 'last';
-  var canTransfer = !!(d && d.canTransfer);
   var closeAction = (d && d.closeAction) || 'ask';
-  var msg = '';
-  if (n > 0) {
-    msg += t('confirm.win_close_sessions', '关闭窗口会停止这个窗口里的会话（共 {n} 个），对应串口连接将断开。')
-      .replace('{n}', String(n));
-  }
-  if (stopDaemon) {
-    if (msg) msg += ' ';
-    msg += mode === 'always'
-      ? t('confirm.quit_always', '退出将停止守护进程，所有串口连接都会断开（包括其它 GUI / CLI / MCP 客户端）。确定退出吗？')
-      : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？');
-  }
-  if (!msg) msg = t('confirm.win_close_bare', '确定关闭这个窗口吗？');
+  var lastWindow = !!(d && d.lastWindow);
+  var askDaemon = !!(d && d.askDaemon);
+  var daemonStop = !!(d && d.daemonStop);
+  var mode = (d && d.mode) || 'ask';
 
-  function doClose(closeMode) {
-    window.go.main.App.ConfirmWindowClose(closeMode, stopDaemon).catch(function(e) {
+  function doClose(closeMode, stop) {
+    window.go.main.App.ConfirmWindowClose(closeMode, !!stop).catch(function(e) {
       console.error('ConfirmWindowClose failed:', e);
     });
   }
@@ -1168,32 +1178,95 @@ function _onWindowCloseConfirm(d) {
     // 用户取消了：清掉 Go 侧的待确认标记，否则下次点 X 会被当成重复请求
     window.go.main.App.CancelWindowClose().catch(function() {});
   }
-  // 「不再提醒」只和「要不要停守护进程」有关；单纯关窗口时不该出现这个勾选框
-  var onDontAsk = stopDaemon ? function() {
-    // 必须在关窗之前落盘，否则进程先退了设置就丢了
-    state.shutdownDaemonWarn = false;
-    saveSettingsNow();
-  } : null;
-  // 「记住选择」：把这次选的会话处理方式写回设置（设置 → 标签页 → 窗口里的会话）。
-  // 同样必须在关窗之前落盘 —— 关窗之后进程可能就没了。
-  function rememberChoice(action) {
-    state.windowCloseAction = action;
-    saveSettingsNow();
+
+  // 最后一个窗口：关掉就是退出程序，会话的处置跟着守护进程走（见「关闭窗口流程」）。
+  // 这时不该再问「仅关闭窗口 / 同时关闭线程」—— 守护进程停了线程也留不住。
+  if (lastWindow) {
+    var quitMsg = mode === 'always'
+      ? t('confirm.quit_always', '退出将停止守护进程，所有串口连接都会断开（包括其它 GUI / CLI / MCP 客户端）。确定退出吗？')
+      : t('confirm.quit_last', '这是最后一个客户端。退出将停止守护进程，所有串口连接都会断开。确定退出吗？');
+    showConfirm(
+      t('confirm.quit_title', '退出串口调试工具'),
+      quitMsg,
+      function() { doClose('process', true); },
+      'confirm.quit_ok', 'confirm.cancel',
+      null, cancel
+    );
+    return;
   }
 
-  if (n > 0 && canTransfer && closeAction === 'ask') {
-    // 两个选项都是「真的关窗」，所以用三选一：销毁 / 转交 / 取消
-    showChoice(
+  // 会话那半。n > 0 时按档位给说法：ask 要把两条路都讲清楚，tab / process 是
+  // 设置里已经定过的，这里只确认「真的按这个办」。
+  var sessionMsg = '';
+  if (n > 0) {
+    if (closeAction === 'tab') {
+      sessionMsg = t('confirm.win_close_keep_msg',
+        '这个窗口里的 {n} 个会话会放回无主：线程继续跑、串口不断，之后可以从「新建会话 → 从已打开线程进入」接回来。')
+        .replace('{n}', String(n));
+    } else if (closeAction === 'process') {
+      sessionMsg = t('confirm.win_close_destroy_msg',
+        '这个窗口里的 {n} 个会话会一起销毁，对应串口连接将断开。')
+        .replace('{n}', String(n));
+    } else {
+      sessionMsg = t('confirm.win_close_sessions',
+        '这个窗口里还有 {n} 个会话。仅关闭窗口的话线程继续跑、串口不断；同时关闭线程会断开串口。')
+        .replace('{n}', String(n));
+    }
+  }
+
+  // 会话定了之后处理守护进程那半。ask 档要单独问一句（三选一，不能只给「确定」：
+  // 关掉守护进程会连带断掉别的窗口 / CLI / MCP 的串口，必须留「只关窗口」这条路）。
+  function finish(closeMode) {
+    if (askDaemon) {
+      showChoice(
+        t('confirm.win_close_title', '关闭窗口'),
+        t('confirm.daemon_ask_msg', '要顺便关闭守护进程吗？关闭后所有串口连接都会断开（包括其它窗口、CLI、MCP 客户端）。'),
+        [
+          { label: t('confirm.daemon_stop_btn', '关闭守护进程'), onPick: function() { doClose(closeMode, true); } },
+          { label: t('confirm.daemon_keep_btn', '只关窗口'), onPick: function() { doClose(closeMode, false); } },
+          { label: t('confirm.cancel', '取消'), onPick: cancel }
+        ]
+      );
+      return;
+    }
+    var msg = sessionMsg;
+    var stop = daemonStop;
+    if (stop) {
+      var note = t('confirm.daemon_stop_note', '守护进程会一起关闭，所有串口连接（包括其它窗口、CLI、MCP）都会断开。');
+      msg = msg ? (msg + ' ' + note) : note;
+    }
+    if (!msg) msg = t('confirm.win_close_bare', '确定关闭这个窗口吗？');
+    showConfirm(
       t('confirm.win_close_title', '关闭窗口'),
       msg,
+      // 认不出来的值按 process 走，和 Go 侧 ConfirmWindowClose 的兜底一致
+      function() { doClose(closeMode, stop); },
+      // 按钮文案用「关闭」而不是「退出」：这里关的是一个窗口，不是整个程序
+      'confirm.tab_close_ok', 'confirm.cancel',
+      null, cancel
+    );
+  }
+
+  if (n > 0 && closeAction === 'ask') {
+    // 三档和「关闭标签页时」完全对齐：仅关闭窗口（线程保留）/ 同时关闭线程 / 取消。
+    // 两个选项都是「真的关窗」，所以用三选一，而不是「确定 / 取消」。
+    showChoice(
+      t('confirm.win_close_title', '关闭窗口'),
+      sessionMsg,
       [
         {
-          label: t('confirm.win_close_transfer_btn', '转到其他窗口'),
-          onPick: function(remember) { if (remember) rememberChoice('transfer'); doClose('transfer'); }
+          label: t('confirm.win_close_keep_btn', '仅关闭窗口'),
+          onPick: function(remember) {
+            if (remember) _rememberTabClose('tab');
+            finish('tab');
+          }
         },
         {
-          label: t('confirm.win_close_destroy_btn', '销毁并关闭'),
-          onPick: function(remember) { if (remember) rememberChoice('destroy'); doClose('destroy'); }
+          label: t('confirm.win_close_destroy_btn', '同时关闭线程'),
+          onPick: function(remember) {
+            if (remember) _rememberTabClose('process');
+            finish('process');
+          }
         },
         { label: t('confirm.cancel', '取消'), onPick: cancel }
       ],
@@ -1201,15 +1274,7 @@ function _onWindowCloseConfirm(d) {
     );
     return;
   }
-  showConfirm(
-    t('confirm.win_close_title', '关闭窗口'),
-    msg,
-    function() { doClose('destroy'); },
-    // 按钮文案用「关闭」而不是「退出」：这里关的是一个窗口，不是整个程序
-    'confirm.tab_close_ok', 'confirm.cancel',
-    onDontAsk,
-    cancel
-  );
+  finish(closeAction === 'tab' ? 'tab' : 'process');
 }
 
 // ---- theme ----
@@ -1220,7 +1285,7 @@ function toggleThemePopup() {
   openSettingsPage();
   // Switch to appearance nav after render
   setTimeout(function() {
-    var navItem = document.querySelector('.settings-nav-item[data-nav="appearance"]');
+    var navItem = document.querySelector('.settings-nav-item[data-nav="look"]');
     if (navItem) navItem.click();
   }, 100);
 }
@@ -1260,7 +1325,7 @@ function _themeName(raw) {
   if (!raw) return '';
   if (typeof raw === 'string') return raw;
   if (typeof raw === 'object') {
-    var lang = state.language || 'zh';
+    var lang = state.language || 'auto';
     // 1. Exact match for current language
     if (raw[lang]) return raw[lang];
     // 2. Short form match (e.g. "zh-Hant" → "zh")
@@ -1715,6 +1780,7 @@ function applyI18n() {
   _set('menuViewClients','menu.view_clients','查看客户端');
   _set('menuDaemonLog','menu.daemon_log','查看守护进程日志');
   _set('menuDevTools','menu.dev_tools','开发人员工具');
+  _set('menuLangAuto','menu.lang_auto','跟随系统');
   _set('menuAbout','menu.about','关于');
   _set('btnSend','btn.send','发送');
   var sb = document.getElementById('btnSend');
@@ -1914,19 +1980,28 @@ function updateModeUI() {
   _syncPortSelectsFromTab();
   applySendRatio();
   applyQuickPanelRatio();
-  loadTabHistory();
+  _liveRefresh();
   refreshStatsDOM();
 }
 
 function saveSendUI() {
   const ss = getSendState();
-  ss.sendTextBuf = pageEl('sendInput').value;
-  // hex buf is only saved when in hex mode
-  if (ss.sendFormat === 'hex') ss.sendHexBuf = pageEl('sendInput').value;
+  // 两个草稿**各存各的**：以前无条件把输入框内容写进 sendTextBuf，只在 hex 模式下
+  // 再写一份 sendHexBuf —— 于是在 Hex 模式里存的草稿把文本草稿覆盖了，切回文本
+  // 就看见一串十六进制。现在按当前格式只动自己那一格。
+  const inputNow = pageEl('sendInput');
+  if (inputNow) {
+    if (ss.sendFormat === 'hex') ss.sendHexBuf = inputNow.value;
+    else ss.sendTextBuf = inputNow.value;
+  }
   const appendSel = pageEl('appendSelect');
   ss.appendSuffix = appendSel ? appendSel.value : 'crlf';
   ss.autoSend = !!(getActiveTab() && getActiveTab()._autoSendActive);
-  ss.sendInterval = parseInt(pageEl('sendInterval').value) || 1000;
+  // 切标签时也会对「没有发送框的页」（.stlog 只读页 / 设置页）调到这里，
+  // 那时 pageEl 只能回退到 document：真没有就跳过，别让一次取控件把切换打断
+  // —— 打断的后果是目标页没 show，整块内容区空白。
+  const ivSel = pageEl('sendInterval');
+  if (ivSel) ss.sendInterval = parseInt(ivSel.value) || 1000;
 }
 
 function restoreSendUI() {
@@ -1940,6 +2015,87 @@ function restoreSendUI() {
   pageEl('sendInterval').value = ss.sendInterval;
   updateSendQuickBtn();
   updateSendInfo();
+}
+
+// ---- 发送框状态同步到守护进程 ----
+//
+// 草稿（文本 / Hex 各一份）、当前格式、多字符串预设都挂在**会话**上，所以换窗口、
+// 关标签再挂回来、甚至重启 GUI 之后输入框里还是原来那段。工程会话由守护进程
+// 再写进 settings.json；普通串口会话只留在守护进程内存里。
+//
+// 方向只有一个：本地 → 守护进程。挂载时从会话取一次（_applyDaemonSessionToTab），
+// 之后以本地为准 —— 否则每 400ms 一次回读会把用户正在敲的字覆盖掉。
+
+var _sendPushTimer = null;
+
+function _sendStatePayload(tab) {
+  var s = (tab && tab._s) || newTabSendState();
+  return {
+    text: s.sendTextBuf || '',
+    hex: s.sendHexBuf || '',
+    format: s.sendFormat === 'hex' ? 'hex' : 'text',
+    presets: (tab && tab.quickPresets) ? tab.quickPresets : []
+  };
+}
+
+// 立即把当前标签页的发送框状态推给守护进程。tab 传 null = 当前标签页
+// （会先把输入框读回 _s；传了别的标签页就只发已有那份，不去碰 DOM）。
+function _flushSendState(tab) {
+  var active = getActiveTab();
+  if (tab === undefined || tab === null) tab = active;
+  if (!tab || !tab.sessionId) return;
+  if (tab === active) {
+    saveSendUI();
+    tab.quickPresets = state.quickPresets.slice();
+  }
+  try {
+    var payload = _sendStatePayload(tab);
+    // 没变就不推：切标签 / 渲染面板都会走到这里，而工程会话每推一次就是一次
+    // settings.json 读改写。顺手也避免「内容其实一样」时去碰文件。
+    var sig = JSON.stringify(payload);
+    if (tab._sendSig === sig) return;
+    tab._sendSig = sig;
+    window.go.main.App.SetSessionSend(tab.sessionId, payload);
+  } catch (e) { /* 守护进程没在跑：草稿只留内存，不打断输入 */ }
+}
+
+function _schedulePushSendState() {
+  if (_sendPushTimer) clearTimeout(_sendPushTimer);
+  _sendPushTimer = setTimeout(function () {
+    _sendPushTimer = null;
+    _flushSendState(null);
+  }, 400);
+}
+
+// 会话第一次挂到标签页上：把守护进程里存的那份草稿搬进来。
+function _restoreSendStateFromSession(tab, sd, sid) {
+  if (!tab || !sd || tab._sendFrom === sid) return;
+  tab._sendFrom = sid;
+  if (!tab._s) tab._s = newTabSendState();
+  // 只在本地那格是空的时候搬：会话第一次挂上来时它一定是空的；而「标签已经建好、
+  // 用户正在敲字」时守护进程那份最多落后一个 400ms 防抖周期，搬过来会吃掉刚敲的字。
+  if (typeof sd.text === 'string' && !tab._s.sendTextBuf) tab._s.sendTextBuf = sd.text;
+  if (typeof sd.hex === 'string' && !tab._s.sendHexBuf) tab._s.sendHexBuf = sd.hex;
+  if (sd.format === 'hex' || sd.format === 'text') tab._s.sendFormat = sd.format;
+  if (Array.isArray(sd.presets)) {
+    tab.quickPresets = sd.presets.slice();
+    // 预设有两份存储：settings.json 的 send.presets（工程文件，跟着会话走）和
+    // 发送队列环（守护进程真正读的那份）。打开工程后只还原了前者，环是空的，
+    // 守护进程那边的「发送多字符串」什么都不会发；反过来 _multistrLoaded 那个
+    // 老路径还会拿「上一个同号进程」的 multistr/<id>.json 把刚还原的冲掉。
+    tab._multistrLoaded = true;
+    if (state.daemonOnline && sid && typeof pushPresetsToDaemon === 'function') {
+      pushPresetsToDaemon(sid, tab.quickPresets);
+    }
+  }
+  // 恢复完把「上次推过的内容」忘掉：下一次 flush 必须真的写一遍（否则签名
+  // 相同会被跳过，守护进程那份就永远停在旧内容上）。
+  tab._sendSig = null;
+  if (tab === getActiveTab()) {
+    restoreSendUI();
+    state.quickPresets = (tab.quickPresets || []).slice();
+    if (typeof quickPanelRender === 'function') quickPanelRender();
+  }
 }
 
 // ---- Custom Select ----
@@ -1995,6 +2151,46 @@ function _csRefresh(wrap) {
   }
 }
 
+// 计算 portal 下拉的位置与高度（打开时和 resize 时共用）。
+//
+// 关键：窗口底部附近的下拉**要向上弹**。以前只算「trigger 底 → 状态栏顶」的
+// 剩余高度并用 max(80, …) 兜底，于是靠近窗口底时那 80px 会顶穿状态栏、被窗口
+// 边缘截断（设置页「高级」里那几项实测就是这样，最后一项只露出半截）。
+function _csPosition(dropdown, trigger) {
+  if (!dropdown || !trigger) return;
+  var rect = trigger.getBoundingClientRect();
+  var sb = document.querySelector('.statusbar');
+  var limitBottom = Math.min(window.innerHeight, sb ? sb.getBoundingClientRect().top : window.innerHeight) - 6;
+  var spaceBelow = Math.max(0, limitBottom - (rect.bottom + 2));
+  var spaceAbove = Math.max(0, rect.top - 8);
+  // 先量「内容想要多高」：把 maxHeight 放开再读 scrollHeight，方向才判得准。
+  // 原来的判据是「下方能不能塞下 88px」，而 maxHeight 又有 80px 的硬下限 ——
+  // 靠近窗口底部时这两个数一起把下拉顶穿状态栏、被窗口边缘裁掉（「尾部追加」
+  // 那个下拉实际就只剩半截 CRLF，还带一条滚动条）。
+  dropdown.style.maxHeight = 'none';
+  var need = dropdown.scrollHeight || 0;
+  var want = Math.min(need, 240);
+  var dropUp = spaceBelow < want && spaceAbove > spaceBelow;
+  var avail = dropUp ? spaceAbove : spaceBelow;
+  if (avail < 48) {
+    // 两边都窄：挑宽的那边，并允许它压缩到实际高度（宁可滚动，也不裁字）
+    avail = Math.max(spaceAbove, spaceBelow);
+    dropUp = spaceAbove > spaceBelow;
+  }
+  dropdown.style.left = rect.left + 'px';
+  dropdown.style.minWidth = rect.width + 'px';
+  dropdown.style.maxWidth = Math.min(Math.max(rect.width * 2, rect.width), window.innerWidth - rect.left - 12) + 'px';
+  // 不再留 80 的下限：空间多少给多少，超出就滚动，绝不顶穿状态栏
+  dropdown.style.maxHeight = Math.max(1, Math.floor(avail)) + 'px';
+  if (dropUp) {
+    dropdown.style.top = 'auto';
+    dropdown.style.bottom = (window.innerHeight - rect.top + 2) + 'px';
+  } else {
+    dropdown.style.bottom = 'auto';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+  }
+}
+
 function _csOpenDropdown(wrap) {
   if (_csOpen && _csOpen !== wrap) _csClose(_csOpen);
   _csRefresh(wrap);
@@ -2005,17 +2201,8 @@ function _csOpenDropdown(wrap) {
   dd.classList.add('is-portalled');
   dd.style.display = 'block';
   var trig = wrap.querySelector('.cs-trigger');
-  var rect = trig ? trig.getBoundingClientRect() : { left: 0, bottom: 0, width: 0 };
   dd.style.position = 'fixed';
-  dd.style.left = rect.left + 'px';
-  dd.style.top = (rect.bottom + 2) + 'px';
-  dd.style.minWidth = rect.width + 'px';
-  dd.style.maxWidth = Math.min(rect.width * 2, window.innerWidth - rect.left - 12) + 'px';
-  // max-height: from trigger bottom to statusbar top (minus margin)
-  var sb = document.querySelector('.statusbar');
-  var sbTop = sb ? sb.getBoundingClientRect().top : window.innerHeight;
-  var avail = sbTop - rect.bottom - 6;
-  dd.style.maxHeight = Math.max(80, Math.floor(avail)) + 'px';
+  _csPosition(dd, trig);
   dd.style.zIndex = '200';
   wrap.classList.add('is-open');
   _csOpen = wrap;
@@ -2025,10 +2212,7 @@ function _csOpenDropdown(wrap) {
   // Close on window resize
   _csResizeObserver = new ResizeObserver(function() {
     if (!_csOpen) return;
-    var r2 = trig.getBoundingClientRect();
-    dd.style.left = r2.left + 'px';
-    dd.style.top = (r2.bottom + 2) + 'px';
-    dd.style.minWidth = r2.width + 'px';
+    _csPosition(dd, trig);
   });
   _csResizeObserver.observe(document.body);
   var selOpt = wrap.querySelector('.cs-option.is-selected');
@@ -2075,7 +2259,12 @@ function initCustomSelect(sel) {
   trig.appendChild(textSpan);
   var arrow = document.createElement('span');
   arrow.className = 'cs-arrow';
-  arrow.innerHTML = icon('chevron_down', 14, 14);
+  // 声明式注入：图标集合是异步拉的，直接 icon() 会拿到 _ICON_MISSING（方框+叉），
+  // 而且写进 innerHTML 后再也没人补 —— 设置弹窗/标签页设置里那一列「⊠」就是这么来的。
+  arrow.setAttribute('data-icon', 'chevron_down');
+  arrow.setAttribute('data-icon-w', '14');
+  arrow.setAttribute('data-icon-h', '14');
+  if (typeof _fillIcon === 'function') _fillIcon(arrow);
   trig.appendChild(arrow);
   wrap.appendChild(trig);
   var dd = document.createElement('div');
@@ -2156,7 +2345,26 @@ function initCustomSelect(sel) {
 }
 
 function initAllCustomSelects() {
-  document.querySelectorAll('select').forEach(function(s) { initCustomSelect(s); });
+  var wrapAll = function(root) {
+    var scope = (root && root.querySelectorAll) ? root : document;
+    scope.querySelectorAll('select').forEach(function(s) { initCustomSelect(s); });
+  };
+  wrapAll(document);
+  // 后建的下拉（软件设置页、标签页设置弹窗、串口详细设置，以及以后新增的面板）
+  // 也要自绘：用一个 MutationObserver 兜底，比在每个构建函数里各叫一次可靠。
+  // initCustomSelect 自身幂等（closest('.cs-wrap') 直接返回），重复扫安全。
+  var mo = new MutationObserver(function(muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var n = added[j];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.tagName === 'SELECT') initCustomSelect(n);
+        else wrapAll(n);
+      }
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
 }
 
 document.addEventListener('click', function(e) {
@@ -2576,10 +2784,41 @@ function _ghostEnd() {
   }
 }
 
+// 活动页变了之后的统一收尾：显示新页、按页型同步状态栏里「属于会话」的那几块
+// （统计 / Tab / 编码 / 行尾）、刷按钮与空态。
+//
+// 关标签 / 拖出成窗 / 打开设置页 都必须走这里。以前只有关闭标签做了这套，
+// 拖出走 _detachTab 时漏了 —— 于是源窗口停在设置页时，右下角还挂着上一条会话的
+// 统计与 Tab/UTF-8/LF 三项（TODO #97）。
+function _afterActivePageChanged(opts) {
+  opts = opts || {};
+  var at = getActiveTab();
+  if (at && at._page) at._page.show();
+  else if (state._welcomePage) state._welcomePage.show();
+  // 切回的标签页在后台期间不会收到数据帧事件，这里补一次刷新
+  if (at && at._live && typeof at._live.notify === 'function') at._live.notify();
+  state.currentMode = (at && at.mode) ? at.mode : 'single';
+  updateModeUI();
+  updateEmptyState();
+  renderTabs();
+  updateOpenBtn();
+  updateSyncIndicator();
+  _updateStatsVisible();
+  updateDaemonUI();
+  _syncTabDisplayChrome();
+  if (opts.reloadHistory !== false && at && isSessionTab(at)) {
+    _liveRefresh();
+    refreshStatsDOM();
+  }
+}
+
 // 只从本窗口摘掉标签：不调 CloseSession，会话在守护进程里继续活着
 function _detachTab(tab) {
   var idx = state.tabs.indexOf(tab);
   if (idx < 0) return;
+  // 摘掉之前把草稿推一次：拖到另一个窗口 / 仅关标签之后，别的窗口是从守护进程
+  // 那份恢复输入框的，不推就丢掉最后 400ms 内敲的字。
+  if (tab.sessionId) _flushSendState(tab);
   if (tab._page) { tab._page.destroy(); tab._page = null; }
   if (tab.sessionId) {
     delete state.historyCache[tab.sessionId];
@@ -2587,10 +2826,10 @@ function _detachTab(tab) {
   }
   state.tabs.splice(idx, 1);
   _clampActiveTab();
-  var nt = getActiveTab();
-  if (nt && nt._page) nt._page.show();
-  else if (state._welcomePage) state._welcomePage.show();
   renderTabs();
+  // 剩下的是另一条会话就重新载入它；只剩设置页/欢迎页时要把状态栏里属于会话的
+  // 那几块收掉（TODO #97）。
+  _afterActivePageChanged({ reloadHistory: !!getActiveTab() && isSessionTab(getActiveTab()) });
 }
 
 function _tabDragMove(e) {
@@ -2850,6 +3089,39 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   initStatusBar();
+  // 输入框（发送框 / 重命名 / 设置里的数字框）右键也用同一套浮层菜单，
+  // 不然那里弹的是 WebView2 的英文原生菜单，和自绘菜单两套观感。
+  if (typeof cMenuBindInputs === 'function') cMenuBindInputs();
+  // 未捕获异常先别只进控制台：开发版从资源管理器启动时 stderr 是黑洞，界面白屏后
+  // 完全无从查起。这里把**第一条**错误打进 Go 日志，并在界面顶部挂一条可点掉的
+  // 横幅（只挂一条，避免报错刷屏把布局顶烂）。
+  (function () {
+    var shown = false;
+    function report(kind, msg, where) {
+      var text = kind + ': ' + msg + (where ? ' @ ' + where : '');
+      try { window.go.main.App.Log('[js-error] ' + text); } catch (_) {}
+      if (shown) return;
+      shown = true;
+      var el = document.createElement('div');
+      el.id = 'jsErrorBanner';
+      el.textContent = text + '（点这里关闭）';
+      el.title = text;
+      el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:20000;padding:6px 10px;' +
+        'background:#b3261e;color:#fff;font:12px/1.5 Consolas,monospace;cursor:pointer;white-space:pre-wrap;';
+      el.addEventListener('click', function () { el.remove(); });
+      document.body.appendChild(el);
+    }
+    window.addEventListener('error', function (e) {
+      report('error', e.message || 'unknown', (e.filename || '') + ':' + (e.lineno || 0));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e.reason;
+      report('promise', (r && r.message) ? r.message : String(r));
+    });
+  })();
+  // 悬浮提示：原生 title 换成自绘小卡（见 tip.js）
+  if (typeof _tipBind === 'function') _tipBind();
+  initAllCustomSelects();
   bindTabsScroll();
   initTabPopup();
   // Fetch version once
@@ -2893,6 +3165,19 @@ window.addEventListener('DOMContentLoaded', () => {
   updateEmptyState();
   renderTabs();
 
+  // 启动参数里的 .stlog / 工程目录（双击文件、命令行带路径）：等设置加载完再开，
+  // 否则新页拿到的是默认显示设置而不是用户配的。用「拉」不用「推」 —— Go 侧推
+  // 事件永远赶不上页面就绪，早了就丢。
+  (function takeStartupPath() {
+    var App = window.go && window.go.main && window.go.main.App;
+    if (!App || typeof App.TakeOpenPath !== 'function') return;
+    Promise.resolve().then(function () {
+      return App.TakeOpenPath();
+    }).then(function (p) {
+      if (p) openPathFromOS(p);
+    }).catch(function () {});
+  })();
+
   try {
     window.runtime.EventsOn('ports-changed', () => refreshPorts());
     window.runtime.EventsOn('ports-list', (data) => updatePortList(data.ports));
@@ -2903,7 +3188,11 @@ window.addEventListener('DOMContentLoaded', () => {
       _tlog('事件 daemon-ready', undefined, 'online=' + state.daemonOnline);
       if (!state.daemonOnline) tryConnect();
     });
-    window.runtime.EventsOn('process-changed', (data) => syncDaemonSessions(data));
+    window.runtime.EventsOn('process-changed', (data) => {
+      syncDaemonSessions(data);
+      // 正停在「已打开的线程」列表上：跟着刷一下，别让人对着过期列表点。
+      if (typeof _refreshThreadListIfOpen === 'function') _refreshThreadListIfOpen();
+    });
     window.runtime.EventsOn('stats-count', (data) => onStatsCount(data));
     window.runtime.EventsOn('stats-rate', (data) => onStatsRate(data));
     window.runtime.EventsOn('clients-changed', (data) => onClientsChanged(data));
@@ -2979,6 +3268,18 @@ window.addEventListener('DOMContentLoaded', () => {
       // 送得出去（实测：标签转过来却没出现）。同步完 _tryActivatePending 会切过去。
       _activateSessionSoon(d && d.sid);
       if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+    } else if (name === 'session-taken') {
+      // 别的窗口从「已打开线程进入」把这个会话接走了：摘掉本窗口的标签，但
+      // **不销毁会话**（串口还开着，它现在归那个窗口）。和拖出标签后的收尾同一条路。
+      // 这不是拖动途中，所以要把 _parked 清掉 —— 否则窗口空了也不补新会话，一直
+      // 停在空窗口里等人拖回来。
+      var takenSid = d && d.sid;
+      if (takenSid) {
+        var takenTab = state.tabs.filter(function (t) { return String(t.sessionId) === String(takenSid); })[0];
+        if (takenTab) _detachTab(takenTab);
+        state._parked = false;
+        if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
+      }
     } else if (name === 'tab-drop-begin') {
       // 单标签窗口并进来了，鼠标还没松：接过来继续左右拖（见 _ghostDrag）
       _beginDropSort(d && d.sid, d && d.x);
@@ -3228,7 +3529,9 @@ function _tryActivatePending() {
   for (var i = 0; i < state.tabs.length; i++) {
     if (state.tabs[i] && String(state.tabs[i].sessionId) === want) {
       _pendingActivateSid = null;
-      if (i !== state.activeTab) switchTab(i);
+      // 不看「是不是已经是活动下标」：刚建出来的标签 activeTab 可能早就是它，
+      // 但页面从没 show 过（内容区空白）。switchTab 是幂等的，重走一次无害。
+      switchTab(i);
       return;
     }
   }
@@ -3259,6 +3562,22 @@ function _daemonTabLabel(ds) {
     : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
 }
 
+// _syncedParamsOf 把守护进程给的串口参数收成标签页用的那一份。
+//
+// 三个入口（新建标签 / 找回标签 / 增量更新）都走它，免得三处字段漂移 ——
+// 漂移过一次：flowControl 只在连接时从工具栏读，守护进程回传的参数里没有，
+// 于是「推送工程回来」永远按 none 开串口。
+function _syncedParamsOf(ds) {
+  return {
+    portName: ds.portName || '', baud: ds.baud || 0,
+    dataBits: ds.dataBits || 0, stopBits: ds.stopBits || '',
+    parity: ds.parity || '', flowControl: ds.flowControl || '',
+    forwardPortB: ds.forwardPortB || '', forwardBaudB: ds.forwardBaudB || 0,
+    forwardDataBitsB: ds.forwardDataBitsB || 0, forwardStopBitsB: ds.forwardStopBitsB || '',
+    forwardParityB: ds.forwardParityB || '', forwardFlowControlB: ds.forwardFlowControlB || '',
+  };
+}
+
 // 把守护进程会话的当前状态写到一个标签页上（标签、在线状态、参数、查看者）。
 // 「找回原有标签页」与「新建标签页」两条路共用，避免两处判断漂移。
 // （第 2 步「更新已有标签页」是它的增量版本：只在实际变化时打 tabsChanged。）
@@ -3275,14 +3594,49 @@ function _applyDaemonSessionToTab(tab, ds) {
   tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
   // 工程会话才有值：标签上要显示工程目录名（而不是「单端口空闲」）
   tab.sessionPath = ds.sessionPath || '';
-  if (isConnected || hasDeclared) {
-    tab.syncedParams = {
-      portName: ds.portName, baud: ds.baud,
-      dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
-      forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
-    };
+  // 参数同步到「已声明」就够：工程推回守护进程、CLI 建的空闲线程都停在这个状态，
+  // 波特率/帧格式/流控得跟过去，否则工具栏停在默认 8N1、悬浮窗画不出参数行。
+  // 连波特率都没有（纯空闲进程）才退回 null。
+  if (isConnected || hasDeclared || ds.baud) {
+    tab.syncedParams = _syncedParamsOf(ds);
   } else {
     tab.syncedParams = null;
+  }
+  // 显示设置：会话第一次挂到这个标签页时用守护进程那份覆盖（推送工程、从线程
+  // 接管都走这里）。之后以本地为准 —— 每轮同步都覆盖会把用户正在改的设置冲掉。
+  // 守护进程那份是空的时候反过来推一次本地：它开始录制时才有东西写进工程文件，
+  // 否则落的是 daemon.ini 的默认值（推过去的工程打开后字体/编码全变）。
+  if (ds.id && tab._dispFrom !== ds.id) {
+    tab._dispFrom = ds.id;
+    if (ds.display) {
+      tab.disp = Object.assign({}, state._dispDefaults, ds.display);
+      if (state.daemonOnline) {
+        try { window.go.main.App.SetTabEncoding(ds.id, tab.disp.encoding); } catch (e) {}
+      }
+      if (tab === getActiveTab()) {
+        _applyDisplayStyle();
+        _redecodeActiveTab(tab.disp.encoding);
+      }
+    } else {
+      _pushTabDisplay(tab);
+    }
+  }
+  // 发送框草稿：会话第一次挂上来时把守护进程存的那份搬进标签页
+  // （换窗口、关标签再挂回来、重启 GUI 之后都还在）。
+  if (ds.send && ds.id) _restoreSendStateFromSession(tab, ds.send, ds.id);
+  // 回放文件的规模（帧数 / rx / tx）：文件里的字节已经在守护进程那边算进
+  // 会话累计了，这里只把它当作**初始值**灌进统计基线，之后续写的新数据接着加。
+  if (ds.fileStats) tab.fileStats = ds.fileStats;
+  // 按**会话 id** 而不是 tab.sessionId 播种：这一步早于标签页拿到 sessionId，
+  // 用 tab.sessionId 会永远跳过，状态栏也就一直显示 0。
+  if (ds.fileStats && ds.id && !state.statsBase[ds.id]) {
+    state.statsBase[ds.id] = {
+      tx: Number(ds.fileStats.tx) || 0,
+      rx: Number(ds.fileStats.rx) || 0,
+      // 转发工程的口径：A→B / B→A 两列在文件里是 p1/p2，与单端口不是一回事
+      p1: Number(ds.fileStats.p1) || 0,
+      p2: Number(ds.fileStats.p2) || 0
+    };
   }
 }
 
@@ -3296,7 +3650,7 @@ async function syncDaemonSessions(procData) {
   // 守护进程事件可能比语言包先到：这时建出来的标签页/快捷面板会拿到空文案
   // （t() 缺键给空串），而且之后没有任何补译路径。先把语言包装好再建 UI。
   if (!_i18nLoaded) {
-    try { await loadI18n(state.language || 'zh'); } catch (e) {}
+    try { await loadI18n(effectiveLang()); } catch (e) {}
   }
   if (!state.daemonOnline) return;
 
@@ -3357,6 +3711,9 @@ async function syncDaemonSessions(procData) {
 
   // 1. Create tabs for new daemon sessions not tracked in any GUI tab
   daemonSessions.forEach(ds => {
+    // 正在接管这一条（「从已打开线程进入」刚点完）：标签马上就在原地建出来了，
+    // 这里再建一个就是两个 —— 等 _convertChooserToSession 挂完再走正常同步。
+    if (_adoptingSid && String(ds.id) === _adoptingSid) return;
     if (ds.sessionPath) {
       // 文件会话进程（session.open 建出来的）默认不建标签页 —— 有人正在等它的
       // 会话页（_pendingProjectPaths 里有这条路径）才往下建，建完把待办划掉。
@@ -3402,11 +3759,7 @@ async function syncDaemonSessions(procData) {
         mode: ds.mode || 'single',
         source: 'gui',
         viewers: ds.viewers || {gui:0, cli:0, mcp:0},
-        syncedParams: (isConnected || hasDeclared) ? {
-          portName: ds.portName, baud: ds.baud,
-          dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
-          forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
-        } : null,
+        syncedParams: (isConnected || hasDeclared || ds.baud) ? _syncedParamsOf(ds) : null,
         // 工程会话带 settings.json 里的 display（打开旧工程看到的就是它当初的样子）；
         // 普通会话用 daemon.ini 的默认值
         disp: ds.display ? Object.assign({}, state._dispDefaults, ds.display) : _newTabDisp(),
@@ -3422,6 +3775,11 @@ async function syncDaemonSessions(procData) {
       newTab._page = new TabPage(state.tabs.length, newTab);
       var mainContent = document.getElementById('mainContent');
       if (mainContent) { mainContent.appendChild(newTab._page.root); initTabPage(newTab._page.root); }
+      _mountLive(newTab);
+      // 走一遍统一的「会话 → 标签页」赋值：草稿 / 多字符串预设 / 文件统计基线
+      // 只有那一条路会搬。以前这里手抄了一份字段表，抄漏了 send 和 fileStats，
+      // 于是推送回来的工程输入框是空的、状态栏从 0 开始。
+      _applyDaemonSessionToTab(newTab, ds);
       state.tabs.push(newTab);
       // Start per-tab Go decode worker
       if (ds.id && state.daemonOnline) {
@@ -3429,6 +3787,9 @@ async function syncDaemonSessions(procData) {
         window.go.main.App.SetTabEncoding(ds.id, newTab.disp.encoding);
       }
       tabsChanged = true;
+      // 这是本窗口的第一个标签（守护进程里已经有会话、GUI 刚起来）：建完切过去，
+      // 否则和 autoCreateIdleSession 一样只剩一个空窗口。
+      if (state.tabs.length === 1) _pendingActivateSid = String(newTab.sessionId);
     }
   });
 
@@ -3436,6 +3797,10 @@ async function syncDaemonSessions(procData) {
   state.tabs.forEach(tab => {
     if (tab.sessionId && dsMap[tab.sessionId]) {
       const ds = dsMap[tab.sessionId];
+      // 本地建出来的标签（autoCreateIdleSession / 原地接管）没走过「会话 → 标签页」
+      // 的整份初始化：补一次，把显示设置、发送框草稿、统计基线带上；已经走过一
+      // 次的（_dispFrom 记着会话号）之后就只走下面的增量字段。
+      if (ds.id && tab._dispFrom !== ds.id) _applyDaemonSessionToTab(tab, ds);
       const isConnected = ds.status === 'connected';
         const hasDeclared2 = !!ds.portName;
         const newLabel = _daemonTabLabel(ds);
@@ -3463,22 +3828,22 @@ async function syncDaemonSessions(procData) {
         tab.nameCustom = dsNameCustom;
         tabsChanged = true;
       }
-      if (!tab.sessionPath && ds.sessionPath) {
+      // 工程目录会跟着线程名改名：路径变了要跟着换，否则悬浮卡标题/「同一个工程
+      // 再打开」都还在用旧路径（tab._projectPath 上面已经跟上了）。
+      if (ds.sessionPath && tab.sessionPath !== ds.sessionPath) {
         tab.sessionPath = ds.sessionPath;
         tabsChanged = true;
       }
       if (tab.portOpen !== isConnected || tab.label !== newLabel || viewersChanged || modeChanged) {
         tab.portOpen = isConnected;
         tab.label = newLabel;
-        if (isConnected || hasDeclared2) {
-          tab.syncedParams = {
-            portName: ds.portName, baud: ds.baud,
-            dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
-            forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
-          };
-        } else if (!hasDeclared2) {
-          tab.syncedParams = null;
-        }
+        tabsChanged = true;
+      }
+      // 参数每次都刷：它不由上面那几个字段推导（改波特率/帧格式不会让 portOpen
+      // 变化），只在「状态变了」时更新会让工具栏一直停在旧值上。
+      const spNext = (isConnected || hasDeclared2 || ds.baud) ? _syncedParamsOf(ds) : null;
+      if (JSON.stringify(spNext) !== JSON.stringify(tab.syncedParams)) {
+        tab.syncedParams = spNext;
         tabsChanged = true;
       }
     }
@@ -3573,7 +3938,7 @@ async function syncDaemonSessions(procData) {
     updatePortOccupied();
     _syncPortSelectsFromTab();
     syncAutoSendState(daemonSessions);
-    await loadTabHistory();
+    await _liveRefresh();
   }
   // 别的窗口拖过来的那一页（见 _activateSessionSoon）：标签这次同步才建出来的话，
   // 到这里就能切过去了。
@@ -3605,37 +3970,75 @@ function syncAutoSendState(daemonSessions) {
 // 标注「已被其它标签页占用」的端口选项。
 // sel 是本页的 <select> 元素（不能用 id 查：多标签时每个页面各有一份同 id），
 // owner 是这个下拉所属的标签页 —— 前向模式下「自己另一个端口」不能算被别人占用。
+// 逐标签标注端口下拉里的占用状态（底色 + 文案后缀都在这儿加）。
+//
+// sel 是本页的 <select>（不能用 id 查：多标签时每页各有一份同 id），
+// owner 是这个下拉所属的标签页。三种情况的判定顺序很关键：
+//   1. 被**别的程序**占着（守护进程试开判出来的 inUseBy=other）→ 红底，任何视角都成立；
+//   2. 自己这个标签正在用的口 → **不标**（用户实测：自己的口显示「已占用」最误导）；
+//   3. 别的标签 / 别的窗口 / CLI / MCP 的会话占着 → 黄底 + 会话名后缀。
+// 另外转发模式里「本标签自己的另一个端口」仍标黄：防止把 A/B 选成同一个口。
 function _markOccupied(sel, owner) {
   if (!sel) return;
   const tab = owner || getActiveTab();
-  // Extract individual ports for this page's forward tab
   const myPorts = tab && tab.mode === 'forward' && tab.portOpen ? _forwardPorts(tab) : null;
   const selId = sel.id;
+  const meta = state.portListData || {};
   let changed = false;
   for (let i = 0; i < sel.options.length; i++) {
     const opt = sel.options[i];
     const portName = opt.value;
-    let occupied = false;
+    const base = opt.getAttribute('data-base') || opt.textContent || '';
+    let cls = '';
+    let suffix = '';
     if (portName) {
-      for (let j = 0; j < state.tabs.length; j++) {
-        const t = state.tabs[j];
-        if (t === tab) continue;
-        if (!t.portOpen || !t.syncedParams) continue;
-        if (_tabHasPort(t, portName)) { occupied = true; break; }
-      }
-      // In forward mode, mark own other port as occupied to prevent self-duplicate
-      if (!occupied && myPorts) {
-        if ((selId === 'portSelectA' && portName === myPorts[1]) ||
-            (selId === 'portSelectB' && portName === myPorts[0])) {
-          occupied = true;
+      const info = meta[portName] || {};
+      // 「自己这个标签在用」要同时看 portOpen：断开的标签可能还留着 syncedParams，
+      // 只按它判断会把这个口一直当成自家占用而不标（反过来就是自己的口标成占用）。
+      const mine = !!(tab && tab.portOpen && _tabHasPort(tab, portName));
+      // daemon 报的占用如果就是本标签这个会话，同样不算「被占用」：关闭串口时
+      // 会话还没销毁、开启时连接尚未返回，都会在这里短暂命中，不拦就会闪一下。
+      const ownerIsMe = !!(tab && tab.sessionId && info.inUseBy === 'daemon' &&
+        String(info.ownerProcessId) === String(tab.sessionId));
+      let sibling = null;
+      if (!mine) {
+        for (let j = 0; j < state.tabs.length; j++) {
+          const t2 = state.tabs[j];
+          if (t2 === tab) continue;
+          if (!t2.portOpen || !t2.syncedParams) continue;
+          if (_tabHasPort(t2, portName)) { sibling = t2; break; }
         }
       }
+      const selfForwardOther = !mine && !sibling && !!myPorts &&
+        ((selId === 'portSelectA' && portName === myPorts[1]) ||
+         (selId === 'portSelectB' && portName === myPorts[0]));
+      if (info.inUseBy === 'other' && !mine && !ownerIsMe) {
+        cls = 'port-busy-other';
+        suffix = t('port.busy_other', '（被其他程序占用）');
+      } else if (sibling) {
+        cls = 'port-occupied';
+        const nm = sibling.label || t('port.other_tab', '其他标签');
+        suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', nm);
+      } else if (selfForwardOther) {
+        cls = 'port-occupied';
+        suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', t('port.own_forward', '本标签另一端口'));
+      } else if (!mine && !ownerIsMe && info.inUseBy === 'daemon') {
+        cls = 'port-occupied';
+        const on = info.ownerName || ('#' + (info.ownerProcessId || '?'));
+        suffix = t('port.busy_session', '（{name} 占用）').replace('{name}', on);
+      }
     }
-    const want = occupied ? 'port-occupied' : '';
-    // 只在真的变了时写：这个 select 上挂着 MutationObserver（attributes: true），
-    // 无条件写 className 每次都会把整份下拉重建一遍（TODO #79 ①）。
-    if (opt.className !== want) {
-      opt.className = want;
+    const text = base + suffix;
+    if (opt.textContent !== text) {
+      opt.textContent = text;
+      changed = true;
+    }
+    const has = (opt.classList.contains('port-occupied') ? 'o' : '') +
+                (opt.classList.contains('port-busy-other') ? 'x' : '');
+    const want = cls === 'port-occupied' ? 'o' : (cls === 'port-busy-other' ? 'x' : '');
+    if (has !== want) {
+      opt.classList.remove('port-occupied', 'port-busy-other');
+      if (cls) opt.classList.add(cls);
       changed = true;
     }
   }
@@ -3700,43 +4103,58 @@ function _syncPortSelectsFromTab() {
   const sp = tab.syncedParams;
   const isFwd = tab.mode === 'forward';
   const hasPort = !!(tab.portOpen || sp.portName); // open or declared
-  if (!hasPort) return;
   // Set port select values from tab's synced params
+  if (hasPort) {
+    if (isFwd) {
+      // portName for connected forward is "COM4 ↔ COM14" — split to get individual ports
+      const p1Port = sp.portName ? sp.portName.split(' ↔ ')[0] : '';
+      _setSelectVal('portSelectA', p1Port);
+      _setSelectVal('portSelectB', sp.forwardPortB);
+      _setSelectVal('baudSelectA', sp.baud);
+      _setSelectVal('baudSelectB', sp.forwardBaudB || sp.baud);
+    } else {
+      _setSelectVal('portSelect', sp.portName);
+      _setSelectVal('baudSelect', sp.baud);
+    }
+  }
+  // 帧格式与流控**不看端口开没开**：已声明但还没连的会话（推送回来的工程、
+  // CLI 建的线程）也要按工程的参数把工具栏摆好，用户点「打开串口」时用的就是
+  // 这一份。以前只在 portOpen 时写，于是推回来的 7E2 工程会被按 8N1 打开。
   if (isFwd) {
-    // portName for connected forward is "COM4 ↔ COM14" — split to get individual ports
-    const p1Port = sp.portName ? sp.portName.split(' ↔ ')[0] : '';
-    _setSelectVal('portSelectA', p1Port);
-    _setSelectVal('portSelectB', sp.forwardPortB);
-    _setSelectVal('baudSelectA', sp.baud);
-    _setSelectVal('baudSelectB', sp.forwardBaudB || sp.baud);
-    if (tab.portOpen) {
-      _setSelectVal('dataBitsSelectA', sp.dataBits);
-      _setSelectVal('dataBitsSelectB', sp.dataBits);
-      _setSelectVal('stopBitsSelectA', sp.stopBits);
-      _setSelectVal('stopBitsSelectB', sp.stopBits);
-      _setSelectVal('paritySelectA', sp.parity);
-      _setSelectVal('paritySelectB', sp.parity);
-    }
+    // B 口是独立的一组（转发时两个口可以不同帧格式）：守护进程没给 B 的值
+    // 才退回 A 的 —— 以前直接抄 A 的，B 口设了 7E2 也会被重置成 A 的 8N1。
+    _setSelectVal('dataBitsSelectA', sp.dataBits);
+    _setSelectVal('dataBitsSelectB', sp.forwardDataBitsB || sp.dataBits);
+    _setSelectVal('stopBitsSelectA', sp.stopBits);
+    _setSelectVal('stopBitsSelectB', sp.forwardStopBitsB || sp.stopBits);
+    _setSelectVal('paritySelectA', sp.parity);
+    _setSelectVal('paritySelectB', sp.forwardParityB || sp.parity);
+    _setSelectVal('flowControlSelectA', sp.flowControl);
+    _setSelectVal('flowControlSelectB', sp.forwardFlowControlB || sp.flowControl);
   } else {
-    _setSelectVal('portSelect', sp.portName);
-    _setSelectVal('baudSelect', sp.baud);
-    if (tab.portOpen) {
-      _setSelectVal('dataBitsSelect', sp.dataBits);
-      _setSelectVal('stopBitsSelect', sp.stopBits);
-      _setSelectVal('paritySelect', sp.parity);
-    }
+    _setSelectVal('dataBitsSelect', sp.dataBits);
+    _setSelectVal('stopBitsSelect', sp.stopBits);
+    _setSelectVal('paritySelect', sp.parity);
+    _setSelectVal('flowControlSelect', sp.flowControl);
   }
 }
 
+// 把值写进工具栏的某个下拉框。
+//
+// 必须走 _applySelectValue，不能直接写 .value（TODO #79 那个坑的同一处）：
+//   1. 自定义下拉的触发器文字只在 _csRefresh 里更新，写 .value 不会刷新它；
+//   2. 目标 <select> 里没有这个选项时（会话是从 CLI / 别的窗口接过来的，这个口
+//      可能根本不在本窗口的端口列表里），写 .value 会静默停在占位符上。
+// 实测症状：标签已经是 COM27 @ 230400、数据也在刷，工具栏却显示
+// 「-- 选择端口 --」和 115200。
 function _setSelectVal(id, val) {
-  if (val === undefined || val === null) return;
+  // 0 也要跳过：老工程的 settings.json 里没有 dataBits/baud，读回来是 0，
+  // 交给 _applySelectValue 会往「数据位」下拉里插一个值为 "0" 的选项。
+  if (val === undefined || val === null || val === '' || val === 0) return;
   const el = pageEl(id);
   if (!el) return;
-  const str = String(val);
-  if (el.tagName === 'INPUT') { el.value = str; return; }
-  for (let i = 0; i < el.options.length; i++) {
-    if (el.options[i].value === str) { el.value = str; return; }
-  }
+  if (el.tagName === 'INPUT') { el.value = String(val); return; }
+  _applySelectValue(el, val);
 }
 
 function handleDaemonOffline() {
@@ -3787,7 +4205,7 @@ function handleDaemonOffline() {
   updateEmptyState();
   renderTabs();
   updateModeUI();
-  loadTabHistory();
+  _liveRefresh();
   // activeTab 刚变过，遮罩的显示条件（按「活动标签是不是会话页」判定）得重算一次：
   // 否则 onDaemonGone 那条路上，遮罩是照旧会话页算的，会一直盖在工程页上。
   updateDaemonUI();
@@ -3966,11 +4384,15 @@ function updatePortList(ports) {
   // 顺手缓存「COM → 设备描述」：标签浮窗（c-tabpop）要显示串口名，
   // 而这里刷出来的描述原本只用于拼下拉框文案，用完就丢。
   state.portDescs = {};
+  // 端口元数据（含占用归属）缓存：逐标签的占用标记在 _markOccupied 里做，
+  // 因为它要区分「自己这个标签在用」和「别的会话在用」。
+  state.portListData = {};
   if (ports) {
     for (let i = 0; i < ports.length; i++) {
       const p = ports[i];
       if (!p || !p.port) continue;
       state.portDescs[p.port] = (p.description && p.description !== p.port) ? p.description : '';
+      state.portListData[p.port] = p;
     }
   }
   let html = '';
@@ -3979,7 +4401,11 @@ function updatePortList(ports) {
   } else {
     ports.forEach(p => {
       const desc = (p.description && p.description !== p.port) ? ' — ' + p.description : '';
-      html += `<option value="${escHtml(p.port)}">${escHtml(p.port + desc)}</option>`;
+      // 这里只放**中性的**端口名 + 描述：占用标记（黄/红）与后缀统一由
+      // _markOccupied 按「每个标签自己的视角」加 —— 自己正在用的那个口不能显示
+      // 成「被占用」（用户实测就是这个），而别的窗口 / CLI / MCP 的会话占用要显示。
+      const base = p.port + desc;
+      html += `<option value="${escHtml(p.port)}" data-base="${escHtml(base)}">${escHtml(base)}</option>`;
     });
   }
   if (html !== state.lastPorts) {
@@ -3995,6 +4421,10 @@ function updatePortList(ports) {
   state.tabs.forEach(function(tb) {
     if (tb && tb._page && tb._page.root) _populateTabPortSelects(tb._page.root);
   });
+  // 重建选项会把「当前值」丢掉（这个口不在列表里时尤其明显）：马上按当前标签的
+  // 会话参数补回去，否则端口列表一到，工具栏就退回「-- 选择端口 --」，而串口
+  // 明明开着。别的标签页在切过去时由 updateModeUI 走同一条同步。
+  _syncPortSelectsFromTab();
   updatePortOccupied();
 }
 
@@ -4036,10 +4466,8 @@ function initTabPage(pageRoot) {
   }
   // 端口下拉按本页 root 填充（不能用 getElementById：每个标签页都有一份同 id）
   _populateTabPortSelects(pageRoot);
-  // 自绘滚动条（原生条已隐藏），只反映真实内容
-  if (typeof initDisplayScrollbar === 'function') {
-    initDisplayScrollbar(pageRoot.querySelector('#displayContent'));
-  }
+  // 显示区不再有自绘滚动条 —— 那是虚窗引擎自己的两道轨道 + 泳道，挂载时由
+  // createLogView 负责。发送框那条还在（它只是输入框的横向滚动）。
   if (typeof initSendScrollbar === 'function') {
     initSendScrollbar(pageRoot.querySelector('#sendInput'));
   }
@@ -4074,16 +4502,19 @@ function _setPortOptions(sel, optionsHtml, placeholder) {
 
 // ---- tabs ----
 let _creatingTab = false;
+// 正在「从已打开线程进入」接管某一个会话：认领成功到会话页挂上之间，同步不许
+// 给它建标签（见 syncDaemonSessions 第 1 步的跳过与 chooseOpenThread）。
+let _adoptingSid = null;
 
 // 新建会话：先开一个「选择页」标签（两张调色盘卡片），选定模式之后才在守护
 // 进程里建空闲进程，并把这个标签页**原地**换成会话页 —— 所以直接关掉选择页
 // 不会留下孤儿进程（旧流程先把进程建出来再建页，关掉就漏了）。
 function openNewSessionTab() {
   // 守护进程没起来也照样能进来：页内的串口卡会置灰，「从文件打开」始终可用。
-  // 已经有一个选择页就切过去，不重复开
-  var existing = state.tabs.findIndex(function(x) { return x.type === 'new'; });
-  if (existing >= 0) { switchTab(existing); return; }
-
+  //
+  // **不限制个数**：以前这里「已经有一个选择页就切过去」，等于永远只能开一个。
+  // 选择页是独立标签，每个都能原地转换成会话页，多开几个是正常用法（一个挑端口、
+  // 一个准备接管别的窗口的线程）。共用状态都在页内（curTab / 列表屏），互不干扰。
   var tab = {
     id: state.tabCounter++,
     label: t('newtab.title', '新建会话'),
@@ -4163,6 +4594,8 @@ async function chooseNewSessionMode(mode) {
   if (mode === 'file') { chooseOpenFile(); return; }
   var tab = getActiveTab();
   if (!tab || tab.type !== 'new') return;
+  // 「从已打开线程进入」：不建进程，先把服务里的会话列出来（同一个标签里换屏）
+  if (mode === 'threads') { openThreadList(tab); return; }
   if (!state.daemonOnline) {
     showAlert(t('confirm.title', '提示'),
       t('newtab.need_daemon', '这个模式需要守护进程，请先启动它（菜单 守护进程 → 启停），或改用「从文件打开」'));
@@ -4179,6 +4612,93 @@ async function chooseNewSessionMode(mode) {
     return;
   }
   _convertChooserToSession(tab, sid, mode);
+}
+
+// ---- 从已打开线程进入 ----
+//
+// 守护进程里的会话是全局的，窗口只是登记「谁开着它」（Go 侧的 sessOwner）。
+// 这张卡把已经在跑、但本窗口没挂着的会话接过来：串口不重开，历史和统计都在。
+// 归属判据全在 Go 侧（app_threads.go 的 annotateOpenSessions），前端只按
+// mine / free 决定走哪条路。
+
+// 打开列表屏（同一个标签页里换屏，不新增标签）。
+async function openThreadList(tab) {
+  if (!tab || !tab._page || !tab._page.openThreads) return;
+  if (!state.daemonOnline) {
+    showAlert(t('confirm.title', '提示'),
+      t('newtab.need_daemon', '这个模式需要守护进程，请先启动它（菜单 守护进程 → 启停），或改用「从文件打开」'));
+    return;
+  }
+  tab._page.openThreads(tab);
+  await refreshOpenThreads(tab);
+}
+
+// 向 Go 要一份列表并重画。离线 / 空列表由 renderThreads 分情况显示。
+async function refreshOpenThreads(tab) {
+  if (!tab || !tab._page || !tab._page.renderThreads) return;
+  var data = null;
+  try { data = await window.go.main.App.ListOpenSessions(); } catch (e) { data = null; }
+  // 等数据这段时间页面可能已经被换成会话页了
+  if (!tab._page || !tab._page.renderThreads) return;
+  tab._page.renderThreads(data || { online: false, sessions: [] });
+}
+
+// 守护进程有变化时，如果正停在列表屏就跟着刷（不然用户对着过期列表点，
+// 点下去才发现会话已经被别的窗口拿走）。
+function _refreshThreadListIfOpen() {
+  var tab = getActiveTab();
+  if (!tab || !tab._page || !tab._page.isChooser) return;
+  var root = tab._page.root;
+  if (!root || root.getAttribute('data-screen') !== 'threads') return;
+  refreshOpenThreads(tab);
+}
+
+// 列表里点了一行：三条路 ——
+//   本窗口已经有这个标签 → 直接切过去（不允许同一个会话在本窗口开两份）
+//   无主                 → 认领（AdoptSession）
+//   别的窗口开着         → 转过来（TakeSessionToWindow，源窗口摘标签、不销毁会话）
+async function chooseOpenThread(tab, sid) {
+  if (!tab || tab.type !== 'new' || !sid) return;
+  var existingTab = state.tabs.filter(function (t) { return String(t.sessionId) === String(sid); })[0];
+  if (existingTab) { switchTab(state.tabs.indexOf(existingTab)); return; }
+  if (tab._choosing) return;
+  tab._choosing = true;
+  _setChooserBusy(tab, true);
+  // 认领到「原地换成会话页」之间不要让同步先给这个会话建一个标签（会多出一个）
+  _adoptingSid = String(sid);
+
+  try {
+    // 列表可能是几十秒前画的：重新确认一次归属，别照着一份过期判断改归属表
+    var data = await window.go.main.App.ListOpenSessions();
+    var list = (data && data.sessions) || [];
+    var item = null;
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].id) === String(sid)) { item = list[i]; break; }
+    }
+    if (!item) throw new Error(t('thread.gone', '这个会话已经不在了'));
+
+    if (item.mine || item.free) {
+      await window.go.main.App.AdoptSession(sid);
+    } else {
+      await window.go.main.App.TakeSessionToWindow(sid);
+    }
+    _convertChooserToSession(tab, sid, item.mode === 'forward' ? 'forward' : 'single');
+    // 这是个**已经在跑**的会话：名字、参数、查看者立刻从刚拿到的列表里补上。
+    // 不补的话标签会一直叫「#3」、工具栏下拉停在占位符上，直到下一次同步 ——
+    // 而接管本身不产生任何守护进程事件，下一次同步可能很久以后才来。
+    _applyDaemonSessionToTab(tab, item);
+    renderTabs();
+    updateModeUI();   // 顺带经 _syncPortSelectsFromTab 把端口 / 波特率写回工具栏
+  } catch (e) {
+    tab._choosing = false;
+    _adoptingSid = null;
+    _setChooserBusy(tab, false);
+    var msg = (e && e.message) ? e.message : String(e);
+    showAlert(t('confirm.title', '提示'), t('thread.fail', '接管失败：') + msg);
+    await refreshOpenThreads(tab);
+  } finally {
+    _adoptingSid = null;
+  }
 }
 
 function _setChooserBusy(tab, busy) {
@@ -4214,6 +4734,7 @@ function _convertChooserToSession(tab, sid, mode) {
   var mc = document.getElementById('mainContent');
   if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
   tab._page.show();
+  _mountLive(tab);
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
@@ -4227,7 +4748,11 @@ function _convertChooserToSession(tab, sid, mode) {
   updateOpenBtn();
   updateSyncIndicator();
   updateEmptyState();
-  loadTabHistory();
+  _liveRefresh();
+  // 新建出来的空闲进程在守护进程里已经有自动名（「会话 #N」/ 端口名）：拉一次
+  // 同步把它补到标签上。不补的话标签会停在「#<id>」兜底文案，直到下一次
+  // process-changed —— 而新建进程本身不保证立刻有一条事件。
+  if (typeof syncDaemonSessions === 'function') syncDaemonSessions();
 }
 
 // 守护进程刚上线且没有任何会话时自动补一个单端口空闲会话（不弹选择页，
@@ -4245,12 +4770,17 @@ async function autoCreateIdleSession(mode) {
   tab._page = new TabPage(state.tabs.length, tab);
   var mc = document.getElementById('mainContent');
   if (mc) { mc.appendChild(tab._page.root); initTabPage(tab._page.root); }
+  _mountLive(tab);
   state.tabs.push(tab);
 
   if (state.daemonOnline) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
     try { window.go.main.App.SetTabEncoding(sid, _dispOf(tab).encoding); } catch (e) {}
   }
+  // 建完之后必须真的切过去显示一次：这一步不只是「激活」——TabPage 的内容
+  // （工具栏 / 数据区 / 发送区）只在这里 show，不切就是一个空窗口：标签栏有
+  // 「会话 #1」、内容区一片空白、引导页又被 updateEmptyState 按「有标签」收掉了。
+  switchTab(state.tabs.length - 1);
   updateEmptyState();
   renderTabs();
   updateOpenBtn();
@@ -4274,7 +4804,11 @@ function _syncStatusDispItems() {
 function _syncTabDisplayChrome() {
   _syncStatusDispItems();
   if (typeof _applyDisplayStyle === 'function') _applyDisplayStyle();
-  if (_statusBar) _statusBar.updateEol();
+  if (_statusBar) {
+    _statusBar.updateEol();
+    if (typeof _statusBar.updateParse === 'function') _statusBar.updateParse();
+    if (typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
+  }
 }
 
 function switchTab(idx) {
@@ -4286,8 +4820,20 @@ function switchTab(idx) {
   // 切到这一页时补齐端口下拉（页面可能在端口列表到达之前就建好了）
   if (newTab._page && newTab._page.root) _populateTabPortSelects(newTab._page.root);
 
-  // 非会话标签页（设置页 / 新建选择页，任一方向）：只显示隐藏，不碰会话状态
-  if (!isSessionTab(newTab) || (oldTab && !isSessionTab(oldTab))) {
+  // 目标不是会话页（设置页 / 新建选择页 / .stlog 只读页）：只显示隐藏，不碰会话状态。
+  //
+  // 以前「任一方向」都走这条短路，于是**从只读工程页切到刚推上来的会话页**时，
+  // 整段恢复被跳过：发送框没被填、多字符串面板没渲染（屏幕上是一个空表格），
+  // 而 tab._s 里其实已经有草稿 —— 下一次 saveSendUI 又拿空的输入框把它覆盖掉，
+  // 表现就是「推送到守护进程后草稿丢了 / Hex 草稿被删了」。
+  if (!isSessionTab(newTab)) {
+    // 会话页 → 设置页 / 只读工程页：走之前得把编辑器里的内容抓回 _s。
+    // 以前直接 hide 就算完，DOM 里刚敲的字没人接住；再切回来 restoreSendUI 拿的
+    // 是旧值 —— 看起来就像「我什么都没删，草稿却少了/被清了」。
+    if (oldTab && isSessionTab(oldTab)) {
+      saveSendUI();
+      _flushSendState(oldTab);
+    }
     if (oldTab && oldTab._page) oldTab._page.hide();
     state.activeTab = idx;
     if (newTab.type === 'settings') {
@@ -4295,7 +4841,7 @@ function switchTab(idx) {
     } else if (newTab._page) {
       newTab._page.show();
       if (isSessionTab(newTab)) {
-        loadTabHistory();
+        _liveRefresh();
         refreshStatsDOM();
       }
     }
@@ -4320,6 +4866,8 @@ function switchTab(idx) {
     oldTab.sendRatio = state.sendRatio;
     oldTab.quickPanelRatio = state.quickPanelRatio;
     oldTab.quickPresets = state.quickPresets.slice();
+    // 切走之前把这份草稿推给守护进程（切标签是最容易丢输入的时刻）
+    _flushSendState(oldTab);
     oldTab._qpCycleActive = state._qpCycleActive;
     // Save port selections
     var ps = pageEl('portSelect');
@@ -4364,7 +4912,7 @@ function switchTab(idx) {
   renderTabs();
   updateOpenBtn();
   restoreSendUI();
-  loadTabHistory();
+  _liveRefresh();
   refreshStatsDOM();
   updatePortOccupied();
   applySendRatio();
@@ -4372,6 +4920,14 @@ function switchTab(idx) {
   updateFwdBtns();
   updateScrollLockBtns();
   quickPanelRender();
+  // 制表符 / 行尾 / 保存开关也是每个标签页各自的：切换后要把状态栏与 tab-size
+  // 样式同步到新标签页（工程 A 用 8、工程 B 用 4 时，不刷就一直是上一页的）。
+  _syncTabDisplayChrome();
+  // 从「没有会话」的页面（设置页 / 只读工程页）切过来时，这三项以前由短路分支
+  // 负责，现在一并补上：空态、同步指示、离线遮罩都要按新页面重算。
+  updateEmptyState();
+  updateSyncIndicator();
+  updateDaemonUI();
 
   _updateStatsVisible();
 
@@ -4413,27 +4969,75 @@ var TEAR_OFF_DY = 42;   // 垂直拖出阈值（像素）
 
 // 拖出来的窗口是整窗尺寸，光标停在它的标签上（偏移由 Go 侧给，见 tearOffGrabX/Y）。
 
+// 关标签页：线程怎么处理（设置 → 标签页 →「关闭标签页时」）
+//
+//   ask      三选一：仅关闭标签 / 同时关闭线程 / 取消（带「记住选择」）
+//   tab      只关标签，线程留在守护进程里（串口不断），之后能从
+//            「新建会话 → 从已打开线程进入」再挂回来
+//   process  连线程一起关（断串口，旧行为）
+//
+// 拦不拦只看**这个标签背后有没有进程**（sessionId），不看串口开没开：
+// 空闲标签背后也是一个真进程，直接关掉等于悄悄销毁它 —— 那是「同时关闭线程」，
+// 不该替用户默认选。设置 / 选择页 / .stlog 文件页没有会话，照旧直接关。
 function closeTab(idx) {
   const tab = state.tabs[idx];
   if (!tab) return;
-  // 「关闭标签页前确认」：只在该标签的串口开着时拦一道。空标签没什么可失去的，
-  // 每次都弹只会变成噪音。
-  if (state.tabCloseWarn && tab.portOpen && tab.sessionId) {
-    showConfirm(
+  const action = state.tabCloseAction || 'ask';
+  const guarded = !!tab.sessionId;
+  const msgKey = tab.portOpen ? 'confirm.tab_close_msg' : 'confirm.tab_close_msg_idle';
+  const msgDef = tab.portOpen
+    ? '这个标签的串口还开着。只关标签的话线程继续跑，串口不会断。'
+    : '这个标签背后是个还没开串口的空闲线程。只关标签的话线程继续留着（之后可从「从已打开线程进入」接回来），同时关闭线程会把它销毁。';
+
+  if (guarded && action === 'ask') {
+    showChoice(
       t('confirm.tab_close_title', '关闭标签页'),
-      t('confirm.tab_close_msg', '这个标签的串口还开着，关闭会断开连接。确定关闭吗？'),
-      function() { _closeTabNow(tab); },
-      'confirm.tab_close_ok', 'confirm.cancel',
-      function() {
-        // 「不再提醒」= 把这个开关关掉，并立即落盘（不走 500ms 防抖）
-        state.tabCloseWarn = false;
-        saveSettingsNow();
-        if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
-      }
+      t(msgKey, msgDef),
+      [
+        {
+          label: t('confirm.tab_close_only', '仅关闭标签'),
+          onPick: function(remember) { if (remember) _rememberTabClose('tab'); _closeTabOnly(tab); }
+        },
+        {
+          label: t('confirm.tab_close_process', '同时关闭线程'),
+          onPick: function(remember) { if (remember) _rememberTabClose('process'); _closeTabNow(tab); }
+        },
+        // 取消排最后：对话框只对第一个按钮标 primary，取消不该是默认动作
+        { label: t('confirm.cancel', '取消'), onPick: function() {} }
+      ],
+      t('confirm.remember_choice', '记住选择')
     );
     return;
   }
+  if (guarded && action === 'tab') { _closeTabOnly(tab); return; }
   _closeTabNow(tab);
+}
+
+// 「记住选择」：把这次的处理方式写回设置，下次同样情况直接照办。
+function _rememberTabClose(action) {
+  state.tabCloseAction = action;
+  saveSettingsNow();
+  if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
+}
+
+// 只关标签、**不关线程**：会话放回「无主」，串口继续开着（没开的也还开着）、
+// 历史继续记，之后能从「新建会话 → 从已打开线程进入」再挂回来（哪个窗口都行）。
+//
+// 注意不能只调 _detachTab：Go 侧的归属表还记着这个窗口，下一次同步会把它
+// 当成「本窗口的会话」再建一个标签出来。必须先让 Go 把归属放掉（ReleaseSession），
+// 并记下「是本窗口放的」，否则「无主就认领」会立刻把它领回来。
+function _closeTabOnly(tab) {
+  if (!tab) return;
+  const sid = tab.sessionId;
+  // 和 _closeTabNow 一样挡住「空窗口自动补会话」：关掉最后一个标签时不该顺手
+  // 又建一个新进程 —— 用户要的是把这个线程留着，不是换一个新的。
+  state._suppressAutoCreate = (Date.now() + 2000);
+  if (sid && state.daemonOnline) {
+    window.go.main.App.ReleaseSession(sid).catch(function(e) {
+      console.error('ReleaseSession failed:', e);
+    });
+  }
+  _detachTab(tab);
 }
 
 // 真正执行关闭。按标签**对象**定位而不是下标：确认框弹出的这段时间里，标签数组
@@ -4459,22 +5063,9 @@ function _closeTabNow(tab) {
   state.tabs.splice(idx, 1);
   _clampActiveTab();
   const newTab = getActiveTab();
-  // Show the new active tab page (or welcome page if no tabs remain)
-  if (newTab && newTab._page) {
-    newTab._page.show();
-  } else if (state._welcomePage) {
-    state._welcomePage.show();
-  }
-  state.currentMode = (newTab && newTab.mode) ? newTab.mode : 'single';
-  updateModeUI();
-  updateEmptyState();
-  renderTabs();
-  updateOpenBtn();
-  updateSyncIndicator();
-  _updateStatsVisible();
-  updateDaemonUI();
-  if (newTab) loadTabHistory();
-  else clearDisplay();
+  // 收尾统一交给 _afterActivePageChanged（与拖出成窗、切页走同一条路）。
+  _afterActivePageChanged({ reloadHistory: !!newTab });
+  if (!newTab) clearDisplay();
 }
 
 function closeCurrentTab() { closeTab(state.activeTab); }
@@ -4535,6 +5126,13 @@ function _tabPopDuration(sec) {
   return h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
 }
 
+// 流控的显示文案：none 不显示（8N1 里没有它的位置），其余用行业缩写。
+function _tabPopFlowText(flow) {
+  if (flow === 'rts_cts') return 'RTS/CTS';
+  if (flow === 'xon_xoff') return 'XON/XOFF';
+  return '';
+}
+
 // 从标签自身状态推出浮窗要显示的东西（不依赖统计接口）
 function _tabPopModel(tab) {
   var sp = tab.syncedParams || null;
@@ -4554,8 +5152,10 @@ function _tabPopModel(tab) {
     }
   }
   var params = '';
-  if (sp) {
+  if (sp && baud) {
     var fmt = (sp.dataBits || 8) + _tabPopParityLetter(sp.parity) + (sp.stopBits || 1);
+    var flow = _tabPopFlowText(sp.flowControl);
+    if (flow) fmt += ' · ' + flow;
     params = (isFwd && sp.forwardBaudB && sp.forwardBaudB !== baud)
       ? (baud + ' ⇄ ' + sp.forwardBaudB + ' · ' + fmt)
       : (baud + ' · ' + fmt);
@@ -4588,8 +5188,13 @@ function _tabPopValues() {
   if (live && _tabPop.uptimeAt) upSec += (Date.now() - _tabPop.uptimeAt) / 1000;
   var hasUptime = (s.uptimeSec || 0) > 0 || (live && _tabPop.uptimeAt);
   return {
-    rxRate: live ? (s.readRateBps || 0) : 0,
-    txRate: live ? (s.writeRateBps || 0) : 0,
+    // 转发模式下方向要倒过来：daemon 的 read/write 是站在 **B 口** 说的 ——
+    // readRateBps 是「从 B 口读到的」（B→A），writeRateBps 是「写到 B 口的」（A→B）。
+    // 而卡片第一条泳道在转发页是 A→B，所以这里必须交换；单端口时 read=RX、
+    // write=TX，不交换。不交换的后果是 A→B 累计涨着、速率却一直是 0，
+    // B→A 累计 0、速率却在跳（实测 5.086M / 0.0 B/s 配 0 / 16.0 kB/s）。
+    rxRate: live ? ((isFwd ? s.writeRateBps : s.readRateBps) || 0) : 0,
+    txRate: live ? ((isFwd ? s.readRateBps : s.writeRateBps) || 0) : 0,
     rxTotal: isFwd ? (s.bytesPort1 || 0) : (s.bytesRead || 0),
     txTotal: isFwd ? (s.bytesPort2 || 0) : (s.bytesWritten || 0),
     errRx: s.readErrors || 0,
@@ -4665,15 +5270,15 @@ function _tabPopT(key, fb) {
 
 // 文件标签的浮窗。文件标签没有会话概念（没 sessionId、没端口），套会话卡片只会
 // 得到一片 —，所以单独画：文件名 / 路径 / 大小 / 收发 / 时间范围 / 来源。
-// 数据来自 tab._stlog.info（stlogLoad 每次读回来都会存一份）。
+// 数据来自 tab._stlog.info（引擎打开完成时把 Meta 存一份）。
 function _tabPopRenderFile() {
   var el = _tabPopEl;
   var tab = _tabPop.tab;
   var st = tab._stlog || {};
   var info = st.info || {};
   var path = tab.path || '';
-  var fwd = info.forward === true;
-  var set = info.settings || {};
+  var fwd = info.mode === 'forward';
+  var set = { port: info.port, baud: info.baud };
   var portA = set.port || '';
   var portB = info.portB || '';
 
@@ -4707,14 +5312,14 @@ function _tabPopRenderFile() {
     '</div>';
   }
   var lanesHTML = fwd
-    ? lane('A→B', 'var(--fwd-p1)', info.bytesAB) + lane('B→A', 'var(--fwd-p2)', info.bytesBA)
-    : lane('⇃ RX', 'var(--green)', info.rxTotal) + lane('↾ TX', 'var(--accent)', info.txTotal);
+    ? lane('A→B', 'var(--fwd-p1)', info.p1Bytes) + lane('B→A', 'var(--fwd-p2)', info.p2Bytes)
+    : lane('⇃ RX', 'var(--green)', info.rxBytes) + lane('↾ TX', 'var(--accent)', info.txBytes);
 
   // 比例条：单口是收发比（绿/蓝），转发是分流比（P1/P2 两色）
   var cRx = fwd ? 'var(--fwd-p1)' : 'var(--green)';
   var cTx = fwd ? 'var(--fwd-p2)' : 'var(--accent)';
-  var partA = fwd ? (info.bytesAB || 0) : (info.rxTotal || 0);
-  var partB = fwd ? (info.bytesBA || 0) : (info.txTotal || 0);
+  var partA = fwd ? (info.p1Bytes || 0) : (info.rxBytes || 0);
+  var partB = fwd ? (info.p2Bytes || 0) : (info.txBytes || 0);
   var sum = partA + partB;
   var hasRatio = sum > 0;
   var rp = hasRatio ? Math.round(partA / sum * 100) : 0;
@@ -4728,9 +5333,9 @@ function _tabPopRenderFile() {
     '<span class="c-tabpop__rval" dir="ltr">' + _tabPopRatioValHTML(hasRatio, rp, cRx, cTx) + '</span>' +
   '</div>';
 
-  // 页脚三项：帧（已载入/总数）、时长、来源数。绝对时间范围退到 title。
-  var loaded = (st.frames && st.frames.length) ? st.frames.length : 0;
-  var totalFrames = (typeof info.total === 'number') ? info.total : 0;
+  // 页脚三项：帧、时长、来源数。绝对时间范围退到 title。
+  var totalFrames = (typeof info.frames === 'number') ? info.frames : 0;
+  var loaded = totalFrames;
   var srcCount = (info.origins && info.origins.length) ? info.origins.length : 0;
   var range = stlogRangeText(info.firstTs, info.lastTs) || '';
 
@@ -4769,7 +5374,7 @@ function _tabPopSpanText(firstTs, lastTs) {
 function _tabPopFileSig() {
   var st = (_tabPop && _tabPop.tab && _tabPop.tab._stlog) || {};
   var info = st.info || {};
-  return ['file', info.path || '', info.total || 0, (st.frames ? st.frames.length : 0)].join('|');
+  return ['file', info.path || '', info.frames || 0].join('|');
 }
 
 function _tabPopRender() {
@@ -4848,6 +5453,7 @@ function _tabPopRender() {
       '<span class="c-tabpop__sid" dir="ltr">#' + escHtml(String(tab.id)) + '</span>' +
     '</div>' +
     '<div class="c-tabpop__sep"></div>' +
+    // 工程/文件会话是回放，没有实时收发：画两条 0 的泳道只会让人以为「没数据」
     lanes +
     ratioHTML +
     '<div class="c-tabpop__sep"></div>' +
@@ -4976,6 +5582,7 @@ function _tabPopOpen(tabEl, idx) {
   if (tab.histOn === undefined) {
     window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
       tab.histOn = !!on;
+      _liveRecording(tab, on);
       if (_tabPop && _tabPop.tab === tab) _tabPopUpdate();
     }).catch(function () {});
   }
@@ -5028,7 +5635,7 @@ function _tabPopSchedule(tabEl, idx) {
   if (document.body.classList.contains('is-tab-dragging')) return;
   // 右键菜单开着的时候不许再冒出来：鼠标在菜单和标签之间挪一下就会触发
   // pointerenter，浮窗弹出来正好压在菜单旁边，看着就是「菜单上面又闪了一下」。
-  if (_tabMenuEl) return;
+  if (cMenuIsOpen()) return;
   // 刚点过标签：切换会重绘按钮，指针下的新按钮会再收到一次 pointerenter，
   // 不挡一下的话浮窗会在点击后 140ms 又自己弹出来。
   if (Date.now() - (window._tabPopClickedAt || 0) < 400) return;
@@ -5072,55 +5679,15 @@ function initTabPopup() {
 // 为什么不用原生菜单：Wails 的菜单是应用级菜单栏，不能按标签弹出；原生
 // contextmenu 又会盖住自绘菜单并且样式不可控。这里直接在 body 下挂一个
 // fixed 浮层，跟随鼠标、贴边翻转，点空白 / Esc / 滚轮 / 失焦都会关。
-var _tabMenuEl = null;
-
-function _tabMenuOnDown(e) {
-  if (_tabMenuEl && !_tabMenuEl.contains(e.target)) _tabMenuClose();
-}
-
-function _tabMenuOnKey(e) {
-  if (e.key === 'Escape') _tabMenuClose();
-}
-
+// 开合、定位、贴边翻转、自动关闭全部交给 menu.js 的 cMenuOpen —— 这里以前
+// 和「数据区右键菜单」各写了一份一模一样的代码，改一边忘一边就会不一致。
 function _tabMenuClose() {
-  if (!_tabMenuEl) return;
-  var el = _tabMenuEl;
-  _tabMenuEl = null;
-  if (el.parentNode) el.parentNode.removeChild(el);
-  document.removeEventListener('pointerdown', _tabMenuOnDown, true);
-  document.removeEventListener('keydown', _tabMenuOnKey, true);
-  document.removeEventListener('scroll', _tabMenuClose, true);
-  window.removeEventListener('blur', _tabMenuClose);
-  window.removeEventListener('resize', _tabMenuClose);
+  cMenuClose();
 }
 
-// 菜单项沿用顶部菜单的四栏网格：勾选位 | 文本 | 快捷键 | 箭头。
+// 菜单项统一走 menu.js 的 cMenuItem：四栏网格 + 勾选 + 禁用 + 快捷键。
 function _tabMenuItem(label, opts) {
-  opts = opts || {};
-  var btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'tab-menu-item';
-  btn.setAttribute('role', 'menuitem');
-  var chk = document.createElement('span');
-  chk.className = 'menu-chk chk' + (opts.checked ? ' on' : '');
-  btn.appendChild(chk);
-  var txt = document.createElement('span');
-  txt.className = 'menu-text';
-  txt.textContent = label;
-  btn.appendChild(txt);
-  var shortcut = document.createElement('span');
-  shortcut.className = 'menu-shortcut';
-  shortcut.textContent = opts.shortcut || '';
-  btn.appendChild(shortcut);
-  var arrow = document.createElement('span');
-  arrow.className = 'menu-arrow';
-  btn.appendChild(arrow);
-  btn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    _tabMenuClose();
-    if (opts.onClick) opts.onClick();
-  });
-  return btn;
+  return cMenuItem(label, opts);
 }
 
 // ---- 标签就地改名 ----
@@ -5212,9 +5779,7 @@ function _tabRenameStart(btn, idx) {
 }
 
 function _tabMenuSep() {
-  var sep = document.createElement('div');
-  sep.className = 'menu-sep';
-  return sep;
+  return cMenuSep();
 }
 
 function _tabMenuCopy(text) {
@@ -5288,6 +5853,7 @@ function _tabMenuOpen(clientX, clientY, idx) {
         // 标签上已经不再显示保存标记（它搬进悬浮卡了），这里只更新缓存，
         // 下次打开卡片能立刻显示正确的开/关。
         tab.histOn = saveOn;
+        _liveRecording(tab, saveOn);
         window.go.main.App.SetHistoryEnabledFor(tab.sessionId, saveOn).catch(function () {});
       }
     });
@@ -5295,6 +5861,7 @@ function _tabMenuOpen(clientX, clientY, idx) {
     window.go.main.App.GetHistoryStatusFor(tab.sessionId).then(function (on) {
       saveOn = !!on;
       tab.histOn = saveOn;
+      _liveRecording(tab, saveOn);
       var chk = saveItem.querySelector('.menu-chk');
       if (chk) chk.classList.toggle('on', saveOn);
     }).catch(function () {});
@@ -5322,24 +5889,111 @@ function _tabMenuOpen(clientX, clientY, idx) {
     onClick: function () { _closeOtherTabs(tab); }
   }));
 
-  document.body.appendChild(menu);
-  // 贴边翻转：右侧/底部放不下就翻到鼠标另一侧，并至少留 4px 边距。
-  var mw = menu.offsetWidth || 176;
-  var mh = menu.offsetHeight || 40;
-  var x = clientX, y = clientY;
-  if (x + mw + 4 > window.innerWidth) x = Math.max(4, x - mw);
-  if (y + mh + 4 > window.innerHeight) y = Math.max(4, y - mh);
-  menu.style.left = Math.round(x) + 'px';
-  menu.style.top = Math.round(y) + 'px';
+  cMenuOpen({ el: menu, x: clientX, y: clientY });
+}
 
-  _tabMenuEl = menu;
-  document.addEventListener('pointerdown', _tabMenuOnDown, true);
-  document.addEventListener('keydown', _tabMenuOnKey, true);
-  // 这里**不能**监听 scroll 去关菜单：菜单是 position:fixed，页面怎么滚都不会错位，
-  // 而数据区刷屏时每一帧都在滚 —— 于是右键一次菜单刚出来就被自己的 scroll 监听关掉，
-  // 表现就是「刷屏时右键打不开」。这个坑只在有流量的时候才显形。
-  window.addEventListener('blur', _tabMenuClose);
-  window.addEventListener('resize', _tabMenuClose);
+// ---- 数据区右键菜单（单端 / 转发页）----
+//
+// 与标签右键菜单同一套皮肤和条目构造器：.menu-dropdown 的毛玻璃挂在 ::before 上，
+// 所以这里只要挂上这个类、再补一条 fixed 定位就有同样的效果（见 style.css 的
+// .menu-dropdown.disp-menu）。定位和贴边翻转的规则也照抄标签菜单。
+//
+// 为什么菜单项不写进引擎（logview.js）：清空、自动滚动、标签页设置改的都是
+// 标签页级状态，引擎只该认识自己那篇文档；它把右键坐标报上来，菜单在这里画。
+function _dispMenuClose() {
+  cMenuClose();
+}
+
+// 条目复用标签菜单的四栏按钮，另外补三件事：禁用态、点完就收菜单、
+// 以及勾选态由调用方按当前状态给（标签菜单的勾选是异步回填的，这里不需要）。
+function _dispMenuItem(label, opts) {
+  opts = opts || {};
+  var run = opts.onClick;
+  var btn = _tabMenuItem(label, {
+    checked: opts.checked,
+    onClick: function () { _dispMenuClose(); if (run) run(); }
+  });
+  if (opts.disabled) btn.disabled = true;
+  return btn;
+}
+
+// ---- 只读页（.stlog / 工程目录）右键 ----
+//
+// 只读页没有会话，菜单也就只有「复制」这一类：和数据区共用同一个浮层组件，
+// 条目少一些。以前这里右键直接复制，用户看不到「复制了多少」也找不到别的动作。
+function openReadonlyMenu(tab, clientX, clientY) {
+  var view = tab && tab._stlog && tab._stlog.view;
+  if (!view) return;
+  var hasSel = typeof view.hasSelection === 'function' ? view.hasSelection() : false;
+  var total = typeof view.total === 'function' ? view.total() : 0;
+  cMenuOpen({
+    x: clientX,
+    y: clientY,
+    items: [
+      {
+        label: _tabMenuItemT('ctxmenu.copy', '复制'),
+        disabled: !hasSel,
+        onClick: function () { view.copy().then(_dispCopyErr); }
+      },
+      {
+        label: _tabMenuItemT('ctxmenu.copy_all', '复制全部'),
+        disabled: !total,
+        onClick: function () { view.copyAll().then(_dispCopyErr); }
+      },
+      { sep: true },
+      {
+        label: _tabMenuItemT('ctxmenu.clear_sel', '取消选择'),
+        disabled: !hasSel,
+        onClick: function () { if (view.clearSelection) view.clearSelection(); }
+      }
+    ]
+  });
+}
+
+// 复制失败要说话。数据区没有「一行提示」的通道（文件页那个 onFlash 是挂在顶栏
+// 帧计数上的），静默失败比弹一次提示更糟：比如整篇超过 5 万帧的上限，用户会以为
+// 剪贴板里是全部内容。成功不弹，只有 err 才弹。
+function _dispCopyErr(r) {
+  if (r && r.err) showAlert(_tabMenuItemT('ctxmenu.copy_fail', '复制失败'), r.err);
+}
+
+function openDisplayMenu(tab, clientX, clientY) {
+  _tabMenuClose();   // 两种浮层不会同时出现，先收掉可能开着的标签菜单
+  _dispMenuClose();
+  var view = tab && tab._live;
+  if (!view) return;
+
+  var menu = document.createElement('div');
+  menu.className = 'menu-dropdown disp-menu';
+  menu.setAttribute('role', 'menu');
+
+  // 「复制」只对选区有效；没有选区时宁可灰掉，也别点了没反应。
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.copy', '复制'), {
+    disabled: !view.hasSelection(),
+    onClick: function () { view.copy().then(_dispCopyErr); }
+  }));
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.copy_all', '复制全部'), {
+    disabled: !view.total(),
+    onClick: function () { view.copyAll().then(_dispCopyErr); }
+  }));
+
+  menu.appendChild(_tabMenuSep());
+
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.clear', '清空显示'), {
+    onClick: function () { clearDisplay(); }
+  }));
+  // 勾选 = 没锁。按钮上写的是「自动滚动 / 锁定滚动」两副文案，菜单里统一叫自动滚动。
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.autoscroll', '自动滚动'), {
+    checked: !state.scrollLocked,
+    onClick: function () { toggleScrollLock(); }
+  }));
+
+  menu.appendChild(_tabMenuSep());
+  menu.appendChild(_dispMenuItem(_tabMenuItemT('ctxmenu.tab_settings', '标签页设置…'), {
+    onClick: function () { openTabSettings(tab); }
+  }));
+
+  cMenuOpen({ el: menu, x: clientX, y: clientY });
 }
 
 // ---- 标签栏内容：类型图标 + 状态点 + 信息槽 ----
@@ -5545,6 +6199,7 @@ function _ensureTabsHist() {
     window.go.main.App.GetHistoryStatusFor(sid).then(function (on) {
       delete _tabHistFetching[sid];
       tb.histOn = !!on;
+      _liveRecording(tb, on);
       if (state.tabs.indexOf(tb) >= 0) renderTabs();
     }).catch(function () {
       delete _tabHistFetching[sid];
@@ -5774,6 +6429,9 @@ async function openPort() {
     dataBits: parseInt((pageEl('dataBitsSelect')||{}).value) || 8,
     stopBits: (pageEl('stopBitsSelect')||{}).value || '1',
     parity: (pageEl('paritySelect')||{}).value || 'none',
+    // 流控以前只写进 gui.ini 的默认值，从来没进过 cfg：界面上选了 RTS/CTS，
+    // 开出来的端口仍然是不带流控的。
+    flowControl: (pageEl('flowControlSelect')||{}).value || 'none',
   };
 
   try {
@@ -5790,21 +6448,28 @@ async function openPort() {
     // 记录「刚挂上会话」的时刻：同步的清理逻辑靠它避开连接窗口期的事件载荷
     tab.connectedAt = Date.now();
 
+    // 连之前先把显示设置推给守护进程：这条会话马上可能要开始录制
+    _pushTabDisplay(tab);
     // Connect the idle process to the selected port
     await window.go.main.App.ConnectSession(tab.sessionId, cfg);
 
     tab.portOpen = true;
     tab.label = `${cfg.port} @ ${cfg.baud}`;
-    tab.syncedParams = { portName: cfg.port, baud: cfg.baud, dataBits: cfg.dataBits, stopBits: cfg.stopBits, parity: cfg.parity };
+    tab.syncedParams = _syncedParamsOf(cfg);
 
     updateOpenBtn();
     updateSyncIndicator();
     updatePortOccupied();
     renderTabs();
-    state.statsBase[tab.sessionId] = { tx: 0, rx: 0 };
+    // 统计跟着会话走：守护进程侧的 bytesRead/Written 本来就是累计的，重连不清零。
+    if (!state.statsBase[tab.sessionId]) {
+      state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
+    }
     refreshStatsDOM();
     _updateStatsVisible();
-    await mergeRingBuffer(tab.sessionId);
+    // 不用再「合并守护进程环」了：虚窗引擎的文档是会话级的常驻对象
+    // （LogView.OpenLive 建、Close 才销毁），实时帧由 App.emitSession 逐帧喂进来，
+    // 重连不会重建它。老的 mergeRingBuffer 是给「前端缓存 + 打开时拉一次」那套用的。
     appendSystemMsg(`串口已打开: ${cfg.port} @ ${cfg.baud}`);
     saveSettings();
   } catch (e) {
@@ -5825,6 +6490,7 @@ async function openForwardPorts() {
     dataBits: parseInt((pageEl('dataBitsSelectA')||{}).value) || 8,
     stopBits: (pageEl('stopBitsSelectA')||{}).value || '1',
     parity: (pageEl('paritySelectA')||{}).value || 'none',
+    flowControl: (pageEl('flowControlSelectA')||{}).value || 'none',
   };
   const cfgB = {
     port: portB,
@@ -5832,6 +6498,7 @@ async function openForwardPorts() {
     dataBits: parseInt((pageEl('dataBitsSelectB')||{}).value) || 8,
     stopBits: (pageEl('stopBitsSelectB')||{}).value || '1',
     parity: (pageEl('paritySelectB')||{}).value || 'none',
+    flowControl: (pageEl('flowControlSelectB')||{}).value || 'none',
   };
 
   try {
@@ -5843,11 +6510,16 @@ async function openForwardPorts() {
     }
     tab.connectedAt = Date.now();   // 同 openPort：给同步清理留出连接窗口期
 
+    _pushTabDisplay(tab);
     await window.go.main.App.ForwardConnect(tab.sessionId, cfgA, cfgB);
 
     tab.portOpen = true;
     tab.label = cfgA.port + ' ↔ ' + cfgB.port;
-    tab.syncedParams = { portName: cfgA.port, baud: cfgA.baud, dataBits: cfgA.dataBits, stopBits: cfgA.stopBits, parity: cfgA.parity, forwardPortB: cfgB.port, forwardBaudB: cfgB.baud };
+    tab.syncedParams = _syncedParamsOf(Object.assign({}, cfgA, {
+      forwardPortB: cfgB.port, forwardBaudB: cfgB.baud,
+      forwardDataBitsB: cfgB.dataBits, forwardStopBitsB: cfgB.stopBits,
+      forwardParityB: cfgB.parity, forwardFlowControlB: cfgB.flowControl,
+    }));
 
     updateOpenBtn();
     updateSyncIndicator();
@@ -5856,7 +6528,7 @@ async function openForwardPorts() {
     state.statsBase[tab.sessionId] = { tx: 0, rx: 0, p1: 0, p2: 0 };
     refreshStatsDOM();
     _updateStatsVisible();
-    await mergeRingBuffer(tab.sessionId);
+    // 同 openPort：引擎文档常驻，不需要重新合并环里的历史。
     appendSystemMsg('端口转发已启动: ' + cfgA.port + ' ↔ ' + cfgB.port);
     saveSettings();
   } catch (e) {
@@ -5872,13 +6544,16 @@ async function closePort() {
       await window.go.main.App.DisconnectSession(tab.sessionId);
     }
   } catch {}
-  await mergeRingBuffer(tab.sessionId);
+  // 断口时不合并历史：引擎文档不动，已收到的帧继续留在页面上（老渲染那套
+  // 是「前端缓存 + 重拉」，才需要这一步）。
   appendSystemMsg(t('sys.port_closed_label', '串口已关闭: %s').replace('%s', tab.label));
   tab.portOpen = false;
   tab.label = tab.mode === 'forward' ? t('tab.idle_forward', '端口转发空闲') : t('tab.idle_single', '单端口空闲');
   tab.syncedParams = null;
-  // 会话还在（空闲进程），但字节/速率是那次连接的，重连会从 0 重新计
-  delete state.statsBase[tab.sessionId];
+  // 统计保留这次连接的结果（关闭后还看得到这次收了多少），只把速率清零 ——
+  // 速率是 stats-rate 的 last-value，端口关了不会再推，留着会一直挂着旧数字。
+  const closedStats = state.statsBase[tab.sessionId];
+  if (closedStats) { closedStats.rxRate = 0; closedStats.txRate = 0; }
   updateOpenBtn();
   updateSyncIndicator();
   updatePortOccupied();
@@ -6003,7 +6678,7 @@ function _bindSettingsPortSync() {
 function _refreshSettingsI18n() {
   if (typeof loadI18n !== 'function') return;
   var before = (typeof _i18nSig === 'string') ? _i18nSig : '';
-  loadI18n(state.language || 'zh').then(function() {
+  loadI18n(effectiveLang()).then(function() {
     if (typeof _i18nSig !== 'string' || _i18nSig === before) return;
     applyI18n();
     if (typeof refreshSettingsPage === 'function') refreshSettingsPage();
@@ -6204,18 +6879,10 @@ function openSettingsPage() {
 
   state.activeTab = state.tabs.length - 1;
   state.currentMode = 'single';
-  // Show settings page
-  page.style.display = '';
-  setTimeout(function() {
-    renderSettingsThemeGrid();
-    renderSettingsIconGrid();
-  }, 50);
-  renderTabs();
-  updateOpenBtn();
-  updateEmptyState();
-  updateSyncIndicator();
-  _updateStatsVisible();
-  updateDaemonUI();
+  // 与关标签 / 拖出成窗共用同一套收尾：设置页不是会话页，状态栏里属于会话的
+  // 统计与 Tab/编码/行尾三项都要收掉（TODO #97）。主题/图标网格的重绘在
+  // settingsTab._page.show() 里已经排了一次，这里不再重复。
+  _afterActivePageChanged({ reloadHistory: false });
   _refreshSettingsI18n();
 }
 function showAbout() {
@@ -6276,14 +6943,33 @@ function updateOpenBtn() {
 
 // 切换显示模式后重绘历史：冻结/回看时保持原来的窗口与滚动位置，
 // 否则用户往回翻出来看的那一段会突然被拽回最新一条（未读提示也随之消失）。
-function _rerenderHistoryKeepingView() {
+// 引擎接管之后「重画」= 让活动标签页的引擎重发一次 Configure / 重取窗口。
+function _liveReconfigure() {
   var tab = getActiveTab();
-  if (!tab || !tab.sessionId || !state.historyCache[tab.sessionId]) return;
-  var display = pageEl('displayContent');
-  var keep = !!_frozen;
-  var st = display ? display.scrollTop : 0;
-  renderHistoryLines(state.historyCache[tab.sessionId], keep);
-  if (display && keep) display.scrollTop = st;
+  if (tab && tab._live && typeof tab._live.reconfigure === 'function') {
+    tab._live.reconfigure();
+  }
+}
+
+// _liveRecording 把「这个标签落不落盘」同步给引擎：滚动条第三条泳道按区间上色
+// （全落 = 绿 / 全没落 = 透明 / 一段里两种都有 = 黄），引擎需要知道切换发生在
+// 第几帧。只在拿到守护进程的真实开关时推一次，不必每帧报。
+function _liveRecording(tab, on) {
+  if (!tab) return;
+  tab.histOn = !!on;
+  if (tab._live && typeof tab._live.setRecording === 'function') {
+    tab._live.setRecording(!!on);
+  }
+}
+
+// _liveRefresh 只重取一屏（不重算布局）：切标签、会话状态变化之后都用它。
+// 原来是 loadTabHistory()，那是老渲染器的加载入口，跟着窗口渲染一起删了。
+function _liveRefresh() {
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.refresh === 'function') {
+    return tab._live.refresh();
+  }
+  return Promise.resolve();
 }
 
 // ---- display ----
@@ -6319,7 +7005,10 @@ function toggleDisplayMode() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  _rerenderHistoryKeepingView();
+  // 会话页已交给虚窗引擎：切模式要重算布局（折行数变了），不能只重渲染老缓存
+  var liveTab = getActiveTab();
+  if (liveTab && liveTab._live) liveTab._live.setMode(state.displayMode);
+  _liveReconfigure();
   saveSettings();
 }
 
@@ -6402,8 +7091,12 @@ function toggleScrollLock() {
   state.scrollLocked = !state.scrollLocked;
   _persistDisplayModes();
   updateScrollLockBtns();
-  // 冻结/解冻与未读占位块由历史层负责（锁定时视图冻结，但滚动条仍随未读增长）
-  if (typeof onScrollLockChanged === 'function') onScrollLockChanged();
+  // 锁定 = 新数据进来也不自动贴底。老的实现靠历史层冻结，现在直接告诉引擎：
+  // 锁定期间即使视口正在底部也不跟随（点「回到底部」仍可手动解除）。
+  var tab = getActiveTab();
+  if (tab && tab._live && typeof tab._live.setScrollLock === 'function') {
+    tab._live.setScrollLock(state.scrollLocked);
+  }
 }
 
 function updateScrollLockBtns() {
@@ -6435,7 +7128,8 @@ function toggleP1Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
+  _liveReconfigure();
 }
 
 function toggleP2Display() {
@@ -6453,7 +7147,7 @@ function toggleP2Display() {
       btn.classList.remove('btn-hex');
     }
   }
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function toggleSendFormat() {
@@ -6465,6 +7159,8 @@ function toggleSendFormat() {
   _syncSendMirror(pageEl('sendInput'));
   updateSendQuickBtn();
   updateSendInfo();
+  // 格式本身也存：下次开这个会话，输入框回来的是同一个模式
+  _flushSendState(null);
 }
 
 function toggleTxDisplay() {
@@ -6481,13 +7177,10 @@ function toggleTxDisplay() {
     btn.title = t('display.switch_to_hex', '点击切换至Hex显示');
     btn.classList.remove('btn-hex');
   }
-  var tab = getActiveTab();
-  if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-    renderHistoryLines(state.historyCache[tab.sessionId]);
-  }
+  // 引擎接管之后：发送侧的 字/H 只影响 dir=2（Tx）这一路，重发 Configure 即可
+  _liveReconfigure();
   saveSettings();
 }
-
 function updateSendQuickBtn() {
   var btn = pageEl('btnSendQuick');
   if (!btn) return;
@@ -6584,16 +7277,42 @@ function onStatsRate(data) {
 function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
+  // 保存开关的绿点也跟着会话状态走：histOn 是在会话同步之后才有值的，
+  // 状态栏建的时候还读不到，不重画就一直停在「关」。
+  //
+  // 但只知道「不知道」还不行：以前只有点开悬浮卡或状态栏那颗图标时才问守护
+  // 进程，于是正在录着的会话，绿点一直是灭的。这里主动问一次（每个会话一次）。
+  if (tab && tab.sessionId && state.daemonOnline &&
+      tab.histOn === undefined && !tab._histPending) {
+    tab._histPending = true;
+    (function (t) {
+      window.go.main.App.GetHistoryStatusFor(t.sessionId).then(function (on) {
+        t._histPending = false;
+        t.histOn = !!on;
+        if (typeof _liveRecording === 'function') _liveRecording(t, !!on);
+        if (getActiveTab() === t) {
+          if (_statusBar && typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
+          renderTabs();
+        }
+      }).catch(function () { t._histPending = false; });
+    })(tab);
+  }
+  if (_statusBar && typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
   if (tab && tab.sessionId) {
-    // 端口没连上：一律显示 0（会话统计是按连接计的）。
-    // 不去读缓存、也不去拉 daemon —— 空闲进程的计数没有意义，读出来只会让
-    // 上一次连接的数字继续挂着（用户实测的那条 P2:389/s）。
+    // 端口没连上：累计字节保留（关闭后还看得到这次收了多少），速率清零。
+    // 速率来自 stats-rate 事件，端口关了不会再推，留着会停在上一次的读数上。
     if (!tab.portOpen) {
       if (_statusBar) {
         // 模式也得定：转发页空闲时箭头仍应是 P1/P2（此前提前返回，把它留在
         // 上一个标签页的 TX/RX 上）
         _statusBar.setStatsMode(activeMode() === 'forward');
-        _statusBar.resetStats();
+        const b = state.statsBase[tab.sessionId];
+        if (b) {
+          _statusBar.updateStatsBytes({ tx: b.tx, rx: b.rx, p1: b.p1, p2: b.p2 });
+          _statusBar.updateStatsRates({ txRate: 0, rxRate: 0, p1Rate: 0, p2Rate: 0, maxBps: 0 });
+        } else {
+          _statusBar.resetStats();
+        }
       }
       return;
     }
@@ -6704,7 +7423,7 @@ function toggleCrVisible() {
   _setDisp('crVisible', !_dispOf().crVisible);
   _syncDispUi();
   // Re-render to show/hide CR bubbles
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function updateTextMenu() {
@@ -6725,14 +7444,14 @@ function setHexEscapeMode(mode) {
   if (_dispOf().hexEscapeMode === mode) return;
   _setDisp('hexEscapeMode', mode);
   _syncDispUi();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function setHexEscapeFormat(fmt) {
   if (_dispOf().hexEscapeFormat === fmt) return;
   _setDisp('hexEscapeFormat', fmt);
   _syncDispUi();
-  _rerenderHistoryKeepingView();
+  _liveReconfigure();
 }
 
 function _updateHexEscFmtRow() {
@@ -6740,21 +7459,11 @@ function _updateHexEscFmtRow() {
   if (row) row.classList.toggle('is-hidden', _dispOf().hexEscapeMode !== 'show');
 }
 
+// refreshHexDisplay 显示设置（分隔符 / 大小写 / 0x 前缀）变了之后重算布局。
+// 只有 Hex 模式看得出差别，但引擎的 Configure 在参数没变时会自己早退，
+// 这里不必再判断一次模式（转发页还有 P1 / P2 两套方向，判断也判不全）。
 function refreshHexDisplay() {
-  // Only refresh if in hex display mode
-  if (activeMode() === 'forward') {
-    if (state.p1DisplayMode === 'hex' || state.p2DisplayMode === 'hex') {
-      const tab = getActiveTab();
-      if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-        renderHistoryLines(state.historyCache[tab.sessionId]);
-      }
-    }
-  } else if (state.displayMode === 'hex') {
-    const tab = getActiveTab();
-    if (tab && tab.sessionId && state.historyCache[tab.sessionId]) {
-      renderHistoryLines(state.historyCache[tab.sessionId]);
-    }
-  }
+  _liveReconfigure();
 }
 
 // ---- threads ----
@@ -7018,7 +7727,14 @@ async function sendData() {
   } else {
     const ab2 = getAppendBytes('text');
     if (ab2.text) data += ab2.text;
-    data = await encodeTextForSend(data);
+    // 编码失败要当场说清楚：以前这个 await 在 try 之外，出错就是一条未处理的
+    // rejection（只剩顶部红条），用户看到的就是「点了发送什么都没发生」。
+    try {
+      data = await encodeTextForSend(data);
+    } catch (e) {
+      showSendHint(String(e && e.message ? e.message : e));
+      return;
+    }
     fmt = 'hex';
   }
 
@@ -7276,12 +7992,17 @@ function quickPanelUpdate(idx, field, value) {
         }
       }, 200);
     }
+    // 改内容 / 改延时 / 改备注也要落盘。以前只有「循环发送」时才把预设同步给
+    // 守护进程，普通编辑只存了 gui.ini —— 工程文件里的 send.presets 一直是旧的。
+    if (typeof _schedulePushSendState === 'function') _schedulePushSendState();
     saveSettings();
   }
 }
 function quickPanelRender() {
   var page = getActivePage();
   if (!page || !page.quickPanel) return;
+  // 预设是「这条会话的」：渲染完顺手把发送框状态（含预设）推给守护进程
+  if (typeof _schedulePushSendState === 'function') _schedulePushSendState();
   var rows = page.quickPanel.querySelector('.qp-rows');
   if (!rows) return;
   var presets = state.quickPresets;
@@ -7427,9 +8148,10 @@ function qpRestoreDefaults() {
   }, 'confirm.ok_restore', 'confirm.cancel_restore');
 }
 
-// Sync state.quickPresets to daemon sendq, then call callback.
-function syncQuickPresetsToDaemon(processId, cb) {
-  var entries = state.quickPresets.map(function(p) {
+// 预设列表 → 守护进程发送队列的线格式。只做字段收口，不读 state：
+// 恢复某个「非活动标签页」的预设时不能拿活动标签页的那一份盖上去。
+function _presetsToDaemonEntries(presets) {
+  return (presets || []).map(function(p) {
     return {
       enabled: p.enabled !== false,
       hex: !!p.hex,
@@ -7438,9 +8160,21 @@ function syncQuickPresetsToDaemon(processId, cb) {
       note: p.note || ''
     };
   });
-  window.go.main.App.WriteMultistrEntries(processId, JSON.stringify(entries)).then(function() {
-    if (cb) cb();
-  }).catch(function(){});
+}
+
+// 把指定的一份预设写进某个会话的发送队列（恢复工程时用）。
+function pushPresetsToDaemon(processId, presets, cb) {
+  if (!processId || !state.daemonOnline) return;
+  try {
+    window.go.main.App.WriteMultistrEntries(
+      processId, JSON.stringify(_presetsToDaemonEntries(presets))
+    ).then(function () { if (cb) cb(); }).catch(function () {});
+  } catch (e) {}
+}
+
+// Sync state.quickPresets to daemon sendq, then call callback.
+function syncQuickPresetsToDaemon(processId, cb) {
+  pushPresetsToDaemon(processId, state.quickPresets, cb);
 }
 
 // Handle multistr-changed events from daemon.
@@ -7625,6 +8359,9 @@ function applyQuickPanelRatio() {
 	} else {
 		quickPanel.style.display = '';
 	}
+	// 收起态：分隔条往内挪 10px（CSS .is-collapsed），把窗口右边缘让给原生缩放。
+	// 否则它的热区压在窗口边框上，拖边框会被面板手柄抢走（TODO #96）。
+	qDivider.classList.toggle('is-collapsed', r <= 0.01);
 	updateQuickPanelCheck();
 }
 
@@ -7732,17 +8469,13 @@ function applySendRatio() {
   var sbEl = document.querySelector('.statusbar');
   if (sbEl) sbEl.classList.toggle('is-flush-bottom', r <= 0.01);
   if (divider) divider.style.display = '';
-  // 改完高度后，如果本来就在跟最新（未冻结、未锁定），重新贴底。
-  // 否则视口一变，滚动位置就"掉队"了，看上去像"拖一下就再也不跟着滚了"。
-  var dc = page.displayContent;
-  if (dc && !state.scrollLocked && typeof _frozen !== 'undefined' && !_frozen) {
-    dc.scrollTop = dc.scrollHeight;
-  }
+  // 改完高度后不用手动贴底：引擎的 ResizeObserver 会重算视口并保持当前 offset，
+  // 贴底时 offset 本来就是 maxOffset，会跟着新的内容高度走。
+  //
   // 压到只剩配置栏那么高时，把显示区里的按钮/数据流/滚动条整体收起来：
   // 否则它们会从浮动配置栏的模糊层后面透出来（截图里的"数据流/按键没隐藏"）。
   var dispH = Math.round(displayArea.getBoundingClientRect().height);
   displayArea.classList.toggle('is-collapsed', dispH <= reserve + 4);
-  if (dc && typeof dc._syncScrollbarInset === 'function') dc._syncScrollbarInset();
 }
 
 
@@ -7756,9 +8489,50 @@ function applySendRatio() {
 // 行渲染直接调 history.js 的 makeDataRow：Rx/Tx 配色、Hex/文本开关、等宽字体、
 // 屏外不绘制全部继承，不另起一套渲染器。
 
-// 首屏/每批 500 帧。一帧最大 4016 B，转十六进制就是 8 KB 字符串，一次给太多
-// 会把过桥的 JSON 和 DOM 一起撑爆；其余靠底部的「加载更多」。
-var STLOG_PAGE_SIZE = 500;
+// .stlog 文件页的数据在 Go 侧（服务 main.LogView → 包 stlogview）：文档只留一份
+// arena 与定长帧表，前端按像素取窗口、只挂可见的几十行，行高由 Go 算。
+// 这里只剩顶栏（文件名/元信息/年份/Hex-文本/导出/推送）与句柄。
+
+// stlogBarText 把 Meta 拼成顶栏那一行。
+//
+// Meta 是「文件这一次打开」的静态快照，和会话页的 stats 不是一回事：没有速率、
+// 没有客户端，只有文件自己写下来的东西（模式/端口/时间范围/来源/完整性）。
+function stlogBarText(m) {
+  if (!m) return '';
+  var parts = [];
+  var range = stlogRangeText(m.firstTs, m.lastTs);
+  if (range) parts.push(range);
+  parts.push((m.size || 0) + ' B');
+  parts.push((m.pages || 0) + ' 页');
+  parts.push((m.records || 0) + ' 记录');
+  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
+  if (m.mode === 'forward') {
+    parts.push('A→B ' + (m.p1Bytes || 0) + ' / B→A ' + (m.p2Bytes || 0) + ' B');
+    parts.push('转发 ' + (m.port ? m.port + ' ↔ ' : '') + (m.portB || ''));
+  } else {
+    parts.push('rx/tx ' + (m.rxBytes || 0) + '/' + (m.txBytes || 0) + ' B');
+  }
+  if (m.label) parts.push('设置 ' + m.label);
+  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
+  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
+  if (m.origins && m.origins.length) {
+    var kinds = [];
+    m.origins.forEach(function (o) {
+      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
+      if (kinds.indexOf(label) < 0) kinds.push(label);
+    });
+    parts.push('来源 ' + kinds.join(' · '));
+  } else {
+    parts.push('无来源');
+  }
+  if (m.recovered && m.recovered.length) parts.push('影子恢复 ' + m.recovered.length + ' 页');
+  if (m.truncated) parts.push('末帧未结束');
+  if (m.broken) parts.push('续片链被切断');
+  if (m.noHead) parts.push('缺头');
+  if (m.stoppedAt) parts.push('停在 0x' + Number(m.stoppedAt).toString(16).toUpperCase());
+  if (m.stopErr) parts.push(m.stopErr);
+  return parts.join(' · ');
+}
 
 function stlogBaseName(p) {
   // 去掉尾部分隔符：拖放给的目录路径可能带 '\'，否则取到的是空串
@@ -7803,134 +8577,50 @@ function stlogRangeText(first, last) {
     (stlogDateText(a) === stlogDateText(b) ? stlogTimeText(b) : stlogFullTs(last));
 }
 
-function stlogSysRow(tab, text) {
-  var line = document.createElement('div');
-  line.className = 'sys-msg';
-  line.textContent = '── ' + text + ' ──';
-  var st = tab._stlog;
-  st.content.insertBefore(line, st.more);
-  return line;
-}
-
-// 顶栏一行元信息：时间范围 / 大小 / 页 / 记录 / rx-tx / 设置 / 异常标记。
-function stlogBarText(info) {
-  var parts = [];
-  var range = stlogRangeText(info.firstTs, info.lastTs);
-  if (range) parts.push(range);
-  parts.push(info.size + ' B');
-  parts.push(info.pages + ' 页');
-  parts.push(info.records + ' 记录');
-  // 转发录制：rx/tx 两栏没有意义（统计块只累计 rx/tx），改显示两个方向的字节数
-  if (info.forward) {
-    parts.push('A→B ' + (info.bytesAB || 0) + ' / B→A ' + (info.bytesBA || 0) + ' B');
-    var setA = (info.settings && info.settings.port) ? info.settings.port : '';
-    parts.push('转发 ' + (setA ? setA + ' ↔ ' : '') + (info.portB || ''));
-  } else {
-    parts.push('rx/tx ' + info.rxTotal + '/' + info.txTotal + ' B');
-  }
-  if (info.settings && info.settings.label) parts.push('设置 ' + info.settings.label);
-  // 来源汇总：只列种类（GUI / CLI / AUTO…），完整串放 title。
-  // 「无来源」要明说——样本文件就是这样，空着会让人以为功能没做。
-  if (info.origins && info.origins.length) {
-    var kinds = [];
-    info.origins.forEach(function (o) {
-      var label = (typeof _originLabel === 'function') ? _originLabel(o) : String(o);
-      if (kinds.indexOf(label) < 0) kinds.push(label);
-    });
-    parts.push('来源 ' + kinds.join(' · '));
-  } else {
-    parts.push('无来源');
-  }
-  if (info.recovered && info.recovered.length) parts.push('影子恢复 ' + info.recovered.length + ' 页');
-  if (info.truncated) parts.push('末帧未结束');
-  if (info.brokenChain) parts.push('续片链被切断');
-  if (info.stoppedAt) parts.push('停在 0x' + Number(info.stoppedAt).toString(16).toUpperCase());
-  if (info.stopErr) parts.push(info.stopErr);
-  return parts.join(' · ');
-}
-
+// stlogUpdateChrome 刷新顶栏：元信息那行、完整来源串（title）、帧数。
 function stlogUpdateChrome(tab) {
   var st = tab._stlog;
-  var info = st.info || {};
+  var info = st.info || null;
+  // 打开失败的文件没有 Meta：顶栏留空，只让正文那行错误说话。
+  // 以前这里拿 {} 去拼，界面上就是「undefined B · undefined 页 · undefined 记录」。
+  if (!info) {
+    st.meta.textContent = '';
+    st.meta.title = '';
+    var t0 = st.view ? st.view.total() : 0;
+    st.count.textContent = '帧 ' + t0;
+    return;
+  }
   st.meta.textContent = stlogBarText(info);
-  // 完整来源串放进 title：顶栏只显示种类，鼠标停上去能看到具体是哪个客户端
   st.meta.title = (info.origins && info.origins.length)
     ? info.origins.join(', ')
     : '这个文件里没有来源信息（Rx 恒无来源；样本文件通常是合成的）';
-  var loaded = st.frames.length;
-  var total = (typeof info.total === 'number') ? info.total : loaded;
-  st.count.textContent = '帧 ' + loaded + ' / ' + total;
-  if (st.exhausted) {
-    st.more.style.display = 'none';
-  } else {
-    st.more.style.display = '';
-    st.moreBtn.textContent = '加载更多（还有 ' + Math.max(0, total - loaded) + ' 帧）';
-  }
+  var total = st.view ? st.view.total() : 0;
+  st.count.textContent = '帧 ' + total;
 }
 
-// stlogLoad 加载下一批帧。
-//
-// 文件页只有一个数据源——本地文件，分页从第一帧往后翻（_stlogLoadLocal）。
-// 工程目录不走这里：它被恢复成真正的会话页，历史由会话那套接口提供。
-function stlogLoad(tab) {
-  _stlogLoadLocal(tab);
-}
-
-// _stlogLoadLocal 直接读本地文件，从第一帧往后翻。
-function _stlogLoadLocal(tab) {
+// stlogFlash 在顶栏帧数那个位置闪一行提示（复制结果之类），1.6 s 后恢复。
+function stlogFlash(tab, msg) {
   var st = tab._stlog;
-  if (st.loading || (st.loaded && st.offset >= st.total)) return;
-  st.loading = true;
-  st.moreBtn.disabled = true;
-  window.go.main.App.ReadStlogFrames(tab.path, st.offset, STLOG_PAGE_SIZE).then(function (info) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    st.loaded = true;
-    st.info = info || {};
-    st.total = info.total || 0;
-    var frames = (info.frames || []).map(function (f) {
-      return { ts: f.ts, tsMs: f.ts, dir: f.dir, hex: f.hex, origin: f.origin };
-    });
-    st.offset = (info.offset || 0) + frames.length;
-    st.frames = st.frames.concat(frames);
-    st.rendered = true;
-    st.exhausted = st.offset >= st.total;
-    stlogRerender(tab);
+  if (st._flashTimer) clearTimeout(st._flashTimer);
+  st.count.textContent = msg;
+  st._flashTimer = setTimeout(function () {
+    st._flashTimer = null;
     stlogUpdateChrome(tab);
-    if (!st.firstLoadDone) {
-      st.firstLoadDone = true;
-      st.content.scrollTop = 0; // 离线正序：从第一帧开始看
-    }
-    if (st.total === 0) stlogSysRow(tab, '文件里没有帧');
-  }).catch(function (err) {
-    st.loading = false;
-    st.moreBtn.disabled = false;
-    if (window.console) console.error('[stlog] ' + tab.path, err);
-    stlogSysRow(tab, '读取失败: ' + String(err));
-  });
+  }, 1600);
 }
 
 // stlogToggleMode 切换文件页的 Hex / 文本 视图。
 //
 // 文件页不复用全局 state.displayMode：会话页默认文本（用户在那儿发的是 ASCII），
 // 而 .stlog 里是原始字节，一打开就该按 Hex 看。两边各存一份，谁也别改对方的设置。
+// 切模式要重算布局（折行数变了），所以走 Go 的 Configure，锚点取当前第一行。
 function stlogToggleMode(tab) {
   var st = tab._stlog;
-  st.mode = (st.mode === 'hex') ? 'text' : 'hex';
-  stlogRerender(tab);
-}
-
-// stlogRerender 用缓存的帧按当前 mode 重画（不重新读文件、不动 offset）。
-function stlogRerender(tab) {
-  var st = tab._stlog;
-  st.content.innerHTML = '';
-  st.frames.forEach(function (f) {
-    makeDataRow(st.content, stlogDirName(f.dir),
-                stlogTsText(f.ts, state.stlogShowYear !== false), f.hex,
-                null, { displayMode: st.mode }, f.origin || '');
-  });
-  st.content.appendChild(st.more);
-  st.modeBtn.textContent = (st.mode === 'hex') ? 'Hex' : '文本';
+  if (!st.view) return;
+  var next = (st.mode === 'hex') ? 'text' : 'hex';
+  st.mode = next;
+  if (st.modeBtn) st.modeBtn.textContent = (next === 'hex') ? 'Hex' : '文本';
+  st.view.setMode(next).then(function () { stlogUpdateChrome(tab); });
 }
 
 function stlogExport(path, btn) {
@@ -7989,7 +8679,8 @@ function openStlogTab(path, kind) {
   yearBtn.addEventListener('click', function () {
     state.stlogShowYear = !(state.stlogShowYear !== false);
     yearBtn.classList.toggle('is-on', state.stlogShowYear);
-    stlogRerender(tab);
+    if (tab._stlog.view) tab._stlog.view.setShowYear(state.stlogShowYear);
+    stlogUpdateChrome(tab);
     if (typeof saveSettings === 'function') saveSettings();
   });
   var countEl = document.createElement('span');
@@ -8021,18 +8712,10 @@ function openStlogTab(path, kind) {
   bar.appendChild(actions);
   page.appendChild(bar);
 
+  // 内容区就是引擎的视口（.lv-host）：没有分页、没有「加载更多」。
   var content = document.createElement('div');
   content.className = 'o-stlog-rows t-stlog-rows';
   page.appendChild(content);
-
-  var more = document.createElement('div');
-  more.className = 'o-stlog-more';
-  var moreBtn = document.createElement('button');
-  moreBtn.className = 't-stlog-btn';
-  moreBtn.textContent = '加载更多';
-  more.addEventListener('click', function () { stlogLoad(tab); });
-  more.appendChild(moreBtn);
-  content.appendChild(more);
 
   var oldPage = getActivePage();
   if (oldPage) oldPage.hide();
@@ -8049,20 +8732,22 @@ function openStlogTab(path, kind) {
     mode: 'single',
     source: 'gui',
     _stlog: {
-      offset: 0, total: 0, loaded: false, loading: false, rendered: false,
       // isDir：工程目录（可以推给守护进程）；单个 .stlog 一律只读
       isDir: kind === 'session',
-      mode: 'hex', frames: [], modeBtn: modeBtn, pushBtn: pushBtn,
-      content: content, more: more, moreBtn: moreBtn, meta: metaEl, count: countEl
+      mode: 'hex', info: null, view: null,
+      modeBtn: modeBtn, pushBtn: pushBtn, meta: metaEl, count: countEl
     },
     _page: {
       root: page,
       show: function () {
         page.style.display = '';
-        if (!tab._stlog.loaded && !tab._stlog.loading) stlogLoad(tab);
+        if (tab._stlog.view) tab._stlog.view.refresh();
       },
       hide: function () { page.style.display = 'none'; },
-      destroy: function () { page.remove(); }
+      destroy: function () {
+        if (tab._stlog.view) tab._stlog.view.destroy();
+        page.remove();
+      }
     }
   };
   state.tabs.push(tab);
@@ -8079,7 +8764,22 @@ function openStlogTab(path, kind) {
   // 少了这一句，离线拖入 .stlog 时新打开的文件页会被「守护进程未启用」盖住。
   updateDaemonUI();
   stlogSyncPushBtn(tab);
-  stlogLoad(tab);
+
+  // 引擎在 tab 建好之后再挂：它的回调要用到 tab 本身。
+  var view = createLogView(content, {
+    disp: function () { return tab.disp; },
+    tsText: function (ms) { return stlogTsText(ms, state.stlogShowYear !== false); },
+    onMeta: function (m) { tab._stlog.info = m; stlogUpdateChrome(tab); },
+    onStatus: function () { stlogUpdateChrome(tab); },
+    onFlash: function (msg) { stlogFlash(tab, msg); },
+    // 只读页也用同一套浮层菜单（原来右键是「有选中就直接复制」，和别处不一致）
+    onContextMenu: function (x, y) { openReadonlyMenu(tab, x, y); }
+  });
+  tab._stlog.view = view;
+  view.open(path).catch(function (err) {
+    if (window.console) console.error('[stlog] ' + path, err);
+    stlogFlash(tab, '打开失败');
+  });
   return tab;
 }
 
@@ -8198,7 +8898,10 @@ function _pickPath(dlg, kind, open) {
   var App = window.go.main.App;
   dlg.then(function (path) {
     if (!path) return; // 用户取消
-    var idx = state.tabs.findIndex(function (t) { return t.type === 'new'; });
+    // 关掉**当前这个**选择页，不是「第一个」：选择页可以同时开好几个，
+    // 用 findIndex 会把别人那一个关掉。
+    var cur = getActiveTab();
+    var idx = (cur && cur.type === 'new') ? state.tabs.indexOf(cur) : -1;
     // 先关选择页再开新页：反过来的话 closeTab 可能把焦点从新标签挪走
     function go() {
       if (idx >= 0) closeTab(idx);
@@ -8224,9 +8927,218 @@ function pickProjectDir() {
   _pickPath(window.go.main.App.PickStlogDir(), 'session', openProjectTab);
 }
 
+// _mountLive 把会话页的显示区交给虚窗引擎（串口监视器 / 转发监视器）。
+//
+// 数据帧由 Go 侧的实时文档攒着，前端只按像素取可见窗口。老的 history.js 渲染
+// 已经删干净，所以这里直接拿会话页自己的 display-content 当挂载点 —— 以前要
+// 单开一层 .lv-mount 去躲老渲染器，现在没必要了。
+function _mountLive(tab) {
+  var why = '';
+  if (!tab) why = 'no-tab';
+  else if (!tab.sessionId) why = 'no-sid';
+  else if (tab._live) why = 'already';
+  else if (!tab._page) why = 'no-page';
+  else if (!tab._page.displayContent) why = 'no-display';
+  else if (typeof createLogView !== 'function') why = 'no-engine';
+  if (why) {
+    try { window.go.main.App.Log('[live] mount skip: ' + why); } catch (e) {}
+    // 引擎没接上时不能只留一句「等待数据…」：那个占位看起来像「还没数据」，
+    // 实际是「视图根本没挂上」，用户会一直等下去（0.9.1 踩过：index.html 里少一个
+    // </script>，logview.js 被当成上一个 script 的正文吞掉，界面就停在这句占位上）。
+    if (why === 'no-engine' && tab._page && tab._page.displayContent) {
+      tab._page.displayContent.innerHTML =
+        '<div class="placeholder">显示引擎没加载（logview.js）。重启一次；仍然这样请反馈这个提示。</div>';
+    }
+    return;
+  }
+  try { window.go.main.App.Log('[live] mount sid=' + tab.sessionId); } catch (e) {}
+  var mount = tab._page.displayContent;
+  // .display-content 原本是给老渲染器用的（overflow-y:auto + padding + 行高），
+  // 交给引擎之后滚动由引擎自己画，这些都要让开；is-engine 那几条就是干这个的。
+  mount.classList.add('is-engine');
+  mount.innerHTML = '';
+  // 让位量不能在挂载这一瞬间量：此刻标签页还没布局，所有 rect 都是 0 —— 顶部
+  // 靠 40px 兜底才没露馅，底部被算成 8px，最后一条帧的数据行就压在浮动按钮下面。
+  // 改成每次 layout() 现量：等页面真正有了尺寸（ResizeObserver / 第一帧到达）再取值。
+  //
+  // 页面**隐藏**时（切到别的标签）clientHeight 是 0，这时候量不到东西，必须沿用上
+  // 一次的结果：返回兜底 40px 的话，layout() 会拿它盖掉真正量到的顶边（转发页的
+  // 配置栏是两行端口选择框，让位约 118px），切一次标签内容就整体上移一次。
+  var lastReserve = null;
+  function reserveOf() {
+    if (!mount.clientHeight && lastReserve) return lastReserve;
+    var out = { top: 40, bottom: 0, trackTop: 40 };
+    if (!mount.clientHeight) return out; // 第一次还没布局，先用兜底值
+    try {
+      // 顶部：滚动条上边界压在悬浮配置栏（毛玻璃）的底边上，内容再让 8px
+      var bar = tab._page.root.querySelector('.config-bar');
+      if (bar) {
+        var barBottom = Math.round(bar.getBoundingClientRect().bottom - mount.getBoundingClientRect().top);
+        if (barBottom > 0) {
+          out.trackTop = barBottom;
+          out.top = Math.max(40, barBottom + 8);
+        }
+      }
+      // 底部：字 / H / 锁定滚动 那排浮动按钮压在内容上，最后一行得让开
+      var btns = tab._page.root.querySelector('.c-fwd-float-btns');
+      if (btns && btns.offsetParent !== null) {
+        var b = Math.round(mount.getBoundingClientRect().bottom - btns.getBoundingClientRect().top) + 8;
+        if (b > 0) out.bottom = b;
+      }
+      lastReserve = out;
+    } catch (e) { /* 量不到就用兜底值 */ }
+    return out;
+  }
+  var view = createLogView(mount, {
+    reserve: reserveOf,
+    // 会话页默认按文本看（用户发的是 ASCII），Hex 是切过去才看
+    mode: (state.displayMode === 'hex') ? 'hex' : 'text',
+    // 「锁定滚动」是跨会话的用户偏好，建视图时带上当前状态
+    scrollLocked: !!state.scrollLocked,
+    disp: function () { return tab.disp; },
+    tsText: function (ms) { return stlogTimeText(new Date(ms)); },
+    // 按方向的模式覆盖：下标 = sessionfile 方向号（0 系统 / 1 读取 / 2 发送 /
+    // 3 P1 / 4 P2），空串 = 沿用整页的 mode。转发页 P1 / P2 各有独立的「字 / H」，
+    // 老渲染按 dir 取 p1DisplayMode 之类，引擎也得按方向算，否则那两个按钮是死键。
+    dirModes: function () {
+      return ['', '', state.txDisplayMode, state.p1DisplayMode, state.p2DisplayMode];
+    },
+    // 顶到最上面时再要一页更早的。游标由引擎给（最旧帧的毫秒 + 同毫秒条数）：
+    // 毫秒会撞车，只按 ts 要会重复或漏帧。
+    onNeedOlder: function (cur) {
+      var App = window.go && window.go.main && window.go.main.App;
+      if (!App || typeof App.GetSessionHistory !== 'function') return null;
+      return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, cur.ts, cur.same).then(function (data) {
+        if (!data || view !== tab._live || !view.isLive()) return { hasMore: false };
+        var frames = _liveFramesFromHistory(data.history);
+        var more = !!data.hasMore;
+        if (!frames.length) return { hasMore: more };
+        return view.prepend(frames).then(function () { return { hasMore: more }; });
+      });
+    },
+    // 设置里可以关掉「自动回补」（默认开）：关掉后翻到顶只显示提示，不主动要。
+    autoRefill: function () { return state.autoRefillHistory !== false; },
+    onStatus: function (s) { tab._liveTotal = s.total || 0; },
+    // 数据区右键：菜单交给 app.js 画 —— 清空 / 自动滚动 / 页设置改的都是标签页级
+    // 状态，引擎那边不认识。文件页不传这个钩子，右键仍是「有选中就复制」。
+    onContextMenu: function (x, y) { openDisplayMenu(tab, x, y); }
+  });
+  tab._live = view;
+  // 切回这一页时要重取窗口：页面隐藏期间尺寸可能变过（拖过分隔条、窗口改大小）。
+  // 原来这个职责在 _liveRefresh() 里，它跟着老渲染一起删了。销毁之后
+  // refresh() 自己会因为 st.dead 早退，不用另外挡。
+  var origShow = tab._page.show;
+  tab._page.show = function () {
+    origShow();
+    view.refresh();
+  };
+  view.openLive(tab.sessionId).then(function () {
+    // 打开即回放：把守护进程环 / 磁盘里已有的历史先灌进来，页面不再是空的。
+    // 只取最近一页，更早的等用户翻到顶时由 onNeedOlder 一页一页往回要。
+    var App = window.go && window.go.main && window.go.main.App;
+    if (!App || typeof App.GetSessionHistory !== 'function') return null;
+    return App.GetSessionHistory(tab.sessionId, _LIVE_PAGE, 0, 0);
+  }).then(function (data) {
+    if (!data || view !== tab._live || !view.isLive()) return;
+    // 第三条泳道（落盘）按区间上色，引擎要知道这个会话开没开存：
+    // 有真实开关就用它，没有就先按「有没有会话文件」猜。
+    view.setRecording(tab.histOn === undefined ? !!data.historyFile : !!tab.histOn);
+    view.setHistory({ file: data.historyFile || '', hasMore: !!data.hasMore });
+    var frames = _liveFramesFromHistory(data.history);
+    if (!frames.length) return;
+    // 铺完历史必须显式回到底部：prepend 里那套「贴底就 refreshLive」依赖
+    // st.atBottom，而打开这一瞬间页面可能还没布局（vh=0），贴底算不出来，
+    // 结果视口停在第 1 帧上，看起来像「历史没灌进来」。
+    return view.prepend(frames).then(function () { view.jumpBottom(); });
+  }).catch(function (err) {
+    if (window.console) console.error('[live] ' + tab.sessionId, err);
+  });
+}
+
+// _LIVE_PAGE 是首次回放和一页往回翻的条数：一页就够一屏，多了只是白过桥。
+var _LIVE_PAGE = 500;
+
+// _liveFramesFromHistory 把守护进程的历史条目翻成引擎要的帧。
+//
+// 系统帧在历史里存的是**文本**（daemon/history.go 的约定），引擎要十六进制串，
+// 这里补转一次；不然回放出来的系统消息只剩时间戳一行。
+function _liveFramesFromHistory(list) {
+  var frames = [];
+  list = list || [];
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!e || !e.hex) continue;
+    var isSys = (e.direction === 'system' || e.direction === 'sys');
+    frames.push({
+      ts: e.tsMs || 0,
+      dir: isSys ? 0 : _liveDirNum(e.direction),
+      origin: e.origin || '',
+      hex: isSys ? _liveTextToHex(e.hex) : e.hex
+    });
+  }
+  return frames;
+}
+
+// _liveDirNum 把守护进程历史里的方向串翻成 sessionfile 的方向号
+// （DirSystem=0 / DirRx=1 / DirTx=2 / DirP1=3 / DirP2=4）。
+function _liveDirNum(s) {
+  switch (s) {
+    case 'tx': return 2;
+    case '1': return 3;
+    case '2': return 4;
+    case 'system': case 'sys': return 0;
+    default: return 1; // rx
+  }
+}
+
+// _liveTextToHex 把系统消息的原文编成引擎要的十六进制串。
+// 系统帧在协议和历史里都是「hex 字段存文本」，别的地方（liveFrameFrom）已在
+// Go 侧转过；历史回放这条路在前端转，两边口径要一致。
+function _liveTextToHex(s) {
+  var bytes;
+  try {
+    bytes = new TextEncoder().encode(String(s == null ? '' : s));
+  } catch (_) {
+    bytes = null;
+  }
+  if (!bytes) {
+    var out0 = '';
+    var str = String(s == null ? '' : s);
+    for (var k = 0; k < str.length; k++) {
+      var c = str.charCodeAt(k) & 0xff;
+      out0 += (c < 16 ? '0' : '') + c.toString(16);
+    }
+    return out0;
+  }
+  var out = '';
+  for (var i = 0; i < bytes.length; i++) {
+    out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+  }
+  return out;
+}
+
 // pickStlogFile 选一个 .stlog，开成只读文件页。
 function pickStlogFile() {
   _pickPath(window.go.main.App.PickStlogFile(), 'file', openStlogTab);
+}
+
+// openPathFromOS 打开一个「外部给的路径」：启动参数里的 .stlog / 工程目录。
+//
+// 与拖放、选文件共用同一套预检：路径可能是 .stlog，也可能是工程目录，
+// 还可能是早就被删掉的文件（那样就当没给，静默跳过）。
+function openPathFromOS(path) {
+  if (!path) return;
+  var App = window.go && window.go.main && window.go.main.App;
+  function go(kind) {
+    if (kind === 'session') openProjectTab(path);
+    else openStlogTab(path);
+  }
+  if (!App || typeof App.ProbeDroppedPaths !== 'function') { go('file'); return; }
+  App.ProbeDroppedPaths([path]).then(function (probes) {
+    var pr = probes && probes[0];
+    if (!pr) return;
+    if (pr.kind === 'file' || pr.kind === 'session') go(pr.kind);
+  }).catch(function () {});
 }
 
 // ---- 拖入注册 ----

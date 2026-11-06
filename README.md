@@ -7,7 +7,7 @@
 **GUI · CLI · MCP 三个客户端，共用一个守护进程**
 
 [![Download](https://img.shields.io/badge/download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/nienieai/serial-debugger/releases)
-[![Version](https://img.shields.io/badge/version-0.9.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Build](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/nienieai/serial-debugger/actions/workflows/release.yml)
 
@@ -18,7 +18,7 @@
 
 [![CLI](https://img.shields.io/badge/CLI-49_commands-blueviolet)](CLI-CHEATSHEET.md)
 [![MCP](https://img.shields.io/badge/MCP-29_tools-blueviolet)](ARCHITECTURE.md)
-[![i18n](https://img.shields.io/badge/i18n-9_languages-brightgreen)](config/i18n)
+[![i18n](https://img.shields.io/badge/i18n-9_languages-brightgreen)](config/resources/i18n)
 
 </div>
 
@@ -128,7 +128,7 @@ graph LR
 - **守护进程 + 多客户端**：GUI / CLI / MCP 统一接入同一守护进程，ProcessManager 管理 idle/connected 状态与 single/forward 模式；心跳 5 s 一次，连续 3 次失败判定断连。
 - **解码引擎 Go 化**：Go 端 per-tab goroutine 逐字节容错解码，产出 `[]Segment` 分段结构；前端纯 DOM 渲染（零 `innerHTML`），解码与渲染彻底解耦。
 
-> 数据走共享内存（发送队列），IPC 承载控制与事件。历史上曾规划「客户端直接映射共享内存读取历史」，但该路径**从未接通**（`ringbuf.OpenSharedRing` 无调用点，且它只映射只读视图、返回对象上的读操作会写 tail，按原设计调用会崩），历史读取实际全部走 IPC 的 `session.history`。详见「已知限制」。
+> 数据走共享内存（发送队列），IPC 承载控制与事件。历史上曾规划「客户端直接映射共享内存读取历史」，但该路径**从未接通**（`ringbuf.OpenSharedRing` 无调用点，且它只映射只读视图、返回对象上的读操作会写 tail，按原设计调用会崩），历史读取实际全部走 IPC 的 `session.history`。详见 [TODO.md 的已知限制](TODO.md#已知限制)。
 
 ## 🔧 功能细节 / Details
 
@@ -158,7 +158,7 @@ graph LR
 ### 主题与外观
 
 - **颜色主题**：文件驱动 + `_modes` 声明（dark/light 双模式），三段式色值（common/dark/light），CSS 全变量化，外部主题自动发现
-- **图标主题**：内置 `config/resources/icons/system/`（20 个 SVG），外部 `resources/icons/<包名>/` 文件夹格式，`_fallback` 回退
+- **图标主题**：内置 `config/resources/icons/system/`（32 个 SVG），外部 `resources/icons/<包名>/` 文件夹格式，`_fallback` 回退
 - **数据高亮自定义**：单端口 10 项 + 端口转发 9 项独立颜色设置，深浅色独立/统一，集成调色板（RGBA 滑块 + EyeDropper + 预设色板）
 - **响应式设置页**：800 px 断点，宽屏左右分栏，窄屏导航悬浮覆盖层；搜索框内嵌图标
 - **模糊渐变条**：config-bar / send-controls / settings-header / 转发按键栏统一透明 + 渐变模糊
@@ -227,19 +227,20 @@ go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 | 类别 | 命令 |
 | --- | --- |
 | 守护进程 | `start` `check` `status` `shutdown` |
-| 端口 | `ports` `refresh` `probe [ports...] [--config]` |
-| 进程 | `create` `declare` `open` `connect` `disconnect` `close` `switch` `setmode` `forward` |
-| 数据 | `send [--hex]` `stats` `history` |
+| 端口 | `ports [--table]` `refresh [--table]` `probe [ports...] [--config] [--budget]` |
+| 进程 | `create` `rename` `declare` `open` `connect` `disconnect` `close` `switch` `setmode` `forward` `session-open` |
+| 数据 | `send [--hex]` `sendone [--raw]` `stats` `history` |
 | 自动发送 | `autosend start/stop/status/interval` `sendqueue` |
 | 多字符串 | `multistr save/load/reload/status` |
 | 历史 | `history-files` `history-search` `history-enable` `history-status` `history-attach` `history-new` `history-detach` |
-| 诊断 | `sessions` `monitor` `threads` `goroutines` |
+| 会话文件 | `stlog-read` `stlog-verify` `stlog-dump` `stlog-export`（离线操作，不需要守护进程） |
+| 诊断 | `sessions` `monitor` `threads` `goroutines` `logs [n]` |
 | 系统（Linux） | `fix-permissions [--yes] [--json]` —— 对当前读不了的 USB 串口做一次临时授权（pkexec），不写系统文件 |
 | 其他 | `help` |
 
 ## 🤖 MCP 工具 / MCP（29 个）
 
-`serial_start_daemon` `serial_list_ports` `serial_refresh_ports` `serial_create` `serial_open` `serial_connect` `serial_disconnect` `serial_switch` `serial_forward_create` `serial_declare` `serial_set_mode` `serial_close` `serial_send` `serial_sessions` `serial_history` `serial_status` `serial_monitor` `serial_shutdown` `serial_stats` `serial_port_watch` `serial_autosend_start` `serial_autosend_stop` `serial_autosend_status` `serial_sendqueue` `serial_multistr_save` `serial_multistr_load` `serial_multistr_status` `serial_probe_ports`
+`serial_start_daemon` `serial_list_ports` `serial_refresh_ports` `serial_create` `serial_open` `serial_connect` `serial_disconnect` `serial_switch` `serial_forward_create` `serial_declare` `serial_set_mode` `serial_close` `serial_rename` `serial_send` `serial_sessions` `serial_history` `serial_status` `serial_monitor` `serial_shutdown` `serial_stats` `serial_port_watch` `serial_autosend_start` `serial_autosend_stop` `serial_autosend_status` `serial_sendqueue` `serial_multistr_save` `serial_multistr_load` `serial_multistr_status` `serial_probe_ports`
 
 ## ⚙️ 配置 / Config
 
@@ -248,7 +249,7 @@ go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 | `config/probe.toml` | 设备探测规则（substring / regex / modbus_crc） |
 | `config/resources/themes/<id>/theme.json` | 内置颜色主题（一个主题一个文件夹，`_modes` 声明模式） |
 | `resources/themes/<id>/` | 外部颜色主题（与 exe 同目录，自带背景图等素材；刷新时自动发现） |
-| `config/resources/icons/system/` | 内置图标包（27 个 SVG + `icons.json`） |
+| `config/resources/icons/system/` | 内置图标包（32 个 SVG + `icons.json`） |
 | `resources/icons/<包名>/` | 外部图标包（文件夹 = 包，缺的键回退 `system`） |
 | `config/resources/i18n/` | 内置翻译（9 语言） |
 | `resources/i18n/<lang>.json` | 覆盖内置翻译，`_font` 字段绑定语言首选字体 |
@@ -261,22 +262,25 @@ go build -tags production -ldflags="-s -w" -o build/bin/serial-gui .
 | [需求文档](REQUIREMENTS.md) | 需求列表与实现状态 |
 | [构建文档](BUILD.md) | 环境要求、构建矩阵、产物说明 |
 | [待办与已知问题](TODO.md) | 待实现功能、已知问题、版本完成记录 |
-| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.9.0 各版本的变更、根因与验收方法 |
+| [版本历史](CHANGELOG.md) | 0.1.0 ～ 0.10.0 各版本的变更、根因与验收方法 |
 | [布局规则](LAYOUT-RULES.md) | 前端布局与 CSS 约束 |
 | [贡献指南](CONTRIBUTING.md) | 提交规范、翻译贡献、行为准则 |
 | [第三方许可](THIRD_PARTY_NOTICES.md) | 依赖许可证清单（MIT/BSD/Apache/ISC） |
 | [CLI 速查表](CLI-CHEATSHEET.md) | 常用命令速查与示例 |
+| [.stlog 格式规范](docs/format/stlog-format.md) | 会话文件 v1.4 的字段级规范、校验、恢复与写槽流程 |
+| [.stlog v2 设计稿](docs/format/stlog-v2.md) | 「manifest + 分卷包 + 索引」多文件规则（尚未实现） |
+| [格式变更记录](docs/format/CHANGES.md) | 格式版本演进、版本号对照与实现进度 |
 
 ## 📜 版本历史 / Changelog
 
-当前版本 **v0.9.0**。最近三版：
+当前版本 **v0.10.0**。最近四版：
 
 | 版本 | 要点 |
 |------|------|
+| **0.10.0** | 会话状态收敛成「守护进程一份权威 + 工程文件落盘」：串口参数（含数据位/停止位/校验/流控）、显示设置、发送草稿、多字符串预设、统计、线程名六类同步打通，工程文件开始记录帧格式；修掉切页跳过恢复导致的草稿被清与空窗口 |
 | **0.9.0** | 多窗口对等模型成型：再启动一次 GUI 就在当前进程里新开窗口（单实例）、标签可拖进另一个窗口且**可反悔**（拖出去当场退回）、拖出成窗后拖回标签栏也有实时预览；关窗确认加「记住选择」，destroy 模式不再追问且真的销毁会话；Linux 分体版串口权限改为**只做临时授权**（GUI 横幅 + `serial-cli fix-permissions`，不写系统文件）；关于页修正渲染引擎与平台文案 |
 | **0.8.3** | 会话文件升级成**工程目录**（`manifest.json` + `settings.json` + `index.bin` + 分包的 `pkg-*.stlog`）：录制只写 `.stlog`、拖入工程或文件即可浏览、工程可按键交给守护进程恢复成会话页（单端口 / 转发）；标签悬停浮窗与文件页浮窗定稿（去掉尖角）；历史/实时渲染再降一档内存与 CPU；许可证改为 **Apache 2.0** |
 | **0.8.2** | 资源统一到 `resources/` 并分「内置 / 外置」两层；主题支持图片（全页背景、四条栏、缩略图）；设置页外观卡与新建会话页重画；标签栏与多字符串面板拖动换成 pointer 实现（实时补位、FLIP 动画、边缘自动滚动、推挤「+」） |
-| **0.8.1** | GUI 一轮集中修复：新建页先选模式、前端热重载、端口下拉同步与占用高亮、历史视图空白、自绘滚动条、状态栏统计残留、标签栏滚动提示、主题按钮图标 |
 
 完整历史（0.1.0 起，含每个版本的根因分析、实测数据与验收方法）见 [`CHANGELOG.md`](CHANGELOG.md)。
 

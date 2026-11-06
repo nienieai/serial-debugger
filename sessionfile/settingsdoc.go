@@ -15,11 +15,15 @@ import (
 //   - 槽里那份是**冗余自描述**，保证单个 pkg 拎出来也能读（v2 §3）
 //   - settings.json 是**权威**，改设置不影响已封包的字节
 type SettingsDoc struct {
-	V     int          `json:"v"`
-	Label string       `json:"label,omitempty"`
-	Notes string       `json:"notes,omitempty"`
-	Mode  string       `json:"mode,omitempty"` // 空串等价 ModeSingle
-	Ports SessionPorts `json:"ports"`
+	V     int    `json:"v"`
+	Label string `json:"label,omitempty"`
+	// LabelCustom 表示 label 是**用户改过的名字**，而不是「开始录制那一刻的线程名」。
+	// 打开工程时只有它为 true 才沿用 label：录制时的 label 往往是自动名
+	// （「会话 #1」），照搬会把工程显示成「会话 #1」，认不出是哪个目录。
+	LabelCustom bool         `json:"labelCustom,omitempty"`
+	Notes       string       `json:"notes,omitempty"`
+	Mode        string       `json:"mode,omitempty"` // 空串等价 ModeSingle
+	Ports       SessionPorts `json:"ports"`
 	// Log 记与之同时录制的那份 .log（history 里的文件名），便于成对查找。
 	Log string `json:"log,omitempty"`
 	// Plot 预留给绘图：选中通道、量程、坐标轴、区域、标注等。
@@ -30,16 +34,28 @@ type SettingsDoc struct {
 	//
 	// 同样是 map：这些键以后还会加，读写时不该因为旧版本不认识就把它们丢掉。
 	Display map[string]any `json:"display,omitempty"`
+	// Send 是这条会话的发送框状态：文本草稿、Hex 草稿、当前格式、
+	// 多字符串预设列表。和 Display 一样用 map 存，旧版本读写不会丢未知键。
+	// 普通串口会话（没有工程目录）只在守护进程内存里留一份，不写这里。
+	Send map[string]any `json:"send,omitempty"`
 	// Save 记的是「关掉的那一刻这个工程还在录」。推送回守护进程时据此决定要不要
 	// 接着录 —— 续写的是同一个目录（见 daemon 的 OpenSession），不是另起一个会话。
 	Save bool `json:"save,omitempty"`
 }
 
 // SessionPorts 是 settings.json 里的端口段。转发录制时 A/B 都有值。
+//
+// 帧格式与流控也在这里：它们和端口/波特率是同一件事 ——「这条会话当初怎么开
+// 的」。把工程推回守护进程时按它重开串口，否则 19200·7E2 的采集会被按
+// 115200·8N1 重开，收到的就是乱码。老文件没有这几个键，读回来是零值。
 type SessionPorts struct {
-	A    string `json:"a,omitempty"`
-	B    string `json:"b,omitempty"`
-	Baud int    `json:"baud,omitempty"`
+	A           string `json:"a,omitempty"`
+	B           string `json:"b,omitempty"`
+	Baud        int    `json:"baud,omitempty"`
+	DataBits    int    `json:"dataBits,omitempty"`
+	StopBits    string `json:"stopBits,omitempty"`
+	Parity      string `json:"parity,omitempty"`
+	FlowControl string `json:"flowControl,omitempty"`
 }
 
 // SettingsDocVer 是 settings.json 的结构版本。
@@ -51,7 +67,11 @@ func NewSettingsDoc(set Settings) *SettingsDoc {
 		V:     SettingsDocVer,
 		Label: set.Label,
 		Mode:  set.Mode,
-		Ports: SessionPorts{A: set.Port, B: set.PortB, Baud: set.Baud},
+		Ports: SessionPorts{
+			A: set.Port, B: set.PortB, Baud: set.Baud,
+			DataBits: set.DataBits, StopBits: set.StopBits,
+			Parity: set.Parity, FlowControl: set.FlowControl,
+		},
 	}
 	if doc.Mode == "" {
 		doc.Mode = ModeSingle
@@ -78,13 +98,17 @@ func (d *SettingsDoc) ToSettings() Settings {
 		mode = ModeSingle
 	}
 	return Settings{
-		V:       SlotPayloadVer,
-		Label:   d.Label,
-		Port:    d.Ports.A,
-		Baud:    d.Ports.Baud,
-		Mode:    mode,
-		PortB:   d.Ports.B,
-		Display: DisplayStrings(d.Display),
+		V:           SlotPayloadVer,
+		Label:       d.Label,
+		Port:        d.Ports.A,
+		Baud:        d.Ports.Baud,
+		Mode:        mode,
+		PortB:       d.Ports.B,
+		DataBits:    d.Ports.DataBits,
+		StopBits:    d.Ports.StopBits,
+		Parity:      d.Ports.Parity,
+		FlowControl: d.Ports.FlowControl,
+		Display:     DisplayStrings(d.Display),
 	}
 }
 

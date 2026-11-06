@@ -89,6 +89,87 @@ func TestOpenSessionAsProcess(t *testing.T) {
 	}
 }
 
+// 帧格式与流控要跟着工程回来：按 19200·7E2 + RTS/CTS 录的工程，推回守护进程
+// 后进程的配置必须是同一份，否则用户点「打开串口」按的是 8N1，一开就是乱码。
+func TestOpenSessionRestoresSerialParams(t *testing.T) {
+	root := t.TempDir()
+	sess := filepath.Join(root, "p7e2")
+	s, err := sessionfile.CreateSession(sess, sessionfile.Settings{
+		Port: "COM4", Baud: 19200,
+		DataBits: 7, StopBits: "2", Parity: "even", FlowControl: "rts_cts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := NewProcessManager()
+	pm.counter.Store(1500)
+	t.Cleanup(pm.DestroyAll)
+
+	proc, _, err := pm.OpenSession(sess)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	want := SerialConfig{Port: "COM4", Baud: 19200, DataBits: 7, StopBits: "2", Parity: "even", FlowControl: "rts_cts"}
+	if proc.config != want {
+		t.Fatalf("config = %+v，期望 %+v", proc.config, want)
+	}
+	// List 也要带上：GUI 的工具栏与悬浮窗都从这里取值
+	var entry map[string]any
+	for _, e := range pm.List() {
+		if e["processId"] == proc.id {
+			entry = e
+		}
+	}
+	if entry == nil {
+		t.Fatal("List 里找不到刚打开的工程")
+	}
+	if entry["flowControl"] != "rts_cts" || entry["dataBits"] != 7 || entry["parity"] != "even" {
+		t.Fatalf("List 参数不全: %v %v %v", entry["flowControl"], entry["dataBits"], entry["parity"])
+	}
+}
+
+// 用户改过名的工程（labelCustom）打开时用改过的名字，不是目录名。
+// 目录名会跟着改名走，所以这两种情况下界面上看到的是同一串 —— 守的是
+// 「改名之后目录没跟着动（比如被占用改不了）」时名字不至于丢。
+func TestOpenSessionUsesCustomLabel(t *testing.T) {
+	root := t.TempDir()
+	sess := filepath.Join(root, "20261106_101010_abcd1234")
+	s, err := sessionfile.CreateSession(sess, sessionfile.Settings{Port: "COM4", Baud: 9600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := sessionfile.LoadSettingsDoc(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Label, doc.LabelCustom = "现场调试", true
+	if err := sessionfile.SaveSettingsDoc(sess, doc); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := NewProcessManager()
+	pm.counter.Store(1600)
+	t.Cleanup(pm.DestroyAll)
+
+	proc, _, err := pm.OpenSession(sess)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	if got := proc.Name(); got != "现场调试" {
+		t.Fatalf("名字 = %q，期望 settings.json 里的现场调试", got)
+	}
+	if !proc.HasCustomName() {
+		t.Fatal("改过的名字应当报告为自定义名")
+	}
+}
+
 // 没记端口的工程：建成空闲进程，端口留空让用户自己选。
 //
 // 不拿目录名冒充串口名 —— 会话页显示「单端口空闲」比显示一个假端口诚实，

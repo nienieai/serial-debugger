@@ -23,7 +23,12 @@ if ($Release) {
 } else {
     # hotreload 只影响 uiAssets（磁盘 vs 嵌入），assetserver 仍走 production 版，
     # 两种构建除了这一处之外行为一致。
-    & wails3 build APP_VERSION=$ver EXTRA_TAGS=hotreload
+    #
+    # devtools：production 构建默认把 WebView2 的开发者工具关掉
+    # （webview_window_windows_production.go 里 openDevTools 是空实现、
+    # AreDevToolsEnabled(false)），「帮助 → 开发人员工具」点了没反应。
+    # 开发构建带上这个 tag 才能开（release 构建不加，保持禁用）。
+    & wails3 build APP_VERSION=$ver EXTRA_TAGS=hotreload,devtools
 }
 $code = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'

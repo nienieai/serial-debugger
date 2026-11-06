@@ -9,7 +9,7 @@
 // 无构建链时 bindings 是和前端一起提交的，不参与构建；ID 会随 Go 方法增减而变，
 // 忘记重新生成就会静默调到错误的方法。名字不会。
 import * as AppService from './bindings/github.com/nienieai/serial-debugger/app.js';
-import { Events, Clipboard, Application, Stream, JSONStream } from '/wails/runtime.js';
+import { Events, Clipboard, Application, Stream, JSONStream, Call } from '/wails/runtime.js';
 
 window.go = window.go || {};
 window.go.main = window.go.main || {};
@@ -60,7 +60,10 @@ window.__wailsApi = {
   JSONStream: JSONStream,
   Events: Events,
   Clipboard: Clipboard,
-  Application: Application
+  Application: Application,
+  // Call 是「没有生成 bindings 的服务」的入口：虚窗文档服务 main.LogView 走它
+  // （见 logview.js），这样加服务不用重新生成一份 bindings 再提交。
+  Call: Call
 };
 
 // 广播一个「bindings 就绪」信号。

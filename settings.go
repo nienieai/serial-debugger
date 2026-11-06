@@ -44,24 +44,36 @@ type AppSettings struct {
 	// AutoStartDaemon 是「随 GUI 启动守护进程」：GUI 本地偏好。打开后 GUI 启动时
 	// 若守护进程没在跑就自动拉起；默认关，保持「由用户点菜单启停」的旧行为。
 	AutoStartDaemon bool `json:"autoStartDaemon" ini:"auto_start_daemon"`
-	// ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」：
-	// never 不动 / last 最后一个 GUI 关闭时关 / always 总是关。
+	// ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」，四档：
+	//   never   只关自己，守护进程不动
+	//   last    自己是守护进程上最后一个客户端时才关，不询问
+	//   always  每次关窗口都关，不询问
+	//   ask     每次关窗口都问一句「要不要顺便关闭守护进程」（默认）
+	//
+	// 0.9.1 之前这里是 never/last/always 三档 + 一个独立的「关闭 GUI 前确认」
+	// 布尔开关（shutdown_daemon_warn）。两者表达的是同一件事的两半，混在一起只会
+	// 出现「last + 不提醒」这种既静默又会断串口的组合 —— 现在合并成四档，「要不要问」
+	// 由 ask 这一档本身表达（迁移见 LoadAppSettings）。
 	ShutdownDaemonMode string `json:"shutdownDaemonMode" ini:"shutdown_daemon_mode"`
-	// ShutdownDaemonWarn 控制关闭 GUI 前要不要先弹确认（会断开所有串口）。
-	// 只在 last / always 下有作用，never 下设置页置灰。
-	ShutdownDaemonWarn bool `json:"shutdownDaemonWarn" ini:"shutdown_daemon_warn"`
-	// TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
+	// TabCloseWarn 是 0.9.1 之前的「关闭标签页前确认」布尔开关。
+	//
+	// 已被 TabCloseAction 取代，只为读旧设置文件保留（迁移见 app.js 的 applySettings）。
+	// 不要再往界面里加它。
 	TabCloseWarn bool `json:"tabCloseWarn" ini:"tab_close_warn"`
+	// TabCloseAction 是「关标签页 / 关窗口时，背后的线程怎么办」：
+	//   ask      三选一：仅关闭标签 / 同时关闭线程 / 取消（默认）
+	//   tab      只关标签，线程留在守护进程里（串口不断），之后能从
+	//            「新建会话 → 从已打开线程进入」再挂回来
+	//   process  连线程一起关（断串口，0.9.1 之前的固定行为）
+	//
+	// 关窗口和关标签页走**同一条**策略：界面上不再有「窗口里的会话」那一项
+	// （0.9.1 之前是 windowCloseAction），关窗弹窗由「关闭守护进程」这条设置和
+	// 这里共同决定 —— 会话那半按本档执行，守护进程那半按 ShutdownDaemonMode。
+	TabCloseAction string `json:"tabCloseAction" ini:"tab_close_action"`
 	// SerialPermissionHint 控制「串口权限不足」横幅要不要自动弹。只在 Linux 有意义：
 	// 分体版对设备节点只能临时授权，拔插或重启后又要重新授权，横幅就是那条提醒。
 	// 关掉后不再自动出现，设置页里的手动入口保留（错误弹窗里也会说明怎么手动修）。
 	SerialPermissionHint bool `json:"serialPermissionHint" ini:"serial_permission_hint"`
-	// WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
-	//   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
-	//   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
-	//   transfer 转到别的窗口去（不问；没有别的窗口时退化成销毁确认）
-	// 注意这和 ShutdownDaemonMode 是两件事：那个管守护进程，这个管会话本身。
-	WindowCloseAction string `json:"windowCloseAction" ini:"window_close_action"`
 	// AutoSaveHistory 是「默认自动保存历史」：新标签 / 新进程是否把数据写进
 	// history/*.log。默认关闭（零值就是 false），只有用户显式打开才落盘。
 	AutoSaveHistory bool   `json:"autoSaveHistory" ini:"auto_save_history"`
@@ -111,6 +123,9 @@ type AppendDefaults struct {
 var iniSectionOrder = []string{"display", "serial", "autosend", "append"}
 
 func defaultSettings() *AppSettings {
+	// Language 默认「跟随系统」：新装用户直接拿到自己系统语言的界面，
+	// 系统语言不在九种内置语言里就回落英语（解析在 i18n.js 的 resolveAutoLang）。
+	// 已有 gui.ini 里的 language 值不受影响。
 	return &AppSettings{
 		DisplayMode:        "text",
 		SendRatio:          0.3,
@@ -130,11 +145,10 @@ func defaultSettings() *AppSettings {
 		Theme:              "auto",
 		ColorThemeID:       "theme-default",
 		IconThemeID:        "",
-		Language:           "zh",
+		Language:           "auto",
 		AutoCreateMode:     "single",
-		ShutdownDaemonMode: "last",
-		ShutdownDaemonWarn: true,
-		WindowCloseAction:  "ask",
+		ShutdownDaemonMode: "ask",
+		TabCloseAction:     "ask",
 		StlogShowYear:      true,
 		// 权限横幅默认开：Linux 上装完就能用，别让用户卡在「打开失败」里没人解释。
 		SerialPermissionHint: true,
@@ -199,7 +213,49 @@ func (a *App) LoadAppSettings() *AppSettings {
 	if err := unmarshalINI(data, cfg); err != nil {
 		return defaultSettings()
 	}
+	// 关窗口不再有自己的一套档位：它和关标签页共用 TabCloseAction
+	// （0.9.1 之前是 windowCloseAction）。旧配置里的 window_close_action 键
+	// 没人读了，ini 解析遇到不认识的键会跳过，不用清文件。
+	if cfg.TabCloseAction != "tab" && cfg.TabCloseAction != "process" {
+		cfg.TabCloseAction = "ask"
+	}
+	// 「关闭 GUI 时」四档：认不出来的值（含 0.9.1 之前的三档旧值以外的脏数据）
+	// 一律按 ask —— 宁可多问一次，也别静默把守护进程停掉。
+	switch cfg.ShutdownDaemonMode {
+	case "never", "last", "always", "ask":
+	default:
+		cfg.ShutdownDaemonMode = "ask"
+	}
+	// 迁移 0.9.1 之前的「关闭 GUI 前确认」布尔开关：它并进了第 4 档 ask。
+	// 旧配置开着提醒（默认就是开）= 用户希望关之前问一句 → 迁成 ask；
+	// 关着提醒的保持原档位（last / always / never 本来就是「不询问」）。
+	if warn, ok := legacyDaemonWarn(data); ok && warn && cfg.ShutdownDaemonMode != "never" {
+		cfg.ShutdownDaemonMode = "ask"
+	}
 	return cfg
+}
+
+// legacyDaemonWarn 从旧 gui.ini 原文里取 shutdown_daemon_warn 的值。
+//
+// 那个键已经从结构体里删掉了，unmarshalINI 遇到不认识的键会跳过，所以只能直接扫
+// 原文。第二个返回值表示「这个键到底在不在」—— 不在就不用迁移（新装或已迁过）。
+func legacyDaemonWarn(data []byte) (bool, bool) {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
+		if line == "" || line[0] == '[' || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 || strings.TrimSpace(line[:eq]) != "shutdown_daemon_warn" {
+			continue
+		}
+		b, err := strconv.ParseBool(strings.TrimSpace(line[eq+1:]))
+		if err != nil {
+			return false, false
+		}
+		return b, true
+	}
+	return false, false
 }
 
 // SaveAppSettings writes settings to <exe>/settings/gui.ini.

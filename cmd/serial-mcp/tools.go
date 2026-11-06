@@ -56,13 +56,18 @@ var allTools = []toolDef{
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{}},
 	},
 	{
-		Name:        "serial_list_ports",
-		Description: "List available serial (COM) ports from the daemon cache. Does NOT trigger a hardware rescan.",
+		Name: "serial_list_ports",
+		Description: "List available serial (COM) ports from the daemon cache. Does NOT trigger a hardware rescan. " +
+			"Each item: port, description, inUse, inUseBy, ownerProcessId/ownerName/ownerMode. " +
+			"inUseBy is 'daemon' when one of this tool's own sessions holds the port (then ownerName/ownerMode identify it), " +
+			"'other' when another application holds it (only detectable on Windows; the owning process is not identified).",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{}},
 	},
 	{
-		Name:        "serial_refresh_ports",
-		Description: "Force a hardware rescan and return the updated list of serial (COM) ports.",
+		Name: "serial_refresh_ports",
+		Description: "Force a hardware rescan and re-check port occupancy, returning the updated list. " +
+			"Same fields as serial_list_ports: inUse/inUseBy plus ownerProcessId/ownerName/ownerMode when inUseBy is 'daemon'. " +
+			"Use this before opening a port when you need the freshest occupancy state.",
 		InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProperty{}},
 	},
 	{

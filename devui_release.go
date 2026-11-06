@@ -15,9 +15,6 @@ import (
 // 前端，exe 仍然自包含、可单文件分发。
 func uiAssets() fs.FS { return assets }
 
-// uiDevMode 告诉 main.go 是否要自动打开 DevTools。
-const uiDevMode = false
-
 // uiAssetMiddleware 在发布构建里不装任何中间件（不额外改写响应头）。
 func uiAssetMiddleware() application.Middleware { return nil }
 

@@ -23,6 +23,24 @@ import (
 type portInfo struct {
 	Port        string `json:"port"`
 	Description string `json:"description"`
+	// InUse/InUseBy 说明「这个端口现在被谁占着」：
+	//   InUse=false        —— 没判定出来（非 Windows，或探测出错）也不标红
+	//   "daemon"           —— 本工具自己的进程（含 CLI / MCP 建的会话）
+	//   "other"            —— 被别的程序占着（Windows 上独占试开被拒）
+	InUse   bool   `json:"inUse"`
+	InUseBy string `json:"inUseBy,omitempty"`
+	// 下面三个只在 InUseBy == "daemon" 时出现，告诉调用方「是本工具的哪个会话」。
+	// 别的程序占着时系统不提供进程信息（要枚举全系统句柄，见 REQUIREMENTS #59）。
+	OwnerProcessId string `json:"ownerProcessId,omitempty"`
+	OwnerName      string `json:"ownerName,omitempty"`
+	OwnerMode      string `json:"ownerMode,omitempty"`
+}
+
+// portOwner 是「端口 → 本工具占用它的那个进程」的摘要。
+type portOwner struct {
+	ID   string
+	Name string
+	Mode string
 }
 
 // ---- client session (3-pipe) ----
@@ -118,6 +136,8 @@ type IpcServer struct {
 	portDescMu   sync.RWMutex
 	cachedPorts  []portInfo
 	portsMu      sync.RWMutex
+	portBusy     map[string]portBusyState // 独占试开结果（只有 other 会被界面标红）
+	portBusyMu   sync.RWMutex
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 
@@ -141,7 +161,9 @@ func NewIpcServer(pm *ProcessManager) *IpcServer {
 	pm.broadcast = s.broadcastEvent
 	pm.pushEvent = s.pushClientEvent
 	pm.onProcessChanged = s.broadcastProcessChanged
-	s.cachedPorts = s.buildPortList()
+	// 启动时试开一次：这次带占用判断，之后只在显式 ports.refresh 时重做
+	// （2 秒硬件探针不试开，见 startHwProbe）。
+	s.cachedPorts = s.buildPortList(true)
 	go s.loadPortDescsBg()
 	s.startHwProbe()
 	return s
@@ -163,7 +185,7 @@ func (s *IpcServer) loadPortDescsBg() {
 	s.portDescMu.Lock()
 	s.portDescs = descs
 	s.portDescMu.Unlock()
-	s.reloadCache()
+	s.reloadCache(false)
 	// Always broadcast after descriptions load so clients re-fetch the full list.
 	s.broadcastPortsChanged()
 }
@@ -178,25 +200,92 @@ func (s *IpcServer) getPortDescs() map[string]string {
 	return descs
 }
 
-func (s *IpcServer) buildPortList() []portInfo {
+// buildPortList 组出端口列表。probeBusy=true 时顺带重做一遍「被别的程序占用」的
+// 试开判断。
+func (s *IpcServer) buildPortList(probeBusy bool) []portInfo {
 	ports, err := serial.GetPortsList()
 	if err != nil {
 		return nil
 	}
 	descs := s.getPortDescs()
+	owners := s.portOwners()
+	if probeBusy {
+		s.refreshPortBusy(ports, owners)
+	}
+	busy := s.getPortBusy()
 	result := make([]portInfo, 0, len(ports))
 	for _, p := range ports {
 		desc := descs[p]
 		if desc == "" {
 			desc = p
 		}
-		result = append(result, portInfo{Port: p, Description: desc})
+		item := portInfo{Port: p, Description: desc}
+		if o, ours := owners[p]; ours {
+			item.InUse, item.InUseBy = true, "daemon"
+			item.OwnerProcessId, item.OwnerName, item.OwnerMode = o.ID, o.Name, o.Mode
+		} else if busy[p] == portBusyOther {
+			item.InUse, item.InUseBy = true, "other"
+		}
+		result = append(result, item)
 	}
 	return result
 }
 
-func (s *IpcServer) reloadCache() {
-	newPorts := s.buildPortList()
+// portOwners 返回「本工具自己占用的端口 → 占用它的进程」。任意客户端的会话都算。
+//
+// 在 pm.mu 读锁内取，Process.Name() 只锁自己的 nameMu，不会和 pm.mu 互相等。
+func (s *IpcServer) portOwners() map[string]portOwner {
+	owners := make(map[string]portOwner)
+	if s.pm == nil {
+		return owners
+	}
+	s.pm.mu.RLock()
+	defer s.pm.mu.RUnlock()
+	for port, id := range s.pm.portMap {
+		o := portOwner{ID: id}
+		if p := s.pm.processes[id]; p != nil {
+			o.Name = p.Name()
+			o.Mode = p.mode
+		}
+		owners[port] = o
+	}
+	return owners
+}
+
+// refreshPortBusy 对「不是本工具占用」的端口做一次独占试开，缓存结果。
+//
+// 2 秒硬件探针每拍都会调它：占用状态与端口集合无关，别人随时可能打开/关掉某个口，
+// 只在启动时探一次的话界面会一直停在旧状态。代价可忽略——被占用的口 CreateFile
+// 立刻失败返回，空闲口开→立刻关且不碰 DCB（不拉 DTR），本工具自己占的直接跳过。
+// 设备已经打不开（拔掉/驱动异常）时 probe 返回 unknown，界面保持原样，不误标红。
+func (s *IpcServer) refreshPortBusy(ports []string, owners map[string]portOwner) {
+	next := make(map[string]portBusyState, len(ports))
+	for _, p := range ports {
+		if _, ours := owners[p]; ours {
+			continue
+		}
+		next[p] = probePortBusy(p)
+	}
+	s.portBusyMu.Lock()
+	s.portBusy = next
+	s.portBusyMu.Unlock()
+}
+
+func (s *IpcServer) getPortBusy() map[string]portBusyState {
+	s.portBusyMu.RLock()
+	defer s.portBusyMu.RUnlock()
+	if len(s.portBusy) == 0 {
+		return nil
+	}
+	out := make(map[string]portBusyState, len(s.portBusy))
+	for k, v := range s.portBusy {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *IpcServer) reloadCache(probeBusy bool) {
+	newPorts := s.buildPortList(probeBusy)
 	s.portsMu.RLock()
 	oldPorts := s.cachedPorts
 	s.portsMu.RUnlock()
@@ -209,16 +298,23 @@ func (s *IpcServer) reloadCache() {
 	}
 }
 
+// portsChanged 除了端口集合，还要比描述与占用状态：描述是启动后异步补上的，
+// 占用状态则在 ports.refresh 时才会变。只比端口名的话，这两种变化都不会触发
+// ports-changed，界面就一直停在旧文案/旧红标上。
 func portsChanged(a, b []portInfo) bool {
 	if len(a) != len(b) {
 		return true
 	}
-	set := make(map[string]bool, len(a))
+	idx := make(map[string]portInfo, len(a))
 	for _, p := range a {
-		set[p.Port] = true
+		idx[p.Port] = p
 	}
 	for _, p := range b {
-		if !set[p.Port] {
+		old, ok := idx[p.Port]
+		if !ok {
+			return true
+		}
+		if old.Description != p.Description || old.InUse != p.InUse || old.InUseBy != p.InUseBy {
 			return true
 		}
 	}
@@ -253,10 +349,18 @@ func (s *IpcServer) startHwProbe() {
 					continue
 				}
 				last := s.hwProbeLastPorts
-				if portsChangedStr(last, ports) {
+				setChanged := portsChangedStr(last, ports)
+				if setChanged {
 					s.hwProbeLastPorts = ports
-					s.reloadCache()
 				}
+				// 端口集合变了当然要重算；**没变也要重算**，因为「被别的程序占用」
+				// 与端口集合无关：别人随时可能打开/关掉某个口，只在启动时探一次的话
+				// 界面会一直显示旧状态，用户点开下拉看不到红标（实际反馈）。
+				//
+				// 每 2s 试开的代价可以忽略：已判为被占用的一次 CreateFile 失败即返回；
+				// 空闲口开→立刻关，不碰 DCB（不拉 DTR）；本工具自己占的端口直接跳过。
+				// reloadCache 内部只在结果变化时才广播 ports-changed。
+				s.reloadCache(true)
 			case <-s.hwProbeStop:
 				return
 			}
@@ -308,6 +412,10 @@ func (s *IpcServer) autoWatchGUI(processId string) {
 func (s *IpcServer) broadcastProcessChanged() {
 	procs := s.pm.List()
 	s.broadcastFiltered("process-changed", map[string]any{"processes": procs})
+	// 端口占用归属（"daemon"）随进程开/关变化：顺手重算一次端口缓存，让别的窗口
+	// 与 CLI 看到的 inUse 不至于停在旧值。这里不做试开（probeBusy=false），
+	// 试开只在启动与 ports.refresh 时进行。
+	s.reloadCache(false)
 }
 
 // broadcastFiltered 把事件投递给所有订阅了它的会话。
@@ -803,7 +911,8 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 		}}
 
 	case contract.PortsRefresh:
-		s.reloadCache()
+		// 显式刷新才重做占用试开：用户点「刷新」时期望看到最新状态。
+		s.reloadCache(true)
 		fallthrough
 	case contract.Ports:
 		s.portsMu.RLock()
@@ -1267,6 +1376,24 @@ func (s *IpcServer) dispatchForSession(sess *clientSession, req *protocol.Reques
 			return protocol.Response{ID: req.ID, Error: "processId required"}
 		}
 		if err := s.pm.SetDisplay(p.ProcessID, p.Display); err != nil {
+			return protocol.Response{ID: req.ID, Error: err.Error()}
+		}
+		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}
+
+	case contract.SessionSetSend:
+		// 发送框状态（文本/Hex 草稿、当前格式、多字符串预设）：存在会话上，
+		// 换窗口、换标签再挂回来都还是同一份。
+		var p struct {
+			ProcessID string         `json:"processId"`
+			Send      map[string]any `json:"send"`
+		}
+		if err := convParams(req.Params, &p); err != nil {
+			return protocol.Response{ID: req.ID, Error: "invalid params"}
+		}
+		if p.ProcessID == "" {
+			return protocol.Response{ID: req.ID, Error: "processId required"}
+		}
+		if err := s.pm.SetSend(p.ProcessID, p.Send); err != nil {
 			return protocol.Response{ID: req.ID, Error: err.Error()}
 		}
 		return protocol.Response{ID: req.ID, Result: map[string]any{"success": true}}

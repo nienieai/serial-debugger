@@ -57,14 +57,27 @@ function icon(key, w, h, attrs) {
 	return svg.replace('<svg', '<svg ' + extra);
 }
 
+// 给单个元素按 data-icon* 属性填图标。
+//
+// 图标是异步拉的（_iconsReady），所以调用时机很关键：
+// - 图标还没到：**不要**写死 _ICON_MISSING，留空等 _populateIcons() 统一补
+//   （否则弹窗/设置页里那些早于 wails-ready 创建的下拉箭头会永久停在「⊠」）。
+// - 图标已到：立即填充，后建元素也能马上显示。
+function _fillIcon(el) {
+	if (!el || !el.getAttribute) return;
+	var key = el.getAttribute('data-icon');
+	if (!key) return;
+	if (!Object.keys(activeIcons || {}).length) return;   // 还没加载好，交给 ready 钩子
+	var w = el.getAttribute('data-icon-w') || 16;
+	var h = el.getAttribute('data-icon-h') || 16;
+	var attrs = el.getAttribute('data-icon-attrs') || '';
+	el.innerHTML = icon(key, parseInt(w), parseInt(h), attrs);
+}
+
 // Auto-populate elements with [data-icon] attribute on DOM ready.
 function _populateIcons() {
 	document.querySelectorAll('[data-icon]').forEach(function(el) {
-		var key = el.getAttribute('data-icon');
-		var w = el.getAttribute('data-icon-w') || 16;
-		var h = el.getAttribute('data-icon-h') || 16;
-		var attrs = el.getAttribute('data-icon-attrs') || '';
-		el.innerHTML = icon(key, parseInt(w), parseInt(h), attrs);
+		_fillIcon(el);
 	});
 }
 document.addEventListener('DOMContentLoaded', function() {

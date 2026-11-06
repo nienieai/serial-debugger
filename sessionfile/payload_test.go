@@ -18,6 +18,11 @@ func sampleSettings() Settings {
 		Baud:    921600,
 		Mode:    ModeForward,
 		PortB:   "COM14",
+		// 帧格式与流控：工程推回守护进程时要靠它把串口按原样重开
+		DataBits:    7,
+		StopBits:    "2",
+		Parity:      "even",
+		FlowControl: "rts_cts",
 		Display: map[string]string{
 			"encoding":       "gbk",
 			"hexCase":        "lower",
@@ -45,7 +50,9 @@ func TestSettingsTLVRoundTrip(t *testing.T) {
 	}
 	if out.V != in.V || out.UUID != in.UUID || out.Created != in.Created ||
 		out.Label != in.Label || out.Port != in.Port || out.Baud != in.Baud ||
-		out.Mode != in.Mode || out.PortB != in.PortB {
+		out.Mode != in.Mode || out.PortB != in.PortB ||
+		out.DataBits != in.DataBits || out.StopBits != in.StopBits ||
+		out.Parity != in.Parity || out.FlowControl != in.FlowControl {
 		t.Fatalf("身份字段不一致:\n got %+v\nwant %+v", out, in)
 	}
 	for k, want := range in.Display {

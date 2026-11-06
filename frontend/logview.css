@@ -1,0 +1,200 @@
+/* ---- 虚窗日志视图（logview）----
+   一行一个绝对定位的 .lv-row，整层 translate3d 平移；行里的 .ts-line / .data-line
+   用的是会话页同一套类，所以配色主题、字体、可见控制字符都跟着走。
+   这里只管几何：视口、行容器、选区盒子、滚动条两道 + 滑块。 */
+
+/* 会话页的挂载点：display-area 是 flex 列，这里占满剩下的高度 */
+.lv-mount { flex: 1 1 auto; min-height: 0; position: relative; }
+
+.lv-host {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  /* .t-stlog-rows 原来给分页内容留的 padding 对虚窗没用：几何全由引擎算，
+     留着会让行起点和选区坐标差 12px、轨道也不贴边。 */
+  padding: 0;
+  font-family: "Cascadia Code", "Fira Code", "Consolas", "Microsoft YaHei", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--lv-bg, color-mix(in srgb, var(--input-bg) 88%, transparent));
+  /* 原生选区关掉：高亮是引擎自己画的（半透明、能跨未渲染区、不会被行重建打断）。
+     从 stlog-viewer 往这边搬的时候漏了这一条 —— 结果是浏览器自己也会选一段
+     DOM 文本，那份高亮和引擎的选区互不相干：看起来「选中了」，右键菜单里
+     「复制」却还是灰的，或者两段高亮同时出现。
+     关掉原生选区后浏览器不再给 I 形光标，由 .lv-view 的 cursor: text 补上。 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.lv-view {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  cursor: text;
+}
+.lv-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+.lv-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  padding-left: 18px; /* 4 + 5 + 5 + 4：两条竖条 + 两侧留白 */
+  padding-right: 8px;
+}
+
+/* 每行最左边两条 5px 竖条：读取指示（非交互 CLI / MCP）。
+   读取记录还没实现（要等工程文件记「谁读过」），所以现在是**占位**：
+   有标记才填色，没有就是空的透明条，但几何位置与宽度先留着。 */
+.lv-gut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  pointer-events: none;
+}
+.lv-gut-cli { left: 4px; }
+.lv-gut-mcp { left: 9px; }
+.lv-gut.is-cli { background: var(--gut-cli, #f59e0b); }
+.lv-gut.is-mcp { background: var(--gut-mcp, #a855f7); }
+.lv-row .ts-line { line-height: 1.4; }
+.lv-row .data-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+/* 系统消息只占一行：时间、标签、正文并列，超长省略。
+   行高在 JS / Go 两侧都按 1 行算（lineCount），这里必须压住不换行。 */
+.lv-row .ts-line.is-sys-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sys-msg--inline { margin: 0; }
+/* 量字体宽度与行高的探针：不进布局，量完立刻删 */
+.lv-probe {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  visibility: hidden;
+  white-space: pre;
+}
+.lv-msg {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  color: var(--placeholder);
+  font-style: italic;
+  pointer-events: none;
+}
+
+/* 选区：一行可能有多个视觉行，各画一块，跟着 layer 一起平移 */
+.lv-sel-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.lv-selbox {
+  position: absolute;
+  /* 选区底色按主题各给一档（--sel-bg）：26% 的 accent 在白底上只有 1.46:1，
+     基本看不出选中；深色下 1.75:1 也偏淡。色调仍跟着主题的 --accent 走。 */
+  background: var(--sel-bg, color-mix(in srgb, var(--accent) 42%, transparent));
+  pointer-events: none;
+}
+
+/* 滚动条：左边 1px 分界线 + 三条 5px 泳道，满高、贴右、直角。
+   三道语义：① 读取（CLI/MCP 读到哪）② 校验（Modbus 严重度）③ 落盘。
+   前两道的数据源还没做，先按占位画（极淡的底），不伪装成有数据。 */
+.lv-rail {
+  position: relative;
+  flex: 0 0 16px;
+  width: 16px;
+  /* 贴到窗口右边缘：原先让开 3px 是怕「无边框窗口最外 3px 的系统调整大小热区」，
+     但滑块本身 16px 宽，让开之后只在右边多出一条缝，看着像滚动条没落到底。
+     右边那条竖线也去掉 —— 右边就是窗口边缘，一条线会把滚动条和窗口框割成两层。 */
+  margin-right: 0;
+  /* 左边那 1px 竖线挪到 .lv-track 上（见下）：轨道上边界就是顶部横线，
+     两条线落在同一个盒子里，竖线才不会从内容区顶端一路画下来「冒头」。 */
+  background: var(--rail-bg, transparent);
+  overflow: hidden;
+  cursor: pointer;
+}
+.lv-lanes { position: relative; width: 15px; height: 100%; }
+/* 轨道本体：上边界落在顶部毛玻璃栏的底边（top 由 JS 设），一直落到底 ——
+   底部那 48px 是浮动按钮条，它的模糊垫底已经向右让开 16px（见 style.css），
+   所以滑块拖到底也看得见。只有会话页（有毛玻璃栏）才画那条上边界横线。 */
+.lv-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  /* 左侧竖线：跟顶部横线同属轨道，起点就是轨道上边界，不会伸到上边去。
+     文件页没有顶部横线（trackTop=0），竖线照旧从内容顶端开始。 */
+  border-left: 1px solid var(--border);
+}
+.lv-track-rule { border-top: 1px solid var(--border); }
+.lv-lane {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  /* 底色跟历史框一致：原来铺了一层 fg 6%，深色下整条通道比数据区亮一档
+     （#191919 vs #0D0D0D），看着像嵌了另一块面板。留透明就是露出 rail 的
+     --panel-bg，和左边历史框同一个底色；泳道上的标记照旧按需画。 */
+  background: transparent;
+}
+.lv-lane-read { left: 0; }
+.lv-lane-check { left: 5px; }
+.lv-lane-disk { left: 10px; }
+.lv-lane-mark { position: absolute; left: 0; width: 5px; }
+.lv-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  min-height: 15px;
+  /* 半透明：让下面三条泳道透出来（和示例工程 #79797966 一个道理），
+     实心滑块会把语义色整个盖住。 */
+  background: color-mix(in srgb, var(--scrollbar-thumb) 45%, transparent);
+  will-change: transform;
+  cursor: pointer;
+}
+/* 悬停 / 拖动只提「同一档灰有多实」，不换成主色 —— 蓝色高亮在深色数据区里
+   太跳，VS Code 那种「还是灰的、只是更实」更像系统滚动条。 */
+.lv-thumb:hover { background: color-mix(in srgb, var(--scrollbar-thumb) 85%, transparent); }
+.lv-thumb:active { background: var(--scrollbar-thumb); }
+
+/* 「回到底部」按钮：不贴底时出现（未读数去掉后，回底还得有个入口） */
+.lv-tobottom {
+  position: absolute;
+  /* 让开滚动条（16px）+ 窗口右边的热区留白（3px） */
+  right: 23px;
+  bottom: 12px;
+  z-index: 7;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+.lv-tobottom:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 顶部提示：内存缓冲已经把更早的历史裁掉了。没落盘时这部分是真丢了；
+   有磁盘文件的会话改成「向上可加载」。top 由 JS 按 reserveTop 定位。 */
+.lv-trim {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--placeholder);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}

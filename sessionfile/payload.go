@@ -31,6 +31,13 @@ const (
 	KeyBaud    uint16 = 0x0015
 	KeyPortB   uint16 = 0x0016
 
+	// 帧格式与流控（0x0017-0x001A）。这些是「录制这一刻串口怎么开的」，
+	// 与 Port/Baud 同一类：工程推回守护进程时照着它重开串口，不是显示设置。
+	KeyDataBits    uint16 = 0x0017
+	KeyStopBits    uint16 = 0x0018
+	KeyParity      uint16 = 0x0019
+	KeyFlowControl uint16 = 0x001A
+
 	KeyDisplayEncoding        uint16 = 0x0100
 	KeyDisplayHexCase         uint16 = 0x0101
 	KeyDisplayHexPrefix       uint16 = 0x0102
@@ -92,6 +99,10 @@ func EncodeSettings(s Settings) []byte {
 	out = appendStr(out, KeyPort, s.Port)
 	out = appendU32(out, KeyBaud, uint32(s.Baud))
 	out = appendStr(out, KeyPortB, s.PortB)
+	out = appendU32(out, KeyDataBits, uint32(s.DataBits))
+	out = appendStr(out, KeyStopBits, s.StopBits)
+	out = appendStr(out, KeyParity, s.Parity)
+	out = appendStr(out, KeyFlowControl, s.FlowControl)
 	for _, d := range displayKeyNames {
 		out = appendStr(out, d.key, s.Display[d.name])
 	}
@@ -145,6 +156,17 @@ func DecodeSettings(payload []byte) (Settings, error) {
 				s.Baud = int(binary.LittleEndian.Uint32(val))
 				seen[key] = true
 			}
+		case KeyDataBits:
+			if n == 4 {
+				s.DataBits = int(binary.LittleEndian.Uint32(val))
+				seen[key] = true
+			}
+		case KeyStopBits:
+			s.StopBits, seen[key] = string(val), true
+		case KeyParity:
+			s.Parity, seen[key] = string(val), true
+		case KeyFlowControl:
+			s.FlowControl, seen[key] = string(val), true
 		default:
 			name, ok := displayNameByKey[key]
 			if !ok {

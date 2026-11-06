@@ -22,6 +22,7 @@
 | `.c-color-preview` | [13. 预览气泡](#13-预览气泡-c-color-preview) |
 | `.statusbar` | [14. 状态栏](#14-状态栏-statusbar) |
 | `.config-bar::before` `.send-controls::before` 等 | [15. 模糊渐变条](#15-模糊渐变条) |
+| `.o-perm-banner` `.c-perm-banner` `.c-perm-banner__btn` | [16. 串口权限横幅](#16-串口权限横幅-o-perm-banner) |
 
 ---
 
@@ -57,16 +58,29 @@
 | `.cs-wrap select` | `position: absolute; inset: 0; opacity: 0; pointer-events: none` | 原生 select 仅作语义容器 |
 | `.cs-trigger` | `width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 26px 0 8px` | 截断过长文字；默认撑满 `.cs-wrap` |
 | `.cs-text` | `overflow: hidden; text-overflow: ellipsis; min-width: 0` | 选中项文字截断 |
-| `.cs-arrow` | `position: absolute; right: 5px; top: 50%; transform: translateY(-50%)` | 箭头不占布局 |
-| `.cs-dropdown` | 打开时 `is-portalled`：portal 到 `body`，JS 内联 `position: fixed` + `left/top/minWidth/maxWidth/maxHeight` | 不受父容器 `overflow: hidden` 裁剪 |
+| `.cs-arrow` | `position: absolute; right: 5px; top: 50%; transform: translateY(-50%)` | 箭头不占布局。<br>**必须用 `data-icon="chevron_down"` 声明式注入**，不能直接 `innerHTML = icon(...)`：图标集合是异步拉的，早于 `wails-ready` 创建的下拉会拿到 `_ICON_MISSING`（方框+叉），之后再没人补 —— 弹窗与设置页那一列「⊠」就是这么来的 |
+| `.cs-dropdown` | 打开时 `is-portalled`：portal 到 `body`，JS 内联 `position: fixed` + `left/top/minWidth/maxWidth/maxHeight`；底色 **`var(--menu-glass-bg)` + `backdrop-filter: blur(14px) saturate(1.4)`**（与菜单下拉同款毛玻璃） | 不受父容器 `overflow: hidden` 裁剪；下拉内没有二级浮层，所以模糊可以直接挂在容器上（菜单因为有三级子菜单才下沉到 `::before`） |
 
 **规则：原生 `<select>` 的 width 对可见布局无效，必须约束 `.cs-trigger` 或 `.cs-wrap`。**
 
-portal 细节（`app.js` `_csOpenDropdown()`）：
+**所有 `<select>` 都要自绘**：`initAllCustomSelects()`（`app.js`）在启动时扫全文档，并挂一个 `MutationObserver` 兜住后建的下拉（软件设置页 `_buildSelect()`、标签页设置弹窗、串口详细设置、以后新增的面板）。`initCustomSelect()` 用 `closest('.cs-wrap')` 幂等，重复扫安全。
 
-- 下拉框以 `trigger.getBoundingClientRect()` 定位：`top = trigger.bottom + 2`，`minWidth = trigger.width`。
-- `max-height` 从 trigger 底部算到 `.statusbar` 顶部（减 6px），下限 80px；超出则内部滚动。
-- 滚动（捕获阶段监听 `document` scroll）与窗口 resize 时自动关闭 / 跟随重定位。
+**包一层之后要补布局**：原来写在 `<select>` 上的 `flex: 1 1 auto` 对 `.cs-wrap` 不生效，所以下面四类行里的 wrap 要单独给宽度（`style.css` 的 `.cs-wrap` 段）：
+
+```css
+.settings-row > .cs-wrap, .settings-num > .cs-wrap,
+.c-form-row > .cs-wrap, .tabset-row > .cs-wrap { flex: 1 1 auto; min-width: 0; }
+```
+
+portal 细节（`app.js` `_csOpenDropdown()` + `_csPosition()`）：
+
+- 下拉框以 `trigger.getBoundingClientRect()` 定位：默认 `top = trigger.bottom + 2`，`minWidth = trigger.width`。
+- **靠近窗口底部要向上弹**：下方可用高度 = `min(窗口底, 状态栏顶) - trigger.bottom - 6`。若下方连两行（≈88px）都放不下且上方更宽裕，就改成 `bottom = 窗口底 - trigger.top + 2`，`max-height` 取上方空间。早期版本只算下方并把下限硬塞成 80px，设置页「高级」里最后那项会被窗口底截掉半行（实测截图）。
+- 滚动（捕获阶段监听 `document` scroll）与窗口 resize（`ResizeObserver`）时自动关闭 / 跟随重定位；两处共用同一个 `_csPosition()`。
+- 输入类控件（设置页 input/select、弹窗、`.settings-search`、`.send-controls` 的数字框、多字符串面板、`.cs-trigger`）统一毛玻璃：`color-mix(in srgb, var(--input-bg) 72%, transparent)` + `backdrop-filter: blur(10px)`，规则放在 `style.css` 末尾以便覆盖各控件自己的 `background`；**排除** checkbox/radio/range 与发送框 textarea（后者上面叠着镜像层）。
+- **端口占用标记用固定状态色**（`.port-occupied` 琥珀 `#f2b200` + 深色字、`.port-busy-other` 红 `#d92d20` + 白字），不跟 `--yellow` / `--red` 主题变量走：亮色主题的 `--yellow` 是深琥珀、暗色是亮黄，配白字或黑字总有一头糊（实测亮黄底白字看不清）。状态色本来就该跨主题一致。
+- 选项悬停用**叠加遮罩**（`box-shadow: inset 0 0 0 999px rgba(127,127,127,.22)`）而不是改 `background`：黄/红底色也要能被高亮，换色会把「被占用」信息盖掉。
+- 占用标记的**视角**是逐标签的（`_markOccupied(sel, tab)`）：自己这个标签正在用的口不标；同窗口别的标签、别的窗口、CLI/MCP 的会话标琥珀 +「会话名 占用」；被别的程序占用标红。判定顺序见 `app.js` 该函数的注释。
 - 关闭时移回原 `.cs-wrap` 并清空内联样式。
 
 ## 3. 配置栏 (config-bar)
@@ -128,7 +142,7 @@ portal 细节（`app.js` `_csOpenDropdown()`）：
 | 元素 | CSS | 策略 |
 | --- | --- | --- |
 | `.quick-panel` | `min-width: 0; overflow: hidden; display: flex; flex-direction: column; padding-top: 44px` | 宽度由 flex 比例控制，`padding-top` 为 config-bar 预留 |
-| `.o-divider--quick` | `width: 5px; cursor: ew-resize; position: relative; z-index: 3` | 拖动调整面板宽度（`::before` 扩展热区） |
+| `.o-divider--quick` | `width: 5px; cursor: ew-resize; position: relative; z-index: 3` | 拖动调整面板宽度（`::before` 扩展热区）。**收起态**（JS 加 `.is-collapsed`）：线的位置**不动**（仍贴着右边缘），只把命中带内移 —— 元素 `pointer-events: none`（最右侧不再吞掉 `mousedown`，窗口边框缩放照常），`::before` 改为 `right: 6px; width: 16px; pointer-events: auto`，即距边缘 6~22px 可抓（比原来 10px 更好拖）。**不要用 `margin-right` 把线内缩**：那会在右边留一条竖直空缝，实测很难看（TODO #96） |
 | `.qp-table` | `display: flex; flex-direction: column; overflow: hidden`；持有 `--qp-cols: 12px 34px 34px minmax(40px, 1fr) 62px 40px 26px` | **三段式**容器：表头 / 滚动区 / 添加行。本身不滚动。**延时列必须 ≥ 60px**：表头文字「延时(ms)」实测需 55px 内容宽，加 `padding 4px` 与右边框 1px 即 60px，否则被 `.qp-col` 的 `text-overflow: ellipsis` 截成「延时(…」。原来用 `subgrid` + `gap: 0` 时单元格宽度是「轨道 + 间隙」（54+6=60）正好放得下，改成独立网格后单元格宽度等于轨道本身，所以必须显式给足。其余最小宽度刻意压低：`.qp-scroll` 关掉了横向滚动（见下），面板过窄时右侧列会被裁且无法触及，压低最小值把触发裁剪的面板宽度降到约 298px；内容列是 `1fr`，正常宽度下自动撑开，不影响观感 |
 | `.qp-hdr` | `flex-shrink: 0; display: grid; grid-template-columns: var(--qp-cols); padding: 6px 10px 6px 4px; overflow-x: auto; overflow-y: hidden`；`::-webkit-scrollbar { display: none }` | 表头。**不再是 sticky**——它在滚动区之外，天然常驻。**它自己也横向可滚**（滚动条隐藏），由 JS 与 `.qp-scroll` 同步 `scrollLeft`，这样横滚时表头跟着走、列不错位；横滚条只由 `.qp-scroll` 显示一条 |
 | `.qp-scroll` | `flex: 0 1 auto; min-height: 0; display: grid; grid-template-columns: var(--qp-cols); padding: 0 4px; scrollbar-gutter: stable; overflow-y: auto; overflow-x: auto` | **唯一的滚动容器**：竖向滚动条因而被严格夹在表头下沿与添加行上沿之间。`flex: 0 1 auto`（不 grow）让数据少时按内容收缩、添加行紧跟末行，数据多时被压缩并出现滚动条。横向在面板窄于约 298px 时出现横滚条，粗细由全局 `::-webkit-scrollbar { height: 6px }` 限定为 6px（未设 `height` 时会回落到平台默认的十几像素）；表头由 `tabpage.js` 里的 `scroll` 监听同步 `scrollLeft`。竖向滚动条的**跨度为表头下沿..添加行上沿**，与添加行的位置无关 |
@@ -262,3 +276,21 @@ v0.6.2 重构：每行 [设置项] [加粗] [背景颜色:深/浅] [字体颜色
 - 模糊通过 `::before` 伪元素承载，`z-index: -1`（位于条内容之下、页面内容之上）。
 - `mask-image`：3/4 区域完全模糊，1/4 区域渐变消失。
 - 转发按键栏的**显隐**由 JS 按模式切换按钮 `is-hidden` 标记控制（见 [6](#6-显示区-display-area)）；`.c-fwd-display .c-fwd-float-btns::before` 仅承载模糊渐变。
+
+## 16. 串口权限横幅 (.o-perm-banner)
+
+只有 Linux 会出现的非模态提示条（`sysperm.Supported` 为真且探到读不了的 `/dev/ttyUSB*` / `/dev/ttyACM*` 才显示；Windows 的 COM 口与 macOS 的 `/dev/cu.*` 永不出现）。
+
+| 元素 | 规则 |
+| --- | --- |
+| `#permBanner.o-perm-banner` | 插在标签栏与 `.main-content` 之间，`flex-shrink: 0`；默认 `display: none`，加 `.is-show` 才 `display: flex` |
+| `.c-perm-banner` | `background: var(--bg2)` + 下边框 1px `var(--border)`，`font-size: 12px`，`user-select: none` |
+| `.c-perm-banner__icon` | 固定宽度图标，`color: var(--yellow)`（警告语气，与错误红区分） |
+| `.c-perm-banner__text` | `flex: 1 1 auto; min-width: 0` + 单行省略（`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`） |
+| `.c-perm-banner__btn` | 右侧「临时授权」按钮，`var(--accent)` 实底白字；请求进行中置 `disabled` |
+| `.c-perm-banner__close` | 20×20 关闭按钮，hover 才显 `var(--bg3)` 底 |
+
+- **参与布局、不覆盖控件**：出现时把 `.main-content` 压矮，不遮挡任何已有元素——所以它不是浮层，也没有 `position: absolute`。
+- **刻意不用模态弹窗**：打开串口失败时用户还要能换端口、看日志、翻设置，弹窗会挡住这些操作。
+- 分体版只做临时授权，拔插或重启后横幅会**再次出现**，因此文案必须能长期停留而不打扰（单行、无动画、无自动消失）。
+- 显隐只由 `showPermBanner()` / `hidePermBanner()` 控制（`onclick` 直接调全局函数），不参与会话页那套 `renderSegments` 渲染；点「×」只是本次隐藏，**不落盘**——下次探测到读不了的设备仍会出现。

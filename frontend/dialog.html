@@ -8,16 +8,28 @@
     由 Go 侧 dialog.go 的 OpenDialog 打开，内容自己用 GetDialog(id) 取。
     刻意不复用 index.html：那里会跑整套 app.js，第二个窗口会把 state、i18n、
     守护进程连接和 frames 流全部再初始化一遍。
+
+    窗口是无边框的（dialog.go 里 Frameless），所以标题栏由这里自己画：
+    .o-dialog-bar 是拖动把手，右边那个 × 等同于取消；边界靠 body 的 1px 边框。
   -->
   <title>串口调试工具</title>
   <link rel="stylesheet" href="/dialog.css">
 </head>
 <body>
+  <header class="o-dialog-bar">
+    <span class="c-dialog__title" id="dlgTitle"></span>
+    <button type="button" class="c-dialog__close" id="dlgClose" aria-label="关闭" title="关闭">✕</button>
+  </header>
   <main class="o-dialog-col">
     <p class="c-dialog__msg" id="dlgMsg">加载中…</p>
     <label class="c-dialog__opt is-hidden" id="dlgDontAsk">
       <input type="checkbox" id="dlgDontAskInput">
       <span id="dlgDontAskText">不再提醒</span>
+    </label>
+    <!-- 第二个勾选框：关窗口时「记住会话怎么处理」和「不再提醒停守护进程」是两件事 -->
+    <label class="c-dialog__opt is-hidden" id="dlgDontAsk2">
+      <input type="checkbox" id="dlgDontAsk2Input">
+      <span id="dlgDontAsk2Text">不再提醒</span>
     </label>
     <div class="o-dialog-actions" id="dlgActions"></div>
   </main>

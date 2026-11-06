@@ -6,6 +6,10 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "/wails/runtime.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as stlogview$0 from "./stlogview/models.js";
+
 /**
  * AppSettings holds all user-facing GUI settings persisted to disk.
  * 
@@ -173,29 +177,47 @@ export class AppSettings {
         }
         if (!("shutdownDaemonMode" in $$source)) {
             /**
-             * ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」：
-             * never 不动 / last 最后一个 GUI 关闭时关 / always 总是关。
+             * ShutdownDaemonMode 是「关闭 GUI 时怎么处理守护进程」，四档：
+             *   never   只关自己，守护进程不动
+             *   last    自己是守护进程上最后一个客户端时才关，不询问
+             *   always  每次关窗口都关，不询问
+             *   ask     每次关窗口都问一句「要不要顺便关闭守护进程」（默认）
+             * 
+             * 0.9.1 之前这里是 never/last/always 三档 + 一个独立的「关闭 GUI 前确认」
+             * 布尔开关（shutdown_daemon_warn）。两者表达的是同一件事的两半，混在一起只会
+             * 出现「last + 不提醒」这种既静默又会断串口的组合 —— 现在合并成四档，「要不要问」
+             * 由 ask 这一档本身表达（迁移见 LoadAppSettings）。
              * @member
              * @type {string}
              */
             this["shutdownDaemonMode"] = "";
         }
-        if (!("shutdownDaemonWarn" in $$source)) {
-            /**
-             * ShutdownDaemonWarn 控制关闭 GUI 前要不要先弹确认（会断开所有串口）。
-             * 只在 last / always 下有作用，never 下设置页置灰。
-             * @member
-             * @type {boolean}
-             */
-            this["shutdownDaemonWarn"] = false;
-        }
         if (!("tabCloseWarn" in $$source)) {
             /**
-             * TabCloseWarn 控制关闭标签页前要不要先弹确认（仅当该标签的串口开着）。
+             * TabCloseWarn 是 0.9.1 之前的「关闭标签页前确认」布尔开关。
+             * 
+             * 已被 TabCloseAction 取代，只为读旧设置文件保留（迁移见 app.js 的 applySettings）。
+             * 不要再往界面里加它。
              * @member
              * @type {boolean}
              */
             this["tabCloseWarn"] = false;
+        }
+        if (!("tabCloseAction" in $$source)) {
+            /**
+             * TabCloseAction 是「关标签页 / 关窗口时，背后的线程怎么办」：
+             *   ask      三选一：仅关闭标签 / 同时关闭线程 / 取消（默认）
+             *   tab      只关标签，线程留在守护进程里（串口不断），之后能从
+             *            「新建会话 → 从已打开线程进入」再挂回来
+             *   process  连线程一起关（断串口，0.9.1 之前的固定行为）
+             * 
+             * 关窗口和关标签页走**同一条**策略：界面上不再有「窗口里的会话」那一项
+             * （0.9.1 之前是 windowCloseAction），关窗弹窗由「关闭守护进程」这条设置和
+             * 这里共同决定 —— 会话那半按本档执行，守护进程那半按 ShutdownDaemonMode。
+             * @member
+             * @type {string}
+             */
+            this["tabCloseAction"] = "";
         }
         if (!("serialPermissionHint" in $$source)) {
             /**
@@ -206,18 +228,6 @@ export class AppSettings {
              * @type {boolean}
              */
             this["serialPermissionHint"] = false;
-        }
-        if (!("windowCloseAction" in $$source)) {
-            /**
-             * WindowCloseAction 是「关窗口时，这个窗口里的会话怎么处理」：
-             *   ask      每次弹框让用户选（默认，等于旧行为：一定要确认）
-             *   destroy  直接销毁这些会话（仍然会弹一次确认，因为会断串口）
-             *   transfer 转到别的窗口去（不问；没有别的窗口时退化成销毁确认）
-             * 注意这和 ShutdownDaemonMode 是两件事：那个管守护进程，这个管会话本身。
-             * @member
-             * @type {string}
-             */
-            this["windowCloseAction"] = "";
         }
         if (!("autoSaveHistory" in $$source)) {
             /**
@@ -333,18 +343,18 @@ export class AppSettings {
      * @returns {AppSettings}
      */
     static createFrom($$source = {}) {
-        const $$createField36_0 = $$createType0;
-        const $$createField37_0 = $$createType1;
-        const $$createField38_0 = $$createType2;
+        const $$createField35_0 = $$createType0;
+        const $$createField36_0 = $$createType1;
+        const $$createField37_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("serial" in $$parsedSource) {
-            $$parsedSource["serial"] = $$createField36_0($$parsedSource["serial"]);
+            $$parsedSource["serial"] = $$createField35_0($$parsedSource["serial"]);
         }
         if ("autoSend" in $$parsedSource) {
-            $$parsedSource["autoSend"] = $$createField37_0($$parsedSource["autoSend"]);
+            $$parsedSource["autoSend"] = $$createField36_0($$parsedSource["autoSend"]);
         }
         if ("append" in $$parsedSource) {
-            $$parsedSource["append"] = $$createField38_0($$parsedSource["append"]);
+            $$parsedSource["append"] = $$createField37_0($$parsedSource["append"]);
         }
         return new AppSettings(/** @type {Partial<AppSettings>} */($$parsedSource));
     }
@@ -502,7 +512,7 @@ export class DialogSpec {
         }
         if (!("dontAsk" in $$source)) {
             /**
-             * 是否显示「不再提醒」勾选框
+             * 第一勾选框（「记住选择」/「不再提醒」都走它）
              * @member
              * @type {boolean}
              */
@@ -514,6 +524,25 @@ export class DialogSpec {
              * @type {string}
              */
             this["dontAskLabel"] = "";
+        }
+        if (!("dontAsk2" in $$source)) {
+            /**
+             * DontAsk2 / DontAsk2Label 是第二个勾选框。
+             * 
+             * 关窗口时同时要记住两件互不相干的事：窗口里的会话怎么办（TabCloseAction），
+             * 以及下次还要不要提醒停守护进程（ShutdownDaemonWarn）。它们写的是两个不同的
+             * 设置，一个勾选框表达不了，所以对话框要能摆两个。
+             * @member
+             * @type {boolean}
+             */
+            this["dontAsk2"] = false;
+        }
+        if (!("dontAsk2Label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dontAsk2Label"] = "";
         }
         if (!("vars" in $$source)) {
             /**
@@ -534,13 +563,13 @@ export class DialogSpec {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType4;
-        const $$createField7_0 = $$createType5;
+        const $$createField9_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("buttons" in $$parsedSource) {
             $$parsedSource["buttons"] = $$createField4_0($$parsedSource["buttons"]);
         }
         if ("vars" in $$parsedSource) {
-            $$parsedSource["vars"] = $$createField7_0($$parsedSource["vars"]);
+            $$parsedSource["vars"] = $$createField9_0($$parsedSource["vars"]);
         }
         return new DialogSpec(/** @type {Partial<DialogSpec>} */($$parsedSource));
     }
@@ -640,6 +669,48 @@ export class ExternalI18nInfo {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new ExternalI18nInfo(/** @type {Partial<ExternalI18nInfo>} */($$parsedSource));
+    }
+}
+
+/**
+ * OpenDoc 是 Open 的返回：文档 id + 首帧状态。
+ */
+export class OpenDoc {
+    /**
+     * Creates a new OpenDoc instance.
+     * @param {Partial<OpenDoc>} [$$source = {}] - The source object to create the OpenDoc.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("status" in $$source)) {
+            /**
+             * @member
+             * @type {stlogview$0.StatusResult}
+             */
+            this["status"] = (new stlogview$0.StatusResult());
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new OpenDoc instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {OpenDoc}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType6;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("status" in $$parsedSource) {
+            $$parsedSource["status"] = $$createField1_0($$parsedSource["status"]);
+        }
+        return new OpenDoc(/** @type {Partial<OpenDoc>} */($$parsedSource));
     }
 }
 
@@ -762,3 +833,4 @@ const $$createType2 = AppendDefaults.createFrom;
 const $$createType3 = DialogButton.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = $Create.Map($Create.Any, $Create.Any);
+const $$createType6 = stlogview$0.StatusResult.createFrom;

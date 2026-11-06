@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/nienieai/serial-debugger/pipe"
 	"github.com/nienieai/serial-debugger/protocol"
 	"github.com/nienieai/serial-debugger/sessionfile"
+	"github.com/nienieai/serial-debugger/stlogview"
 	"github.com/nienieai/serial-debugger/version"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -43,6 +45,14 @@ type App struct {
 	winMu   sync.Mutex
 	windows map[string]*application.WebviewWindow
 	winSeq  int
+
+	// 无边框窗口的最大化状态：窗口名 → 最大化之前的位置和大小。
+	//
+	// 为什么自己记：Wails 对 frameless 窗口的 ToggleMaximise 只把 WS_MAXIMIZE
+	// 状态位置上了（IsMaximised 会跟着变 true），窗口尺寸却一动不动 —— 那个
+	// ShowWindow(SW_MAXIMIZE) 在无边框窗口上不管用。这里干脆按屏幕工作区自己摆。
+	restMu  sync.Mutex
+	winRest map[string]winRect
 
 	// 单实例：又启动了一份 GUI 时，v3 把通知交给我们（见 onSecondInstanceLaunch）。
 	//
@@ -67,6 +77,12 @@ type App struct {
 	// 认领，否则那些会话在 GUI 里永远不会显示。
 	sessMu    sync.Mutex
 	sessOwner map[string]string
+	// 主动放手过的会话：会话 ID → 放手的窗口名。
+	//
+	// 「关闭标签 → 仅关闭标签」会把会话放回无主（线程还在跑），但放手方自己
+	// **不能**按「无主就认领」立刻再领回来 —— 那样标签一关就自己弹回来。别的
+	// 窗口照常可以领（见 GetSessionsForWindow 与 AdoptSession）。
+	sessReleased map[string]string
 
 	// 关窗确认：窗口名 → 上次发确认帧的时间（防连点 X 叠出多个确认窗口）。
 	// forcedWindows 里的窗口表示用户已经确认过，下次 WindowClosing 直接放行。
@@ -100,6 +116,15 @@ type App struct {
 	// Tab decode workers — one goroutine per tab.
 	tabDecoders   map[string]*tabDecodeUnit // processId → worker
 	tabDecodersMu sync.Mutex
+
+	// 虚窗文档服务：每个 .stlog 标签页一个文档，按 id 分（见 logview.go）。
+	logview *LogView
+
+	// 启动参数里带的 .stlog / 工程目录（双击文件、命令行带上路径）。
+	// 前端加载完自己来取一次，取走就清空 —— 用「拉」而不是「推」：推的时机
+	// 永远赶不上页面就绪，早了就丢事件。
+	openMu   sync.Mutex
+	openPath string
 }
 
 // tabDecodeUnit runs a dedicated decode goroutine for one tab.
@@ -158,7 +183,28 @@ func (td *tabDecodeUnit) setEncoding(enc string) {
 }
 
 func NewApp() *App {
-	return &App{}
+	a := &App{}
+	a.logview = newLogView(a)
+	return a
+}
+
+// ---- 启动参数里的文件 ----
+
+// setStartupPath 记下「启动时要打开的那个路径」（由 main.go 解析命令行后调用）。
+func (a *App) setStartupPath(p string) {
+	a.openMu.Lock()
+	a.openPath = p
+	a.openMu.Unlock()
+}
+
+// TakeOpenPath 取走启动路径（一次）。前端在 wails-ready 之后调一次：
+// 有值就开成只读页，没有就什么都不做。
+func (a *App) TakeOpenPath() string {
+	a.openMu.Lock()
+	p := a.openPath
+	a.openPath = ""
+	a.openMu.Unlock()
+	return p
 }
 
 // attach 把 v3 的 application / window 交给 service。
@@ -205,13 +251,114 @@ func (a *App) registerWindow(name string, w *application.WebviewWindow) {
 
 func (a *App) unregisterWindow(name string) {
 	a.winMu.Lock()
-	defer a.winMu.Unlock()
+	_, existed := a.windows[name]
 	delete(a.windows, name)
 	// 主窗口没了就把指针清掉：OpenDialog / CloseMainWindow 会回退到它，
 	// 拿一个已经销毁的窗口去 Position()/Close() 会出问题。
 	if name == "main" {
 		a.window = nil
 	}
+	left := a.countAppWindowsLocked()
+	names := a.appWindowNamesLocked()
+	a.winMu.Unlock()
+
+	a.restMu.Lock()
+	delete(a.winRest, name)
+	a.restMu.Unlock()
+
+	if existed {
+		log.Printf("[window] 注销 %q，剩余应用窗口 %d 个: %v", name, left, names)
+	}
+	// 最后一个窗口没了就退进程。不能只指望 allowWindowClose / ConfirmWindowClose
+	// 里那两处 quit：它们靠「关之前数一下还有几个窗口」，只要窗口表里多留了一个
+	// 已销毁的条目，lastWindow 就是 false，进程于是变成「一个窗口都没有、还连着
+	// 守护进程」的幽灵（2026-11-05 实测：PID 15708 挂了一晚上，任务管理器里只能
+	// 手动结束，守护进程那边还显示有个 GUI 客户端在线）。
+	if existed && left == 0 {
+		a.scheduleQuit("最后一个应用窗口已关闭", false)
+	}
+}
+
+// scheduleQuit 安排退出进程，所有「该退了」的入口都走这里。
+//
+// lastWindow=true 表示「这次关掉的确实是最后一个应用窗口」，此时允许窗口表里只剩
+// 看不见的残留：v3 关掉最后一个窗口后 HWND 可能还挂着（2026-11-05 实测：
+// 进程还在、owns 一个 visible=False 的 WailsWebviewWindow、守护进程那边显示
+// 一个 GUI 客户端仍在线，任务管理器里只能手动结束）。lastWindow=false 是
+// unregisterWindow 的兜底，要求窗口表真的空了才退。
+//
+// 500ms 后复查是为了「刚关掉又马上建一个」的场合（拖出标签、再启动一次 GUI）；
+// 1.5 秒后的 os.Exit 是最后兜底 —— v3 的 Quit 是 InvokeSync(destroy)，
+// 主线程正在销毁窗口时可能等不到回调，那样进程会一直挂着，而它已经没窗口可显示。
+func (a *App) scheduleQuit(reason string, lastWindow bool) {
+	if a.wailsApp == nil {
+		return
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if lastWindow {
+			if a.anyVisibleAppWindow() {
+				log.Printf("[close] %s，但还有可见窗口 %v，不退", reason, a.appWindowNames())
+				return
+			}
+		} else if n := a.countAppWindows(); n > 0 {
+			log.Printf("[close] %s，但窗口表里还有 %d 个窗口 %v，不退", reason, n, a.appWindowNames())
+			return
+		}
+		log.Printf("[close] %s，退出进程（剩余窗口 %v）", reason, a.appWindowNames())
+		go func() {
+			time.Sleep(1500 * time.Millisecond)
+			if !a.anyVisibleAppWindow() {
+				log.Printf("[close] Quit 没生效（已无可见窗口），强制结束进程")
+				os.Exit(0)
+			}
+		}()
+		a.quit()
+	}()
+}
+
+// anyVisibleAppWindow 报告是否还有**看得见**的应用窗口。
+//
+// 只数可见的：判断「进程还该不该活着」看的是「屏幕上还有没有这个程序的窗口」，
+// 而不是「窗口表里还有没有条目」—— 后者可能留着关到一半的残留。
+func (a *App) anyVisibleAppWindow() bool {
+	a.winMu.Lock()
+	list := make([]*application.WebviewWindow, 0, len(a.windows))
+	for name, w := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			list = append(list, w)
+		}
+	}
+	a.winMu.Unlock()
+	for _, w := range list {
+		if w != nil && w.IsVisible() {
+			return true
+		}
+	}
+	return false
+}
+
+// countAppWindowsLocked 同 countAppWindows，调用方已持有 winMu。
+func (a *App) countAppWindowsLocked() int {
+	n := 0
+	for name := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			n++
+		}
+	}
+	return n
+}
+
+// appWindowNamesLocked 列出应用窗口名（日志/诊断用），调用方已持有 winMu。
+func (a *App) appWindowNamesLocked() []string {
+	out := make([]string, 0, len(a.windows))
+	for name := range a.windows {
+		if name == "main" || strings.HasPrefix(name, "win-") {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (a *App) windowByName(name string) *application.WebviewWindow {
@@ -260,11 +407,45 @@ func (a *App) sessSet(sid, win string) {
 	if a.sessOwner == nil {
 		a.sessOwner = make(map[string]string)
 	}
+	delete(a.sessReleased, sid)
 	if win == "" {
 		delete(a.sessOwner, sid)
 		return
 	}
 	a.sessOwner[sid] = win
+}
+
+// sessRelease 把会话放回「无主」并记下是谁放的（只关标签、线程保留）。
+// 返回 false 表示这个会话本来就不归这个窗口。
+func (a *App) sessRelease(sid, win string) bool {
+	if sid == "" || win == "" {
+		return false
+	}
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sessOwner[sid] != win {
+		return false
+	}
+	delete(a.sessOwner, sid)
+	if a.sessReleased == nil {
+		a.sessReleased = make(map[string]string)
+	}
+	a.sessReleased[sid] = win
+	return true
+}
+
+// sessReleasedFor 返回这个会话是被哪个窗口放手的（"" = 没被放手过）。
+func (a *App) sessReleasedFor(sid string) string {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	return a.sessReleased[sid]
+}
+
+// sessForgetReleased 清掉放手标记：用户显式把它领回来、或者它换了个主人。
+func (a *App) sessForgetReleased(sid string) {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	delete(a.sessReleased, sid)
 }
 
 // sessOfWindow 列出某个窗口名下的全部会话。
@@ -304,6 +485,24 @@ func (a *App) sessPrune(alive map[string]bool) {
 			delete(a.sessOwner, sid)
 		}
 	}
+	for sid := range a.sessReleased {
+		if !alive[sid] {
+			delete(a.sessReleased, sid)
+		}
+	}
+}
+
+// sessClearAll 清空全部窗口的会话归属。
+//
+// 只在**确认守护进程已经没了**时调用（用户点停止、收到 daemon-shutdown 广播、
+// 心跳判定离线且重连失败）：会话是守护进程里的对象，它一走会话就全没了，归属表
+// 再留着只会误导 —— 实测：手动停掉守护进程（界面已显示「守护进程未启用」）后
+// 关窗口，仍会弹「会停止这个窗口里的会话（共 3 个）」，可实际一个都不剩。
+func (a *App) sessClearAll() {
+	a.sessMu.Lock()
+	a.sessOwner = make(map[string]string)
+	a.sessReleased = make(map[string]string)
+	a.sessMu.Unlock()
 }
 
 // winNameFromCtx 取出「正在调用这个方法的窗口名」。
@@ -329,6 +528,78 @@ func (a *App) WhoAmI(ctx context.Context) string {
 	return "(unknown)"
 }
 
+// WindowControl 是无边框窗口右上角三个按钮的入口（minimise / toggle-maximise / close）。
+//
+// 为什么不用运行时的 window.wails.Window：那条路对无边框窗口实测不生效 ——
+// Size / IsMaximised 这类读方法都正常，说明通道是通的，但 ToggleMaximise 调完
+// 窗口纹丝不动。走服务方法还有个好处：Close 会经过 onWindowClosingFor 的
+// 「这个窗口里的会话要不要一起销毁」确认，和点系统关闭按钮完全同一条路。
+//
+// 用 ctx 里的 WindowKey 认领调用方：多窗口时各点各的，不依赖主窗口单例。
+func (a *App) WindowControl(ctx context.Context, action string) string {
+	name := winNameFromCtx(ctx)
+	w := a.windowByName(name)
+	if w == nil {
+		return "窗口不存在"
+	}
+	switch action {
+	case "minimise":
+		// Wails 的 Minimise 在无边框窗口上不落地，直接对原生窗口发 SW_MINIMIZE
+		if !minimiseNative(uintptr(w.NativeWindow())) {
+			w.Minimise()
+		}
+	case "toggle-maximise":
+		a.toggleMaximise(w, name)
+	case "close":
+		w.Close()
+	default:
+		return "未知操作: " + action
+	}
+	return name
+}
+
+// winRect 是窗口在「最大化之前」的位置和大小（DIP）。
+type winRect struct{ x, y, w, h int }
+
+// toggleMaximise 在「铺满工作区」和「最大化之前的尺寸」之间来回切。
+//
+// 不用 Wails 自己的 Maximise：frameless 窗口上那个 ShowWindow(SW_MAXIMIZE) 只
+// 把状态位置上了，尺寸一动不动。自己按屏幕工作区摆还有额外好处 —— 铺的是去掉
+// 任务栏的区域，和原生最大化一致，也不会因为多显示器跑错屏幕。
+func (a *App) toggleMaximise(w *application.WebviewWindow, name string) {
+	a.restMu.Lock()
+	defer a.restMu.Unlock()
+	if a.winRest == nil {
+		a.winRest = make(map[string]winRect)
+	}
+	if b, ok := a.winRest[name]; ok {
+		delete(a.winRest, name)
+		w.SetPosition(b.x, b.y)
+		w.SetSize(b.w, b.h)
+		return
+	}
+	x, y := w.Position()
+	width, height := w.Size()
+	// 先记原来的位置再铺满：铺满之后 Position/Size 就查不到原值了
+	a.winRest[name] = winRect{x, y, width, height}
+	scr, err := w.GetScreen()
+	if err != nil || scr == nil {
+		return
+	}
+	wa := scr.WorkArea
+	w.SetPosition(wa.X, wa.Y)
+	w.SetSize(wa.Width, wa.Height)
+}
+
+// IsMaximised 报告调用方窗口是否被本程序铺满了工作区（前端切「还原」图标用）。
+func (a *App) IsMaximised(ctx context.Context) bool {
+	name := winNameFromCtx(ctx)
+	a.restMu.Lock()
+	_, ok := a.winRest[name]
+	a.restMu.Unlock()
+	return ok
+}
+
 // OpenProbeWindow 打开（或聚焦）多窗口验证窗口。
 func (a *App) OpenProbeWindow() string {
 	const name = "probe"
@@ -338,11 +609,13 @@ func (a *App) OpenProbeWindow() string {
 		return name
 	}
 	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:   name,
-		Title:  "多窗口原型",
-		Width:  560,
-		Height: 480,
-		URL:    "/?w=probe",
+		Name:      name,
+		Title:     "多窗口原型",
+		Width:     560,
+		Height:    480,
+		Frameless: true,
+		Windows:   framelessChrome,
+		URL:       "/?w=probe",
 	})
 	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		a.unregisterWindow(name)
@@ -405,7 +678,61 @@ func (a *App) emitSession(sid, name string, data ...any) {
 	// 调试面板窗口（?w=session）是同一个会话的另一个观察者，照旧收一份
 	if sid != "" {
 		a.sendFrame("session-"+sid, frame)
+		// 虚窗文档也吃一份：串口监视器/转发监视器换成按像素取窗口之后，
+		// 前端不再自己存 historyCache，这份得在 Go 里攒起来。
+		if f, ok := liveFrameFrom(name, payload); ok {
+			a.logview.appendSession(sid, f)
+		}
 	}
+}
+
+// liveFrameFrom 把一条数据帧的参数翻成虚窗文档的输入。
+//
+// 只认四个数据方向（rx/tx/1/2）与 system：别的帧（dialog-result、tab-drop-* 之类）
+// 走的是同一个 Stream，不能混进日志文档。
+func liveFrameFrom(name string, payload any) (stlogview.FrameIn, bool) {
+	var dir uint8
+	switch name {
+	case "rx":
+		dir = sessionfile.DirRx
+	case "tx":
+		dir = sessionfile.DirTx
+	case "1":
+		dir = sessionfile.DirP1
+	case "2":
+		dir = sessionfile.DirP2
+	case "system", "sys":
+		dir = sessionfile.DirSystem
+	default:
+		return stlogview.FrameIn{}, false
+	}
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return stlogview.FrameIn{}, false
+	}
+	hexStr, _ := m["hex"].(string)
+	if hexStr == "" {
+		return stlogview.FrameIn{}, false
+	}
+	// 系统帧在协议和历史里存的是**文本**（daemon/history.go 的注释：系统帧存
+	// text 而不是 hex），而 stlogview 的 FrameIn.Hex 一律是十六进制串。这里补
+	// 一次转码，否则系统消息会被 hex.DecodeString 判成非法输入、解成空 payload，
+	// 界面上只剩一行「Sys ~0B」没有正文。
+	if dir == sessionfile.DirSystem {
+		hexStr = hex.EncodeToString([]byte(hexStr))
+	}
+	f := stlogview.FrameIn{Dir: dir, Hex: hexStr}
+	if v, ok := m["tsMs"].(int64); ok {
+		f.Ts = v
+	} else if v, ok := m["ts"].(int64); ok {
+		f.Ts = v
+	} else if v, ok := m["tsMs"].(float64); ok {
+		f.Ts = int64(v)
+	}
+	if o, ok := m["origin"].(string); ok {
+		f.Origin = o
+	}
+	return f, true
 }
 
 // sendFrame 把一帧交给指定窗口的 Stream 连接。
@@ -493,11 +820,13 @@ func (a *App) OpenSessionWindow(sessionID string) string {
 		return name
 	}
 	w := a.wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:   name,
-		Title:  "会话 " + sessionID,
-		Width:  720,
-		Height: 560,
-		URL:    "/?w=session&sid=" + url.QueryEscape(sessionID),
+		Name:      name,
+		Title:     "会话 " + sessionID,
+		Width:     720,
+		Height:    560,
+		Frameless: true,
+		Windows:   framelessChrome,
+		URL:       "/?w=session&sid=" + url.QueryEscape(sessionID),
 	})
 	w.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		a.unregisterWindow(name)
@@ -531,11 +860,18 @@ const (
 	//
 	// 要落在标签上：按下标签时鼠标在标签上，窗口跟过来以后光标也应该还在标签上，
 	// 否则一拖出来光标就跑到标题栏/内容区，手感是「页面从手里飞了」。
-	// 窗口内坐标 = 标题栏（约 31px）+ 标签栏顶部 + 半个标签高度；
+	// 窗口内坐标 = 标签栏顶部 + 半个标签高度（无边框窗口没有系统标题栏）。
 	// x 取第一个标签的左侧内缩，避免落在横向滚动箭头上。
 	tearOffGrabX = 24
-	tearOffGrabY = 76
+	tearOffGrabY = 47
 )
+
+// framelessChrome 是无边框窗口的 Windows 专有选项：去掉 Win11 的圆角与投影。
+//
+// 不设它的话系统仍会给无边框窗口留一圈 DWM 圆角和投影 —— 看起来像「边框没裁
+// 干净」，最大化时四周还会露出一条桌面。标题栏交给前端画（见 index.html 的
+// .win-ctrl），所以窗口本身用 Frameless。
+var framelessChrome = application.WindowsWindow{DisableFramelessWindowDecorations: true}
 
 func (a *App) createWindowNamed(name, title string, hidden bool, width, height int) (*application.WebviewWindow, error) {
 	if a.wailsApp == nil {
@@ -554,6 +890,8 @@ func (a *App) createWindowNamed(name, title string, hidden bool, width, height i
 		Height:    height,
 		MinWidth:  320,
 		MinHeight: 200,
+		Frameless: true,
+		Windows:   framelessChrome,
 		Hidden:    hidden, // 拖动中先隐藏，设好 no-activate 再显示，避免闪一下抢焦点
 		URL:       "/",
 	})
@@ -935,12 +1273,13 @@ func absInt(v int) int {
 	return v
 }
 
-// tabBandHeight 是「窗口顶部属于标签栏的那一带」的高度（标题栏 + 菜单栏 + 标签栏）。
+// tabBandHeight 是「窗口顶部属于标签栏的那一带」的高度（菜单栏 + 标签栏）。
 //
 // 拖拽落点落在这条带子里 = 插到那排标签里；落在下面（内容区）不算。
-// 96 px 是按现有布局量的：标题栏 ~40 + 菜单栏 ~22 + 标签栏 ~34。
+// 68 px 是按现有布局量的：菜单栏 32 + 标签栏 36（单行标签；双行再加 18）。
+// （无边框窗口没有系统标题栏，原来那 40 px 已经拿掉。）
 // 这里没法做精确的 DOM 命中（松手时源页面拿不到坐标），所以用布局常量近似。
-const tabBandHeight = 96
+const tabBandHeight = 68
 
 // tabBandWindowAt 返回「屏幕坐标 (x,y) 落在哪个窗口的标签栏带上」，没有则返回空。
 //
@@ -1206,58 +1545,55 @@ func (a *App) allowWindowClose(name string) bool {
 
 	sids := a.sessOfWindow(name)
 	cfg := a.LoadAppSettings()
-	// 「要不要停守护进程」只对**最后一个窗口**有意义。
-	//
-	// decideClose 数的是守护进程上的客户端数，而所有窗口共用同一个 GUI 客户端 ——
-	// 多窗口之后 clients 永远是 1，照它判定的话关掉任意一个窗口都会把守护进程停掉，
-	// 别的窗口里的串口跟着全断（实测踩到：关 win-4，main 的会话也死了）。
 	lastWindow := a.countAppWindows() <= 1
+	// 守护进程那半：四档见 decideClose。0.9.1 之前它只对**最后一个窗口**有意义
+	// （多窗口共用一个 GUI 客户端，按客户端数判会误停别人的串口），现在 always /
+	// last / ask 三档都是用户在设置里显式选的，所以每个窗口关闭时都要判一遍。
+	// last 档本身仍然只在「自己是守护进程上最后一个客户端」时才动，关中间那个
+	// 窗口不会影响守护进程。
 	action := closeProceed
-	if lastWindow {
+	if cfg.ShutdownDaemonMode != "" && cfg.ShutdownDaemonMode != "never" {
 		clients := a.GetClients()
-		action = decideClose(cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, clients != nil, len(clients))
+		action = decideClose(cfg.ShutdownDaemonMode, clients != nil, len(clients))
 	}
 	// 这里的判定结果只在一处出现，不打日志的话「为什么没弹确认框」完全无从查起
 	// （实测踩过：clients 多一个就会静默放行）。
-	log.Printf("[close] window=%q sessions=%d lastWindow=%v mode=%s warn=%v -> action=%d",
-		name, len(sids), lastWindow, cfg.ShutdownDaemonMode, cfg.ShutdownDaemonWarn, action)
+	log.Printf("[close] window=%q sessions=%d lastWindow=%v mode=%s action=%d windows=%v",
+		name, len(sids), lastWindow, cfg.ShutdownDaemonMode, action, a.appWindowNames())
 
-	// 要停守护进程但用户没让「不再提醒」：停下来即可，但会话也要跟着没了，
-	// 这时若窗口里还有会话，下面照样要确认。
-	stopDaemon := action == closeStopDaemon || action == closeConfirm
-
-	// 「关窗口时会话怎么处理」的默认动作（设置 → 标签页）。
-	// transfer 只有在确实还有别的窗口时才成立，否则退化成 destroy。
-	configured := cfg.WindowCloseAction
-	if configured != "destroy" && configured != "transfer" {
+	// 关窗口时会话怎么处理：和关标签页**共用** TabCloseAction（设置 → 标签页）。
+	//   ask     弹框三选一
+	//   tab     只关窗口，会话放回无主（线程继续跑、串口不断）
+	//   process 连线程一起关（断串口）
+	configured := cfg.TabCloseAction
+	if configured != "tab" && configured != "process" {
 		configured = "ask"
 	}
 	closeMode := configured
-	canTransfer := a.pickTransferTarget(name) != ""
-	degraded := false
-	if closeMode == "transfer" && !canTransfer {
-		closeMode = "destroy"
-		degraded = true
+	if lastWindow && closeMode == "ask" {
+		closeMode = lastWindowCloseMode(action)
 	}
 
-	// destroy / transfer 是用户在设置里明确选过的，不再追问（设置页那条文案本来
-	// 就叫「直接销毁（会断串口）」）；只有 ask、以及「想转交却没地方转」这种
-	// 退化情形才弹会话确认框。对话框里勾了「记住选择」写的就是这个设置。
-	needConfirm := action == closeConfirm || windowCloseNeedsConfirm(configured, len(sids), degraded)
+	// ask 档是「停下来之前先问一句」，tab / process 是用户在设置里明确选过的，
+	// 只有 ask 才弹会话确认框。「记住选择」写的就是这个设置（和关标签页共用）。
+	needConfirm := action == closeConfirm
+	if !lastWindow {
+		needConfirm = needConfirm || windowCloseNeedsConfirm(configured, len(sids))
+	}
 
 	if !needConfirm {
+		stopDaemon := action == closeStopDaemon
 		if len(sids) > 0 {
 			switch closeMode {
-			case "transfer":
-				a.transferWindowSessions(name)
-			case "destroy":
-				// 用户在设置里明确选了「直接销毁」，或者在确认框里勾了「记住选择」
-				// 选过销毁：这里就是最终决定，真把会话销毁掉。
-				// 以前这条分支只处理 transfer，destroy 全靠确认框走
-				// ConfirmWindowClose；现在 destroy 不再弹框，漏掉这一步的话会话
-				// 会变成守护进程上的孤儿 —— 标签没了、串口却一直开着（实测踩到）。
+			case "tab":
+				n := a.releaseWindowSessions(name)
+				log.Printf("[close] 窗口 %q 按设置仅关闭窗口，%d 个会话放回无主", name, n)
+			case "process":
+				// 用户在设置里明确选了「同时关闭线程」，或者在确认框里勾了「记住选择」：
+				// 这里就是最终决定，真把会话销毁掉。漏掉这一步的话会话会变成守护进程
+				// 上的孤儿 —— 标签没了、串口却一直开着（实测踩到）。
 				n := a.destroyWindowSessions(name)
-				log.Printf("[close] 窗口 %q 按设置直接销毁 %d 个会话", name, n)
+				log.Printf("[close] 窗口 %q 按设置销毁 %d 个会话", name, n)
 			}
 		}
 		if stopDaemon {
@@ -1267,10 +1603,7 @@ func (a *App) allowWindowClose(name string) bool {
 		// 这里是「放行这次关闭」，不要再调 Close()（会二次触发关闭）；
 		// 但最后一个窗口还是要显式退程序，否则窗口没了进程还在。
 		if lastWindow {
-			go func() {
-				time.Sleep(300 * time.Millisecond)
-				a.quit()
-			}()
+			a.scheduleQuit("最后一个窗口关闭（无需确认）", true)
 		}
 		return true
 	}
@@ -1290,32 +1623,40 @@ func (a *App) allowWindowClose(name string) bool {
 	a.pendingCloseWin[name] = time.Now()
 	a.closeWinMu.Unlock()
 
+	// 帧里把「会话怎么问」「守护进程怎么问」拆成两个独立字段：前端可以只问其中一件，
+	// 也可以两件连着问（两个档位都是 ask 的场合）。
 	a.sendFrame(name, map[string]any{"e": "window-close-confirm", "d": map[string]any{
 		"sessions":    len(sids),
-		"stopDaemon":  stopDaemon,
+		"closeAction": closeMode,                 // ask / tab / process
+		"lastWindow":  lastWindow,                // 最后一个窗口：只问守护进程，不问线程
+		"askDaemon":   action == closeConfirm,    // 先问一句「要不要顺便停守护进程」
+		"daemonStop":  action == closeStopDaemon, // 不问也一定要停（last / always 档）
 		"mode":        cfg.ShutdownDaemonMode,
-		"closeAction": closeMode, // ask / destroy
-		"canTransfer": canTransfer,
 	}})
 	return false
 }
 
 // ConfirmWindowClose 由前端在用户确认关闭窗口后调用。
 //
-// mode: destroy 销毁本窗口的会话 / transfer 把它们转到别的窗口 —— 后者不销毁
-// 任何会话，串口连接不断，只是换了个窗口显示。
+// mode 用 TabCloseAction 的取值：tab 只关窗口（会话放回无主）/ process 连线程一起关；
+// stopDaemon 是用户在「每次询问」那一档里回答的「要 / 不要停守护进程」。
 func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bool) error {
 	name := winNameFromCtx(ctx)
 	if name == "" {
 		return fmt.Errorf("无法确定发起调用的窗口")
 	}
+	// mode 用的就是 TabCloseAction 的取值（关窗口和关标签页共用一套策略）：
+	//   tab     = 只关窗口，会话放回无主
+	//   process = 连线程一起关（断串口）
+	// 认不出来的值按 process：宁可多关一次，也别在界面上显示「已关闭」而串口
+	// 还开着、线程却没有主人。
 	n := 0
-	transferredTo := ""
-	if mode == "transfer" {
-		transferredTo = a.transferWindowSessions(name)
-	}
-	if transferredTo == "" {
-		// 没别的地方可去（或者用户选的就是销毁）：照旧销毁
+	if mode == "tab" {
+		n = a.releaseWindowSessions(name)
+	} else {
+		if mode != "process" {
+			log.Printf("[close] 窗口 %q 收到未知的关闭方式 %q，按 process 处理", name, mode)
+		}
 		n = a.destroyWindowSessions(name)
 	}
 	if stopDaemon {
@@ -1334,8 +1675,8 @@ func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bo
 	a.forcedWindows[name] = true
 	delete(a.pendingCloseWin, name)
 	a.closeWinMu.Unlock()
-	log.Printf("[close] 窗口 %q 确认关闭：mode=%s 销毁会话 %d 个，转到窗口 %q，停守护进程=%v，最后一个窗口=%v",
-		name, mode, n, transferredTo, stopDaemon, lastWindow)
+	log.Printf("[close] 窗口 %q 确认关闭：mode=%s 处理会话 %d 个，停守护进程=%v，最后一个窗口=%v",
+		name, mode, n, stopDaemon, lastWindow)
 
 	// 异步关：这个调用是从该窗口的 JS 里发出来的，同步 Close 会把正在回包的
 	// IPC 连接一起带走，前端可能连回执都收不到。
@@ -1346,9 +1687,8 @@ func (a *App) ConfirmWindowClose(ctx context.Context, mode string, stopDaemon bo
 			a.window.Close()
 		}
 		if lastWindow {
-			// 留一点时间让窗口真正销毁（Quit 会强制关掉剩余窗口）
-			time.Sleep(300 * time.Millisecond)
-			a.quit()
+			// 关窗是异步的，scheduleQuit 内部会留时间复查（见那里的注释）
+			a.scheduleQuit("最后一个窗口确认关闭", true)
 		}
 	}()
 	return nil
@@ -1372,13 +1712,14 @@ func (a *App) CancelWindowClose(ctx context.Context) {
 func (a *App) countAppWindows() int {
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
-	n := 0
-	for name := range a.windows {
-		if name == "main" || strings.HasPrefix(name, "win-") {
-			n++
-		}
-	}
-	return n
+	return a.countAppWindowsLocked()
+}
+
+// appWindowNames 列出当前的应用窗口名（diagnostics 用）。
+func (a *App) appWindowNames() []string {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	return a.appWindowNamesLocked()
 }
 
 // windowClosingCleanup 在窗口真的关掉时收尾：把它的会话归属清掉（会话本身
@@ -1408,50 +1749,30 @@ func (a *App) destroyWindowSessions(name string) int {
 	return n
 }
 
-// pickTransferTarget 选一个「接盘」窗口：优先 main，否则编号最小的 win-N。
+// releaseWindowSessions 把某个窗口名下的会话全部放回「无主」，但**不销毁**。
 //
-// 为什么优先 main：它是启动就在的那个，用户对它的位置最熟；转过去的标签
-// 出现在最稳的窗口里，不会跟着某个临时窗口一起被关掉。
-func (a *App) pickTransferTarget(from string) string {
-	a.winMu.Lock()
-	defer a.winMu.Unlock()
-	if from != "main" {
-		if _, ok := a.windows["main"]; ok {
-			return "main"
-		}
-	}
-	best := ""
-	for name := range a.windows {
-		if name == from || !strings.HasPrefix(name, "win-") {
+// 「关闭窗口 → 仅关闭窗口（线程保留）」用：串口继续开、历史继续记，之后可以从
+// 任意窗口的「新建会话 → 从已打开线程进入」接回来。
+//
+// 为什么用 sessRelease 而不是 sessDropWindow：关闭是异步的（前端确认 → Close），
+// 这中间这个窗口还会同步一次列表；直接摘掉归属的话，它会按「无主就认领」把刚
+// 放手的会话又领回来（未读标签闪一下）。sessRelease 顺手记下「是本窗口放的」，
+// 本窗口就不会自己领回去。
+func (a *App) releaseWindowSessions(name string) int {
+	sids := a.sessOfWindow(name)
+	n := 0
+	for _, sid := range sids {
+		if !a.sessRelease(sid, name) {
 			continue
 		}
-		if best == "" || name < best {
-			best = name
-		}
-	}
-	return best
-}
-
-// transferWindowSessions 把某个窗口名下的会话整体转给另一个窗口，返回目标窗口名。
-//
-// 和 destroyWindowSessions 的区别：**不销毁任何会话**，串口连接不断，只是换了个
-// 窗口显示。转完之后两边都要重同步：目标窗口会为新会话建标签，源窗口（如果还活着）
-// 会把自己的标签摘掉。
-func (a *App) transferWindowSessions(from string) string {
-	target := a.pickTransferTarget(from)
-	if target == "" {
-		log.Printf("[close] 窗口 %q 没有可转交的目标窗口", from)
-		return ""
-	}
-	sids := a.sessDropWindow(from)
-	for _, sid := range sids {
-		a.sessSet(sid, target)
+		// 这个窗口不再看这个会话了：解码协程跟着停，免得它一直在、没人消费。
+		a.StopTabDecoder(sid)
+		n++
 	}
 	if len(sids) > 0 {
-		log.Printf("[close] 窗口 %q 的 %d 个会话转到窗口 %q: %v", from, len(sids), target, sids)
+		log.Printf("[close] 窗口 %q 放手会话 %d/%d: %v", name, n, len(sids), sids)
 	}
-	a.emit("sessions-changed", map[string]any{"reason": "transfer", "from": from, "to": target})
-	return target
+	return n
 }
 
 // closeAction 是「关窗口时怎么处理守护进程」的判定结果。
@@ -1465,7 +1786,13 @@ const (
 
 // decideClose 是关窗时守护进程部分的判定核心，单独拆出来是为了能直接测各种组合。
 //
-// mode: never 从不 / last 最后一个客户端才关 / always 总是关。
+// mode 四档（见 AppSettings.ShutdownDaemonMode）：
+//
+//	never   只关自己，守护进程不动
+//	last    自己是守护进程上最后一个客户端时才关，不询问
+//	always  每次关窗口都关，不询问
+//	ask     每次都问（关掉守护进程会断掉所有串口，所以默认是这个）
+//
 // connected: 本次是否真的连着守护进程（没连上就没什么可关的）。
 // clientCount: 守护进程上的客户端总数（含自己）。
 //
@@ -1473,39 +1800,49 @@ const (
 // 旁边还有个 CLI/MCP 连着」时关窗口会把它们一起断掉。当前 source 只有
 // gui / cli / mcp 三种（protocol.go:91），这里不按 source 过滤，将来加 web
 // 客户端也自动算进来。
-func decideClose(mode string, warn, connected bool, clientCount int) closeAction {
-	if mode != "last" && mode != "always" {
-		return closeProceed // never（含旧配置缺这个键）
-	}
+func decideClose(mode string, connected bool, clientCount int) closeAction {
 	if !connected {
 		return closeProceed
 	}
-	if mode == "last" && clientCount > 1 {
-		return closeProceed // 还有别的客户端，它/它们还要用
-	}
-	if !warn {
+	switch mode {
+	case "ask":
+		return closeConfirm
+	case "always":
+		return closeStopDaemon
+	case "last":
+		if clientCount > 1 {
+			return closeProceed // 还有别的客户端，它/它们还要用
+		}
 		return closeStopDaemon
 	}
-	return closeConfirm
+	return closeProceed // never（含旧配置缺这个键）
+}
+
+// lastWindowCloseMode 决定「最后一个窗口」关掉时会话怎么处理。
+//
+// 最后一个窗口一关程序就退了，这时不再单独问线程（见「关闭窗口流程」文档）：
+// 守护进程要停，会话跟着一起没（process）；守护进程不停，会话放回无主（tab），
+// 下次启动 GUI 能从「从已打开线程进入」接回来。
+func lastWindowCloseMode(action closeAction) string {
+	if action == closeStopDaemon || action == closeConfirm {
+		return "process"
+	}
+	return "tab"
 }
 
 // windowCloseNeedsConfirm 决定「有会话时关这个窗口要不要弹确认框」。
 //
-// 和设置页的三档文案对齐（设置 → 标签页 → 窗口里的会话）：
-//   - ask      每次都问
-//   - destroy  用户明确选了「直接销毁（会断串口）」，不再追问
-//   - transfer 不破坏任何东西，直接转交
+// 判据就是「关闭标签页时」那一档（关窗口和关标签页共用 TabCloseAction）：
+//   - ask     每次都问
+//   - tab     只关窗口、会话放回无主，不破坏任何东西，不再追问
+//   - process 用户明确选了「连线程一起关（断串口）」，不再追问
 //
-// degraded = 设置是 transfer、但这会儿没有别的窗口可转（退化成销毁）。这种情形
-// 必须问：用户期望的是「转走」，不是「悄悄把串口断掉」。
-func windowCloseNeedsConfirm(configured string, sessions int, degraded bool) bool {
+// 认不出来的值按 ask 算（LoadAppSettings 也会把非法值归一成 ask）。
+func windowCloseNeedsConfirm(configured string, sessions int) bool {
 	if sessions <= 0 {
 		return false
 	}
-	if degraded {
-		return true
-	}
-	return configured != "destroy" && configured != "transfer"
+	return configured != "tab" && configured != "process"
 }
 
 // QuitApp 退出整个程序（所有窗口一起关），保留给「彻底退出」这类入口。
@@ -1553,6 +1890,8 @@ func (a *App) stopDaemonQuiet() {
 	ec := a.eventConn
 	a.eventConn = nil
 	a.daemonMu.Unlock()
+	// 守护进程要停了：它上面的会话随之消失，归属表一并清掉（关窗口时不再按旧会话数弹框）
+	a.sessClearAll()
 	if ec == nil {
 		return
 	}
@@ -1598,6 +1937,9 @@ func (a *App) onDaemonDisconnected(ec *client.DaemonClient) {
 		return
 	}
 
+	// 重连也失败 = 守护进程真没了，会话跟着没了：先清归属再报离线，
+	// 免得界面上还留着「这个窗口有 3 个会话」的假象（关窗口时会据此弹确认框）。
+	a.sessClearAll()
 	a.emit("daemon-offline", map[string]any{"reason": "heartbeat"})
 }
 
@@ -1721,6 +2063,9 @@ func (a *App) StopDaemon() error {
 		a.eventConn = nil
 	}
 	a.daemonMu.Unlock()
+	// 用户主动停了守护进程：会话跟着消失，归属表一并清掉
+	// （否则界面已显示「守护进程未启用」，关窗口还会弹「会停止 3 个会话」）
+	a.sessClearAll()
 
 	if ec != nil {
 		client.CallOnce(contract.Shutdown, nil, "gui")
@@ -1901,6 +2246,22 @@ func (a *App) SetSessionDisplay(processID string, display map[string]any) error 
 	return err
 }
 
+// SetSessionSend 把一条会话的发送框状态（文本草稿 / Hex 草稿 / 当前格式 /
+// 多字符串预设）记到守护进程的会话上；工程会话由守护进程再写进 settings.json。
+//
+// 存草稿是「尽力而为」：守护进程没在跑、会话刚被别的窗口拿走，都不该打断输入，
+// 所以这里把错误吞掉（前端也不显示提示）。
+func (a *App) SetSessionSend(processID string, send map[string]any) error {
+	if processID == "" {
+		return nil
+	}
+	_, err := a.call(contract.SessionSetSend, map[string]any{
+		"processId": processID,
+		"send":      send,
+	})
+	return err
+}
+
 // SaveDisplayDefaults 把新的默认值写进 daemon.ini 的 [display] 段。
 //
 // 只有守护进程能写 daemon.ini（单写者），所以走 IPC。IPC 只认字符串值
@@ -1971,6 +2332,10 @@ func (a *App) GetSessionsForWindow(ctx context.Context) []map[string]any {
 		case owner == win:
 			out = append(out, s)
 		case owner == "" && claimUnowned:
+			// 本窗口刚「仅关闭标签」放手的会话：别自己领回来，否则标签关不掉。
+			if a.sessReleasedFor(sid) == win {
+				continue
+			}
 			if a.sessClaim(sid, win) {
 				log.Printf("[window] 会话 %s 无主，认领给窗口 %q", sid, win)
 				out = append(out, s)
@@ -2014,6 +2379,12 @@ func (a *App) fetchSessions() []map[string]any {
 		if v, ok := pmap["display"]; ok {
 			entry["display"] = v
 		}
+		if v, ok := pmap["send"]; ok {
+			entry["send"] = v
+		}
+		if v, ok := pmap["fileStats"]; ok {
+			entry["fileStats"] = v
+		}
 		if viewers, ok := pmap["viewers"]; ok {
 			entry["viewers"] = viewers
 		}
@@ -2026,23 +2397,24 @@ func (a *App) fetchSessions() []map[string]any {
 		if ringName, ok := pmap["sendRingName"]; ok {
 			entry["sendRingName"] = ringName
 		}
-		if mode, _ := pmap["mode"].(string); mode == "forward" {
-			entry["portName"] = pmap["portName"]
-			entry["baud"] = pmap["baud"]
-			entry["dataBits"] = pmap["dataBits"]
-			entry["stopBits"] = pmap["stopBits"]
-			entry["parity"] = pmap["parity"]
-			entry["forwardPortB"] = pmap["forwardPortB"]
-			entry["forwardBaudB"] = pmap["forwardBaudB"]
-			entry["forwardDataBitsB"] = pmap["forwardDataBitsB"]
-			entry["forwardStopBitsB"] = pmap["forwardStopBitsB"]
-			entry["forwardParityB"] = pmap["forwardParityB"]
-		} else if status == "connected" {
-			entry["portName"] = pmap["portName"]
-			entry["baud"] = pmap["baud"]
-			entry["dataBits"] = pmap["dataBits"]
-			entry["stopBits"] = pmap["stopBits"]
-			entry["parity"] = pmap["parity"]
+		// 串口参数：只要守护进程给了就带上，不再只认「已连接」和「转发」。
+		//
+		// 以前只给这两类，于是「已声明但还没连」的会话（推送回来的工程、CLI/MCP
+		// 建的空闲线程）在 GUI 里既没有端口行也没有 8N1 —— 悬浮窗画不出参数行，
+		// 状态栏速率百分比的分母（波特率）还是 0，工具栏也停在默认值上。
+		mode, _ := pmap["mode"].(string)
+		if _, ok := pmap["portName"]; ok {
+			for _, k := range []string{"portName", "baud", "dataBits", "stopBits", "parity", "flowControl"} {
+				entry[k] = pmap[k]
+			}
+		}
+		if mode == "forward" {
+			for _, k := range []string{
+				"forwardPortB", "forwardBaudB", "forwardDataBitsB",
+				"forwardStopBitsB", "forwardParityB", "forwardFlowControlB",
+			} {
+				entry[k] = pmap[k]
+			}
 		}
 		out = append(out, entry)
 	}
@@ -2511,6 +2883,74 @@ func (a *App) GetRenderEngine() string {
 	return runtime.GOOS
 }
 
+// 关于页的两个外链。写成常量、由后端自己打开 —— 前端一旦能把任意字符串
+// 塞进 openURL，就等于把 shell 交出去了。
+const (
+	aboutRepoURL   = "https://github.com/nienieai/serial-debugger"
+	aboutIssuesURL = "https://github.com/nienieai/serial-debugger/issues"
+)
+
+// GetBuildInfo 返回构建信息（构建时间 / Git 提交 / Go 版本），关于页「构建」一行用。
+//
+// 取自 runtime/debug 的 VCS 信息（Go 1.18+ 在 git 仓库里 go build 会自动打进去），
+// 不靠构建脚本传 ldflags —— 那种做法一旦脚本漏改，关于页显示的就是假的。
+// 拿不到 VCS 信息时（不在仓库里构建）只回 Go 版本，前端按空值处理。
+func (a *App) GetBuildInfo() map[string]string {
+	out := map[string]string{"go": runtime.Version()}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return out
+	}
+	if bi.GoVersion != "" {
+		out["go"] = bi.GoVersion
+	}
+	for _, d := range bi.Deps {
+		switch d.Path {
+		case "github.com/wailsapp/wails/v3":
+			out["wails"] = d.Version
+		case "go.bug.st/serial":
+			out["serial"] = d.Version
+		}
+	}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev := s.Value
+			if len(rev) > 7 {
+				rev = rev[:7]
+			}
+			out["commit"] = rev
+		case "vcs.time":
+			if t, err := time.Parse(time.RFC3339, s.Value); err == nil {
+				out["time"] = t.Local().Format("2006-01-02 15:04")
+			} else {
+				out["time"] = s.Value
+			}
+		case "vcs.modified":
+			if s.Value == "true" {
+				out["dirty"] = "1"
+			}
+		}
+	}
+	return out
+}
+
+// OpenProjectPage 打开项目主页。
+func (a *App) OpenProjectPage() map[string]any {
+	if err := openURL(aboutRepoURL); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true}
+}
+
+// OpenIssuesPage 打开问题反馈页。
+func (a *App) OpenIssuesPage() map[string]any {
+	if err := openURL(aboutIssuesURL); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return map[string]any{"ok": true}
+}
+
 // GetProtocolVersion 返回本客户端使用的 IPC 协议版本（MAJOR.MINOR.PATCH）。
 // 关于页要显示它，别再在 JS 里硬编码 —— 硬编码的那份必然和守护进程报的漂移。
 func (a *App) GetProtocolVersion() string {
@@ -2826,9 +3266,24 @@ func (a *App) TriggerSend(processID string) error {
 
 // ---- devtools ----
 
-// OpenDevTools toggles the WebView2 DevTools window.
-// Requires the GUI to be built with `wails build -devtools`.
-func (a *App) OpenDevTools() {
+// OpenDevTools 打开当前窗口的 WebView2 开发者工具。
+//
+// 需要 dev 构建（build.ps1 默认带 `devtools` tag）；production 构建里
+// Wails 把 DevTools 关掉了（openDevTools 是空实现、AreDevToolsEnabled(false)），
+// 调了也不会有反应。
+func (a *App) OpenDevTools(ctx context.Context) {
+	if a.wailsApp == nil {
+		return
+	}
+	w := a.windowByName(winNameFromCtx(ctx))
+	if w == nil {
+		w = a.window
+	}
+	if w != nil {
+		w.OpenDevTools()
+		return
+	}
+	// 兜底：没有窗口对象时模拟 Ctrl+Shift+F12（老路子）
 	openDevToolsWindow()
 }
 
@@ -3390,6 +3845,11 @@ func (a *App) pollDaemonEvents(ec *client.DaemonClient) {
 		case msg, ok := <-events:
 			if !ok {
 				return
+			}
+			// 守护进程正常关闭：它上面的会话已经全部销毁，归属表立刻清掉。
+			// 只等心跳那条路（最长 ~6s）的话，这期间关窗口会按旧会话数弹确认框。
+			if msg.Event == "daemon-shutdown" {
+				a.sessClearAll()
 			}
 			// Route directional data events to per-tab decode workers.
 			switch msg.Event {

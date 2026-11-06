@@ -61,10 +61,15 @@ func latestSessionDir(dir string) string {
 // 对 .log 做的事。v2 起录制只写会话目录，重启后的历史就从这里恢复。
 //
 // 系统帧（dir=0）在历史包里存的是文本而不是 hex，这里按同样规则还原。
-func loadSessionIntoRing(rb *ringbuf.RingBuffer, dir string) (int, error) {
+//
+// 返回值除了帧数，还有文件自带的四个字节合计：rx/tx 是单端口会话的口径，
+// p1/p2 是转发会话的口径（A→B / B→A）。转发录制的统计块只累计 rx/tx 两列，
+// 而转发帧的 dir 是 P1/P2、不计入那两列 —— 所以 p1/p2 只能在这里按帧现加，
+// 否则推送一个转发工程回来，浮窗和状态栏的 A→B / B→A 永远是 0。
+func loadSessionIntoRing(rb *ringbuf.RingBuffer, dir string) (frames int, rx, tx, p1, p2 int64, err error) {
 	info, err := sessionfile.ReadSession(dir)
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, 0, 0, err
 	}
 	count := 0
 	for i := range info.Frames {
@@ -77,11 +82,13 @@ func loadSessionIntoRing(rb *ringbuf.RingBuffer, dir string) (int, error) {
 		}
 		pkt := encodeHistoryPacket(int64(f.Ts), hexData, dirByteToName(f.Dir), f.OriginStr)
 		if !rb.WriteEvict(pkt) {
-			return count, fmt.Errorf("ring buffer 写入失败（第 %d 条）", count)
+			return count, 0, 0, 0, 0, fmt.Errorf("ring buffer 写入失败（第 %d 条）", count)
 		}
 		count++
 	}
-	return count, nil
+	// 文件自己的收发合计：回放会话没有实时流量，浮窗里要显示的就是这几个数。
+	return count, int64(info.RxTotal), int64(info.TxTotal),
+		int64(info.P1Total), int64(info.P2Total), nil
 }
 
 // 历史落盘的**默认值**：新进程是否把数据写进 history/*.log。

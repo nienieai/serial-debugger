@@ -3,6 +3,8 @@
 > 适用对象：本仓库所有文档的作者（README、构建文档、架构文档、FAQ、贡献指南等），尤其是后续各阶段自动生成文档的 Agent。
 > 本指南是各文档产出 Agent 的**唯一风格依据**：先读本指南，再写文档；写完对照第 6 节检查清单自检。
 
+> ⚠️ **它是外来模板参考，不是本仓库的现状描述**：文中的 `docs/build.md`、`docs/architecture.md`、`docs/faq.md`、`internal/...` 等路径都是「文档该放哪」的**示例**——本仓库实际把架构与构建文档放在根目录（[ARCHITECTURE.md](ARCHITECTURE.md)、[BUILD.md](BUILD.md)），也没有 `internal/` 目录。示例里的 Wails 命令已按 v3（`wails3`）改写，本仓库构建统一走 `.\build.ps1`。使用本指南时只取**写法**（结构、表格、语气、检查清单），路径与命令以根目录文档为准。
+
 ---
 
 ## 0. 调研依据摘要（为什么这样定规则）
@@ -99,9 +101,8 @@
 解压后直接运行：
 
 ```bash
-# Windows: 解压后双击 serialtool.exe
-# macOS:   chmod +x serialtool && ./serialtool
-# Linux:   chmod +x serialtool && ./serialtool
+# Windows: 解压后双击 serial-gui.exe
+# Linux:   chmod +x serial-gui && ./serial-gui
 ```
 
 ### 从源码构建
@@ -109,10 +110,10 @@
 ```bash
 git clone https://github.com/<owner>/<repo>.git
 cd <repo>
-wails build           # 产物在 build/bin/ 下
+.\build.ps1           # 产物在 build/bin/ 下；-Release 产出自包含 exe
 ```
 
-> 环境要求与按平台构建详见 [构建/开发文档](docs/build.md)。
+> 环境要求与按平台构建详见 [构建文档](BUILD.md)。
 
 ### 运行
 
@@ -132,16 +133,16 @@ build\bin\serialtool.exe      # Windows
 4. 接收区出现设备回帧即连接成功。
 
 命令行无交互接口，全部功能通过图形界面完成；自动化场景可参考
-[docs/protocol.md](docs/protocol.md) 的协议说明。
+[ARCHITECTURE.md](ARCHITECTURE.md) 的 IPC 协议说明。
 
 <!-- ========== 7. 文档链接（只放链接，不贴内容） ========== -->
 ## 文档
 
 | 文档 | 说明 |
 | --- | --- |
-| [构建/开发文档](docs/build.md) | 环境要求、构建矩阵、调试方法 |
-| [架构文档](docs/architecture.md) | 分层结构、数据流、状态机、关键参数 |
-| [常见问题 FAQ](docs/faq.md) | 高频问题与解决 |
+| [构建文档](BUILD.md) | 环境要求、构建矩阵、调试方法 |
+| [架构文档](ARCHITECTURE.md) | 分层结构、数据流、状态机、关键参数 |
+| 常见问题 FAQ | 高频问题与解决（本仓库暂无，见 `TODO.md` 与 `BUILD.md` 注意事项） |
 | [贡献指南](CONTRIBUTING.md) | 如何提交 issue / PR |
 
 <!-- ========== 8. 贡献指南（简短 + 外链） ========== -->
@@ -193,10 +194,10 @@ build\bin\serialtool.exe      # Windows
 | --- | --- | --- | --- |
 | Go | 1.21+ | 后端编译 | 检查：`go version` |
 | Node.js | 18 LTS+ | 前端构建 | 检查：`node -v` |
-| Wails CLI | v2.x | 脚手架与构建 | `go install github.com/wailsapp/wails/v2/cmd/wails@latest` |
-| 原生工具链 | 平台相关 | 原生编译 | Windows: TDM-GCC / MinGW-w64；macOS: Xcode CLT；Linux: gcc + libgtk-3-dev、libwebkit2gtk-4.0-dev |
+| Wails CLI | v3.x | 脚手架与构建 | `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`；本仓库实际用 `build.ps1`，见 [BUILD.md](BUILD.md) |
+| 原生工具链 | 平台相关 | 原生编译 | Windows: TDM-GCC / MinGW-w64；macOS: Xcode CLT；Linux: gcc + libgtk-4-dev、libwebkitgtk-6.0-dev |
 
-> 首次安装后先运行 `wails doctor` 自检，它会列出缺失依赖及修复指引。
+> 首次安装后先运行 `wails3 doctor` 自检，它会列出缺失依赖及修复指引。
 
 <!-- ========== 2. 快速构建（一次性成功路径） ========== -->
 ## 快速构建
@@ -204,8 +205,8 @@ build\bin\serialtool.exe      # Windows
 ```bash
 git clone <repo-url> && cd <repo>
 go mod download        # 拉取 Go 依赖
-wails doctor           # 自检环境（可选但推荐）
-wails build            # 构建当前平台
+wails3 doctor          # 自检环境（可选但推荐）
+wails3 build           # 构建当前平台
 # 产物: build/bin/<可执行文件>
 ```
 
@@ -214,13 +215,11 @@ wails build            # 构建当前平台
 
 | 场景 | 平台 | 命令 | 产物 |
 | --- | --- | --- | --- |
-| 日常开发 | 当前平台 | `wails dev` | 热重载 + 前端调试端口 |
-| 正式发布 | Windows amd64 | `wails build -platform windows/amd64 -clean` | `build/bin/serialtool.exe` |
-| 正式发布 | macOS arm64 | `wails build -platform darwin/arm64 -clean` | `build/bin/serialtool` |
-| 正式发布 | macOS amd64 | `wails build -platform darwin/amd64 -clean` | `build/bin/serialtool` |
-| 正式发布 | Linux amd64 | `wails build -platform linux/amd64 -clean` | `build/bin/serialtool` |
+| 日常开发 | 当前平台 | `wails3 dev` | 热重载 + 前端调试端口 |
+| 正式发布 | Windows amd64 | `.\build.ps1 -Release` | `build/bin/serial-gui.exe` |
+| 正式发布 | Linux amd64 | `.\build.ps1 -Release`（在 Linux 上执行） | `build/bin/serial-gui` |
 | 仅编译后端（CI 快速校验） | 当前平台 | `go build ./...` | 无 UI，仅校验编译 |
-| 仅跑后端单测 | 当前平台 | `go test ./internal/...` | 测试报告 |
+| 仅跑相关包单测 | 当前平台 | `go test ./daemon/ ./decode/` | 测试报告 |
 
 > 规则：矩阵行按「场景」分组排序；同一场景的多平台行相邻；每行「命令」必须可直接复制。
 
@@ -264,11 +263,11 @@ wails dev          # 前端热重载 + 后端每次保存自动重启
 
 | 问题 | 解决 |
 | --- | --- |
-| `wails doctor` 提示缺 WebView2 | Windows 下载并安装 Evergreen WebView2 Runtime |
-| Linux 构建报缺 gtk/webkit 头文件 | `sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev` |
-| 打开串口返回 `permission denied` | Linux 将用户加入 `dialout` 组：`sudo usermod -aG dialout $USER` |
+| `wails3 doctor` 提示缺 WebView2 | Windows 下载并安装 Evergreen WebView2 Runtime |
+| Linux 构建报缺 gtk/webkit 头文件 | `sudo apt install libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev` |
+| 打开串口返回 `permission denied` | Linux：`serial-cli fix-permissions` 临时授权，或 `sudo usermod -aG dialout $USER` 后重新登录 |
 
-> 完整 FAQ 见 [docs/faq.md](faq.md)。
+> 本仓库暂无 FAQ 文档（`docs/faq.md` 规划中），常见问题暂见 [BUILD.md](BUILD.md) 的「注意事项」。
 ```
 
 ### 2.3 硬性规则
@@ -423,7 +422,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     A[提交代码] --> B[CI: go vet + go test]
-    B --> C[CI: wails build 三平台]
+    B --> C[CI: 构建 Windows + Linux]
     C --> D[打包 zip/tar.gz]
     D --> E[GitHub Release]
 ```
@@ -511,7 +510,7 @@ flowchart LR
 
 - 首次出现给中英对照：`串口（Serial Port）`；之后全文统一用中文或统一用英文，不混用。
 - 专有名词大小写必须准确：`Wails`、`Go`、`WebView2`、`HEX`、`ASCII`、`GitHub`、`TypeScript`；禁止写成 `wails`、`golang`、`hex`（正文中）。
-- 命令、文件名、包名、环境变量一律反引号：`` `wails build` ``、`` `internal/serial` ``。
+- 命令、文件名、包名、环境变量一律反引号：`` `.\build.ps1` ``、`` `daemon/` ``。
 - 术语表维护在 `docs/glossary.md`（可选但推荐，>10 个专有名词时必备）；文档中首次出现的术语可链到术语表锚点。
 - 同一概念全仓一个叫法（如「串口调试工具」vs「串口助手」二选一），由术语表裁决。
 

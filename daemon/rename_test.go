@@ -99,9 +99,14 @@ func TestRenamePersistsForProjectSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开工程失败: %v", err)
 	}
-	// 文件里记的 label 就是名字（旧工程里是端口名）
-	if got := proc.Name(); got != "COM9" {
-		t.Fatalf("打开工程后名字 = %q，期望沿用 settings.json 的 COM9", got)
+	// 录制时写进 settings.json 的 label 是「开始录制那一刻的线程名」（这里是自动名
+	// COM9），不是用户起的名字：打开工程一律先显示目录名，免得十个工程都叫 COM9。
+	if got, want := proc.Name(), filepath.Base(dir); got != want {
+		t.Fatalf("打开工程后名字 = %q，期望目录名 %q", got, want)
+	}
+	// 目录名不是「用户改过的名字」：标签右键的「恢复自动名」不该因此生效
+	if proc.HasCustomName() {
+		t.Fatal("打开工程后被当成「用户改过名」")
 	}
 
 	if err := pm.Rename(proc.id, "现场调试"); err != nil {

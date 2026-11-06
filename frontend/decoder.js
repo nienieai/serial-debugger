@@ -345,6 +345,10 @@ function bytesToHexStr(bytes) {
 }
 
 async function encodeTextForSend(text) {
+  // 这里原来直接读 d.encoding，可 _d() 没调 —— 抛 ReferenceError: d is not defined，
+  // 而 sendData 的 await 在 try 之外，于是整次发送变成一条未处理的 rejection
+  // （界面上只剩红色横幅「promise: d is not defined」），数据一个字节都发不出去。
+  const d = _d();
   const enc = d.encoding || 'utf-8';
   if (enc === 'ascii') {
     if (isAsciiText(text)) {
