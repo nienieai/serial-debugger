@@ -1997,7 +1997,11 @@ function saveSendUI() {
   const appendSel = pageEl('appendSelect');
   ss.appendSuffix = appendSel ? appendSel.value : 'crlf';
   ss.autoSend = !!(getActiveTab() && getActiveTab()._autoSendActive);
-  ss.sendInterval = parseInt(pageEl('sendInterval').value) || 1000;
+  // 切标签时也会对「没有发送框的页」（.stlog 只读页 / 设置页）调到这里，
+  // 那时 pageEl 只能回退到 document：真没有就跳过，别让一次取控件把切换打断
+  // —— 打断的后果是目标页没 show，整块内容区空白。
+  const ivSel = pageEl('sendInterval');
+  if (ivSel) ss.sendInterval = parseInt(ivSel.value) || 1000;
 }
 
 function restoreSendUI() {
@@ -2045,7 +2049,13 @@ function _flushSendState(tab) {
     tab.quickPresets = state.quickPresets.slice();
   }
   try {
-    window.go.main.App.SetSessionSend(tab.sessionId, _sendStatePayload(tab));
+    var payload = _sendStatePayload(tab);
+    // 没变就不推：切标签 / 渲染面板都会走到这里，而工程会话每推一次就是一次
+    // settings.json 读改写。顺手也避免「内容其实一样」时去碰文件。
+    var sig = JSON.stringify(payload);
+    if (tab._sendSig === sig) return;
+    tab._sendSig = sig;
+    window.go.main.App.SetSessionSend(tab.sessionId, payload);
   } catch (e) { /* 守护进程没在跑：草稿只留内存，不打断输入 */ }
 }
 
@@ -2078,6 +2088,9 @@ function _restoreSendStateFromSession(tab, sd, sid) {
       pushPresetsToDaemon(sid, tab.quickPresets);
     }
   }
+  // 恢复完把「上次推过的内容」忘掉：下一次 flush 必须真的写一遍（否则签名
+  // 相同会被跳过，守护进程那份就永远停在旧内容上）。
+  tab._sendSig = null;
   if (tab === getActiveTab()) {
     restoreSendUI();
     state.quickPresets = (tab.quickPresets || []).slice();
@@ -2803,6 +2816,9 @@ function _afterActivePageChanged(opts) {
 function _detachTab(tab) {
   var idx = state.tabs.indexOf(tab);
   if (idx < 0) return;
+  // 摘掉之前把草稿推一次：拖到另一个窗口 / 仅关标签之后，别的窗口是从守护进程
+  // 那份恢复输入框的，不推就丢掉最后 400ms 内敲的字。
+  if (tab.sessionId) _flushSendState(tab);
   if (tab._page) { tab._page.destroy(); tab._page = null; }
   if (tab.sessionId) {
     delete state.historyCache[tab.sessionId];
@@ -3513,7 +3529,9 @@ function _tryActivatePending() {
   for (var i = 0; i < state.tabs.length; i++) {
     if (state.tabs[i] && String(state.tabs[i].sessionId) === want) {
       _pendingActivateSid = null;
-      if (i !== state.activeTab) switchTab(i);
+      // 不看「是不是已经是活动下标」：刚建出来的标签 activeTab 可能早就是它，
+      // 但页面从没 show 过（内容区空白）。switchTab 是幂等的，重走一次无害。
+      switchTab(i);
       return;
     }
   }
@@ -3769,6 +3787,9 @@ async function syncDaemonSessions(procData) {
         window.go.main.App.SetTabEncoding(ds.id, newTab.disp.encoding);
       }
       tabsChanged = true;
+      // 这是本窗口的第一个标签（守护进程里已经有会话、GUI 刚起来）：建完切过去，
+      // 否则和 autoCreateIdleSession 一样只剩一个空窗口。
+      if (state.tabs.length === 1) _pendingActivateSid = String(newTab.sessionId);
     }
   });
 
@@ -4756,6 +4777,10 @@ async function autoCreateIdleSession(mode) {
     try { window.go.main.App.StartTabDecoder(sid); } catch (e) {}
     try { window.go.main.App.SetTabEncoding(sid, _dispOf(tab).encoding); } catch (e) {}
   }
+  // 建完之后必须真的切过去显示一次：这一步不只是「激活」——TabPage 的内容
+  // （工具栏 / 数据区 / 发送区）只在这里 show，不切就是一个空窗口：标签栏有
+  // 「会话 #1」、内容区一片空白、引导页又被 updateEmptyState 按「有标签」收掉了。
+  switchTab(state.tabs.length - 1);
   updateEmptyState();
   renderTabs();
   updateOpenBtn();
@@ -4795,8 +4820,20 @@ function switchTab(idx) {
   // 切到这一页时补齐端口下拉（页面可能在端口列表到达之前就建好了）
   if (newTab._page && newTab._page.root) _populateTabPortSelects(newTab._page.root);
 
-  // 非会话标签页（设置页 / 新建选择页，任一方向）：只显示隐藏，不碰会话状态
-  if (!isSessionTab(newTab) || (oldTab && !isSessionTab(oldTab))) {
+  // 目标不是会话页（设置页 / 新建选择页 / .stlog 只读页）：只显示隐藏，不碰会话状态。
+  //
+  // 以前「任一方向」都走这条短路，于是**从只读工程页切到刚推上来的会话页**时，
+  // 整段恢复被跳过：发送框没被填、多字符串面板没渲染（屏幕上是一个空表格），
+  // 而 tab._s 里其实已经有草稿 —— 下一次 saveSendUI 又拿空的输入框把它覆盖掉，
+  // 表现就是「推送到守护进程后草稿丢了 / Hex 草稿被删了」。
+  if (!isSessionTab(newTab)) {
+    // 会话页 → 设置页 / 只读工程页：走之前得把编辑器里的内容抓回 _s。
+    // 以前直接 hide 就算完，DOM 里刚敲的字没人接住；再切回来 restoreSendUI 拿的
+    // 是旧值 —— 看起来就像「我什么都没删，草稿却少了/被清了」。
+    if (oldTab && isSessionTab(oldTab)) {
+      saveSendUI();
+      _flushSendState(oldTab);
+    }
     if (oldTab && oldTab._page) oldTab._page.hide();
     state.activeTab = idx;
     if (newTab.type === 'settings') {
@@ -4886,6 +4923,11 @@ function switchTab(idx) {
   // 制表符 / 行尾 / 保存开关也是每个标签页各自的：切换后要把状态栏与 tab-size
   // 样式同步到新标签页（工程 A 用 8、工程 B 用 4 时，不刷就一直是上一页的）。
   _syncTabDisplayChrome();
+  // 从「没有会话」的页面（设置页 / 只读工程页）切过来时，这三项以前由短路分支
+  // 负责，现在一并补上：空态、同步指示、离线遮罩都要按新页面重算。
+  updateEmptyState();
+  updateSyncIndicator();
+  updateDaemonUI();
 
   _updateStatsVisible();
 
@@ -7237,6 +7279,24 @@ function refreshStatsDOM() {
   const isFwd = activeMode() === 'forward';
   // 保存开关的绿点也跟着会话状态走：histOn 是在会话同步之后才有值的，
   // 状态栏建的时候还读不到，不重画就一直停在「关」。
+  //
+  // 但只知道「不知道」还不行：以前只有点开悬浮卡或状态栏那颗图标时才问守护
+  // 进程，于是正在录着的会话，绿点一直是灭的。这里主动问一次（每个会话一次）。
+  if (tab && tab.sessionId && state.daemonOnline &&
+      tab.histOn === undefined && !tab._histPending) {
+    tab._histPending = true;
+    (function (t) {
+      window.go.main.App.GetHistoryStatusFor(t.sessionId).then(function (on) {
+        t._histPending = false;
+        t.histOn = !!on;
+        if (typeof _liveRecording === 'function') _liveRecording(t, !!on);
+        if (getActiveTab() === t) {
+          if (_statusBar && typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
+          renderTabs();
+        }
+      }).catch(function () { t._histPending = false; });
+    })(tab);
+  }
   if (_statusBar && typeof _statusBar.updateSave === 'function') _statusBar.updateSave();
   if (tab && tab.sessionId) {
     // 端口没连上：累计字节保留（关闭后还看得到这次收了多少），速率清零。
@@ -7932,6 +7992,9 @@ function quickPanelUpdate(idx, field, value) {
         }
       }, 200);
     }
+    // 改内容 / 改延时 / 改备注也要落盘。以前只有「循环发送」时才把预设同步给
+    // 守护进程，普通编辑只存了 gui.ini —— 工程文件里的 send.presets 一直是旧的。
+    if (typeof _schedulePushSendState === 'function') _schedulePushSendState();
     saveSettings();
   }
 }
