@@ -106,12 +106,18 @@ func (p *Process) openStlogFile() {
 		V: sessionfile.SlotPayloadVer,
 		// Label 记的是「开始录制这一刻的线程名」，不是端口名：改名之后新包会带上
 		// 新名字，已封包的字节不动（包头槽是自描述快照，见 v2 §3）。
-		Label:   p.Name(),
-		Port:    p.config.Port,
-		Baud:    p.config.Baud,
-		Mode:    mode,
-		PortB:   portB,
-		Display: display,
+		Label: p.Name(),
+		Port:  p.config.Port,
+		Baud:  p.config.Baud,
+		Mode:  mode,
+		PortB: portB,
+		// 帧格式与流控也是「录制这一刻的配置」：工程推回守护进程时按它重开串口，
+		// 少了这四项，19200·7E2 的采集会被按 115200·8N1 重开。
+		DataBits:    p.config.DataBits,
+		StopBits:    p.config.StopBits,
+		Parity:      p.config.Parity,
+		FlowControl: p.config.FlowControl,
+		Display:     display,
 	}
 	sess, err := sessionfile.CreateSessionIn(dir, set)
 	if err != nil {

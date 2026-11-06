@@ -2397,23 +2397,24 @@ func (a *App) fetchSessions() []map[string]any {
 		if ringName, ok := pmap["sendRingName"]; ok {
 			entry["sendRingName"] = ringName
 		}
-		if mode, _ := pmap["mode"].(string); mode == "forward" {
-			entry["portName"] = pmap["portName"]
-			entry["baud"] = pmap["baud"]
-			entry["dataBits"] = pmap["dataBits"]
-			entry["stopBits"] = pmap["stopBits"]
-			entry["parity"] = pmap["parity"]
-			entry["forwardPortB"] = pmap["forwardPortB"]
-			entry["forwardBaudB"] = pmap["forwardBaudB"]
-			entry["forwardDataBitsB"] = pmap["forwardDataBitsB"]
-			entry["forwardStopBitsB"] = pmap["forwardStopBitsB"]
-			entry["forwardParityB"] = pmap["forwardParityB"]
-		} else if status == "connected" {
-			entry["portName"] = pmap["portName"]
-			entry["baud"] = pmap["baud"]
-			entry["dataBits"] = pmap["dataBits"]
-			entry["stopBits"] = pmap["stopBits"]
-			entry["parity"] = pmap["parity"]
+		// 串口参数：只要守护进程给了就带上，不再只认「已连接」和「转发」。
+		//
+		// 以前只给这两类，于是「已声明但还没连」的会话（推送回来的工程、CLI/MCP
+		// 建的空闲线程）在 GUI 里既没有端口行也没有 8N1 —— 悬浮窗画不出参数行，
+		// 状态栏速率百分比的分母（波特率）还是 0，工具栏也停在默认值上。
+		mode, _ := pmap["mode"].(string)
+		if _, ok := pmap["portName"]; ok {
+			for _, k := range []string{"portName", "baud", "dataBits", "stopBits", "parity", "flowControl"} {
+				entry[k] = pmap[k]
+			}
+		}
+		if mode == "forward" {
+			for _, k := range []string{
+				"forwardPortB", "forwardBaudB", "forwardDataBitsB",
+				"forwardStopBitsB", "forwardParityB", "forwardFlowControlB",
+			} {
+				entry[k] = pmap[k]
+			}
 		}
 		out = append(out, entry)
 	}

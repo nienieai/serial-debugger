@@ -293,6 +293,18 @@ function _setDisp(key, val) {
   }
 }
 
+// 把一个标签页的显示设置推给守护进程。
+//
+// 会话第一次挂上时推一次：守护进程那边如果一直是空的，这条会话开始录制时
+// settings.json 落的是 daemon.ini 的默认值 —— 用户在标签页里选的 GB2312 /
+// 制表符 / 行尾序列一个都留不下来。
+function _pushTabDisplay(tab) {
+  if (!tab || !tab.sessionId || !tab.disp || !state.daemonOnline) return;
+  try {
+    window.go.main.App.SetSessionDisplay(tab.sessionId, tab.disp).catch(function () {});
+  } catch (e) { /* 守护进程没在跑：显示设置只留在标签页里 */ }
+}
+
 // 改「新标签页的默认值」并写回守护进程的 daemon.ini。
 //
 // 只有守护进程能写那个文件（单写者），所以走 IPC。离线时调用方已经把控件置灰了，
@@ -2050,10 +2062,22 @@ function _restoreSendStateFromSession(tab, sd, sid) {
   if (!tab || !sd || tab._sendFrom === sid) return;
   tab._sendFrom = sid;
   if (!tab._s) tab._s = newTabSendState();
-  if (typeof sd.text === 'string') tab._s.sendTextBuf = sd.text;
-  if (typeof sd.hex === 'string') tab._s.sendHexBuf = sd.hex;
+  // 只在本地那格是空的时候搬：会话第一次挂上来时它一定是空的；而「标签已经建好、
+  // 用户正在敲字」时守护进程那份最多落后一个 400ms 防抖周期，搬过来会吃掉刚敲的字。
+  if (typeof sd.text === 'string' && !tab._s.sendTextBuf) tab._s.sendTextBuf = sd.text;
+  if (typeof sd.hex === 'string' && !tab._s.sendHexBuf) tab._s.sendHexBuf = sd.hex;
   if (sd.format === 'hex' || sd.format === 'text') tab._s.sendFormat = sd.format;
-  if (Array.isArray(sd.presets)) tab.quickPresets = sd.presets.slice();
+  if (Array.isArray(sd.presets)) {
+    tab.quickPresets = sd.presets.slice();
+    // 预设有两份存储：settings.json 的 send.presets（工程文件，跟着会话走）和
+    // 发送队列环（守护进程真正读的那份）。打开工程后只还原了前者，环是空的，
+    // 守护进程那边的「发送多字符串」什么都不会发；反过来 _multistrLoaded 那个
+    // 老路径还会拿「上一个同号进程」的 multistr/<id>.json 把刚还原的冲掉。
+    tab._multistrLoaded = true;
+    if (state.daemonOnline && sid && typeof pushPresetsToDaemon === 'function') {
+      pushPresetsToDaemon(sid, tab.quickPresets);
+    }
+  }
   if (tab === getActiveTab()) {
     restoreSendUI();
     state.quickPresets = (tab.quickPresets || []).slice();
@@ -3520,6 +3544,22 @@ function _daemonTabLabel(ds) {
     : (isConnected ? `${ds.portName} @ ${ds.baud}` : (hasDeclared ? `${ds.portName} @ ${ds.baud} [` + t('tab.declared', '已声明') + `]` : t('tab.idle_single', '单端口空闲')));
 }
 
+// _syncedParamsOf 把守护进程给的串口参数收成标签页用的那一份。
+//
+// 三个入口（新建标签 / 找回标签 / 增量更新）都走它，免得三处字段漂移 ——
+// 漂移过一次：flowControl 只在连接时从工具栏读，守护进程回传的参数里没有，
+// 于是「推送工程回来」永远按 none 开串口。
+function _syncedParamsOf(ds) {
+  return {
+    portName: ds.portName || '', baud: ds.baud || 0,
+    dataBits: ds.dataBits || 0, stopBits: ds.stopBits || '',
+    parity: ds.parity || '', flowControl: ds.flowControl || '',
+    forwardPortB: ds.forwardPortB || '', forwardBaudB: ds.forwardBaudB || 0,
+    forwardDataBitsB: ds.forwardDataBitsB || 0, forwardStopBitsB: ds.forwardStopBitsB || '',
+    forwardParityB: ds.forwardParityB || '', forwardFlowControlB: ds.forwardFlowControlB || '',
+  };
+}
+
 // 把守护进程会话的当前状态写到一个标签页上（标签、在线状态、参数、查看者）。
 // 「找回原有标签页」与「新建标签页」两条路共用，避免两处判断漂移。
 // （第 2 步「更新已有标签页」是它的增量版本：只在实际变化时打 tabsChanged。）
@@ -3536,14 +3576,32 @@ function _applyDaemonSessionToTab(tab, ds) {
   tab.viewers = ds.viewers || { gui: 0, cli: 0, mcp: 0 };
   // 工程会话才有值：标签上要显示工程目录名（而不是「单端口空闲」）
   tab.sessionPath = ds.sessionPath || '';
-  if (isConnected || hasDeclared) {
-    tab.syncedParams = {
-      portName: ds.portName, baud: ds.baud,
-      dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
-      forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
-    };
+  // 参数同步到「已声明」就够：工程推回守护进程、CLI 建的空闲线程都停在这个状态，
+  // 波特率/帧格式/流控得跟过去，否则工具栏停在默认 8N1、悬浮窗画不出参数行。
+  // 连波特率都没有（纯空闲进程）才退回 null。
+  if (isConnected || hasDeclared || ds.baud) {
+    tab.syncedParams = _syncedParamsOf(ds);
   } else {
     tab.syncedParams = null;
+  }
+  // 显示设置：会话第一次挂到这个标签页时用守护进程那份覆盖（推送工程、从线程
+  // 接管都走这里）。之后以本地为准 —— 每轮同步都覆盖会把用户正在改的设置冲掉。
+  // 守护进程那份是空的时候反过来推一次本地：它开始录制时才有东西写进工程文件，
+  // 否则落的是 daemon.ini 的默认值（推过去的工程打开后字体/编码全变）。
+  if (ds.id && tab._dispFrom !== ds.id) {
+    tab._dispFrom = ds.id;
+    if (ds.display) {
+      tab.disp = Object.assign({}, state._dispDefaults, ds.display);
+      if (state.daemonOnline) {
+        try { window.go.main.App.SetTabEncoding(ds.id, tab.disp.encoding); } catch (e) {}
+      }
+      if (tab === getActiveTab()) {
+        _applyDisplayStyle();
+        _redecodeActiveTab(tab.disp.encoding);
+      }
+    } else {
+      _pushTabDisplay(tab);
+    }
   }
   // 发送框草稿：会话第一次挂上来时把守护进程存的那份搬进标签页
   // （换窗口、关标签再挂回来、重启 GUI 之后都还在）。
@@ -3557,7 +3615,9 @@ function _applyDaemonSessionToTab(tab, ds) {
     state.statsBase[ds.id] = {
       tx: Number(ds.fileStats.tx) || 0,
       rx: Number(ds.fileStats.rx) || 0,
-      p1: 0, p2: 0
+      // 转发工程的口径：A→B / B→A 两列在文件里是 p1/p2，与单端口不是一回事
+      p1: Number(ds.fileStats.p1) || 0,
+      p2: Number(ds.fileStats.p2) || 0
     };
   }
 }
@@ -3681,11 +3741,7 @@ async function syncDaemonSessions(procData) {
         mode: ds.mode || 'single',
         source: 'gui',
         viewers: ds.viewers || {gui:0, cli:0, mcp:0},
-        syncedParams: (isConnected || hasDeclared) ? {
-          portName: ds.portName, baud: ds.baud,
-          dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
-          forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
-        } : null,
+        syncedParams: (isConnected || hasDeclared || ds.baud) ? _syncedParamsOf(ds) : null,
         // 工程会话带 settings.json 里的 display（打开旧工程看到的就是它当初的样子）；
         // 普通会话用 daemon.ini 的默认值
         disp: ds.display ? Object.assign({}, state._dispDefaults, ds.display) : _newTabDisp(),
@@ -3702,6 +3758,10 @@ async function syncDaemonSessions(procData) {
       var mainContent = document.getElementById('mainContent');
       if (mainContent) { mainContent.appendChild(newTab._page.root); initTabPage(newTab._page.root); }
       _mountLive(newTab);
+      // 走一遍统一的「会话 → 标签页」赋值：草稿 / 多字符串预设 / 文件统计基线
+      // 只有那一条路会搬。以前这里手抄了一份字段表，抄漏了 send 和 fileStats，
+      // 于是推送回来的工程输入框是空的、状态栏从 0 开始。
+      _applyDaemonSessionToTab(newTab, ds);
       state.tabs.push(newTab);
       // Start per-tab Go decode worker
       if (ds.id && state.daemonOnline) {
@@ -3716,6 +3776,10 @@ async function syncDaemonSessions(procData) {
   state.tabs.forEach(tab => {
     if (tab.sessionId && dsMap[tab.sessionId]) {
       const ds = dsMap[tab.sessionId];
+      // 本地建出来的标签（autoCreateIdleSession / 原地接管）没走过「会话 → 标签页」
+      // 的整份初始化：补一次，把显示设置、发送框草稿、统计基线带上；已经走过一
+      // 次的（_dispFrom 记着会话号）之后就只走下面的增量字段。
+      if (ds.id && tab._dispFrom !== ds.id) _applyDaemonSessionToTab(tab, ds);
       const isConnected = ds.status === 'connected';
         const hasDeclared2 = !!ds.portName;
         const newLabel = _daemonTabLabel(ds);
@@ -3743,22 +3807,22 @@ async function syncDaemonSessions(procData) {
         tab.nameCustom = dsNameCustom;
         tabsChanged = true;
       }
-      if (!tab.sessionPath && ds.sessionPath) {
+      // 工程目录会跟着线程名改名：路径变了要跟着换，否则悬浮卡标题/「同一个工程
+      // 再打开」都还在用旧路径（tab._projectPath 上面已经跟上了）。
+      if (ds.sessionPath && tab.sessionPath !== ds.sessionPath) {
         tab.sessionPath = ds.sessionPath;
         tabsChanged = true;
       }
       if (tab.portOpen !== isConnected || tab.label !== newLabel || viewersChanged || modeChanged) {
         tab.portOpen = isConnected;
         tab.label = newLabel;
-        if (isConnected || hasDeclared2) {
-          tab.syncedParams = {
-            portName: ds.portName, baud: ds.baud,
-            dataBits: ds.dataBits, stopBits: ds.stopBits, parity: ds.parity,
-            forwardPortB: ds.forwardPortB, forwardBaudB: ds.forwardBaudB,
-          };
-        } else if (!hasDeclared2) {
-          tab.syncedParams = null;
-        }
+        tabsChanged = true;
+      }
+      // 参数每次都刷：它不由上面那几个字段推导（改波特率/帧格式不会让 portOpen
+      // 变化），只在「状态变了」时更新会让工具栏一直停在旧值上。
+      const spNext = (isConnected || hasDeclared2 || ds.baud) ? _syncedParamsOf(ds) : null;
+      if (JSON.stringify(spNext) !== JSON.stringify(tab.syncedParams)) {
+        tab.syncedParams = spNext;
         tabsChanged = true;
       }
     }
@@ -4018,31 +4082,39 @@ function _syncPortSelectsFromTab() {
   const sp = tab.syncedParams;
   const isFwd = tab.mode === 'forward';
   const hasPort = !!(tab.portOpen || sp.portName); // open or declared
-  if (!hasPort) return;
   // Set port select values from tab's synced params
+  if (hasPort) {
+    if (isFwd) {
+      // portName for connected forward is "COM4 ↔ COM14" — split to get individual ports
+      const p1Port = sp.portName ? sp.portName.split(' ↔ ')[0] : '';
+      _setSelectVal('portSelectA', p1Port);
+      _setSelectVal('portSelectB', sp.forwardPortB);
+      _setSelectVal('baudSelectA', sp.baud);
+      _setSelectVal('baudSelectB', sp.forwardBaudB || sp.baud);
+    } else {
+      _setSelectVal('portSelect', sp.portName);
+      _setSelectVal('baudSelect', sp.baud);
+    }
+  }
+  // 帧格式与流控**不看端口开没开**：已声明但还没连的会话（推送回来的工程、
+  // CLI 建的线程）也要按工程的参数把工具栏摆好，用户点「打开串口」时用的就是
+  // 这一份。以前只在 portOpen 时写，于是推回来的 7E2 工程会被按 8N1 打开。
   if (isFwd) {
-    // portName for connected forward is "COM4 ↔ COM14" — split to get individual ports
-    const p1Port = sp.portName ? sp.portName.split(' ↔ ')[0] : '';
-    _setSelectVal('portSelectA', p1Port);
-    _setSelectVal('portSelectB', sp.forwardPortB);
-    _setSelectVal('baudSelectA', sp.baud);
-    _setSelectVal('baudSelectB', sp.forwardBaudB || sp.baud);
-    if (tab.portOpen) {
-      _setSelectVal('dataBitsSelectA', sp.dataBits);
-      _setSelectVal('dataBitsSelectB', sp.dataBits);
-      _setSelectVal('stopBitsSelectA', sp.stopBits);
-      _setSelectVal('stopBitsSelectB', sp.stopBits);
-      _setSelectVal('paritySelectA', sp.parity);
-      _setSelectVal('paritySelectB', sp.parity);
-    }
+    // B 口是独立的一组（转发时两个口可以不同帧格式）：守护进程没给 B 的值
+    // 才退回 A 的 —— 以前直接抄 A 的，B 口设了 7E2 也会被重置成 A 的 8N1。
+    _setSelectVal('dataBitsSelectA', sp.dataBits);
+    _setSelectVal('dataBitsSelectB', sp.forwardDataBitsB || sp.dataBits);
+    _setSelectVal('stopBitsSelectA', sp.stopBits);
+    _setSelectVal('stopBitsSelectB', sp.forwardStopBitsB || sp.stopBits);
+    _setSelectVal('paritySelectA', sp.parity);
+    _setSelectVal('paritySelectB', sp.forwardParityB || sp.parity);
+    _setSelectVal('flowControlSelectA', sp.flowControl);
+    _setSelectVal('flowControlSelectB', sp.forwardFlowControlB || sp.flowControl);
   } else {
-    _setSelectVal('portSelect', sp.portName);
-    _setSelectVal('baudSelect', sp.baud);
-    if (tab.portOpen) {
-      _setSelectVal('dataBitsSelect', sp.dataBits);
-      _setSelectVal('stopBitsSelect', sp.stopBits);
-      _setSelectVal('paritySelect', sp.parity);
-    }
+    _setSelectVal('dataBitsSelect', sp.dataBits);
+    _setSelectVal('stopBitsSelect', sp.stopBits);
+    _setSelectVal('paritySelect', sp.parity);
+    _setSelectVal('flowControlSelect', sp.flowControl);
   }
 }
 
@@ -4809,6 +4881,9 @@ function switchTab(idx) {
   updateFwdBtns();
   updateScrollLockBtns();
   quickPanelRender();
+  // 制表符 / 行尾 / 保存开关也是每个标签页各自的：切换后要把状态栏与 tab-size
+  // 样式同步到新标签页（工程 A 用 8、工程 B 用 4 时，不刷就一直是上一页的）。
+  _syncTabDisplayChrome();
 
   _updateStatsVisible();
 
@@ -5007,6 +5082,13 @@ function _tabPopDuration(sec) {
   return h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
 }
 
+// 流控的显示文案：none 不显示（8N1 里没有它的位置），其余用行业缩写。
+function _tabPopFlowText(flow) {
+  if (flow === 'rts_cts') return 'RTS/CTS';
+  if (flow === 'xon_xoff') return 'XON/XOFF';
+  return '';
+}
+
 // 从标签自身状态推出浮窗要显示的东西（不依赖统计接口）
 function _tabPopModel(tab) {
   var sp = tab.syncedParams || null;
@@ -5026,8 +5108,10 @@ function _tabPopModel(tab) {
     }
   }
   var params = '';
-  if (sp) {
+  if (sp && baud) {
     var fmt = (sp.dataBits || 8) + _tabPopParityLetter(sp.parity) + (sp.stopBits || 1);
+    var flow = _tabPopFlowText(sp.flowControl);
+    if (flow) fmt += ' · ' + flow;
     params = (isFwd && sp.forwardBaudB && sp.forwardBaudB !== baud)
       ? (baud + ' ⇄ ' + sp.forwardBaudB + ' · ' + fmt)
       : (baud + ' · ' + fmt);
@@ -6301,6 +6385,9 @@ async function openPort() {
     dataBits: parseInt((pageEl('dataBitsSelect')||{}).value) || 8,
     stopBits: (pageEl('stopBitsSelect')||{}).value || '1',
     parity: (pageEl('paritySelect')||{}).value || 'none',
+    // 流控以前只写进 gui.ini 的默认值，从来没进过 cfg：界面上选了 RTS/CTS，
+    // 开出来的端口仍然是不带流控的。
+    flowControl: (pageEl('flowControlSelect')||{}).value || 'none',
   };
 
   try {
@@ -6317,12 +6404,14 @@ async function openPort() {
     // 记录「刚挂上会话」的时刻：同步的清理逻辑靠它避开连接窗口期的事件载荷
     tab.connectedAt = Date.now();
 
+    // 连之前先把显示设置推给守护进程：这条会话马上可能要开始录制
+    _pushTabDisplay(tab);
     // Connect the idle process to the selected port
     await window.go.main.App.ConnectSession(tab.sessionId, cfg);
 
     tab.portOpen = true;
     tab.label = `${cfg.port} @ ${cfg.baud}`;
-    tab.syncedParams = { portName: cfg.port, baud: cfg.baud, dataBits: cfg.dataBits, stopBits: cfg.stopBits, parity: cfg.parity };
+    tab.syncedParams = _syncedParamsOf(cfg);
 
     updateOpenBtn();
     updateSyncIndicator();
@@ -6357,6 +6446,7 @@ async function openForwardPorts() {
     dataBits: parseInt((pageEl('dataBitsSelectA')||{}).value) || 8,
     stopBits: (pageEl('stopBitsSelectA')||{}).value || '1',
     parity: (pageEl('paritySelectA')||{}).value || 'none',
+    flowControl: (pageEl('flowControlSelectA')||{}).value || 'none',
   };
   const cfgB = {
     port: portB,
@@ -6364,6 +6454,7 @@ async function openForwardPorts() {
     dataBits: parseInt((pageEl('dataBitsSelectB')||{}).value) || 8,
     stopBits: (pageEl('stopBitsSelectB')||{}).value || '1',
     parity: (pageEl('paritySelectB')||{}).value || 'none',
+    flowControl: (pageEl('flowControlSelectB')||{}).value || 'none',
   };
 
   try {
@@ -6375,11 +6466,16 @@ async function openForwardPorts() {
     }
     tab.connectedAt = Date.now();   // 同 openPort：给同步清理留出连接窗口期
 
+    _pushTabDisplay(tab);
     await window.go.main.App.ForwardConnect(tab.sessionId, cfgA, cfgB);
 
     tab.portOpen = true;
     tab.label = cfgA.port + ' ↔ ' + cfgB.port;
-    tab.syncedParams = { portName: cfgA.port, baud: cfgA.baud, dataBits: cfgA.dataBits, stopBits: cfgA.stopBits, parity: cfgA.parity, forwardPortB: cfgB.port, forwardBaudB: cfgB.baud };
+    tab.syncedParams = _syncedParamsOf(Object.assign({}, cfgA, {
+      forwardPortB: cfgB.port, forwardBaudB: cfgB.baud,
+      forwardDataBitsB: cfgB.dataBits, forwardStopBitsB: cfgB.stopBits,
+      forwardParityB: cfgB.parity, forwardFlowControlB: cfgB.flowControl,
+    }));
 
     updateOpenBtn();
     updateSyncIndicator();
@@ -7987,9 +8083,10 @@ function qpRestoreDefaults() {
   }, 'confirm.ok_restore', 'confirm.cancel_restore');
 }
 
-// Sync state.quickPresets to daemon sendq, then call callback.
-function syncQuickPresetsToDaemon(processId, cb) {
-  var entries = state.quickPresets.map(function(p) {
+// 预设列表 → 守护进程发送队列的线格式。只做字段收口，不读 state：
+// 恢复某个「非活动标签页」的预设时不能拿活动标签页的那一份盖上去。
+function _presetsToDaemonEntries(presets) {
+  return (presets || []).map(function(p) {
     return {
       enabled: p.enabled !== false,
       hex: !!p.hex,
@@ -7998,9 +8095,21 @@ function syncQuickPresetsToDaemon(processId, cb) {
       note: p.note || ''
     };
   });
-  window.go.main.App.WriteMultistrEntries(processId, JSON.stringify(entries)).then(function() {
-    if (cb) cb();
-  }).catch(function(){});
+}
+
+// 把指定的一份预设写进某个会话的发送队列（恢复工程时用）。
+function pushPresetsToDaemon(processId, presets, cb) {
+  if (!processId || !state.daemonOnline) return;
+  try {
+    window.go.main.App.WriteMultistrEntries(
+      processId, JSON.stringify(_presetsToDaemonEntries(presets))
+    ).then(function () { if (cb) cb(); }).catch(function () {});
+  } catch (e) {}
+}
+
+// Sync state.quickPresets to daemon sendq, then call callback.
+function syncQuickPresetsToDaemon(processId, cb) {
+  pushPresetsToDaemon(processId, state.quickPresets, cb);
 }
 
 // Handle multistr-changed events from daemon.

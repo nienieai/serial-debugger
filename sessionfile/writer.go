@@ -22,6 +22,12 @@ type Settings struct {
 	Mode string `json:"mode,omitempty"`
 	// PortB 只在转发录制里有值（A 口仍然放在 Port）。
 	PortB string `json:"portB,omitempty"`
+	// 帧格式与流控：一并入档，工程推回守护进程时才能按当初的样子重开串口。
+	// 老文件没有这几个 key，读回来是零值（openSerialPort 会兜底成 8N1/none）。
+	DataBits    int    `json:"dataBits,omitempty"`
+	StopBits    string `json:"stopBits,omitempty"`
+	Parity      string `json:"parity,omitempty"`
+	FlowControl string `json:"flowControl,omitempty"`
 	// Display 是录制这一刻的「怎么看」：编码、Hex 大小写/前缀/分隔、控制字符、
 	// 转义字节。键名与 settings.json 的 display 段一致，值统一是字符串。
 	//

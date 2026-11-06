@@ -44,10 +44,18 @@ type SettingsDoc struct {
 }
 
 // SessionPorts 是 settings.json 里的端口段。转发录制时 A/B 都有值。
+//
+// 帧格式与流控也在这里：它们和端口/波特率是同一件事 ——「这条会话当初怎么开
+// 的」。把工程推回守护进程时按它重开串口，否则 19200·7E2 的采集会被按
+// 115200·8N1 重开，收到的就是乱码。老文件没有这几个键，读回来是零值。
 type SessionPorts struct {
-	A    string `json:"a,omitempty"`
-	B    string `json:"b,omitempty"`
-	Baud int    `json:"baud,omitempty"`
+	A           string `json:"a,omitempty"`
+	B           string `json:"b,omitempty"`
+	Baud        int    `json:"baud,omitempty"`
+	DataBits    int    `json:"dataBits,omitempty"`
+	StopBits    string `json:"stopBits,omitempty"`
+	Parity      string `json:"parity,omitempty"`
+	FlowControl string `json:"flowControl,omitempty"`
 }
 
 // SettingsDocVer 是 settings.json 的结构版本。
@@ -59,7 +67,11 @@ func NewSettingsDoc(set Settings) *SettingsDoc {
 		V:     SettingsDocVer,
 		Label: set.Label,
 		Mode:  set.Mode,
-		Ports: SessionPorts{A: set.Port, B: set.PortB, Baud: set.Baud},
+		Ports: SessionPorts{
+			A: set.Port, B: set.PortB, Baud: set.Baud,
+			DataBits: set.DataBits, StopBits: set.StopBits,
+			Parity: set.Parity, FlowControl: set.FlowControl,
+		},
 	}
 	if doc.Mode == "" {
 		doc.Mode = ModeSingle
@@ -86,13 +98,17 @@ func (d *SettingsDoc) ToSettings() Settings {
 		mode = ModeSingle
 	}
 	return Settings{
-		V:       SlotPayloadVer,
-		Label:   d.Label,
-		Port:    d.Ports.A,
-		Baud:    d.Ports.Baud,
-		Mode:    mode,
-		PortB:   d.Ports.B,
-		Display: DisplayStrings(d.Display),
+		V:           SlotPayloadVer,
+		Label:       d.Label,
+		Port:        d.Ports.A,
+		Baud:        d.Ports.Baud,
+		Mode:        mode,
+		PortB:       d.Ports.B,
+		DataBits:    d.Ports.DataBits,
+		StopBits:    d.Ports.StopBits,
+		Parity:      d.Ports.Parity,
+		FlowControl: d.Ports.FlowControl,
+		Display:     DisplayStrings(d.Display),
 	}
 }
 

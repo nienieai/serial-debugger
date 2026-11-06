@@ -180,6 +180,10 @@ payload 是 **key–length–value 序列**，按 key 升序写出：
 | `0x0014` | `port` | string | A 口 |
 | `0x0015` | `baud` | u32 | |
 | `0x0016` | `port_b` | string | 仅转发录制有值 |
+| `0x0017` | `data_bits` | u32 | 5–8；缺省按 8 |
+| `0x0018` | `stop_bits` | string | `1` / `1.5` / `2`；缺省按 1 |
+| `0x0019` | `parity` | string | `none` / `odd` / `even` / `mark` / `space` |
+| `0x001A` | `flow_control` | string | `none` / `rts_cts` / `xon_xoff` |
 | `0x0100` | `display.encoding` | string | |
 | `0x0101` | `display.hexCase` | string | |
 | `0x0102` | `display.hexPrefix` | string | |
@@ -214,14 +218,15 @@ v2 文件照常打开，只是读不到 `display`（回落到 `settings.json` �
 
 **设计保留、尚未实现**
 
-`app`、串口参数细节（`dataBits` / `stopBits` / `parity` / `flow` / `baudB`）、
-`notes`、`record`、`origins`、`stats`，将来的 key 从 `0x0017` 起分配。
+`app`、`baudB`（转发时 B 口的波特率，暂时与 A 口同一值）、`notes`、
+`record`、`origins`、`stats`，将来的 key 从 `0x001B` 起分配。
+（`0x0017`–`0x001A` 已被帧格式与流控占用，见上表。）
 `origins` 没实现，所以来源一律走 `origin = 255` 内联（§2.8）。
 
 转发录制：`mode = forward`、`port_b` 为 B 口，`port` 始终是 A 口。
 **老文件没有 `mode`，读回来是空串，必须按 `single` 处理**（`Settings.IsForward()` 为 false）。
 
-**`origins` 的容量规则（将来的 `0x0017`，两条上限取小者）**
+**`origins` 的容量规则（将来的 `0x001B`，两条上限取小者）**
 
 - **硬上限 254 条**：`origin` 是 u8，255 保留给"内联回退"，0 保留不用（§2.8），所以 id 最多到 254。
 - **字节预算 4000 B**：TLV 编码后 `len` 必须 ≤ 4000；追加新来源会超限时同样冻结字典。
