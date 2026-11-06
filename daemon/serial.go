@@ -240,6 +240,11 @@ type Process struct {
 	sendMu sync.RWMutex
 	send   map[string]any
 
+	// fileStats 是「这次回放的文件里有多少东西」：帧数、rx/tx 字节合计。
+	// 回放会话没有实时流量，浮窗里的收发数字只能来自文件本身。
+	fileStatsMu sync.RWMutex
+	fileStats   map[string]any
+
 	// customName 是用户起的线程名（nameMu 保护）。空串表示「用自动名」：
 	// 自动名按当前模式与端口现算（见 autoName），所以「先建空闲会话、之后才连上
 	// 端口」这种常见流程不需要在 connect/switch 各处挂钩子，名字自己就会变过来。
@@ -1501,11 +1506,12 @@ func (p *Process) restoreLatestSession() {
 	if p.historyRing == nil || !p.historyRing.IsEmpty() {
 		return
 	}
-	n, err := loadSessionIntoRing(p.historyRing, dir)
+	n, rxTotal, txTotal, err := loadSessionIntoRing(p.historyRing, dir)
 	if err != nil {
 		logOp("错误", "恢复历史失败 (进程 #%s, %s): %v", p.id, filepath.Base(dir), err)
 		return
 	}
+	p.SetFileStats(n, rxTotal, txTotal)
 	if n > 0 {
 		logOp("历史", "进程 #%s 已从 %s 恢复 %d 条", p.id, filepath.Base(dir), n)
 	}
@@ -2077,6 +2083,27 @@ func (p *Process) persistDir() string {
 	return ""
 }
 
+// SetFileStats 记下回放文件的规模（帧数 / rx / tx 字节）。
+func (p *Process) SetFileStats(frames int, rx, tx int64) {
+	p.fileStatsMu.Lock()
+	p.fileStats = map[string]any{"frames": frames, "rx": rx, "tx": tx}
+	p.fileStatsMu.Unlock()
+}
+
+// FileStats 返回回放文件的规模；不是文件会话就是 nil。
+func (p *Process) FileStats() map[string]any {
+	p.fileStatsMu.RLock()
+	defer p.fileStatsMu.RUnlock()
+	if p.fileStats == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p.fileStats))
+	for k, v := range p.fileStats {
+		out[k] = v
+	}
+	return out
+}
+
 // Send 返回这条会话的发送框状态（没有就是 nil）。
 func (p *Process) Send() map[string]any {
 	p.sendMu.RLock()
@@ -2256,12 +2283,13 @@ func (pm *ProcessManager) OpenSession(path string) (*Process, int, error) {
 	if proc.historyRing != nil {
 		proc.historyRing.Reset()
 	}
-	n, err := loadSessionIntoRing(proc.historyRing, path)
+	n, rxTotal, txTotal, err := loadSessionIntoRing(proc.historyRing, path)
 	proc.ringBufMu.Unlock()
 	if err != nil {
 		pm.Destroy(proc.id)
 		return nil, 0, err
 	}
+	proc.SetFileStats(n, rxTotal, txTotal)
 	logOp("历史", "进程 #%s 已打开文件会话 %s (%d 条)", proc.id, filepath.Base(path), n)
 	return proc, n, nil
 }
@@ -2721,6 +2749,10 @@ func (pm *ProcessManager) List() []map[string]any {
 		// 发送框状态（草稿 / 当前格式 / 多字符串预设）：GUI 建标签页时拿它恢复。
 		if sd := p.Send(); len(sd) > 0 {
 			entry["send"] = sd
+		}
+		// 回放文件的规模（帧数 / rx / tx）：浮窗用它显示「文件里有什么」
+		if fs := p.FileStats(); len(fs) > 0 {
+			entry["fileStats"] = fs
 		}
 		// Include config for connected processes and idle processes that have stored config
 		hasConfig := p.status == "connected" || p.config.Port != ""

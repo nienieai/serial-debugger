@@ -3548,6 +3548,8 @@ function _applyDaemonSessionToTab(tab, ds) {
   // 发送框草稿：会话第一次挂上来时把守护进程存的那份搬进标签页
   // （换窗口、关标签再挂回来、重启 GUI 之后都还在）。
   if (ds.send && ds.id) _restoreSendStateFromSession(tab, ds.send, ds.id);
+  // 回放文件的规模（帧数 / rx / tx）：浮窗显示的就是它
+  if (ds.fileStats) tab.fileStats = ds.fileStats;
 }
 
 async function syncDaemonSessions(procData) {
@@ -5245,6 +5247,14 @@ function _tabPopRender() {
   var tab = _tabPop.tab;
   var m = _tabPop.model;
   var v = _tabPopValues();
+  // 回放会话（工程 / 文件）没有实时流量：收发字节用**文件本身**的合计
+  // （守护进程打开时随会话列表带出来）。速率仍留「—」，因为文件没有「当前」。
+  var fs = tab.sessionPath ? (tab.fileStats || null) : null;
+  if (fs) {
+    v.rxTotal = Number(fs.rx) || 0;
+    v.txTotal = Number(fs.tx) || 0;
+    v.hasData = true;
+  }
   var isFwd = tab.mode === 'forward';
   var on = v.live;           // 徽标 / 速率 / 条形
   var hasData = v.hasData;   // 累计 / 错误 / 收发比
@@ -5313,8 +5323,10 @@ function _tabPopRender() {
       '<span class="c-tabpop__sid" dir="ltr">#' + escHtml(String(tab.id)) + '</span>' +
     '</div>' +
     '<div class="c-tabpop__sep"></div>' +
-    lanes +
-    ratioHTML +
+    // 工程/文件会话是回放，没有实时收发：画两条 0 的泳道只会让人以为「没数据」
+    ((tab.sessionPath && !fs)
+      ? '<div class="c-tabpop__hint">' + _tabPopT('tabpop.file_session', '文件会话：没有实时收发统计') + '</div>'
+      : lanes + ratioHTML) +
     '<div class="c-tabpop__sep"></div>' +
     '<div class="c-tabpop__foot">' +
       '<span>' + _tabPopT('tabpop.clients', '客户端') + ' <b dir="ltr">' + clients + '</b></span>' +
@@ -5334,6 +5346,8 @@ function _tabPopUpdate() {
     if (_tabPop.fileSig !== _tabPopFileSig()) _tabPopRenderFile();
     return;
   }
+  // 回放会话的数字来自文件、不会变：别让实时刷新把它们改回 0
+  if (_tabPop.tab && _tabPop.tab.sessionPath && _tabPop.tab.fileStats) return;
   var el = _tabPopEl;
   if (_tabPop.sig !== _tabPopSig()) {
     _tabPopRender();
@@ -7124,6 +7138,20 @@ function onStatsRate(data) {
 function refreshStatsDOM() {
   const tab = getActiveTab();
   const isFwd = activeMode() === 'forward';
+  // 回放会话（工程 / 文件）：累计字节来自文件本身（守护进程打开时随会话列表
+  // 带出的 fileStats），速率恒为 0 —— 文件没有「当前」这个概念。
+  if (tab && tab.sessionId && tab.sessionPath && tab.fileStats) {
+    if (_statusBar) {
+      _statusBar.setStatsMode(isFwd);
+      _statusBar.updateStatsBytes({
+        tx: Number(tab.fileStats.tx) || 0,
+        rx: Number(tab.fileStats.rx) || 0,
+        p1: 0, p2: 0
+      });
+      _statusBar.updateStatsRates({ txRate: 0, rxRate: 0, p1Rate: 0, p2Rate: 0, maxBps: 0 });
+    }
+    return;
+  }
   if (tab && tab.sessionId) {
     // 端口没连上：累计字节保留（关闭后还看得到这次收了多少），速率清零。
     // 速率来自 stats-rate 事件，端口关了不会再推，留着会停在上一次的读数上。

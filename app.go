@@ -2382,6 +2382,9 @@ func (a *App) fetchSessions() []map[string]any {
 		if v, ok := pmap["send"]; ok {
 			entry["send"] = v
 		}
+		if v, ok := pmap["fileStats"]; ok {
+			entry["fileStats"] = v
+		}
 		if viewers, ok := pmap["viewers"]; ok {
 			entry["viewers"] = viewers
 		}

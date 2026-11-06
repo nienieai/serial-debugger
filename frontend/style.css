@@ -1953,9 +1953,16 @@ body.is-tab-dragging .tab-new {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: .2px;
+  /* 线程名可能很长（工程目录名、COMx ↔ COMy）：给它省略号，别去挤右边的连接徽标 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .c-tabpop__badge {
+  /* 徽标是固定宽度的小胶囊：标题再长也不许压缩它 */
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
