@@ -6,10 +6,16 @@
 
 ## 待实现
 
-优先级约定：P1 > P2 > P3（高 → 低）。
+优先级约定：**P0（架构级，先于功能）** > P1 > P2 > P3（高 → 低）。
+
+P0 是两条**贯穿性**的工作，不产出用户可见功能，但决定后面每一功能要不要重写一遍：
+**显式生命周期管理**（状态怎么变）与**数据一致性管理**（多客户端同时改怎么不互相覆盖）。
+两条都已有设计稿放在开发目录（不进 Git），落地按各自的步骤表走。
 
 | 优先级 | 需求 | 依赖 | 说明 |
 |--------|------|------|------|
+| P0 | 显式生命周期管理：会话相位机（`created` / `attached` / `recording` / `sealed` / `closed`）+ 窗口相位机（`ready` / `parked` / `closing` / `closed`），标签页不再是独立状态、而是「归属窗口的投影」 | `rev`（已完成） | **现状**：六个正交状态位（进程 / 端口 / 录制 / 归属 / 窗口 / 标签）分别由四处代码维护，靠八条隐式守卫勉强对齐 —— `_parked`、`_orphanSid`、`_dispFrom`、`_sendFrom`/`_sendSig`、`_creatingTab`、`_adoptingSid`、`_pendingProjectPaths`、`sessReleased`。**已发生的三次故障都能归因到状态位错位**：0 标签空窗口却「还有 1 个会话」（归属↔标签）、关完窗口进程仍挂（窗口↔进程）、推送报「没有把这个工程挂上来」（归属↔标签）。**做法**：一个迁移一个函数、同一次把六位一起改；迁移后 `rev++` 并广播，前端只订阅不猜；非法迁移直接拒绝并记日志。**验收**：八条守卫 `grep` 为 0，上面三类故障复现不出来 |
+| P0 | 数据一致性管理：字段级 `session.patch {baseRev, ops:[{path,value}]}` + `session.snapshot{sinceRev}` / `delta` 广播 + 客户端 store；冲突显式返回而不是覆盖 | `rev`（已完成）、schema 单一来源（已完成） | **现状**：`SetSend` / `SetDisplay` 是整份覆盖，两个客户端同时改同一会话时后写的**静默**冲掉先写的；`rev` 已经能判定「谁的副本旧」，但还没有写入口用它。**要做**：① `session.patch` 按 `path` 写（`internal/schema` 里的 `Path` 就是寻址串）；② 冲突返回 `{conflict:true, rev, path, current}`，不覆盖；③ `session.snapshot{sinceRev}` 供跳号补拉；④ 前端 `stores.js` 持有 `sid → {rev, …}`，视图只读它。旧接口保留一版双写，灰度可回退。**验收**：两个窗口同改同一字段，后者收到冲突；`go test -race` 下 50 个客户端随机 patch，最终状态等于按 seq 重放 |
 | P1 | CLI/MCP/daemon 全量 i18n | 基础已有；`sys.*` 已能翻译 | **已有**：9 个语言包 + Go 侧 `config.T` / `config.FormatSysMsg`，CLI 与 MCP 会把守护进程回的 `sys.*` 消息按当前语言翻（`cmd/serial-cli/main.go:1707` / `:1723` / `:1741`），`--lang` 与 `settings/cli.ini` 的 `[general] language` 决定用哪个。**还缺**：CLI 的帮助与命令输出仍是硬编码中文（`printHelp()` 在 `main.go:1874`），守护进程日志也没有 i18n 钩子——语言包里已经有 `cli.*` 一类键，但这些出口没接上（`cli.banner` / `cli.commands` 至今无调用点）。**注意**：MCP 的 `tools/list` 描述是给模型看的，翻译前得先定「按客户端语言还是守护进程语言」 |
 | P1 | 会话文件：`history.files/open/close/export` IPC + replay 会话 + `process.list` 扩展 | `.stlog` 格式包已完成 | **现状**：`history.files` 其实已经实现，但它只列旧的 `history/*.log`（`daemon/ipc.go:1623` → `listHistoryFiles`），不看 `.stlog`；`history.open` / `close` / `export` 三个方法在 `contract` 里连常量都没有。所以还是两条路——守护进程录制、CLI/GUI 离线读文件。`.stlog` 不能挂成会话，GUI/CLI/MCP 都没法经守护进程列文件、回放、导出、做锁交接。详见方案 §5/§6/§7（阶段表 P2）。**接口形状**：`history.files` → `{files:[{file,kind,port,baud,mode,created,entryCount,size,locked,closedAt}],hasMore}`；`history.open` → `mode:"replay"\|"attach"`，返回 `{sessionId,kind,header,entryCount,firstPage}`；`process.list` 条目加 `kind`(`live`/`replay`)、`sessionFile`、`record`、`created`、`entryCount`。**注意**：`entryCount` 是扫描出的总条数（不含坏尾），与 `firstPage` 的首页数据分开；`offset ≤ entryCount` 另加 1e8 防误传，写错即空结果 |
 | P1 | 会话文件：文件标签页搜索/过滤 + 真正虚拟滚动 | 现有分页加载 | **进展（feat/logview-engine）**：**真正虚拟滚动已落地** —— Go 侧 `stlogview` 包按像素取窗口（行高与折行都在 Go 算），前端 `frontend/logview.js` 只挂可见的几十行；分页 500 帧与「加载更多」已删，52 MB / 158 万帧实测能滚到底（End 直达最后一帧）。**还剩**：搜索/过滤。**待定**：搜索放读侧（`stlogview.Store` 目前只能按像素窗口取，没有 keyword）还是前端过滤——读侧过滤要扫页，前端过滤要全量载入，两边都与虚窗互相牵制。**建议**：读侧 `keyword` + 时间窗（复用统计块的 `firstTs/lastTs` 做页级预筛，避免逐记录扫），命中结果另存一份稀疏索引，窗口按「命中帧号」反查像素位置 |
